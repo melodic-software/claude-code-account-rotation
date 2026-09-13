@@ -50,6 +50,16 @@ public sealed record UsageLimit(
         LimitKind.WeeklyScoped => ScopeDisplayName ?? "scoped",
         _ => RawKind,
     };
+
+    /// <summary>
+    /// Whether this window has already turned over by <paramref name="now"/>, so
+    /// the figure describes the window before this one and measures nothing the
+    /// operator can act on. The single place that comparison is made: a card that
+    /// blanked such a figure while a decision still counted it would be showing
+    /// the operator one thing and acting on another. A window with no reset time
+    /// has not reset: an unknown boundary is not a passed one.
+    /// </summary>
+    public bool HasResetBy(DateTimeOffset now) => ResetsAt is DateTimeOffset resets && resets < now;
 }
 
 /// <summary>The usage-credits block: whether extra usage is on and why not.</summary>
