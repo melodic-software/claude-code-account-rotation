@@ -1,8 +1,10 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.App.Tests.Adapters;
+using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Quota;
 using Microsoft.Extensions.DependencyInjection;
@@ -24,6 +26,14 @@ public sealed class DashboardAssemblerTests
 {
     private const string LiveEmail = "dev.a@example.com";
     private const string OtherEmail = "dev.b@example.com";
+
+    // Five roster accounts whose ordinal order is deliberately not the order they
+    // free up in, so an assertion on the sequence cannot pass by accident.
+    private const string FirstEmail = "a@example.com";
+    private const string SecondEmail = "b@example.com";
+    private const string ThirdEmail = "c@example.com";
+    private const string FourthEmail = "d@example.com";
+    private const string FifthEmail = "e@example.com";
 
     [Fact]
     public async Task ASnapshotNamingTheLiveAccountIsShownOnItsCard()
@@ -142,6 +152,42 @@ public sealed class DashboardAssemblerTests
         // The older source is named on the row, because the card's own line is not it.
         Limit(card, 2).GetProperty("source").GetString().ShouldBe("refresh");
         Limit(card, 2).GetProperty("capturedAt").GetDateTimeOffset().ShouldBe(read);
+    }
+
+    [Fact]
+    public async Task TheLiveCardsStandingFollowsTheMergedFiguresNotTheCachedReadAlone()
+    {
+        // The standing an order is keyed on and the row that explains it have to
+        // come off the same merge: a regression that built the standing from the
+        // cached read alone, bypassing the tee, would still show a mild session
+        // figure on the card and would still pass every ordering fact above,
+        // because every one of them seeds through the cache alone.
+        await using AppFactory factory = new();
+        DateTimeOffset now = factory.Clock.GetUtcNow();
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        await CredentialFiles.WriteAsync(factory.LiveDirectory, "live-token", TestContext.Current.CancellationToken);
+        // The cached on-demand read: both windows mild, both resetting ahead.
+        Record(
+            factory,
+            LiveEmail,
+            now.AddHours(-2),
+            new UsageLimit("session", LimitKind.Session, "session", 10, "ok", now.AddHours(3), null, IsActive: true),
+            Weekly(20, now.AddDays(3)));
+        // The tee, rewritten after that read, carries only the two windows it
+        // always does, and its session figure alone clears the exhaustion line.
+        DateTimeOffset sessionResetsAt = now.AddHours(4);
+        await WriteTeeAsync(
+            factory,
+            TeeWithSessionPercent(LiveEmail, now.AddMinutes(-5), sessionPercent: 95, sessionResetsAt, weeklyPercent: 43, now.AddDays(2)));
+
+        JsonElement card = await LiveCardAsync(factory);
+
+        // 95 clears the 90 session threshold; 43 stays well under the 100 weekly
+        // one, so the exhausted key is the session reset alone.
+        card.GetProperty("standing").GetString().ShouldBe("exhausted");
+        card.GetProperty("nextResetAt").GetDateTimeOffset().ShouldBe(sessionResetsAt);
+        // The row ties to the same figure the standing used, not to the cached 10.
+        Limit(card, 0).GetProperty("percent").GetDouble().ShouldBe(95);
     }
 
     [Fact]
@@ -369,6 +415,112 @@ public sealed class DashboardAssemblerTests
         Limit(card, 0).GetProperty("windowReset").GetBoolean().ShouldBeFalse();
     }
 
+    [Fact]
+    public async Task TheCardsAreOrderedByWhenEachAccountFreesUpNext()
+    {
+        // The operator reads the list top down, so the account that frees up
+        // soonest has to be the one at the top: the usable accounts by the weekly
+        // window closest to turning over, then the exhausted ones by when they
+        // actually come back, then the ones nothing has read, then the ones taken
+        // out of the rotation.
+        await using AppFactory factory = new();
+        DateTimeOffset now = factory.Clock.GetUtcNow();
+        await factory.WriteStateFileAsync(FirstEmail, TestContext.Current.CancellationToken);
+        await RosterAsync(
+            factory,
+            Entry(FirstEmail),
+            Entry(SecondEmail),
+            Entry(ThirdEmail),
+            Entry(FourthEmail),
+            Entry(FifthEmail, paused: true));
+        Record(factory, FirstEmail, now.AddHours(-1), Weekly(42, now.AddDays(3)));
+        Record(factory, SecondEmail, now.AddHours(-1), Weekly(100, now.AddDays(1)));
+        Record(factory, ThirdEmail, now.AddHours(-1), Weekly(58, now.AddHours(1)));
+        // The earliest window of all, and last anyway: the roster decides whether
+        // an account is a candidate, and its numbers do not argue with that.
+        Record(factory, FifthEmail, now.AddHours(-1), Weekly(4, now.AddMinutes(30)));
+
+        using HttpClient client = factory.CreateClient();
+        JsonElement dashboard = await client.GetFromJsonAsync<JsonElement>(new Uri("/api/dashboard", UriKind.Relative), TestContext.Current.CancellationToken);
+
+        // The live account is second, and is not pinned to the top.
+        dashboard.GetProperty("accounts").EnumerateArray()
+            .Select(static card => card.GetProperty("email").GetString())
+            .ShouldBe([ThirdEmail, FirstEmail, SecondEmail, FourthEmail, FifthEmail]);
+        JsonElement usable = Card(dashboard, ThirdEmail);
+        usable.GetProperty("standing").GetString().ShouldBe("usable");
+        usable.GetProperty("nextResetAt").GetDateTimeOffset().ShouldBe(now.AddHours(1));
+        JsonElement exhausted = Card(dashboard, SecondEmail);
+        exhausted.GetProperty("standing").GetString().ShouldBe("exhausted");
+        exhausted.GetProperty("nextResetAt").GetDateTimeOffset().ShouldBe(now.AddDays(1));
+    }
+
+    [Fact]
+    public async Task TwoProfileFoldersNamingTheSameAccountBothShowACard()
+    {
+        // ProfileFolderStore.ListAsync does not de-duplicate by e-mail, so a
+        // hand-copied folder can name the same account a second time. The page
+        // must render both cards, not fault matching the arrangement back to them.
+        await using AppFactory factory = new();
+        await factory.ParkedProfileAsync(OtherEmail, "refresh-b", TestContext.Current.CancellationToken);
+        string duplicate = Path.Combine(factory.ProfilesRoot, "dev-b-duplicate");
+        Directory.CreateDirectory(duplicate);
+        await File.WriteAllTextAsync(
+            Path.Combine(duplicate, "profile.json"),
+            AppFactory.AccountJson(OtherEmail).ToJsonString(),
+            TestContext.Current.CancellationToken);
+
+        using HttpClient client = factory.CreateClient();
+        JsonElement dashboard = await client.GetFromJsonAsync<JsonElement>(new Uri("/api/dashboard", UriKind.Relative), TestContext.Current.CancellationToken);
+
+        dashboard.GetProperty("accounts").EnumerateArray()
+            .Count(card => card.GetProperty("email").GetString() == OtherEmail)
+            .ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task ACachedFigureFromAWindowThatHasResetSortsUsable()
+    {
+        // A hundred percent from a window that has since turned over measures
+        // nothing: the account is free now. It must not sort as exhausted, and it
+        // must state no wait at all, because the only instant it has is in the
+        // past and would render as a countdown that already expired.
+        await using AppFactory factory = new();
+        DateTimeOffset now = factory.Clock.GetUtcNow();
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        await RosterAsync(factory, Entry(LiveEmail), Entry(FirstEmail));
+        factory.Services.GetRequiredService<QuotaState>().RecordSnapshot(new UsageSnapshot(
+            AccountEmail.Parse(FirstEmail).Value,
+            now.AddHours(-6),
+            QuotaSource.Cached,
+            [Weekly(100, now.AddHours(-1))],
+            ExtraUsage: null));
+
+        JsonElement card = await CardAsync(factory, FirstEmail);
+
+        card.GetProperty("standing").GetString().ShouldBe("usable");
+        card.GetProperty("nextResetAt").ValueKind.ShouldBe(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task ASpentAccountWhoseResetCannotBeDatedCarriesNoInstant()
+    {
+        // Spent, with no reset instant to spend it against: the card still says
+        // the account is out, and says nothing about when it returns, because the
+        // page renders the line from this field and would otherwise have to
+        // invent the hour.
+        await using AppFactory factory = new();
+        DateTimeOffset now = factory.Clock.GetUtcNow();
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        await RosterAsync(factory, Entry(LiveEmail), Entry(FirstEmail));
+        Record(factory, FirstEmail, now.AddHours(-1), Weekly(100));
+
+        JsonElement card = await CardAsync(factory, FirstEmail);
+
+        card.GetProperty("standing").GetString().ShouldBe("exhausted");
+        card.GetProperty("nextResetAt").ValueKind.ShouldBe(JsonValueKind.Null);
+    }
+
     /// <summary>The rows a card shows before anything has numbers for it: named, ordered, and every one of them unknown.</summary>
     private static void ShouldBeAllUnknown(JsonElement card)
     {
@@ -391,6 +543,25 @@ public sealed class DashboardAssemblerTests
         factory.Services.GetRequiredService<QuotaState>().RecordSnapshot(
             new UsageSnapshot(AccountEmail.Parse(email).Value, capturedAt, QuotaSource.OnDemandRefresh, limits, ExtraUsage: null));
 
+    /// <summary>The seven-day window, the one the usable order is keyed on. No reset instant means the endpoint gave none.</summary>
+    private static UsageLimit Weekly(double percent, DateTimeOffset? resetsAt = null) =>
+        new("weekly_all", LimitKind.WeeklyAll, "weekly", percent, "ok", resetsAt, null, IsActive: true);
+
+    /// <summary>A roster entry for an account the operator has put on the machine but not logged in.</summary>
+    private static RosterEntry Entry(string email, bool paused = false) =>
+        new(AccountEmail.Parse(email).Value, Paused: paused);
+
+    /// <summary>
+    /// Writes the roster the page reads. A roster entry alone is enough for a
+    /// card, so an ordering fact needs no profile folder: the numbers come from
+    /// the quota state and the pause flag from here.
+    /// </summary>
+    private static async Task RosterAsync(AppFactory factory, params RosterEntry[] entries)
+    {
+        using RosterFile roster = new(factory.AppData);
+        _ = await roster.UpdateAsync(_ => new Roster(entries), TestContext.Current.CancellationToken);
+    }
+
     /// <summary>A weekly window the endpoint scoped to one model and named itself.</summary>
     private static UsageLimit Scoped(string displayName, double percent, DateTimeOffset resetsAt) =>
         new("weekly_scoped", LimitKind.WeeklyScoped, "weekly", percent, "warning", resetsAt, displayName, IsActive: true);
@@ -406,6 +577,31 @@ public sealed class DashboardAssemblerTests
     private static JsonElement Usage(JsonElement card) => card.GetProperty("usage");
 
     private static JsonElement Limit(JsonElement card, int index) => Usage(card).GetProperty("limits")[index];
+
+    /// <summary>
+    /// The tee file shaped like <see cref="RateLimitGuardTeeFileReaderTests.Tee"/>,
+    /// but with a session figure that helper cannot produce: the merge fact needs
+    /// a session percentage past the exhaustion line, not the helper's fixed 69.
+    /// </summary>
+    private static string TeeWithSessionPercent(
+        string email,
+        DateTimeOffset capturedAt,
+        double sessionPercent,
+        DateTimeOffset sessionResetsAt,
+        double weeklyPercent,
+        DateTimeOffset weeklyResetsAt) =>
+        new JsonObject
+        {
+            ["captured_at"] = capturedAt.ToString("O"),
+            ["session_id"] = "00000000-0000-4000-8000-000000000002",
+            ["session_name"] = "a session",
+            ["rate_limits"] = new JsonObject
+            {
+                ["five_hour"] = new JsonObject { ["used_percentage"] = sessionPercent, ["resets_at"] = sessionResetsAt.ToUnixTimeSeconds() },
+                ["seven_day"] = new JsonObject { ["used_percentage"] = weeklyPercent, ["resets_at"] = weeklyResetsAt.ToUnixTimeSeconds() },
+            },
+            ["account"] = new JsonObject { ["email"] = email },
+        }.ToJsonString();
 
     private static async Task WriteTeeAsync(AppFactory factory, string content)
     {
@@ -425,11 +621,13 @@ public sealed class DashboardAssemblerTests
     {
         using HttpClient client = factory.CreateClient();
         JsonElement dashboard = await client.GetFromJsonAsync<JsonElement>(new Uri("/api/dashboard", UriKind.Relative), TestContext.Current.CancellationToken);
-        return dashboard.GetProperty("accounts").EnumerateArray().Single(card => card.GetProperty("email").GetString() == email);
+        return Card(dashboard, email);
     }
 
-    private static JsonElement Card(Payload dashboard, string email) =>
-        dashboard.Element.GetProperty("accounts").EnumerateArray().Single(card => card.GetProperty("email").GetString() == email);
+    private static JsonElement Card(JsonElement dashboard, string email) =>
+        dashboard.GetProperty("accounts").EnumerateArray().Single(card => card.GetProperty("email").GetString() == email);
+
+    private static JsonElement Card(Payload dashboard, string email) => Card(dashboard.Element, email);
 
     private static async Task<Payload> DashboardAsync(AppFactory factory)
     {

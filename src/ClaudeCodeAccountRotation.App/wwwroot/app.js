@@ -25,6 +25,10 @@
   // The card node per e-mail, rebuilt by each render, so a login panel can be
   // hung on the right card without querying by an address that needs escaping.
   var cardNodes = {};
+  // The addresses of the cards on the page, in the order they are on it, set by
+  // the same rebuild that fills cardNodes. What an arriving payload is compared
+  // against to tell a reorder from an update in place.
+  var renderedOrder = [];
 
   function showToast(text, kind) {
     toast.textContent = text;
@@ -467,6 +471,20 @@
     return account.refresh.message || state;
   }
 
+  // Where the card sits in the list, said in the one word its rows never carry.
+  // A usable account's countdown is not repeated here: the seven-day row above
+  // already reads "resets in 2 h 14 min", and the same phrase twice on one card
+  // reads as two different facts.
+  function nextReset(account, at) {
+    if (account.standing === "usable") { return "usable now"; }
+    if (account.standing === "unread") { return "no usage read yet"; }
+    if (account.standing === "paused") { return "paused"; }
+    // A spent account whose reset nothing can date has no wait to state, and the
+    // rows above already say which figure is missing.
+    if (account.standing === "exhausted" && account.nextResetAt) { return "usable " + relative(account.nextResetAt, at); }
+    return null;
+  }
+
   function usage(account, dashboard) {
     var section = element("div", "usage");
     var at = new Date(dashboard.capturedAt).getTime();
@@ -474,6 +492,8 @@
     if (account.usage.source) {
       section.appendChild(element("p", "asof", asOf(account.usage.capturedAt, account.usage.source, at)));
     }
+    var frees = nextReset(account, at);
+    if (frees) { section.appendChild(element("p", "next-reset", frees)); }
     if (account.usage.credits) { section.appendChild(element("p", "asof", creditsLine(account.usage.credits))); }
     if (account.usageNote) { section.appendChild(element("p", "muted", account.usageNote)); }
     var state = refreshState(account, dashboard);
@@ -500,26 +520,45 @@
     return mutate(accountPath(email, "/refresh"), "POST", null, started);
   }
 
+  // Whether the arriving payload would move a card, which is the only thing the
+  // guard below defers for.
+  function reordered(arriving) {
+    return arriving.length !== renderedOrder.length
+      || arriving.some(function (email, index) { return email !== renderedOrder[index]; });
+  }
+
   function render(dashboard, force) {
-    // The header is not part of any card, so it is written before the guard
-    // below and on every poll: an operator with an Edit panel open would
-    // otherwise watch the page's own timestamp, the pass's progress, and the
-    // Refresh all button freeze at whatever they said when the panel opened.
+    // The header, the banner, and the warnings are not part of any card, so they
+    // are written before the guards below and on every poll: an operator with an
+    // Edit panel open would otherwise watch the page's own timestamp, the pass's
+    // progress, the Refresh all button, and a banner that has since been cleared
+    // freeze at whatever they said when the panel opened.
     captured.textContent = "as of " + new Date(dashboard.capturedAt).toLocaleTimeString();
     refreshStateLine.textContent = passState(dashboard);
     refreshAllButton.disabled = busy || dashboard.refresh.inProgress;
-    // Rendering rebuilds every card, so the ten-second poll would otherwise wipe an
-    // Edit panel, or a half-typed login code, out from under whoever is typing it.
-    // A mutation's own render passes force, since that one has to show the result.
-    if (!force && cards.querySelector("details.edit[open], details.login[open]")) { return; }
     banner.hidden = !dashboard.banner;
     banner.textContent = dashboard.banner || "";
     warnings.innerHTML = "";
     warnings.hidden = dashboard.warnings.length === 0;
     dashboard.warnings.forEach(function (warning) { warnings.appendChild(element("li", null, warning)); });
+    // Rendering rebuilds every card, so the ten-second poll would otherwise wipe an
+    // Edit panel, or a half-typed login code, out from under whoever is typing it.
+    // A mutation's own render passes force, since that one has to show the result.
+    if (!force && cards.querySelector("details.edit[open], details.login[open]")) { return; }
+    // The hazard is a card moving, not a card being redrawn. Switch fires without a
+    // confirm, so an order that changes while the pointer rests on the list, or
+    // while a button inside it holds focus, sends the operator to whichever account
+    // slid under the aim; the pointer resting there is the mouse's ordinary state,
+    // so deferring on it alone would freeze the cards for as long as an operator
+    // left the cursor on them. An order identical to the one on screen moves no
+    // card, so it is rendered in place and a Refresh all pass keeps landing card by
+    // card under the pointer.
+    var arriving = dashboard.accounts.map(function (account) { return account.email; });
+    if (!force && reordered(arriving) && (cards.matches(":hover") || cards.contains(document.activeElement))) { return; }
 
     cards.innerHTML = "";
     cardNodes = {};
+    renderedOrder = arriving;
     dashboard.accounts.forEach(function (account) {
       var roster = account.roster;
       var paused = !!(roster && roster.paused);

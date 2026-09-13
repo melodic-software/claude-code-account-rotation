@@ -7,6 +7,7 @@ using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Ports;
 using ClaudeCodeAccountRotation.Core.Quota;
+using ClaudeCodeAccountRotation.Core.Routing;
 
 namespace ClaudeCodeAccountRotation.App.Dashboard;
 
@@ -18,7 +19,9 @@ namespace ClaudeCodeAccountRotation.App.Dashboard;
 /// login") and a folder that predates the roster still shows up (with Adopt
 /// offered). Every read first repairs a state file a session wrote a stale
 /// block back into, so the page never shows the outgoing account as live for
-/// long. Ranking joins in a later phase.
+/// long. The cards come out in the order the accounts free up, which is the Core
+/// availability order and not one computed here; the ranked queue of switch
+/// candidates, a filter and a truncation over that same order, joins later.
 /// </summary>
 internal sealed class DashboardAssembler(
     ClaudeStateFile stateFile,
@@ -54,26 +57,46 @@ internal sealed class DashboardAssembler(
         AccountEmail? liveEmail = liveAccount?.Email;
         DateTimeOffset capturedAt = timeProvider.GetUtcNow();
 
-        List<AccountCardView> cards = [];
+        List<(AccountCardView Card, AccountStanding Standing)> built = [];
         if (liveEmail is AccountEmail live)
         {
             ParkedProfile? ownFolder = parked.FirstOrDefault(profile => profile.Email == live);
             (UsageSnapshot? observed, string? note) = Attribute(snapshot, live);
-            cards.Add(Card(live, isLive: true, livePair is not null, ownFolder?.FolderPath, observed, note, roster, capturedAt));
+            built.Add(Card(live, isLive: true, livePair is not null, ownFolder?.FolderPath, observed, note, roster, capturedAt));
         }
 
-        cards.AddRange(parked
+        built.AddRange(parked
             .Where(profile => profile.Email != liveEmail)
             .Select(profile => Card(profile.Email, isLive: false, profile.HasCredentials, profile.FolderPath, observed: null, note: null, roster, capturedAt)));
 
         // A roster entry the operator added but has not logged in yet owns no
         // identity file, so the folder listing above cannot see it. Its card is
         // what makes Add visible on the page at all.
-        List<AccountCardView> rosterOnly = [.. roster.Entries
-            .Where(entry => !cards.Exists(card => string.Equals(card.Email, entry.Email.Value, StringComparison.Ordinal)))
+        List<(AccountCardView Card, AccountStanding Standing)> rosterOnly = [.. roster.Entries
+            .Where(entry => !built.Exists(pair => string.Equals(pair.Card.Email, entry.Email.Value, StringComparison.Ordinal)))
             .Select(entry => Card(entry.Email, isLive: false, hasCredentials: false, profiles.FolderPathFor(entry.Email), observed: null, note: null, roster, capturedAt))];
-        cards.AddRange(rosterOnly);
-        cards.Sort(static (left, right) => string.CompareOrdinal(left.Email, right.Email));
+        built.AddRange(rosterOnly);
+
+        // One arrangement for the whole payload, and the cards go out in the
+        // order it hands back: the group and the instant on each card are read
+        // off the key that placed it, never derived a second time here, so what
+        // the operator reads on a card cannot disagree with where the card is.
+        // The match back to a card is by the standing instance the arrangement
+        // was handed, not by e-mail: two entries can share an address (a
+        // hand-copied profile folder is not de-duplicated), and a dictionary
+        // keyed on the address would throw on the second one where the page
+        // used to just show two cards.
+        var byStanding = built.ToDictionary(
+            static pair => pair.Standing,
+            static pair => pair.Card,
+            (IEqualityComparer<AccountStanding>)ReferenceEqualityComparer.Instance);
+        List<AccountCardView> cards = [.. AccountAvailability
+            .Arrange([.. built.Select(static pair => pair.Standing)], capturedAt)
+            .Select(arranged => byStanding[arranged.Standing] with
+            {
+                Standing = Wire(arranged.Key.Standing),
+                NextResetAt = arranged.Key.NextResetAt,
+            })];
 
         List<string> warnings = [];
         if (liveEmail is null && livePair is not null)
@@ -100,8 +123,14 @@ internal sealed class DashboardAssembler(
             Pass(capturedAt));
     }
 
-    /// <summary>One card, whichever of the three sources it came from: the same usage merge and the same refresh state for all of them.</summary>
-    private AccountCardView Card(
+    /// <summary>
+    /// One card, whichever of the three sources it came from, beside the standing
+    /// the ordering keys on. Both come out of one merge, called once here: a
+    /// second call would let the rows the operator reads and the figures the
+    /// order was computed from drift apart on the live card, which is exactly the
+    /// disagreement the merged snapshot exists to make impossible.
+    /// </summary>
+    private (AccountCardView Card, AccountStanding Standing) Card(
         AccountEmail email,
         bool isLive,
         bool hasCredentials,
@@ -109,37 +138,7 @@ internal sealed class DashboardAssembler(
         UsageSnapshot? observed,
         string? note,
         Roster roster,
-        DateTimeOffset capturedAt) =>
-        new(email.Value,
-            isLive,
-            hasCredentials,
-            folder,
-            Usage(observed, quota.LatestFor(email), capturedAt),
-            note,
-            Refresh(email, folder),
-            View(roster.Find(email)));
-
-    /// <summary>
-    /// Merges every source that has numbers for one account into the rows the
-    /// card shows: the five-hour and seven-day rows first, then every scoped row,
-    /// then anything the endpoint has added since this build shipped.
-    /// <para>
-    /// The merge is per bucket, not per snapshot. The tee carries two of the
-    /// buckets and an on-demand read carries three or more, so whichever of them
-    /// happened to be written last would otherwise blank the rows it does not
-    /// know about. Each row therefore comes from whichever source that carries
-    /// that bucket captured it last, and a row from an older source than the
-    /// card's own names its source itself.
-    /// </para>
-    /// <para>
-    /// A bucket no source carries is still emitted, unknown, so the card admits
-    /// what it does not know instead of showing a shorter list; and a row whose
-    /// window has reset since it was captured loses its percentage, because a
-    /// figure from the window before this one measures nothing the operator can
-    /// act on.
-    /// </para>
-    /// </summary>
-    private static UsageView Usage(UsageSnapshot? observed, UsageSnapshot? read, DateTimeOffset capturedAt)
+        DateTimeOffset capturedAt)
     {
         List<UsageSnapshot> sources = [];
         if (observed is not null)
@@ -147,33 +146,52 @@ internal sealed class DashboardAssembler(
             sources.Add(observed);
         }
 
-        if (read is not null)
+        if (quota.LatestFor(email) is UsageSnapshot read)
         {
             sources.Add(read);
         }
 
-        if (sources.Count == 0)
+        MergedUsage? merged = UsageMerge.Merge(sources);
+        RosterEntry? entry = roster.Find(email);
+        return (
+            new AccountCardView(
+                email.Value,
+                isLive,
+                hasCredentials,
+                folder,
+                Usage(merged, capturedAt),
+                note,
+                Refresh(email, folder),
+                View(entry)),
+            new AccountStanding(email, isLive, entry?.Paused ?? false, hasCredentials, merged?.Merged));
+    }
+
+    /// <summary>
+    /// The merged numbers as the card shows them: the five-hour and seven-day
+    /// rows first, then every scoped row, then anything the endpoint has added
+    /// since this build shipped.
+    /// <para>
+    /// The merge itself belongs to the Core rule that the ordering also keys on,
+    /// so nothing about which figure wins is decided here. What is decided here
+    /// is what the page owes a reader: a bucket no source carries is still
+    /// emitted, unknown, so the card admits what it does not know instead of
+    /// showing a shorter list, and the rows come out in the order the page lists
+    /// them rather than the order the sources happened to arrive in.
+    /// </para>
+    /// <para>
+    /// A row whose window has reset since it was captured loses its percentage,
+    /// because a figure from the window before this one measures nothing the
+    /// operator can act on.
+    /// </para>
+    /// </summary>
+    private static UsageView Usage(MergedUsage? merged, DateTimeOffset capturedAt)
+    {
+        if (merged is null)
         {
             return UsageView.Unread;
         }
 
-        List<(UsageSnapshot? Source, UsageLimit Limit)> rows = [];
-        foreach (UsageSnapshot source in sources)
-        {
-            foreach (UsageLimit limit in source.Limits)
-            {
-                int existing = rows.FindIndex(row => SameBucket(row.Limit, limit));
-                if (existing < 0)
-                {
-                    rows.Add((source, limit));
-                }
-                else if (source.CapturedAt > rows[existing].Source!.CapturedAt)
-                {
-                    rows[existing] = (source, limit);
-                }
-            }
-        }
-
+        List<(UsageSnapshot? Source, UsageLimit Limit)> rows = [.. merged.Rows.Select(static row => ((UsageSnapshot?)row.Source, row.Limit))];
         foreach (UsageLimit bucket in UsageBuckets.Always)
         {
             if (!rows.Exists(row => row.Limit.Kind == bucket.Kind))
@@ -182,20 +200,11 @@ internal sealed class DashboardAssembler(
             }
         }
 
-        // The card's own line names the newest source that actually contributed a
-        // row, falling back to the newest source there is when none did: a tee
-        // observation that carried no percentages at all is still an "as of".
-        UsageSnapshot card = rows.Where(row => row.Source is not null).Select(row => row.Source!).MaxBy(source => source.CapturedAt)
-            ?? sources.MaxBy(source => source.CapturedAt)!;
-
         return new UsageView(
-            Wire(card.Source),
-            card.CapturedAt,
-            [.. rows.OrderBy(row => Position(row.Limit.Kind)).Select(row => Row(row.Source, row.Limit, card, capturedAt))],
-            // The newest source that has a credits block rather than the newest
-            // source outright, for the reason the rows are merged per bucket: the
-            // tee never carries one, and a tee write must not blank the line.
-            Credits(sources.Where(source => source.ExtraUsage is not null).MaxBy(source => source.CapturedAt)?.ExtraUsage));
+            Wire(merged.Card.Source),
+            merged.Card.CapturedAt,
+            [.. rows.OrderBy(row => Position(row.Limit.Kind)).Select(row => Row(row.Source, row.Limit, merged.Card, capturedAt))],
+            Credits(merged.Merged.ExtraUsage));
     }
 
     private static UsageLimitView Row(UsageSnapshot? source, UsageLimit limit, UsageSnapshot card, DateTimeOffset capturedAt)
@@ -205,7 +214,7 @@ internal sealed class DashboardAssembler(
             return UsageLimitView.Unknown(limit);
         }
 
-        bool reset = limit.ResetsAt is DateTimeOffset resets && resets < capturedAt;
+        bool reset = limit.HasResetBy(capturedAt);
         bool own = ReferenceEquals(source, card);
         return new UsageLimitView(
             limit.RawKind,
@@ -223,18 +232,6 @@ internal sealed class DashboardAssembler(
         ? null
         : new UsageCreditsView(credits.IsEnabled, credits.DisabledReason, credits.SpendLimitReached);
 
-    /// <summary>
-    /// Whether two limits measure the same window. The two named buckets are
-    /// identified by kind alone; a scoped or unrecognised one needs its raw kind
-    /// and its display name too, because an account can hold several of either
-    /// and merging them would let one model's figure overwrite another's.
-    /// </summary>
-    private static bool SameBucket(UsageLimit left, UsageLimit right) =>
-        left.Kind == right.Kind
-        && (left.Kind is LimitKind.Session or LimitKind.WeeklyAll
-            || (string.Equals(left.RawKind, right.RawKind, StringComparison.Ordinal)
-                && string.Equals(left.ScopeDisplayName, right.ScopeDisplayName, StringComparison.Ordinal)));
-
     /// <summary>The order the page lists the buckets in; ties keep the order the sources gave them.</summary>
     private static int Position(LimitKind kind) => kind switch
     {
@@ -250,6 +247,26 @@ internal sealed class DashboardAssembler(
         QuotaSource.StatuslineSnapshot => "snapshot",
         QuotaSource.OnDemandRefresh => "refresh",
         _ => "cached",
+    };
+
+    /// <summary>
+    /// Where an account stands, as the page spells it. The word a card cannot
+    /// derive for itself: a page holding only an instant cannot tell an account
+    /// that is free now from one nobody has read.
+    /// <para>
+    /// Every member is named and the default throws, because a member added later
+    /// would otherwise reach the page as "no usage read yet": the one word that
+    /// tells the operator nothing is known about an account, said about an account
+    /// this code simply has no word for yet.
+    /// </para>
+    /// </summary>
+    private static string Wire(AvailabilityStanding standing) => standing switch
+    {
+        AvailabilityStanding.Usable => "usable",
+        AvailabilityStanding.Exhausted => "exhausted",
+        AvailabilityStanding.Unread => "unread",
+        AvailabilityStanding.Paused => "paused",
+        _ => throw new ArgumentOutOfRangeException(nameof(standing)),
     };
 
     /// <summary>

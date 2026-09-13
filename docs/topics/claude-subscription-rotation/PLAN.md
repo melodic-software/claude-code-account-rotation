@@ -486,6 +486,18 @@ decision-point auto-refresh (AC 5). Pure functions over `AccountStanding` rows.
   excluded, live account included when eligible, order by earliest `WeeklyResetsAt` (accounts with
   no snapshot sort last and are flagged "no data"), truncation to `QueueLength`, urgency flag when
   the reset is within 24 h and headroom remains.
+  - **scope-change note 2026-09-12 (#47):** #47 built `AccountStanding` and the total order this
+    item truncates, so 3.2 is a filter plus a truncation over `AccountAvailability.Arrange` rather
+    than a sort of its own; a second ordering here would be the one the operator is not looking at.
+    Its filter must also drop `HasCredentials == false`: `Arrange` orders every account the
+    dashboard shows, and an account with no credentials is not a switch target. 3.1 must thread
+    `RoutingPolicy`'s two thresholds into `DashboardAssembler`'s `Arrange` call as well as into
+    `Rank`, or card order and queue order diverge the first time a policy moves them; the thresholds
+    are already parameters on `Arrange` and `KeyFor` awaiting that policy. Four of this item's six
+    substrings in the Sanity Check grep (`Paused`, `SevenDayExhausted`, `FiveHourAtThreshold`,
+    `OrdersByEarliestWeeklyReset`) are already satisfied by `AccountAvailabilityTests`, so 3.2's own
+    new tests are `TruncatesToQueueLength` and `FlagsUrgentWeeklyReset`, and that line's
+    `AccountRankingTests` reads as "either suite".
 - [ ] **3.3** `SwitchAdvisor.Evaluate`: proposal `ActiveNearLimit` at ≥ 90, `ActiveTripped` at 100
   or when `~/.claude/rate-limit-guard/stop-events.jsonl` (the reader contract's documented reactive
   file, read by `RateLimitGuardStopEventsReader`) holds a `StopFailure` record newer than the latest
