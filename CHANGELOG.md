@@ -8,6 +8,13 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- Each dashboard account says where it stands and when it frees up (#47). Every card in
+  `GET /api/dashboard` gains `standing` (`usable`, `exhausted`, `unread`, or `paused`) and
+  `nextResetAt`, the instant it was ordered by, null when there is no wait that can be dated. The
+  page's ten-second re-render now holds off while the pointer or the keyboard focus is inside the
+  card list: the order follows figures a pass can change, and a poll that reordered the cards under
+  an aimed cursor would send a Switch, which asks for no confirmation, to the wrong account. The
+  header above the cards still updates on every poll, and an action's own re-render always runs.
 - The dashboard payload carries usage where it carried quota (#52). Each card's `quota` and
   `quotaNote` are replaced by `usage` (the source the newest figures came from, when they were
   taken, one row per bucket, and the usage-credits block) and `usageNote`, and each card gains a
@@ -41,6 +48,14 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- The dashboard lists the accounts in the order they free up, and every card says what its place in
+  that order means (#47). The accounts that can be worked now come first, ordered by the weekly
+  reset that ends them; then the spent ones, ordered by the reset that actually frees them; then the
+  ones nothing has been read from; then the ones the operator paused. Under each card's figures one
+  line names which of those it is: `usable now`, `usable in 2 h 14 min`, `no usage read yet`, or
+  `paused`. The operator pays for each subscription by the week whether or not it is spent, so the
+  account to work next is the one whose window turns over soonest: anything left in that window when
+  it resets is lost, and anything left in the others is not.
 - Every card says what its account has left (#52). The five-hour window, the seven-day window, and
   every scoped window the endpoint reports each get a row with its percentage, its reset time, and a
   line naming the source the figures came from and the time they were captured. A bucket no source
