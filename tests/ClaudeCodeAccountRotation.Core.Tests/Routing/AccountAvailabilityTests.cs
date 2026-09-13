@@ -140,6 +140,25 @@ public sealed class AccountAvailabilityTests
     }
 
     [Fact]
+    public void AnExhaustedAccountWhoseResetCannotBeDatedSortsAfterTheOnesThatCan()
+    {
+        // Spent, and nothing says when it comes back: the account is still out of
+        // the running, so it stays in the exhausted group, and it states no wait
+        // at all rather than one the page would have to invent. Last of that
+        // group, because an account whose return nobody can date must not be
+        // offered ahead of one that really does free up at a known hour.
+        AvailabilityKey key = AccountAvailability.KeyFor(Read("a@example.com", Weekly(100)), _now);
+
+        key.Standing.ShouldBe(AvailabilityStanding.Exhausted);
+        key.NextResetAt.ShouldBeNull();
+
+        Order(
+            Read("a@example.com", Weekly(100)),
+            Read("b@example.com", Weekly(100, _now.AddDays(2))))
+            .ShouldBe(["b@example.com", "a@example.com"]);
+    }
+
+    [Fact]
     public void AWindowThatHasResetSinceCaptureCountsAsUsable()
     {
         // A cached hundred per cent from the window before this one measures

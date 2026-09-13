@@ -466,6 +466,25 @@ public sealed class DashboardAssemblerTests
         card.GetProperty("nextResetAt").ValueKind.ShouldBe(JsonValueKind.Null);
     }
 
+    [Fact]
+    public async Task ASpentAccountWhoseResetCannotBeDatedCarriesNoInstant()
+    {
+        // Spent, with no reset instant to spend it against: the card still says
+        // the account is out, and says nothing about when it returns, because the
+        // page renders the line from this field and would otherwise have to
+        // invent the hour.
+        await using AppFactory factory = new();
+        DateTimeOffset now = factory.Clock.GetUtcNow();
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        await RosterAsync(factory, Entry(LiveEmail), Entry(FirstEmail));
+        Record(factory, FirstEmail, now.AddHours(-1), Weekly(100));
+
+        JsonElement card = await CardAsync(factory, FirstEmail);
+
+        card.GetProperty("standing").GetString().ShouldBe("exhausted");
+        card.GetProperty("nextResetAt").ValueKind.ShouldBe(JsonValueKind.Null);
+    }
+
     /// <summary>The rows a card shows before anything has numbers for it: named, ordered, and every one of them unknown.</summary>
     private static void ShouldBeAllUnknown(JsonElement card)
     {
@@ -488,8 +507,8 @@ public sealed class DashboardAssemblerTests
         factory.Services.GetRequiredService<QuotaState>().RecordSnapshot(
             new UsageSnapshot(AccountEmail.Parse(email).Value, capturedAt, QuotaSource.OnDemandRefresh, limits, ExtraUsage: null));
 
-    /// <summary>The seven-day window, the one the usable order is keyed on.</summary>
-    private static UsageLimit Weekly(double percent, DateTimeOffset resetsAt) =>
+    /// <summary>The seven-day window, the one the usable order is keyed on. No reset instant means the endpoint gave none.</summary>
+    private static UsageLimit Weekly(double percent, DateTimeOffset? resetsAt = null) =>
         new("weekly_all", LimitKind.WeeklyAll, "weekly", percent, "ok", resetsAt, null, IsActive: true);
 
     /// <summary>A roster entry for an account the operator has put on the machine but not logged in.</summary>
@@ -541,14 +560,13 @@ public sealed class DashboardAssemblerTests
     {
         using HttpClient client = factory.CreateClient();
         JsonElement dashboard = await client.GetFromJsonAsync<JsonElement>(new Uri("/api/dashboard", UriKind.Relative), TestContext.Current.CancellationToken);
-        return dashboard.GetProperty("accounts").EnumerateArray().Single(card => card.GetProperty("email").GetString() == email);
+        return Card(dashboard, email);
     }
 
     private static JsonElement Card(JsonElement dashboard, string email) =>
         dashboard.GetProperty("accounts").EnumerateArray().Single(card => card.GetProperty("email").GetString() == email);
 
-    private static JsonElement Card(Payload dashboard, string email) =>
-        dashboard.Element.GetProperty("accounts").EnumerateArray().Single(card => card.GetProperty("email").GetString() == email);
+    private static JsonElement Card(Payload dashboard, string email) => Card(dashboard.Element, email);
 
     private static async Task<Payload> DashboardAsync(AppFactory factory)
     {
