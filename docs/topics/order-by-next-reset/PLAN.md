@@ -670,7 +670,7 @@ Every row below was settled by the brief owner before planning, except the rows 
 | 18 | Three phases, fully sequential, all main-session or one implementer worker | `[EXEC-SHAPE]` |
 | 19 | An exhausted account keys on the **latest** live reset among the buckets that exhausted it, not the earliest: it frees up only when the later window turns over | brief, revised at review |
 | 20 | `Arrange` is the single entry point, returning `ArrangedAccount(Key, Standing)` pairs already ordered; the assembler calls it once per payload and never sorts or calls `KeyFor` | `[EXEC-SHAPE]` |
-| 21 | `render(dashboard, force)` skips a non-forced render while the pointer or focus is inside `#cards`; a forced render still runs | `[EXEC-SHAPE]` |
+| 21 | `render(dashboard, force)` skips a non-forced render while the pointer or focus is inside `#cards`; a forced render still runs. Narrowed at review: only when the arriving order also differs from the rendered one, so a same-order poll still lands in place | `[EXEC-SHAPE]` |
 | 22 | The usable card's line is `usable now`, not a second countdown: the 7-day row beside it already says "resets in ..." | `[EXEC-SHAPE]` |
 
 ## Open questions
