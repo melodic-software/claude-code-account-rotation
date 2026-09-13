@@ -413,7 +413,12 @@ at the end of Phase 1.
 | `src/ClaudeCodeAccountRotation.App/Endpoints/RosterEndpoints.cs` | KEEP | Audited: both card sites compile unchanged on the trailing defaults |
 | `tests/ClaudeCodeAccountRotation.App.Tests/Endpoints/SwitchEndpointTests.cs` | KEEP | Audited: stays green, two unread accounts, ordinal tie-break |
 
-### Phase 3: The card line, and the close-out [TODO]
+### Phase 3: The card line, and the close-out [DONE]
+
+Landed 2026-09-13 as `a8c04f1` (the card line and the render guard) and `3f3e682` (the
+CHANGELOG entries and the parent-plan note). Every Sanity Check bullet below held on re-run and a
+fresh-context verifier passed all six of its criteria. The parent-plan note leads with a lower-case
+`scope-change` so the grep in this section finds it. Items 6 and 7 close in the pull request.
 
 1. `src/ClaudeCodeAccountRotation.App/wwwroot/app.js`: a `nextReset(account, at)` helper beside
    `refreshState`, and one `element("p", "next-reset", ...)` appended inside `usage(account,
