@@ -467,6 +467,20 @@
     return account.refresh.message || state;
   }
 
+  // Where the card sits in the list, said in the one word its rows never carry.
+  // A usable account's countdown is not repeated here: the seven-day row above
+  // already reads "resets in 2 h 14 min", and the same phrase twice on one card
+  // reads as two different facts.
+  function nextReset(account, at) {
+    if (account.standing === "usable") { return "usable now"; }
+    if (account.standing === "unread") { return "no usage read yet"; }
+    if (account.standing === "paused") { return "paused"; }
+    // A spent account whose reset nothing can date has no wait to state, and the
+    // rows above already say which figure is missing.
+    if (account.standing === "exhausted" && account.nextResetAt) { return "usable " + relative(account.nextResetAt, at); }
+    return null;
+  }
+
   function usage(account, dashboard) {
     var section = element("div", "usage");
     var at = new Date(dashboard.capturedAt).getTime();
@@ -474,6 +488,8 @@
     if (account.usage.source) {
       section.appendChild(element("p", "asof", asOf(account.usage.capturedAt, account.usage.source, at)));
     }
+    var frees = nextReset(account, at);
+    if (frees) { section.appendChild(element("p", "next-reset", frees)); }
     if (account.usage.credits) { section.appendChild(element("p", "asof", creditsLine(account.usage.credits))); }
     if (account.usageNote) { section.appendChild(element("p", "muted", account.usageNote)); }
     var state = refreshState(account, dashboard);
@@ -512,6 +528,11 @@
     // Edit panel, or a half-typed login code, out from under whoever is typing it.
     // A mutation's own render passes force, since that one has to show the result.
     if (!force && cards.querySelector("details.edit[open], details.login[open]")) { return; }
+    // The cards are ordered by data a poll can change, and Switch fires without a
+    // confirm: a reorder between aim and click sends the operator to whichever
+    // account slid under the pointer. Keyboard focus counts the same, since
+    // tabbing to a button is aiming at it.
+    if (!force && (cards.matches(":hover") || cards.contains(document.activeElement))) { return; }
     banner.hidden = !dashboard.banner;
     banner.textContent = dashboard.banner || "";
     warnings.innerHTML = "";
