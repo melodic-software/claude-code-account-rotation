@@ -155,6 +155,42 @@ public sealed class DashboardAssemblerTests
     }
 
     [Fact]
+    public async Task TheLiveCardsStandingFollowsTheMergedFiguresNotTheCachedReadAlone()
+    {
+        // The standing an order is keyed on and the row that explains it have to
+        // come off the same merge: a regression that built the standing from the
+        // cached read alone, bypassing the tee, would still show a mild session
+        // figure on the card and would still pass every ordering fact above,
+        // because every one of them seeds through the cache alone.
+        await using AppFactory factory = new();
+        DateTimeOffset now = factory.Clock.GetUtcNow();
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        await CredentialFiles.WriteAsync(factory.LiveDirectory, "live-token", TestContext.Current.CancellationToken);
+        // The cached on-demand read: both windows mild, both resetting ahead.
+        Record(
+            factory,
+            LiveEmail,
+            now.AddHours(-2),
+            new UsageLimit("session", LimitKind.Session, "session", 10, "ok", now.AddHours(3), null, IsActive: true),
+            Weekly(20, now.AddDays(3)));
+        // The tee, rewritten after that read, carries only the two windows it
+        // always does, and its session figure alone clears the exhaustion line.
+        DateTimeOffset sessionResetsAt = now.AddHours(4);
+        await WriteTeeAsync(
+            factory,
+            TeeWithSessionPercent(LiveEmail, now.AddMinutes(-5), sessionPercent: 95, sessionResetsAt, weeklyPercent: 43, now.AddDays(2)));
+
+        JsonElement card = await LiveCardAsync(factory);
+
+        // 95 clears the 90 session threshold; 43 stays well under the 100 weekly
+        // one, so the exhausted key is the session reset alone.
+        card.GetProperty("standing").GetString().ShouldBe("exhausted");
+        card.GetProperty("nextResetAt").GetDateTimeOffset().ShouldBe(sessionResetsAt);
+        // The row ties to the same figure the standing used, not to the cached 10.
+        Limit(card, 0).GetProperty("percent").GetDouble().ShouldBe(95);
+    }
+
+    [Fact]
     public async Task ARowWhoseWindowResetSinceItWasCapturedLosesItsPercentage()
     {
         // A figure from the window before this one measures nothing the operator
@@ -541,6 +577,31 @@ public sealed class DashboardAssemblerTests
     private static JsonElement Usage(JsonElement card) => card.GetProperty("usage");
 
     private static JsonElement Limit(JsonElement card, int index) => Usage(card).GetProperty("limits")[index];
+
+    /// <summary>
+    /// The tee file shaped like <see cref="RateLimitGuardTeeFileReaderTests.Tee"/>,
+    /// but with a session figure that helper cannot produce: the merge fact needs
+    /// a session percentage past the exhaustion line, not the helper's fixed 69.
+    /// </summary>
+    private static string TeeWithSessionPercent(
+        string email,
+        DateTimeOffset capturedAt,
+        double sessionPercent,
+        DateTimeOffset sessionResetsAt,
+        double weeklyPercent,
+        DateTimeOffset weeklyResetsAt) =>
+        new JsonObject
+        {
+            ["captured_at"] = capturedAt.ToString("O"),
+            ["session_id"] = "00000000-0000-4000-8000-000000000002",
+            ["session_name"] = "a session",
+            ["rate_limits"] = new JsonObject
+            {
+                ["five_hour"] = new JsonObject { ["used_percentage"] = sessionPercent, ["resets_at"] = sessionResetsAt.ToUnixTimeSeconds() },
+                ["seven_day"] = new JsonObject { ["used_percentage"] = weeklyPercent, ["resets_at"] = weeklyResetsAt.ToUnixTimeSeconds() },
+            },
+            ["account"] = new JsonObject { ["email"] = email },
+        }.ToJsonString();
 
     private static async Task WriteTeeAsync(AppFactory factory, string content)
     {
