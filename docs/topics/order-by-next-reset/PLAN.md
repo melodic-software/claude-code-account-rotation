@@ -418,7 +418,10 @@ at the end of Phase 1.
 Landed 2026-09-13 as `a8c04f1` (the card line and the render guard) and `3f3e682` (the
 CHANGELOG entries and the parent-plan note). Every Sanity Check bullet below held on re-run and a
 fresh-context verifier passed all six of its criteria. The parent-plan note leads with a lower-case
-`scope-change` so the grep in this section finds it. Items 6 and 7 close in the pull request.
+`scope-change` so the grep in this section finds it. Items 6 and 7 close in the pull request. Review
+then narrowed the render guard to defer only when the arriving order would actually move a card, the
+pointer resting on the list being the mouse's ordinary state, and moved the banner and warnings
+writes above both guards beside the header ones, since neither lives inside `#cards`.
 
 1. `src/ClaudeCodeAccountRotation.App/wwwroot/app.js`: a `nextReset(account, at)` helper beside
    `refreshState`, and one `element("p", "next-reset", ...)` appended inside `usage(account,

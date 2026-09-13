@@ -139,6 +139,13 @@ public static class AccountAvailability
     /// Every account, keyed and ordered. The single entry point: a caller that
     /// keyed the accounts itself and sorted them would be the second ordering in
     /// the process, and the one the operator is not looking at.
+    /// <para>
+    /// Each <see cref="ArrangedAccount.Standing"/> handed back is the caller's own
+    /// instance, unchanged and never copied, so a caller may match it to whatever
+    /// it holds beside it by reference identity. That is the only match that
+    /// holds: two accounts can carry the same address, and matching on the address
+    /// would fail on the pair.
+    /// </para>
     /// </summary>
     public static IReadOnlyList<ArrangedAccount> Arrange(
         IReadOnlyList<AccountStanding> standings,

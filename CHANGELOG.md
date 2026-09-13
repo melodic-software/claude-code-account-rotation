@@ -11,10 +11,12 @@ All notable changes to this project are documented in this file. The format foll
 - Each dashboard account says where it stands and when it frees up (#47). Every card in
   `GET /api/dashboard` gains `standing` (`usable`, `exhausted`, `unread`, or `paused`) and
   `nextResetAt`, the instant it was ordered by, null when there is no wait that can be dated. The
-  page's ten-second re-render now holds off while the pointer or the keyboard focus is inside the
-  card list: the order follows figures a pass can change, and a poll that reordered the cards under
-  an aimed cursor would send a Switch, which asks for no confirmation, to the wrong account. The
-  header above the cards still updates on every poll, and an action's own re-render always runs.
+  page's ten-second re-render now holds off only when the pointer or the keyboard focus is inside
+  the card list and the arriving order would move a card: the order follows figures a pass can
+  change, and a poll that reordered the cards under an aimed cursor would send a Switch, which asks
+  for no confirmation, to the wrong account. An unchanged order moves nothing, so the cards are
+  redrawn in place and keep landing during a refresh pass. The header, the banner, and the warnings
+  above the cards update on every poll, and an action's own re-render always runs.
 - The dashboard payload carries usage where it carried quota (#52). Each card's `quota` and
   `quotaNote` are replaced by `usage` (the source the newest figures came from, when they were
   taken, one row per bucket, and the usage-credits block) and `usageNote`, and each card gains a

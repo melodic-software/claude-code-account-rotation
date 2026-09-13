@@ -253,13 +253,20 @@ internal sealed class DashboardAssembler(
     /// Where an account stands, as the page spells it. The word a card cannot
     /// derive for itself: a page holding only an instant cannot tell an account
     /// that is free now from one nobody has read.
+    /// <para>
+    /// Every member is named and the default throws, because a member added later
+    /// would otherwise reach the page as "no usage read yet": the one word that
+    /// tells the operator nothing is known about an account, said about an account
+    /// this code simply has no word for yet.
+    /// </para>
     /// </summary>
     private static string Wire(AvailabilityStanding standing) => standing switch
     {
         AvailabilityStanding.Usable => "usable",
         AvailabilityStanding.Exhausted => "exhausted",
+        AvailabilityStanding.Unread => "unread",
         AvailabilityStanding.Paused => "paused",
-        _ => "unread",
+        _ => throw new ArgumentOutOfRangeException(nameof(standing)),
     };
 
     /// <summary>
