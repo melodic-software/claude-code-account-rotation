@@ -143,9 +143,17 @@ record, so the Core rule leads and the page trails.
 Baseline to record before Phase 1: `dotnet test -c Release` total on `5f27f60` (expected 428, 1
 skipped). Every later count is stated relative to that number.
 
-### Phase 1: The merge function and the ordering primitive, in Core [TODO]
+### Phase 1: The merge function and the ordering primitive, in Core [DONE]
 
 Review: architecture
+
+Landed 2026-09-13 as `5e44f87` (the merge lift) and `a825814` (the ordering primitive). Every
+Sanity Check bullet below held on re-run; a fresh-context verifier passed all ten of its criteria,
+reading `UsageMerge` as line-for-line the assembler's private loop and the golden fixture as the
+approved sequence. Test total 454 against a baseline of 431 on `7b1c62b` (the plan's 428 was the
+pre-plan count). `HasResetBy` is pinned through the availability suite rather than a `UsageLimit`
+fact of its own. `MergedUsage.Merged.Limits` is in merge-insertion order, not `Position` order;
+Phase 2 keeps ordering rows in the App.
 
 Tests first, in the `RefreshOrderTests` shape: `public sealed class <Type>Tests` with a class-level
 doc comment arguing what the suite pins, full-sentence fact names, Shouldly, and the Core project's
