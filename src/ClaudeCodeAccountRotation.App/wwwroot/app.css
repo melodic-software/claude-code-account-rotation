@@ -84,6 +84,33 @@ header h1 { margin: 0; font-size: 1.6rem; letter-spacing: 0.01em; }
 
 .card.paused { opacity: 0.75; }
 
+.usage { display: flex; flex-direction: column; gap: 0.35rem; }
+
+/* One bucket per row: label, bar, and reading on one line at the card's 280px,
+   with the reset time and a row's own source wrapping under them. */
+.limit { display: flex; flex-wrap: wrap; align-items: center; gap: 0.2rem 0.5rem; font-size: 0.85rem; }
+/* A scoped window's label is whatever the endpoint calls it, so it wraps inside
+   its own basis rather than pushing the bar off the row. */
+.limit .label { flex: 0 0 3.4rem; min-width: 0; overflow-wrap: anywhere; color: var(--muted); }
+.limit .bar {
+  flex: 1 1 5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--line) 70%, transparent);
+  overflow: hidden;
+}
+.limit .fill { height: 100%; border-radius: inherit; background: var(--accent); }
+.limit .fill[data-severity="warning"] { background: var(--warn); }
+.limit .fill[data-severity="error"], .limit .fill[data-severity="critical"] { background: var(--error); }
+.limit .reading { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+/* The whole basis, so neither line steals the bar's row. */
+.limit .resets, .limit .asof { flex-basis: 100%; color: var(--muted); }
+
+.asof, .refresh-state { margin: 0; color: var(--muted); font-size: 0.8rem; }
+
+header button { margin-top: 0.6rem; }
+#refresh-state { margin: 0.4rem 0 0; min-height: 1.2rem; }
+
 .actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 
 button {

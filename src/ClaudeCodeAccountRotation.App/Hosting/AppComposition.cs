@@ -5,16 +5,19 @@ using ClaudeCodeAccountRotation.App.Adapters.Process;
 using ClaudeCodeAccountRotation.App.Configuration;
 using ClaudeCodeAccountRotation.App.Dashboard;
 using ClaudeCodeAccountRotation.App.Endpoints;
+using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.App.Security;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Configuration;
 using ClaudeCodeAccountRotation.Core.Ports;
+using ClaudeCodeAccountRotation.Core.Quota;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.HostFiltering;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Logging;
 
@@ -117,9 +120,25 @@ internal static class AppComposition
         services.AddSingleton<LiveDirectorySwitch>();
         services.AddSingleton<DashboardState>();
         services.AddSingleton<DashboardAssembler>();
+        AddRefresh(services);
         services.AddHostedService<InstanceLockHolder>();
         services.AddHostedService<StartupReconciliation>();
         services.AddHostedService<StateFileWatcher>();
+        // The worker is registered twice over one instance because the refresh
+        // routes call TryStart on it: AddHostedService alone registers it as an
+        // IHostedService and nothing else, so the route could not resolve the very
+        // object holding the channel its 202 writes to.
+        services.AddSingleton<QuotaRefreshWorker>();
+        services.AddHostedService(static provider => provider.GetRequiredService<QuotaRefreshWorker>());
+        // A pass is a credential operation, not a request: the account in flight
+        // must be allowed to finish or its rotated pair is stranded. The worst
+        // case is one gated refresh unit — a 2 s wait for the mutation gate, a
+        // 20 s token POST, three write attempts each wrapping AtomicBytesFile's
+        // 2 s transient retry, and 1.75 s of pacing between them — which is about
+        // 30 s. The framework's default 30 s would cut that unit off at its worst
+        // moment, so the drain is given 45 s.
+        services.Configure<Microsoft.Extensions.Hosting.HostOptions>(
+            static options => options.ShutdownTimeout = TimeSpan.FromSeconds(45));
         // No checks registered: liveness only. MapRoutes maps the /healthz route this serves.
         services.AddHealthChecks();
 
@@ -148,6 +167,7 @@ internal static class AppComposition
         DashboardEndpoints.Map(app);
         SwitchEndpoints.Map(app);
         RosterEndpoints.Map(app);
+        RefreshEndpoints.Map(app);
         LoginEndpoints.Map(app);
     }
 
@@ -163,10 +183,44 @@ internal static class AppComposition
     internal static void AddOutboundClients(IServiceCollection services, string userAgent)
     {
         ArgumentNullException.ThrowIfNull(services);
+        // The clock comes from the container, not from TimeProvider.System: a
+        // Retry-After given as an absolute date is turned into a wait against it,
+        // and a test that moves the clock must be able to move that too. TryAdd,
+        // so the composition root's own registration (or a test's replacement of
+        // it) stands and a caller wiring only these two clients still gets a clock.
+        services.TryAddSingleton(TimeProvider.System);
         services.AddHttpClient(nameof(AnthropicUsageEndpointClient))
-            .AddTypedClient<IUsageEndpointClient>(http => new AnthropicUsageEndpointClient(http, userAgent, TimeProvider.System));
+            .AddTypedClient<IUsageEndpointClient>((http, provider) => new AnthropicUsageEndpointClient(http, userAgent, provider.GetRequiredService<TimeProvider>()));
         services.AddHttpClient(nameof(ClaudeOAuthTokenRefreshClient))
-            .AddTypedClient<ITokenRefreshClient>(http => new ClaudeOAuthTokenRefreshClient(http, userAgent, TimeProvider.System));
+            .AddTypedClient<ITokenRefreshClient>((http, provider) => new ClaudeOAuthTokenRefreshClient(http, userAgent, provider.GetRequiredService<TimeProvider>()));
+    }
+
+    /// <summary>
+    /// The refresh engine and everything it needs that is not already registered.
+    /// <para>
+    /// Two of these are delegates rather than the services themselves. The typed
+    /// clients are transient (a singleton capturing one would hold a handler past
+    /// its rotation), so the engine resolves a fresh one per call through a
+    /// factory. The pacing delegate exists because <c>TestClock</c> overrides only
+    /// <c>GetUtcNow</c>: a <c>Task.Delay</c> driven by a <see cref="TimeProvider"/>
+    /// would really sleep in a test, so production hands the engine the real delay
+    /// and a test hands it a recorder.
+    /// </para>
+    /// </summary>
+    private static void AddRefresh(IServiceCollection services)
+    {
+        services.AddSingleton<QuotaState>();
+        services.AddSingleton<UsageSnapshotCache>();
+        services.AddSingleton<RecoveryFiles>();
+        services.AddSingleton(provider => new RefreshBudget(provider.GetRequiredService<TimeProvider>()));
+        services.AddSingleton<Func<IUsageEndpointClient>>(static provider => provider.GetRequiredService<IUsageEndpointClient>);
+        services.AddSingleton<Func<ITokenRefreshClient>>(static provider => provider.GetRequiredService<ITokenRefreshClient>);
+        services.AddSingleton<Func<TimeSpan, CancellationToken, Task>>(static provider =>
+        {
+            TimeProvider timeProvider = provider.GetRequiredService<TimeProvider>();
+            return (delay, cancellationToken) => Task.Delay(delay, timeProvider, cancellationToken);
+        });
+        services.AddSingleton<QuotaRefresh>();
     }
 
     /// <summary>

@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
+using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Ports;
@@ -46,6 +47,8 @@ internal sealed partial class LiveDirectorySwitch
     private readonly ILoginSessionRunner _logins;
     private readonly IClaudeCliAuthStatus _authStatus;
     private readonly ManagedLoginPolicyReader _policyReader;
+    private readonly RecoveryFiles _recovery;
+    private readonly QuotaState _quota;
     private readonly SwitchOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<LiveDirectorySwitch> _logger;
@@ -61,6 +64,8 @@ internal sealed partial class LiveDirectorySwitch
         ILoginSessionRunner logins,
         IClaudeCliAuthStatus authStatus,
         ManagedLoginPolicyReader policyReader,
+        RecoveryFiles recovery,
+        QuotaState quota,
         SwitchOptions options,
         TimeProvider timeProvider,
         ILogger<LiveDirectorySwitch> logger)
@@ -74,6 +79,8 @@ internal sealed partial class LiveDirectorySwitch
         _logins = logins;
         _authStatus = authStatus;
         _policyReader = policyReader;
+        _recovery = recovery;
+        _quota = quota;
         _options = options;
         _timeProvider = timeProvider;
         _logger = logger;
@@ -94,6 +101,15 @@ internal sealed partial class LiveDirectorySwitch
             {
                 LogRefused(target.Value, SwitchRefusal.MutationInProgress);
                 return Result<SwitchOutcome, SwitchRefusal>.Failure(SwitchRefusal.MutationInProgress);
+            }
+
+            // Under the gate, not before it: checked before, a switch could still
+            // slip in between the pass's TryBeginRun and the identity repair that
+            // opens it, which takes the gate with a zero wait.
+            if (_quota.InProgress)
+            {
+                LogRefused(target.Value, SwitchRefusal.RefreshInProgress);
+                return Result<SwitchOutcome, SwitchRefusal>.Failure(SwitchRefusal.RefreshInProgress);
             }
 
             return await SwitchUnderGateAsync(target, cancellationToken);
@@ -208,8 +224,14 @@ internal sealed partial class LiveDirectorySwitch
         AccountEmail? liveOwner = await ReadLiveOwnerAsync(live, cancellationToken);
         DateTimeOffset now = _timeProvider.GetUtcNow();
 
+        // Read here, under the gate, with every other planning input: a refresh
+        // that stranded this folder's rotated pair left the file in it dead, so
+        // moving that file to live would both fail the account and take away the
+        // parked pair the restore compares against.
+        bool targetStranded = _recovery.HasRecoveryFor(targetProfile.FolderPath);
+
         Result<SwitchPlan, SwitchRefusal> planned = SwitchPlanner.Plan(new SwitchPlanningInput(
-            live, targetProfile, liveCredentials, targetCredentials, policy, journalOpen, liveOwner, _options.ProfilesRoot, now));
+            live, targetProfile, liveCredentials, targetCredentials, policy, journalOpen, liveOwner, _options.ProfilesRoot, now, targetStranded));
         if (planned.IsFailure)
         {
             LogRefused(target.Value, planned.Error);

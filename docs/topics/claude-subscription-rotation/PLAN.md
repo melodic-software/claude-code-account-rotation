@@ -423,22 +423,22 @@ time, plus login expiry (AC 4). Behavioral references: `spike-usage-probe.py`,
   bound stands for ten accounts. **Shared:** AC 4 cannot hold for more than about eight idle
   accounts in one window; route the re-scoping ("populated across successive windows, paced, with
   lockouts shown per card") through `/planning:plan review` because it changes a locked criterion.
-- [ ] **2.1** Core quota types and `UsageResponseParser` (reads `limits[]` and `extra_usage` only).
+- [x] **2.1** Core quota types and `UsageResponseParser` (reads `limits[]` and `extra_usage` only).
   Fixture `usage-response-spike01.json` reproduces spike 01's shape including the codenamed null
   buckets. Tests: three limits parsed; `weekly_scoped` carries `ScopeDisplayName == "Fable"`; an
   unknown `kind` still parses as `LimitKind.Unknown`; a body with no `limits` → failure result.
-- [ ] **2.2** `StatuslineSnapshot` + `RateLimitGuardTeeFileReader` (tolerates a missing file, torn
+- [x] **2.2** `StatuslineSnapshot` + `RateLimitGuardTeeFileReader` (tolerates a missing file, torn
   JSON, missing `rate_limits`, and reads `account.email` when present).
-- [ ] **2.3** `RefreshBudget` (`TimeProvider`-driven sliding window: 6 reads per account per 5 min,
+- [x] **2.3** `RefreshBudget` (`TimeProvider`-driven sliding window: 6 reads per account per 5 min,
   60-second minimum gap, lockout until `Retry-After`). The first 401 on a reservation refunds it and
   does not start the gap clock, so the single retry after a credential refresh rides the original
   reservation; a second 401 on the same reservation is not refunded (PR #15 security review).
-- [ ] **2.4** Ports `IUsageEndpointClient`, `ITokenRefreshClient`; adapters
+- [x] **2.4** Ports `IUsageEndpointClient`, `ITokenRefreshClient`; adapters
   `AnthropicUsageEndpointClient` and `ClaudeOAuthTokenRefreshClient` via `IHttpClientFactory` typed
   clients, 20-second timeout, `User-Agent: claude-code-account-rotation/<version> (+https://github.com/melodic-software/claude-code-account-rotation)`,
   `anthropic-beta: oauth-2025-04-20` on the usage read, Claude Code's public client id on the refresh
   as spike 03 did. Errors map to `UsageReadFailure`; `Retry-After` parsed from the 429.
-- [ ] **2.5** `QuotaRefresh` under the `CredentialMutationGate`: Refresh all iterates non-paused
+- [x] **2.5** `QuotaRefresh` under the `CredentialMutationGate`: Refresh all iterates non-paused
   accounts with one-second spacing, plus any paused account whose login expires within 7 days (a
   paused pair's 28-day login must never lapse silently); on 401 for a **parked** pair, refresh once
   and write back (rotated `refreshToken`, `accessToken`, `expiresAt`, and `refreshTokenExpiresAt`
@@ -451,13 +451,20 @@ time, plus login expiry (AC 4). Behavioral references: `spike-usage-probe.py`,
   writable. The live pair is read with its current access token and never refreshed here (a 401 on
   the live pair shows "session will refresh" on the card). Per-account results including lockouts.
   `UsageSnapshotCache` persists the latest snapshot per account.
-- [ ] **2.6** Endpoints `POST /api/refresh`, `POST /api/accounts/{email}/refresh`; dashboard cards
+- [x] **2.6** Endpoints `POST /api/refresh`, `POST /api/accounts/{email}/refresh`; dashboard cards
   gain bars per `UsageLimit`, "as of <time> via snapshot|refresh|cached", "login expires in N days"
   (from `LoginExpiresAt`), "rate limited, retry in N s" state, and the usage-credits state line.
 
+Landed (2026-09-12): 2.1 to 2.4 shipped together in PR #15 and were never ticked; 2.5 and 2.6
+shipped in #52 (`docs/topics/usage-cards/PLAN.md`, its `DEVIATIONS.md` for every departure from
+the text above). What moved: "login expires in N days" is #49's; the pass runs in a hosted
+background worker started by the routes rather than inside the request; the recovery file is
+restored at start and on a per-card refresh, and a stranded folder refuses a switch server-side.
+The phase stays `[DOING]` for 2.0 alone.
+
 **Sanity Check:**
 
-- `.work/claude-subscription-rotation/spike-02b-bucket-keying.md` exists and its first line matches `^# Spike 02b .* (PER-TOKEN|SHARED)$`.
+- `.work/claude-subscription-rotation/spike-02b-bucket-keying.md` exists and its first line matches `^# Spike 02b .* (PER-TOKEN|SHARED)$`. Scope-change note 2026-09-12 (#52): still open; #52 shipped without it. The pass is safe under both answers (stop on the first 429, honour `Retry-After` for every read, keep unread accounts first in line, skip the doomed read when the access token is already expired) and the pass log records reads in the window, so the keying can be settled from the log as well as from the spike.
 - `dotnet test` exit 0; `grep -rn "seven_day_opus\|seven_day_sonnet\|tangelo\|nimbus_quill\|cinder_cove" src/ | wc -l` prints `0`.
 - `AnthropicUsageEndpointClientTests`: 200 → success; 429 with `Retry-After: 300` → `RateLimited` with `RetryAfter == 300 s` and exactly one request sent.
 - `QuotaRefreshTests.ParkedPairUnauthorizedRefreshesOnceThenRetriesOnce`: fake handler records exactly one token POST and exactly two usage GETs; written-back file has a new `refreshTokenExpiresAt` equal to `now + refresh_token_expires_in` and untouched sibling keys.
@@ -466,7 +473,7 @@ time, plus login expiry (AC 4). Behavioral references: `spike-usage-probe.py`,
 - `QuotaRefreshTests.WriteBackFailureParksTheRotatedPairInRecovery`: with the parked file made read-only after the token endpoint answers, the recovery file exists with the new fingerprint, the card reports a blocking error, and the next start restores the pair and deletes the recovery file.
 - `AtomicJsonFileTests.CreatesOwnerOnlyFilesOnUnix` (Linux CI leg): target mode `600`, no temp residue; `ReplacesAbsentTargetByMove` on both legs.
 - `QuotaRefreshTests.PausedPairNearLoginExpiryIsRefreshed`: a paused pair 5 days from login expiry gets one token POST; one 20 days out gets none.
-- Live acceptance (human): with ≥ 2 parked accounts, one idle > 8 h, click Refresh all; every card populated within 60 s (wall clock) with source, capture time, and "login expires in N days"; compare one card to that account's claude.ai Settings > Usage.
+- Live acceptance (human): with ≥ 2 parked accounts, one idle > 8 h, click Refresh all; every card populated within 60 s (wall clock) with source, capture time, and "login expires in N days"; compare one card to that account's claude.ai Settings > Usage. Scope-change note 2026-09-12 (#52): "login expires in N days" moved to #49; the 60-second bound is not promised while the bucket keying is unknown, since under a shared bucket a pass populates about eight cards and the rest report "rate limited, retry in N s" and lead the next pass (converging in three passes over ten accounts). Running spike 02b per-token restores the bound as written. The runbook step is in `tests/acceptance/README.md`.
 
 ### Phase 3: Ranking, queue, and switch proposals [TODO]
 
@@ -500,7 +507,7 @@ decision-point auto-refresh (AC 5). Pure functions over `AccountStanding` rows.
 - `QuotaRefreshTests.DecisionPointRefreshesTopThreeOnly`: with five eligible accounts and the active crossing to 81 percent, exactly three usage GETs are sent, and none for an account read 30 s earlier.
 - `QuotaRefreshTests.UnchangedStateSendsNoUsageReads`: 360 dashboard reads over a simulated hour with the active account steady at 85 percent send zero usage GETs.
 - `SwitchAdvisorTests.CooldownSurvivesRestart`: a switch-back proposal at T, a new advisor built from the persisted state at T + 10 min, no second proposal.
-- `grep -rn "System.Threading.Timer\|PeriodicTimer\|Task.Delay" src/ClaudeCodeAccountRotation.App/Quota/ | wc -l` prints `0` (no timer path in the refresh code; the one-second spacing lives in `RefreshBudget` pacing, asserted by name).
+- `grep -rn "System.Threading.Timer\|PeriodicTimer\|Task.Delay" src/ClaudeCodeAccountRotation.App/Quota/ | wc -l` prints `0` (no timer path in the refresh code). Scope-change note 2026-09-12 (#52): `RefreshBudget` refuses and never waits; the one-second spacing is an injected delay delegate on `QuotaRefresh`, registered in `AppComposition`, so tests pace through a recorder and the grep stays green.
 
 ### Phase 4: Roster operations and browser-assisted login [TODO]
 

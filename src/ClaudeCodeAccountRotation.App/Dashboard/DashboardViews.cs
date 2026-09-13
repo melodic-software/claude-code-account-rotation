@@ -1,4 +1,5 @@
 using ClaudeCodeAccountRotation.App.Switching;
+using ClaudeCodeAccountRotation.Core.Quota;
 
 namespace ClaudeCodeAccountRotation.App.Dashboard;
 
@@ -8,7 +9,8 @@ internal sealed record DashboardView(
     IReadOnlyList<AccountCardView> Accounts,
     string? Banner,
     IReadOnlyList<string> Warnings,
-    DateTimeOffset CapturedAt);
+    DateTimeOffset CapturedAt,
+    RefreshView Refresh);
 
 internal sealed record LiveAccountView(string? Email, bool HasCredentials, string? Fingerprint);
 
@@ -17,8 +19,9 @@ internal sealed record AccountCardView(
     bool IsLive,
     bool HasCredentials,
     string? Folder,
-    StatuslineQuotaView? Quota = null,
-    string? QuotaNote = null,
+    UsageView Usage,
+    string? UsageNote,
+    RefreshStateView Refresh,
     RosterEntryView? Roster = null);
 
 /// <summary>
@@ -41,17 +44,129 @@ internal sealed record RosterEntryView(
 internal sealed record BrowserProfileView(string Browser, string Directory, string Name, string? Email);
 
 /// <summary>
-/// The windows a live session observed, as the tee recorded them. A card only
-/// ever shows a snapshot that names its own account. The source is not a field
-/// because the tee is the only source there is until the on-demand refresh
-/// lands and gives it something to vary against.
+/// One account's quota as the card shows it: where the newest figures came
+/// from, when they were taken, one row per bucket, and the usage-credits line.
+/// <para>
+/// A card is merged per bucket across every source that has numbers for the
+/// account (the live session's statusline tee, an on-demand read, a cached read
+/// from before the last restart), so <see cref="Source"/> and
+/// <see cref="CapturedAt"/> name the newest source that contributed a row and a
+/// row taken from an older one says so itself. Letting the newest whole snapshot
+/// win instead would blank the scoped row every time a live session writes the
+/// tee, which carries only two of the buckets.
+/// </para>
 /// </summary>
-internal sealed record StatuslineQuotaView(
-    double? FiveHourPercent,
-    DateTimeOffset? FiveHourResetsAt,
-    double? SevenDayPercent,
-    DateTimeOffset? SevenDayResetsAt,
-    DateTimeOffset CapturedAt);
+internal sealed record UsageView(
+    string? Source,
+    DateTimeOffset? CapturedAt,
+    IReadOnlyList<UsageLimitView> Limits,
+    UsageCreditsView? Credits)
+{
+    /// <summary>
+    /// The card of an account nothing has numbers for: the rows the page always
+    /// shows, every one of them unknown, and no "as of" line. Shared, so a card
+    /// handed back by a roster edit carries the same shape a refreshed one does
+    /// and the always-three-rows invariant lives on the server rather than in the
+    /// browser.
+    /// </summary>
+    public static UsageView Unread { get; } = new(
+        Source: null,
+        CapturedAt: null,
+        [.. UsageBuckets.Always.Select(UsageLimitView.Unknown)],
+        Credits: null);
+}
+
+/// <summary>
+/// One bucket on a card: the generic row the page renders whatever the endpoint
+/// calls the window.
+/// <para>
+/// Two flags say what the row knows, and the page reads them in this order.
+/// <see cref="Known"/> false means no source carried this bucket at all, which
+/// renders as "unknown". <see cref="WindowReset"/> true means a source did carry
+/// it but the window has reset since it was captured, so <see cref="Percent"/>
+/// is null and the card says so rather than showing a figure that now measures
+/// nothing. Otherwise the percentage stands.
+/// </para>
+/// <para>
+/// <see cref="Source"/> and <see cref="CapturedAt"/> are set only when this row
+/// came from a different source than the card's own; otherwise the card's one
+/// "as of" line speaks for it.
+/// </para>
+/// </summary>
+internal sealed record UsageLimitView(
+    string Kind,
+    string Label,
+    double? Percent,
+    DateTimeOffset? ResetsAt,
+    string? Severity,
+    string? Source,
+    DateTimeOffset? CapturedAt,
+    bool Known,
+    bool WindowReset)
+{
+    /// <summary>A row for a bucket no source carried: named and ordered, and admittedly unknown.</summary>
+    public static UsageLimitView Unknown(UsageLimit bucket)
+    {
+        ArgumentNullException.ThrowIfNull(bucket);
+        return new UsageLimitView(
+            bucket.RawKind,
+            bucket.Label,
+            Percent: null,
+            ResetsAt: null,
+            Severity: null,
+            Source: null,
+            CapturedAt: null,
+            Known: false,
+            WindowReset: false);
+    }
+}
+
+/// <summary>The usage-credits block: whether extra usage is on, why not, and whether the spend limit stopped it.</summary>
+internal sealed record UsageCreditsView(bool Enabled, string? DisabledReason, bool SpendLimitReached);
+
+/// <summary>
+/// How one account's last turn in a refresh pass went, or <c>idle</c> before
+/// there has been one. <see cref="State"/> is the outcome kind in kebab-case
+/// because the app configures no JSON enum converter: every enum-shaped field on
+/// this page is a string on the wire.
+/// </summary>
+internal sealed record RefreshStateView(string State, string? Message, DateTimeOffset? RetryAt)
+{
+    /// <summary>Nothing has read this account yet, and nothing refused to.</summary>
+    public static RefreshStateView Idle { get; } = new("idle", Message: null, RetryAt: null);
+}
+
+/// <summary>
+/// The pass as a whole rather than one card's share of it: whether one is
+/// running, when the host lockout that refuses every read lifts, and one line on
+/// what the last pass came to.
+/// </summary>
+internal sealed record RefreshView(bool InProgress, DateTimeOffset? LockedUntil, string? Summary);
+
+/// <summary>
+/// The buckets a card always shows a row for, in the order it shows them, as
+/// empty limits whose only job is to name and label a row no source carried.
+/// The raw kinds are the usage endpoint's own words, which is what lets a
+/// placeholder and a real row be recognised as the same bucket.
+/// <para>
+/// The scoped bucket is the generic weekly-scoped window with no display name,
+/// which <see cref="UsageLimit.Label"/> renders as "scoped". The model behind it
+/// is never named here: a card says what the endpoint called it, or nothing.
+/// </para>
+/// </summary>
+internal static class UsageBuckets
+{
+    public static UsageLimit Session { get; } = Empty("session", LimitKind.Session);
+
+    public static UsageLimit WeeklyAll { get; } = Empty("weekly_all", LimitKind.WeeklyAll);
+
+    public static UsageLimit WeeklyScoped { get; } = Empty("weekly_scoped", LimitKind.WeeklyScoped);
+
+    public static IReadOnlyList<UsageLimit> Always { get; } = [Session, WeeklyAll, WeeklyScoped];
+
+    private static UsageLimit Empty(string rawKind, LimitKind kind) =>
+        new(rawKind, kind, Group: null, Percent: 0, Severity: null, ResetsAt: null, ScopeDisplayName: null, IsActive: false);
+}
 
 internal sealed record SwitchOutcomeView(
     string Now,

@@ -154,6 +154,23 @@ public sealed class SwitchPlannerTests
     }
 
     [Fact]
+    public void RefusesWhenTheTargetIsStrandedInRecovery()
+    {
+        // The parked file still on disk is the pair the failed write-back was meant
+        // to replace, and its refresh token died the moment the token endpoint
+        // answered. Moving it to live would put a dead pair where the CLI reads,
+        // and no restore could apply afterwards. The refusal outranks the expiry
+        // check, which would otherwise report the wrong reason for the same folder.
+        SwitchPlanningInput input = Baseline() with
+        {
+            TargetHasRecoveryFile = true,
+            TargetCredentials = Pair("refresh-b", loginExpiresAt: _now.AddMinutes(-1)),
+        };
+
+        SwitchPlanner.Plan(input).Error.ShouldBe(SwitchRefusal.TargetStrandedInRecovery);
+    }
+
+    [Fact]
     public void RefusesWhenTheTargetLoginHasExpired()
     {
         SwitchPlanningInput input = Baseline();

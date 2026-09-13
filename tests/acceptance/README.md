@@ -39,6 +39,25 @@ session. `jq -r .oauthAccount.emailAddress ~/.claude.json` still prints the inco
 `bash tests/acceptance/check-live-identity.sh` prints `billed_email=<incoming account>`. It makes one
 honest-User-Agent read of the OAuth profile with the live access token and prints nothing else.
 
+## Usage cards and Refresh all (issue #52)
+
+Run after installing a build that carries the usage cards, with every account logged in.
+
+1. Open the dashboard and click `Refresh all`. The line under the header reads
+   `refreshing all accounts...` while the pass runs and then `last pass: ...` with the counts.
+2. Every card the rate window allowed shows three rows, the 5-hour window, the 7-day window, and the
+   scoped one, each with a percentage and its reset time, and one `as of <time> via refresh` line
+   naming where the figures came from and when they were taken. A card the window refused reads
+   `rate limited, retry in N s` and is first in line for the next pass; a card nothing has read shows
+   `unknown` on every row rather than zero. Wait out the lockout and click `Refresh all` again for
+   the cards the first pass did not reach.
+3. Pick one card and compare it against that account's `Settings > Usage` on claude.ai, signed in as
+   that account. Record which account, both readings, and the card's capture time: a difference is
+   only a finding once it is larger than what the capture time explains.
+4. `bash tests/acceptance/check-single-holder.sh ~/.claude-profiles ~/.claude` prints `duplicates=0`
+   and `recovery=0`. A non-zero `recovery` names each stranded file: restart the tool, or click that
+   account's own `Refresh`, and run the check again.
+
 ## Log
 
 | date | machine | criteria | outcome | notes |

@@ -138,4 +138,25 @@ public sealed class RefreshBudgetTests
         budget.TryReserve(_accountB).ShouldBeTrue();
         budget.LockedOutFor(_accountB).ShouldBeNull();
     }
+
+    [Fact]
+    public void TheGapRemainingCountsDownFromTheLastReadAndThenGoesAway()
+    {
+        TestClock clock = new(DateTimeOffset.Parse("2026-09-07T12:00:00Z", System.Globalization.CultureInfo.InvariantCulture));
+        RefreshBudget budget = new(clock);
+
+        // Nothing to wait for before the account has ever been read, which is what
+        // lets a card that was never read say "unknown" rather than "read 0 s ago".
+        budget.GapRemaining(_accountA).ShouldBeNull();
+
+        budget.TryReserve(_accountA).ShouldBeTrue();
+        clock.Advance(TimeSpan.FromSeconds(10));
+
+        budget.GapRemaining(_accountA)!.Value.ShouldBe(TimeSpan.FromSeconds(50));
+
+        // Past the gap it agrees with TryReserve, so the card never counts down
+        // against a read the budget would already allow.
+        clock.Advance(TimeSpan.FromSeconds(51));
+        budget.GapRemaining(_accountA).ShouldBeNull();
+    }
 }

@@ -16,6 +16,16 @@ internal sealed class RecordingHandler(params HttpResponseMessage[] responses) :
 
     public List<string?> Bodies { get; } = [];
 
+    /// <summary>
+    /// Adds one more scripted answer after construction. A refresh pass decides
+    /// what it sends from state the test sets up first, so a test that has to
+    /// hand the whole script to a constructor cannot script a handler the host
+    /// already owns. The empty-script throw is deliberately kept: a queue that
+    /// answered a request nobody scripted would let an unexpected outbound call
+    /// pass for a deliberate one.
+    /// </summary>
+    public void Enqueue(HttpResponseMessage response) => _responses.Enqueue(response);
+
     public static HttpResponseMessage Json(HttpStatusCode status, string body) =>
         new(status) { Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json") };
 

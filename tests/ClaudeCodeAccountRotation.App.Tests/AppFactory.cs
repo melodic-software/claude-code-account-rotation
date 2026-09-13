@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Adapters.Process;
 using ClaudeCodeAccountRotation.App.Switching;
+using ClaudeCodeAccountRotation.App.Tests.Adapters;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Ports;
@@ -78,6 +79,27 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
     /// <summary>Every log line the host wrote, so a test can assert what never reaches one.</summary>
     public LogSink Logs { get; } = new();
 
+    /// <summary>
+    /// The socket at the bottom of every outbound handler chain. Empty by
+    /// default, so an unexpected outbound call throws rather than reaching the
+    /// network or quietly answering: this is the assertion that no test in this
+    /// repository talks to Anthropic. A test scripts it with
+    /// <see cref="Adapters.RecordingHandler.Enqueue"/> after the host is built,
+    /// and both named clients share the one queue, so a pass's token POST and its
+    /// usage GET are recorded in the order they were actually sent.
+    /// </summary>
+    public RecordingHandler Outbound { get; } = new();
+
+    /// <summary>
+    /// Every delay the refresh engine asked for, in order, and none of them
+    /// taken. The engine paces itself with an injected delegate rather than
+    /// <c>Task.Delay</c> precisely so this can exist: <see cref="TestClock"/>
+    /// overrides only <c>GetUtcNow</c>, so a delay driven by the container's
+    /// <see cref="TimeProvider"/> would really sleep and a pass over ten accounts
+    /// would take ten seconds of wall clock per test.
+    /// </summary>
+    public Pacer Waits { get; } = new();
+
     public static JsonObject AccountJson(string email) => new() { ["accountUuid"] = "uuid-" + email, ["emailAddress"] = email };
 
     public async Task WriteStateFileAsync(string email, CancellationToken cancellationToken)
@@ -111,6 +133,22 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
         builder.ConfigureLogging(logging => logging.AddProvider(Logs));
         builder.ConfigureTestServices(services =>
         {
+            // Nothing reaches the network: the factory's own handler chain stays
+            // and only the socket underneath it is replaced. The lambda captures
+            // the one instance rather than minting one per client, or the two
+            // named clients would each hold a script of their own and a test
+            // could not say what order the pass sent its requests in.
+            services.ConfigureHttpClientDefaults(client => client.ConfigurePrimaryHttpMessageHandler(() => Outbound));
+            // The clock the login runner already reads, now for everything the
+            // container hands a TimeProvider. A refresh pass decides whether an
+            // access token has expired and how long a lockout still has to run
+            // from it, and a test that could not move that clock would have to
+            // sleep through both. Every instant a test compares against one the
+            // host produced must now come from this clock too: a wall-clock
+            // instant means nothing to a host frozen four days earlier.
+            services.Replace(ServiceDescriptor.Singleton<TimeProvider>(Clock));
+            // The pacing delegate, recorded rather than taken; see Waits.
+            services.Replace(ServiceDescriptor.Singleton<Func<TimeSpan, CancellationToken, Task>>(Waits.Record));
             services.Replace(ServiceDescriptor.Singleton<IClaudeCliAuthStatus>(Cli));
             // Both ports, or a removal would resolve the real CLI on this machine.
             services.Replace(ServiceDescriptor.Singleton<IClaudeCliLogout>(Cli));
@@ -137,6 +175,20 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
         if (Directory.Exists(Root))
         {
             Directory.Delete(Root, recursive: true);
+        }
+    }
+
+    /// <summary>The pacing delegate as a recorder: it answers at once and remembers what it was asked to wait.</summary>
+    internal sealed class Pacer
+    {
+        private readonly ConcurrentQueue<TimeSpan> _requested = new();
+
+        public IReadOnlyCollection<TimeSpan> Requested => _requested;
+
+        public Task Record(TimeSpan delay, CancellationToken cancellationToken)
+        {
+            _requested.Enqueue(delay);
+            return cancellationToken.IsCancellationRequested ? Task.FromCanceled(cancellationToken) : Task.CompletedTask;
         }
     }
 

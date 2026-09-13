@@ -11,6 +11,8 @@
   var banner = document.getElementById("banner");
   var warnings = document.getElementById("warnings");
   var captured = document.getElementById("captured");
+  var refreshAllButton = document.getElementById("refresh-all");
+  var refreshStateLine = document.getElementById("refresh-state");
   var toast = document.getElementById("toast");
   var addForm = document.getElementById("add");
   var addEmail = document.getElementById("add-email");
@@ -385,12 +387,131 @@
     return button;
   }
 
+  // Every countdown on the page is measured from the instant the payload was
+  // taken rather than from the browser's clock, so a card's numbers and the
+  // time until its window resets are read off the same moment.
+  function secondsUntil(instant, from) {
+    return Math.max(0, Math.round((new Date(instant).getTime() - from) / 1000));
+  }
+
+  function relative(instant, from) {
+    var seconds = secondsUntil(instant, from);
+    if (seconds < 60) { return "in " + seconds + " s"; }
+    var minutes = Math.round(seconds / 60);
+    if (minutes < 60) { return "in " + minutes + " min"; }
+    var hours = Math.floor(minutes / 60);
+    return hours < 48 ? "in " + hours + " h " + (minutes % 60) + " min" : "in " + Math.round(hours / 24) + " d";
+  }
+
+  // A figure whose age and origin go unsaid is exactly what this card exists to
+  // avoid, so the two travel together wherever a source is named. A time of day
+  // alone reads as today: a figure cached before midnight, or a card nobody has
+  // refreshed since last week, would look hours old instead of days, which is
+  // the exact deceit this line exists to prevent. Same day, the time; any other
+  // day, the date with it.
+  function asOf(capturedAt, source, from) {
+    var taken = new Date(capturedAt);
+    var sameDay = taken.toDateString() === new Date(from).toDateString();
+    return "as of " + (sameDay ? taken.toLocaleTimeString() : taken.toLocaleString()) + " via " + source;
+  }
+
+  // Unknown first: no source carried this bucket at all. Then a window that has
+  // reset since its capture, whose percentage now measures nothing.
+  function reading(limit) {
+    if (!limit.known) { return "unknown"; }
+    if (limit.windowReset) { return "window reset since last read"; }
+    return limit.percent === null ? "unknown" : Math.round(limit.percent) + "%";
+  }
+
+  function barWidth(limit) {
+    if (!limit.known || limit.windowReset || limit.percent === null) { return 0; }
+    return Math.max(0, Math.min(100, limit.percent));
+  }
+
+  function limitRow(limit, at) {
+    var row = element("div", "limit");
+    row.appendChild(element("span", "label", limit.label));
+    var bar = element("div", "bar");
+    var fill = element("div", "fill");
+    fill.style.width = barWidth(limit) + "%";
+    fill.setAttribute("data-severity", limit.severity || "");
+    bar.appendChild(fill);
+    row.appendChild(bar);
+    row.appendChild(element("span", "reading", reading(limit)));
+    // A window that has already reset has no reset to count down to: "resets in
+    // 0 s" beside "window reset since last read" is the same stale figure said
+    // twice.
+    if (limit.resetsAt && !limit.windowReset) { row.appendChild(element("span", "resets", "resets " + relative(limit.resetsAt, at))); }
+    // Only a row taken from another source than the card's own says where it
+    // came from; otherwise the card's single "as of" line speaks for it.
+    if (limit.source) { row.appendChild(element("span", "asof", asOf(limit.capturedAt, limit.source, at))); }
+    return row;
+  }
+
+  function creditsLine(credits) {
+    var text = "usage credits: " + (credits.enabled
+      ? "enabled"
+      : "disabled" + (credits.disabledReason ? " (" + credits.disabledReason + ")" : ""));
+    return credits.spendLimitReached ? text + "; spend limit reached" : text;
+  }
+
+  // What the card says about its last refresh. "idle" and "read" say nothing: a
+  // card showing numbers with an "as of" line has already said it. While a pass
+  // runs, a card that has never reported an outcome is waiting its turn; the
+  // payload carries no per-outcome timestamp, so a card that already has one
+  // keeps showing it rather than claiming to be in this pass.
+  function refreshState(account, dashboard) {
+    var state = account.refresh.state;
+    if (dashboard.refresh.inProgress && state === "idle") { return "refreshing..."; }
+    if (state === "idle" || state === "read") { return null; }
+    return account.refresh.message || state;
+  }
+
+  function usage(account, dashboard) {
+    var section = element("div", "usage");
+    var at = new Date(dashboard.capturedAt).getTime();
+    account.usage.limits.forEach(function (limit) { section.appendChild(limitRow(limit, at)); });
+    if (account.usage.source) {
+      section.appendChild(element("p", "asof", asOf(account.usage.capturedAt, account.usage.source, at)));
+    }
+    if (account.usage.credits) { section.appendChild(element("p", "asof", creditsLine(account.usage.credits))); }
+    if (account.usageNote) { section.appendChild(element("p", "muted", account.usageNote)); }
+    var state = refreshState(account, dashboard);
+    if (state) { section.appendChild(element("p", "refresh-state", state)); }
+    return section;
+  }
+
+  // The pass as a whole, in one line above the cards.
+  function passState(dashboard) {
+    if (dashboard.refresh.inProgress) { return "refreshing all accounts..."; }
+    if (dashboard.refresh.lockedUntil) {
+      return "rate limited, retry in " + secondsUntil(dashboard.refresh.lockedUntil, new Date(dashboard.capturedAt).getTime()) + " s";
+    }
+    return dashboard.refresh.summary || "";
+  }
+
+  // Both refresh routes answer 202 and leave the pass to the background worker;
+  // the ten-second poll is what shows it landing, card by card.
+  function started(result) {
+    showToast(result.ok ? "Refresh started" : refused(result.body), result.ok ? "ok" : "error");
+  }
+
+  function refreshAccount(email) {
+    return mutate(accountPath(email, "/refresh"), "POST", null, started);
+  }
+
   function render(dashboard, force) {
+    // The header is not part of any card, so it is written before the guard
+    // below and on every poll: an operator with an Edit panel open would
+    // otherwise watch the page's own timestamp, the pass's progress, and the
+    // Refresh all button freeze at whatever they said when the panel opened.
+    captured.textContent = "as of " + new Date(dashboard.capturedAt).toLocaleTimeString();
+    refreshStateLine.textContent = passState(dashboard);
+    refreshAllButton.disabled = busy || dashboard.refresh.inProgress;
     // Rendering rebuilds every card, so the ten-second poll would otherwise wipe an
     // Edit panel, or a half-typed login code, out from under whoever is typing it.
     // A mutation's own render passes force, since that one has to show the result.
     if (!force && cards.querySelector("details.edit[open], details.login[open]")) { return; }
-    captured.textContent = "as of " + new Date(dashboard.capturedAt).toLocaleTimeString();
     banner.hidden = !dashboard.banner;
     banner.textContent = dashboard.banner || "";
     warnings.innerHTML = "";
@@ -416,12 +537,21 @@
         card.appendChild(element("p", "muted", roster.browser + (roster.browserProfileDirectory ? " / " + profileCardLabel(roster.browser, roster.browserProfileDirectory) : "")));
       }
 
+      card.appendChild(usage(account, dashboard));
+
       var actions = element("div", "actions");
       var switchButton = actionButton(account.isLive ? "Live now" : "Switch", "switch", function () { switchTo(account.email); });
       // A paused account is out of the ranked queue, not off the page: the operator
-      // can still switch to it by hand.
-      switchButton.disabled = account.isLive || !account.hasCredentials || busy || !!dashboard.banner;
+      // can still switch to it by hand. A stranded folder is the exception: its
+      // credential file is the dead lineage, and switching would move it live
+      // where no restore can reach it.
+      switchButton.disabled = account.isLive || !account.hasCredentials || busy || !!dashboard.banner
+        || dashboard.refresh.inProgress || account.refresh.state === "stranded";
       actions.appendChild(switchButton);
+
+      var refreshButton = actionButton("Refresh", "secondary", function () { refreshAccount(account.email); });
+      refreshButton.disabled = busy || dashboard.refresh.inProgress;
+      actions.appendChild(refreshButton);
 
       if (roster) {
         actions.appendChild(actionButton(paused ? "Resume" : "Pause", "secondary", function () { setPaused(account.email, !paused); }));
@@ -478,6 +608,10 @@
         showToast(refused(result.body), "error");
       }
     });
+  });
+
+  refreshAllButton.addEventListener("click", function () {
+    mutate("/api/refresh", "POST", null, started);
   });
 
   addEmail.addEventListener("input", function () {

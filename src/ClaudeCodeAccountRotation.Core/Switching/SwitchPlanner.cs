@@ -61,6 +61,15 @@ public static class SwitchPlanner
             return Refuse(SwitchRefusal.RefreshLockPresent);
         }
 
+        // Before the expiry check, because the pair still in the folder is the one
+        // a failed write-back left behind: its refresh token died when the token
+        // endpoint answered, so its recorded expiry says nothing useful and an
+        // unpark would move a dead pair to live, after which no restore can apply.
+        if (input.TargetHasRecoveryFile)
+        {
+            return Refuse(SwitchRefusal.TargetStrandedInRecovery);
+        }
+
         if (input.TargetCredentials.LoginExpiresAt is DateTimeOffset loginExpiresAt && loginExpiresAt <= input.Now)
         {
             return Refuse(SwitchRefusal.TargetLoginExpired);

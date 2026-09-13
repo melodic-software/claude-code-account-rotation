@@ -94,6 +94,34 @@ public sealed class RefreshBudget(
         }
     }
 
+    /// <summary>
+    /// How long until the minimum gap since this account's last successful read
+    /// has passed, or null when no gap stands in the way: the account has never
+    /// been read, or enough time has gone by.
+    /// <para>
+    /// This is what a budget refusal tells the operator ("read N s ago") instead
+    /// of failing silently, and it reads rather than reserves, so asking costs
+    /// the account nothing and no entry is created for an account that has never
+    /// been read. It measures from the reads only, never the refunded ones: a 401
+    /// did not start the gap clock, exactly as <see cref="RecordUnauthorized"/>
+    /// arranges, so the retry after a credential refresh must not be told to wait.
+    /// </para>
+    /// </summary>
+    public TimeSpan? GapRemaining(AccountEmail account)
+    {
+        DateTimeOffset now = _timeProvider.GetUtcNow();
+        lock (_mutex)
+        {
+            if (!_accounts.TryGetValue(account, out AccountBudget? budget) || budget.Reads.Count == 0)
+            {
+                return null;
+            }
+
+            TimeSpan remaining = _minimumGap - (now - budget.Reads[^1]);
+            return remaining > TimeSpan.Zero ? remaining : null;
+        }
+    }
+
     private AccountBudget Budget(AccountEmail account)
     {
         if (!_accounts.TryGetValue(account, out AccountBudget? budget))

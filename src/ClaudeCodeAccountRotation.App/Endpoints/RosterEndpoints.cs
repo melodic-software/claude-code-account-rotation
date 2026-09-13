@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Accounts;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Dashboard;
+using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.App.Security;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core;
@@ -33,7 +34,9 @@ namespace ClaudeCodeAccountRotation.App.Endpoints;
 /// rather than silently leaving a live token behind. <c>?logout=false</c> is
 /// the operator's deliberate override: the folder goes and the response says
 /// the token was not revoked. A folder that holds no pair skips the logout
-/// entirely; there is nothing to revoke.
+/// entirely; there is nothing to revoke. A folder whose pair is stranded in
+/// recovery is put back first, so the revocation reaches the lineage that is
+/// actually alive.
 /// </para>
 /// </summary>
 internal static class RosterEndpoints
@@ -97,7 +100,13 @@ internal static class RosterEndpoints
                 IsLive: false,
                 folder.HasCredentials,
                 folder.FolderPath,
-                Roster: DashboardAssembler.View(entry)));
+                // Nothing has read this account yet, and the card still carries the
+                // rows the page always shows: the three-row shape is the server's
+                // to keep, whichever route hands a card back.
+                UsageView.Unread,
+                UsageNote: null,
+                RefreshStateView.Idle,
+                DashboardAssembler.View(entry)));
         });
 
         mutations.MapPatch("/accounts/{email}", static async (
@@ -156,6 +165,7 @@ internal static class RosterEndpoints
             IClaudeCliLogout cli,
             ILoginSessionRunner logins,
             CredentialMutationGate gate,
+            RecoveryFiles recovery,
             SwitchOptions options,
             CancellationToken cancellationToken) =>
         {
@@ -208,6 +218,22 @@ internal static class RosterEndpoints
                 // switch stops consulting it past its journal write: a browser that
                 // navigates away must not leave a revoked login beside a kept folder.
                 CancellationToken committed = CancellationToken.None;
+
+                // A stranded folder holds the pair a rotation replaced while the
+                // working lineage waits in the recovery directory. Revoking what the
+                // folder holds would kill the dead pair and leave the live one valid
+                // for the rest of its login, in a file belonging to an account the
+                // roster no longer names. So the restore runs first, under the gate
+                // this handler already holds, and the logout revokes what the account
+                // really has. A restore that cannot apply refuses the removal
+                // outright rather than choosing which lineage to leave behind.
+                if (recovery.HasRecoveryFor(folder) && !await recovery.RestoreAsync(folder, committed))
+                {
+                    return Refused(
+                        "StrandedInRecovery",
+                        "That account's rotated credentials are held in the recovery directory and could not be put back, so a removal now would revoke the wrong login. The warning on this page says what that account needs; remove it once the recovery file is resolved.");
+                }
+
                 bool hasPair = File.Exists(Path.Combine(folder, FileSystemCredentialPairStore.FileName));
                 bool revoke = logout ?? true;
                 bool revoked = false;
@@ -288,7 +314,12 @@ internal static class RosterEndpoints
                 IsLive: true,
                 HasCredentials: true,
                 profiles.FolderPathFor(live),
-                Roster: DashboardAssembler.View(entry)));
+                // Adopting a folder reads nothing from the usage endpoint; the next
+                // poll or the next pass fills these rows in.
+                UsageView.Unread,
+                UsageNote: null,
+                RefreshStateView.Idle,
+                DashboardAssembler.View(entry)));
         });
     }
 

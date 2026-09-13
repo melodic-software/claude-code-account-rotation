@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
+using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Identity;
@@ -39,6 +40,23 @@ public sealed class RosterEndpointTests
         using RosterFile file = new(factory.AppData);
         return await file.ReadAsync(cancellationToken);
     }
+
+    /// <summary>
+    /// Strands a rotated pair for a folder, the state a write-back that could not
+    /// land leaves behind. Written after the host has started, because startup's
+    /// own sweep would otherwise apply it before the request under test.
+    /// </summary>
+    private static async Task StrandAsync(
+        AppFactory factory,
+        string folder,
+        string parkedRefreshToken,
+        string rotatedRefreshToken,
+        CancellationToken cancellationToken) =>
+        (await factory.Services.GetRequiredService<RecoveryFiles>().WriteAsync(
+            folder,
+            RefreshTokenFingerprint.FromRefreshToken(parkedRefreshToken),
+            CredentialFiles.Pair(rotatedRefreshToken),
+            cancellationToken)).ShouldBeTrue();
 
     private static async Task<JsonObject?> CardAsync(HttpClient client, string email, CancellationToken cancellationToken)
     {
@@ -225,6 +243,57 @@ public sealed class RosterEndpointTests
         response.StatusCode.ShouldBe(HttpStatusCode.Conflict);
         Directory.Exists(folder).ShouldBeTrue();
         (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["refusal"]!.GetValue<string>().ShouldBe("LogoutFailed");
+    }
+
+    [Fact]
+    public async Task ARemovalPutsAStrandedPairBackBeforeRevokingIt()
+    {
+        // A stranded folder holds the pair a rotation replaced; the working
+        // lineage is in the recovery directory. Revoking what the folder holds
+        // would kill the dead pair and leave the live one valid for the rest of
+        // its login, in a file belonging to an account the roster no longer names
+        // and no card ever shows again. The logout here fails on purpose, because
+        // a successful one deletes the folder and takes the evidence with it.
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        string folder = await factory.ParkedProfileAsync(ParkedEmail, "refresh-parked", TestContext.Current.CancellationToken);
+        factory.Cli.LogoutError = "the CLI could not reach the token endpoint";
+        using HttpClient client = factory.CreateMutatingClient();
+        await StrandAsync(factory, folder, "refresh-parked", "refresh-rotated", TestContext.Current.CancellationToken);
+
+        using HttpResponseMessage response = await client.DeleteAsync(Account(ParkedEmail), TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        // The restore ran first, so what the logout was pointed at is the lineage
+        // the account actually has.
+        factory.Cli.LogoutCalls.ShouldBe([folder]);
+        (await CredentialFiles.FingerprintAsync(folder, TestContext.Current.CancellationToken))
+            .ShouldBe(RefreshTokenFingerprint.FromRefreshToken("refresh-rotated"));
+        factory.Services.GetRequiredService<RecoveryFiles>().HasRecoveryFor(folder).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task ARemovalIsRefusedWhileARecoveryFileCannotBeApplied()
+    {
+        // The restore cannot run: the folder has no pair left for the
+        // compare-and-swap to replace. Deleting the folder now would leave the
+        // recovery file holding a live refresh token for an account nothing on
+        // this machine names any more, so the removal is refused and says what to
+        // resolve first.
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        string folder = await factory.ParkedProfileAsync(ParkedEmail, "refresh-parked", TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        await StrandAsync(factory, folder, "refresh-parked", "refresh-rotated", TestContext.Current.CancellationToken);
+        File.Delete(Path.Combine(folder, CredentialFiles.FileName));
+
+        using HttpResponseMessage response = await client.DeleteAsync(Account(ParkedEmail), TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+        body["refusal"]!.GetValue<string>().ShouldBe("StrandedInRecovery");
+        body["message"]!.GetValue<string>().ShouldContain("recovery");
+        Directory.Exists(folder).ShouldBeTrue();
+        factory.Cli.LogoutCalls.ShouldBeEmpty();
+        factory.Services.GetRequiredService<RecoveryFiles>().HasRecoveryFor(folder).ShouldBeTrue();
     }
 
     [Fact]

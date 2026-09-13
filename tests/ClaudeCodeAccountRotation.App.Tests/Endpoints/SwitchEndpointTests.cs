@@ -3,6 +3,8 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
+using ClaudeCodeAccountRotation.App.Quota;
+using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -143,7 +145,7 @@ public sealed class SwitchEndpointTests
         using AppFactory factory = new();
         await CredentialFiles.WriteAsync(factory.LiveDirectory, "refresh-a", TestContext.Current.CancellationToken);
         await factory.WriteStateFileAsync("a@example.com", TestContext.Current.CancellationToken);
-        await factory.ParkedProfileAsync("b@example.com", "refresh-b", TestContext.Current.CancellationToken, loginExpiresAt: DateTimeOffset.UtcNow.AddDays(-1));
+        await factory.ParkedProfileAsync("b@example.com", "refresh-b", TestContext.Current.CancellationToken, loginExpiresAt: factory.Clock.GetUtcNow().AddDays(-1));
         using HttpClient client = factory.CreateMutatingClient();
 
         using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
@@ -153,27 +155,86 @@ public sealed class SwitchEndpointTests
     }
 
     [Fact]
-    public async Task TwoConcurrentSwitchesYieldOneSuccessAndOneConflict()
+    public async Task ASwitchToAStrandedFolderIsRefused()
     {
-        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
-        await factory.ParkedProfileAsync("c@example.com", "refresh-c", TestContext.Current.CancellationToken);
+        // The folder's own pair is the dead half of a rotation the write-back could
+        // not land; the working half is in the recovery directory, keyed to the
+        // fingerprint that folder still holds. Making that pair live would move it
+        // out from under the restore's compare-and-swap and no restore could ever
+        // apply again, so the refusal is server-side and not a disabled button.
+        using AppFactory factory = new();
+        await CredentialFiles.WriteAsync(factory.LiveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await factory.WriteStateFileAsync("a@example.com", TestContext.Current.CancellationToken);
+        string folder = await factory.ParkedProfileAsync("b@example.com", "refresh-b", TestContext.Current.CancellationToken);
+        (await factory.Services.GetRequiredService<RecoveryFiles>().WriteAsync(
+            folder,
+            CredentialFiles.Pair("refresh-b").Fingerprint,
+            CredentialFiles.Pair("refresh-rotated"),
+            TestContext.Current.CancellationToken)).ShouldBeTrue();
         using HttpClient client = factory.CreateMutatingClient();
 
-        Task<HttpResponseMessage> toB = client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
-        Task<HttpResponseMessage> toC = client.PostAsync(SwitchUri("c@example.com"), content: null, TestContext.Current.CancellationToken);
-        HttpResponseMessage[] responses = await Task.WhenAll(toB, toC);
+        using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
 
-        try
+        response.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["refusal"]!.GetValue<string>().ShouldBe("TargetStrandedInRecovery");
+        (await CredentialFiles.FingerprintAsync(factory.LiveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
+    }
+
+    [Fact]
+    public async Task ASwitchIsRefusedWhileARefreshPassIsInFlight()
+    {
+        // A pass fixes the live account's identity when it starts and reads the live
+        // pair between its gated units. A switch landing between two turns would have
+        // the outgoing account's turn read the incoming account's pair, putting one
+        // account's usage figures on the other's card, so the refusal is server-side
+        // and not a disabled button.
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        QuotaState quota = factory.Services.GetRequiredService<QuotaState>();
+        quota.TryBeginRun().ShouldBeTrue();
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using (HttpResponseMessage refused = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken))
         {
-            responses.Select(static response => response.StatusCode).Order().ShouldBe([HttpStatusCode.OK, HttpStatusCode.Conflict]);
+            refused.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+            (await refused.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["refusal"]!.GetValue<string>().ShouldBe("RefreshInProgress");
+            (await CredentialFiles.FingerprintAsync(factory.LiveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
         }
-        finally
+
+        quota.EndRun();
+
+        using HttpResponseMessage allowed = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        allowed.StatusCode.ShouldBe(HttpStatusCode.OK);
+        (await CredentialFiles.FingerprintAsync(factory.LiveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
+    }
+
+    [Fact]
+    public async Task ASwitchIsRefusedWhileAnotherCredentialChangeHoldsTheGate()
+    {
+        // The endpoint's wait for the mutation gate is zero, so a switch arriving
+        // while another credential change holds it is a 409 rather than a queued
+        // request. Holding the permit states that outright; racing two requests
+        // through the test server states it only when the thread pool happens to
+        // schedule the second before the first is done. The serialization itself is
+        // covered by LiveDirectorySwitchTests.ConcurrentSwitchesSerializeAndLeaveOneHolderPerLineage.
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using (IDisposable permit = await factory.Services
+            .GetRequiredService<CredentialMutationGate>()
+            .AcquireAsync(TimeSpan.Zero, TestContext.Current.CancellationToken))
         {
-            foreach (HttpResponseMessage response in responses)
-            {
-                response.Dispose();
-            }
+            using HttpResponseMessage refused = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+            refused.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+            (await refused.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["refusal"]!.GetValue<string>().ShouldBe("MutationInProgress");
+            (await CredentialFiles.FingerprintAsync(factory.LiveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
         }
+
+        using HttpResponseMessage allowed = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        allowed.StatusCode.ShouldBe(HttpStatusCode.OK);
+        (await CredentialFiles.FingerprintAsync(factory.LiveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
     }
 
     [Fact]
