@@ -159,6 +159,26 @@ public sealed class AccountAvailabilityTests
     }
 
     [Fact]
+    public void AnAccountSpentOnBothWindowsWithOneUndatedCarriesNoInstant()
+    {
+        // The undated window can still be blocking when the dated one turns
+        // over, so the reset that is known is not the hour the account comes
+        // back: stating it would promise a return nobody can vouch for and put
+        // the card ahead of accounts that really do free up later.
+        AvailabilityKey key = AccountAvailability.KeyFor(
+            Read("a@example.com", Session(95), Weekly(100, _now.AddDays(1))),
+            _now);
+
+        key.Standing.ShouldBe(AvailabilityStanding.Exhausted);
+        key.NextResetAt.ShouldBeNull();
+
+        Order(
+            Read("a@example.com", Session(95), Weekly(100, _now.AddDays(1))),
+            Read("b@example.com", Weekly(100, _now.AddDays(3))))
+            .ShouldBe(["b@example.com", "a@example.com"]);
+    }
+
+    [Fact]
     public void AWindowThatHasResetSinceCaptureCountsAsUsable()
     {
         // A cached hundred per cent from the window before this one measures

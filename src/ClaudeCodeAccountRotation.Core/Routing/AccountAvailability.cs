@@ -71,7 +71,9 @@ public static class AccountAvailability
     /// already turned over, figure and instant together; then exhausted, on
     /// either window being spent, keyed by the <b>later</b> of the resets that
     /// exhausted it, because an account over both limits is not free when the
-    /// first of them turns over; else usable, keyed by the weekly reset.
+    /// first of them turns over, and by no instant at all when one of those
+    /// windows carries no reset, because the later of them is then unknown;
+    /// else usable, keyed by the weekly reset.
     /// </summary>
     public static AvailabilityKey KeyFor(
         AccountStanding standing,
@@ -106,20 +108,24 @@ public static class AccountAvailability
             return new AvailabilityKey(AvailabilityStanding.Usable, weekly?.ResetsAt, standing.Email);
         }
 
-        List<DateTimeOffset> frees = [];
-        if (sessionSpent && session?.ResetsAt is DateTimeOffset sessionResets)
+        // The account comes back when the last of the windows that spent it
+        // turns over, so one of them carrying no reset leaves the whole wait
+        // undatable: the other window's instant would promise a return the
+        // undated one may still be blocking.
+        List<DateTimeOffset?> frees = [];
+        if (sessionSpent)
         {
-            frees.Add(sessionResets);
+            frees.Add(session?.ResetsAt);
         }
 
-        if (weeklySpent && weekly?.ResetsAt is DateTimeOffset weeklyResets)
+        if (weeklySpent)
         {
-            frees.Add(weeklyResets);
+            frees.Add(weekly?.ResetsAt);
         }
 
         return new AvailabilityKey(
             AvailabilityStanding.Exhausted,
-            frees.Count == 0 ? null : frees.Max(),
+            frees.Contains(null) ? null : frees.Max(),
             standing.Email);
     }
 
