@@ -180,6 +180,34 @@ public sealed class SwitchEndpointTests
     }
 
     [Fact]
+    public async Task ASwitchIsRefusedWhileARefreshPassIsInFlight()
+    {
+        // A pass fixes the live account's identity when it starts and reads the live
+        // pair between its gated units. A switch landing between two turns would have
+        // the outgoing account's turn read the incoming account's pair, putting one
+        // account's usage figures on the other's card, so the refusal is server-side
+        // and not a disabled button.
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        QuotaState quota = factory.Services.GetRequiredService<QuotaState>();
+        quota.TryBeginRun().ShouldBeTrue();
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using (HttpResponseMessage refused = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken))
+        {
+            refused.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+            (await refused.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["refusal"]!.GetValue<string>().ShouldBe("RefreshInProgress");
+            (await CredentialFiles.FingerprintAsync(factory.LiveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
+        }
+
+        quota.EndRun();
+
+        using HttpResponseMessage allowed = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        allowed.StatusCode.ShouldBe(HttpStatusCode.OK);
+        (await CredentialFiles.FingerprintAsync(factory.LiveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
+    }
+
+    [Fact]
     public async Task TwoConcurrentSwitchesYieldOneSuccessAndOneConflict()
     {
         using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);

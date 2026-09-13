@@ -56,6 +56,7 @@ internal sealed class RefreshHarness : IDisposable
             new CannedIdentity(),
             new ManagedLoginPolicyReader(Path.Combine(Root, "managed-settings.json"), static () => null, static () => null),
             Recovery,
+            State,
             options,
             Clock,
             NullLogger<LiveDirectorySwitch>.Instance);

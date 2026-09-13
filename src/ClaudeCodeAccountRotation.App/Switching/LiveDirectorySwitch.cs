@@ -48,6 +48,7 @@ internal sealed partial class LiveDirectorySwitch
     private readonly IClaudeCliAuthStatus _authStatus;
     private readonly ManagedLoginPolicyReader _policyReader;
     private readonly RecoveryFiles _recovery;
+    private readonly QuotaState _quota;
     private readonly SwitchOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<LiveDirectorySwitch> _logger;
@@ -64,6 +65,7 @@ internal sealed partial class LiveDirectorySwitch
         IClaudeCliAuthStatus authStatus,
         ManagedLoginPolicyReader policyReader,
         RecoveryFiles recovery,
+        QuotaState quota,
         SwitchOptions options,
         TimeProvider timeProvider,
         ILogger<LiveDirectorySwitch> logger)
@@ -78,6 +80,7 @@ internal sealed partial class LiveDirectorySwitch
         _authStatus = authStatus;
         _policyReader = policyReader;
         _recovery = recovery;
+        _quota = quota;
         _options = options;
         _timeProvider = timeProvider;
         _logger = logger;
@@ -98,6 +101,15 @@ internal sealed partial class LiveDirectorySwitch
             {
                 LogRefused(target.Value, SwitchRefusal.MutationInProgress);
                 return Result<SwitchOutcome, SwitchRefusal>.Failure(SwitchRefusal.MutationInProgress);
+            }
+
+            // Under the gate, not before it: checked before, a switch could still
+            // slip in between the pass's TryBeginRun and the identity repair that
+            // opens it, which takes the gate with a zero wait.
+            if (_quota.InProgress)
+            {
+                LogRefused(target.Value, SwitchRefusal.RefreshInProgress);
+                return Result<SwitchOutcome, SwitchRefusal>.Failure(SwitchRefusal.RefreshInProgress);
             }
 
             return await SwitchUnderGateAsync(target, cancellationToken);
