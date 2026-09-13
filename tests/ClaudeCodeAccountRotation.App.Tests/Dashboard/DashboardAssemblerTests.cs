@@ -407,7 +407,7 @@ public sealed class DashboardAssemblerTests
         using HttpClient client = factory.CreateClient();
         JsonElement dashboard = await client.GetFromJsonAsync<JsonElement>(new Uri("/api/dashboard", UriKind.Relative), TestContext.Current.CancellationToken);
 
-        // The live account is third, and is not pinned to the top.
+        // The live account is second, and is not pinned to the top.
         dashboard.GetProperty("accounts").EnumerateArray()
             .Select(static card => card.GetProperty("email").GetString())
             .ShouldBe([ThirdEmail, FirstEmail, SecondEmail, FourthEmail, FifthEmail]);
@@ -417,6 +417,29 @@ public sealed class DashboardAssemblerTests
         JsonElement exhausted = Card(dashboard, SecondEmail);
         exhausted.GetProperty("standing").GetString().ShouldBe("exhausted");
         exhausted.GetProperty("nextResetAt").GetDateTimeOffset().ShouldBe(now.AddDays(1));
+    }
+
+    [Fact]
+    public async Task TwoProfileFoldersNamingTheSameAccountBothShowACard()
+    {
+        // ProfileFolderStore.ListAsync does not de-duplicate by e-mail, so a
+        // hand-copied folder can name the same account a second time. The page
+        // must render both cards, not fault matching the arrangement back to them.
+        await using AppFactory factory = new();
+        await factory.ParkedProfileAsync(OtherEmail, "refresh-b", TestContext.Current.CancellationToken);
+        string duplicate = Path.Combine(factory.ProfilesRoot, "dev-b-duplicate");
+        Directory.CreateDirectory(duplicate);
+        await File.WriteAllTextAsync(
+            Path.Combine(duplicate, "profile.json"),
+            AppFactory.AccountJson(OtherEmail).ToJsonString(),
+            TestContext.Current.CancellationToken);
+
+        using HttpClient client = factory.CreateClient();
+        JsonElement dashboard = await client.GetFromJsonAsync<JsonElement>(new Uri("/api/dashboard", UriKind.Relative), TestContext.Current.CancellationToken);
+
+        dashboard.GetProperty("accounts").EnumerateArray()
+            .Count(card => card.GetProperty("email").GetString() == OtherEmail)
+            .ShouldBe(2);
     }
 
     [Fact]

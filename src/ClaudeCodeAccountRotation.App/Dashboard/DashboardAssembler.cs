@@ -81,13 +81,18 @@ internal sealed class DashboardAssembler(
         // order it hands back: the group and the instant on each card are read
         // off the key that placed it, never derived a second time here, so what
         // the operator reads on a card cannot disagree with where the card is.
-        var byEmail = built.ToDictionary(
-            static pair => pair.Card.Email,
+        // The match back to a card is by the standing instance the arrangement
+        // was handed, not by e-mail: two entries can share an address (a
+        // hand-copied profile folder is not de-duplicated), and a dictionary
+        // keyed on the address would throw on the second one where the page
+        // used to just show two cards.
+        var byStanding = built.ToDictionary(
+            static pair => pair.Standing,
             static pair => pair.Card,
-            StringComparer.Ordinal);
+            (IEqualityComparer<AccountStanding>)ReferenceEqualityComparer.Instance);
         List<AccountCardView> cards = [.. AccountAvailability
             .Arrange([.. built.Select(static pair => pair.Standing)], capturedAt)
-            .Select(arranged => byEmail[arranged.Standing.Email.Value] with
+            .Select(arranged => byStanding[arranged.Standing] with
             {
                 Standing = Wire(arranged.Key.Standing),
                 NextResetAt = arranged.Key.NextResetAt,
