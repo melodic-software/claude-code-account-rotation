@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Quota;
+using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -208,27 +209,32 @@ public sealed class SwitchEndpointTests
     }
 
     [Fact]
-    public async Task TwoConcurrentSwitchesYieldOneSuccessAndOneConflict()
+    public async Task ASwitchIsRefusedWhileAnotherCredentialChangeHoldsTheGate()
     {
+        // The endpoint's wait for the mutation gate is zero, so a switch arriving
+        // while another credential change holds it is a 409 rather than a queued
+        // request. Holding the permit states that outright; racing two requests
+        // through the test server states it only when the thread pool happens to
+        // schedule the second before the first is done. The serialization itself is
+        // covered by LiveDirectorySwitchTests.ConcurrentSwitchesSerializeAndLeaveOneHolderPerLineage.
         using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
-        await factory.ParkedProfileAsync("c@example.com", "refresh-c", TestContext.Current.CancellationToken);
         using HttpClient client = factory.CreateMutatingClient();
 
-        Task<HttpResponseMessage> toB = client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
-        Task<HttpResponseMessage> toC = client.PostAsync(SwitchUri("c@example.com"), content: null, TestContext.Current.CancellationToken);
-        HttpResponseMessage[] responses = await Task.WhenAll(toB, toC);
+        using (IDisposable permit = await factory.Services
+            .GetRequiredService<CredentialMutationGate>()
+            .AcquireAsync(TimeSpan.Zero, TestContext.Current.CancellationToken))
+        {
+            using HttpResponseMessage refused = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
 
-        try
-        {
-            responses.Select(static response => response.StatusCode).Order().ShouldBe([HttpStatusCode.OK, HttpStatusCode.Conflict]);
+            refused.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+            (await refused.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["refusal"]!.GetValue<string>().ShouldBe("MutationInProgress");
+            (await CredentialFiles.FingerprintAsync(factory.LiveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
         }
-        finally
-        {
-            foreach (HttpResponseMessage response in responses)
-            {
-                response.Dispose();
-            }
-        }
+
+        using HttpResponseMessage allowed = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        allowed.StatusCode.ShouldBe(HttpStatusCode.OK);
+        (await CredentialFiles.FingerprintAsync(factory.LiveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
     }
 
     [Fact]

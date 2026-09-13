@@ -152,3 +152,26 @@ revisit), human-decision.
 - discovery: the fix-pass verifier found the post-POST catch-all unreachable by the suite (every
   scripted write failure sat inside the retry filter); a further test throws an unfiltered
   exception and asserts an immediate strand.
+
+## PR review: Codex and CI
+
+- discovery: a switch landing mid-pass put one account's usage figures on another's card.
+  `QuotaRefresh.CandidatesAsync` fixes the live account's identity once when the pass is
+  assembled, the live turn reads the live pair holding no gate, and `LiveDirectorySwitch`
+  consulted `QuotaState.InProgress` nowhere, so a switch from A to B between two turns had A's
+  turn read B's pair. Fixed by refusing the switch with a new `SwitchRefusal.RefreshInProgress`
+  while a pass or a per-card read is in flight, checked under the mutation gate rather than in
+  front of it: in front, a switch could still slip in between `TryBeginRun` and the identity
+  repair that opens the pass, which takes the gate with a zero wait (`0aebae7`). Residual: a pass
+  that begins while a switch already holds the gate skips the live account as unverified and the
+  switched-to card can read "needs login" until the next pass, but no ordering now puts another
+  account's figures on a card.
+- deviation: plan said `SwitchEndpointTests` races two switches through the test server and
+  asserts one 200 and one 409 / found the endpoint's gate wait is zero, the test server queues
+  each request to the thread pool, and the test has no barrier, so under the Ubuntu leg's load the
+  first switch finished before the second was scheduled and both returned 200 (twice in a row;
+  green on Windows and locally) / chose to hold the gate permit against a single switch, the
+  pattern `RosterEndpointTests` already uses, and renamed the fact
+  `ASwitchIsRefusedWhileAnotherCredentialChangeHoldsTheGate`; the real race stays covered by
+  `LiveDirectorySwitchTests.ConcurrentSwitchesSerializeAndLeaveOneHolderPerLineage` / revisit:
+  none.
