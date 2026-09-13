@@ -320,9 +320,17 @@ Work items, in order.
 | `tests/ClaudeCodeAccountRotation.Core.Tests/Quota/UsageMergeTests.cs` | Create | Five merge facts |
 | `tests/ClaudeCodeAccountRotation.Core.Tests/Routing/AccountAvailabilityTests.cs` | Create | Eighteen ordering facts, the golden-order fixture among them |
 
-### Phase 2: The assembler applies the order and emits the two fields [TODO]
+### Phase 2: The assembler applies the order and emits the two fields [DONE]
 
 Review: code-design
+
+Landed 2026-09-13 as `e37b6d0` (the assembler applies the order) and `13aa037` (a fix-up). Every
+Sanity Check bullet below held on re-run; a fresh-context verifier passed all ten of its criteria.
+It also found that matching the arranged cards back by e-mail would fault the endpoint on a
+hand-copied profile folder naming an account twice, where the page used to show two cards; the
+fix-up matches by the `AccountStanding` instance the arrangement was handed and pins the two-card
+behaviour with `TwoProfileFoldersNamingTheSameAccountBothShowACard`. Test total 457 against 454
+at the end of Phase 1.
 
 1. `src/ClaudeCodeAccountRotation.App/Dashboard/DashboardViews.cs`: two trailing parameters on
    `AccountCardView`, after `Roster`, each with a default so `RosterEndpoints.cs:98` and `:312`
