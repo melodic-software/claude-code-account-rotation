@@ -194,12 +194,13 @@ internal sealed partial class DashboardAssembler(
     /// Parked writes in this process are atomic (a temp file and a replace), so a
     /// torn read is belt and braces against ourselves; it is real for anyone else
     /// who writes into a profile folder, a hand edit or another tool or a folder
-    /// swapped out mid-poll. The precedent is the watcher hotfix: a file read
-    /// while someone else is rewriting it must cost the reader nothing more than
-    /// the value it went for.
+    /// swapped out mid-poll. A file read while someone else is rewriting it must
+    /// cost the reader nothing more than the value it went for.
     /// </para>
     /// <para>
-    /// Only the folder reaches the log, never anything the file holds.
+    /// The folder's own leaf reaches the log beside the store's reason. The reason
+    /// can name the file path, since it is the store's own exception message, but
+    /// never a value the file holds.
     /// </para>
     /// </summary>
     private async Task<DateTimeOffset?> ReadLoginExpiryAsync(ParkedProfile profile, CancellationToken cancellationToken)
@@ -213,12 +214,15 @@ internal sealed partial class DashboardAssembler(
         {
             return (await pairs.ReadParkedAsync(profile.FolderPath, cancellationToken))?.LoginExpiresAt;
         }
-        catch (Exception exception) when (exception is JsonException or InvalidDataException or IOException or UnauthorizedAccessException)
+        catch (Exception exception) when (exception is JsonException or InvalidDataException or InvalidOperationException or IOException or UnauthorizedAccessException)
         {
-            LogLoginExpiryUnreadable(profile.FolderPath, exception.Message);
+            LogLoginExpiryUnreadable(FolderName(profile.FolderPath), exception.Message);
             return null;
         }
     }
+
+    private static string FolderName(string folderPath) =>
+        Path.GetFileName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(folderPath)));
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "login expiry unreadable for {Folder}: {Reason}")]
     private partial void LogLoginExpiryUnreadable(string folder, string reason);

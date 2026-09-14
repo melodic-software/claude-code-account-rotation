@@ -609,6 +609,7 @@ public sealed class DashboardAssemblerTests
         card.GetProperty("hasCredentials").GetBoolean().ShouldBeTrue();
         card.GetProperty("loginExpiresAt").ValueKind.ShouldBe(JsonValueKind.Null);
         factory.Logs.Lines.ShouldContain(line => line.Contains("login expiry unreadable for", StringComparison.Ordinal));
+        factory.Logs.Lines.ShouldNotContain(line => line.Contains("refresh-b", StringComparison.Ordinal));
     }
 
     /// <summary>The rows a card shows before anything has numbers for it: named, ordered, and every one of them unknown.</summary>

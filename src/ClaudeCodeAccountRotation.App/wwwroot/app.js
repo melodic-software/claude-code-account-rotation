@@ -406,25 +406,25 @@
     return Math.max(0, Math.round((new Date(instant).getTime() - from) / 1000));
   }
 
-  function relative(instant, from) {
-    var seconds = secondsUntil(instant, from);
-    if (seconds < 60) { return "in " + seconds + " s"; }
+  // The one bucket ladder every distance on the page is said in, bare of any
+  // affix, so a countdown and an age cannot drift onto different thresholds.
+  function span(seconds) {
+    if (seconds < 60) { return seconds + " s"; }
     var minutes = Math.round(seconds / 60);
-    if (minutes < 60) { return "in " + minutes + " min"; }
+    if (minutes < 60) { return minutes + " min"; }
     var hours = Math.floor(minutes / 60);
-    return hours < 48 ? "in " + hours + " h " + (minutes % 60) + " min" : "in " + Math.round(hours / 24) + " d";
+    return hours < 48 ? hours + " h " + (minutes % 60) + " min" : Math.round(hours / 24) + " d";
+  }
+
+  function relative(instant, from) {
+    return "in " + span(secondsUntil(instant, from));
   }
 
   // An age in the buckets a countdown uses, said the other way round, so the
   // operator reads "logged in 12 d ago" against "login expires in 16 d" without
   // translating between two shapes.
   function ago(instant, from) {
-    var seconds = Math.max(0, Math.round((from - new Date(instant).getTime()) / 1000));
-    if (seconds < 60) { return seconds + " s ago"; }
-    var minutes = Math.round(seconds / 60);
-    if (minutes < 60) { return minutes + " min ago"; }
-    var hours = Math.floor(minutes / 60);
-    return hours < 48 ? hours + " h " + (minutes % 60) + " min ago" : Math.round(hours / 24) + " d ago";
+    return span(Math.max(0, Math.round((from - new Date(instant).getTime()) / 1000))) + " ago";
   }
 
   // One reading of the refresh token's life, shared by the chip, the Switch
@@ -529,15 +529,16 @@
   // A usable account's countdown is not repeated here: the seven-day row above
   // already reads "resets in 2 h 14 min", and the same phrase twice on one card
   // reads as two different facts.
-  // The chip above states the credential facts, so a paused card says "paused"
-  // once, and a parked card whose login has expired is spared a "usable now" its
-  // Switch button refuses; the live account keeps its quota standing, which is
-  // the operative fact whatever its login says.
+  // The chip above states the credential facts, so this line is left off a
+  // paused card except the live one, whose chip says "live" and would otherwise
+  // leave "paused" unsaid; a parked card whose login has expired is spared a
+  // "usable now" its Switch button refuses; the live account keeps its quota
+  // standing, which is the operative fact whatever its login says.
   function nextReset(account, at) {
     if (loginExpired(account, at) && !account.isLive) { return null; }
     if (account.standing === "usable") { return "usable now"; }
     if (account.standing === "unread") { return "no usage read yet"; }
-    if (account.standing === "paused") { return null; }
+    if (account.standing === "paused") { return account.isLive ? "paused" : null; }
     // A spent account whose reset nothing can date has no wait to state, and the
     // rows above already say which figure is missing.
     if (account.standing === "exhausted" && account.nextResetAt) { return "usable " + relative(account.nextResetAt, at); }

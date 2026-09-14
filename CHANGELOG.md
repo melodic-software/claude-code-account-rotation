@@ -16,8 +16,8 @@ All notable changes to this project are documented in this file. The format foll
   has expired, since the chip has already said so, and `Switch` is disabled once a login has
   expired. `Log in again` stays in the action row only while the card needs it, no credentials, an
   expired login, or a login inside the seven-day warning window, and otherwise moves into the Edit
-  panel. `Remove` moves into its own group after the action row, and cards sharing a row now share
-  its height.
+  panel. `Remove` moves into its own group after the action row, and every row of cards is as tall
+  as the tallest card, so the action rows line up.
 - Each dashboard account says where it stands and when it frees up (#47). Every card in
   `GET /api/dashboard` gains `standing` (`usable`, `exhausted`, `unread`, or `paused`) and
   `nextResetAt`, the instant it was ordered by, null when there is no wait that can be dated. The
