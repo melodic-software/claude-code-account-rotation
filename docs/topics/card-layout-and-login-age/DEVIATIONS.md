@@ -37,3 +37,26 @@ Append-only. One entry per decision. Types: plan-confirmed, discovery, deviation
   `ProfileFetchedAt == null`. `FileSystemCredentialPairStore.WriteParkedAsync` is atomic (temp file,
   fsync, replace) and both writers go through it, so the parked-read guard defends against external
   writers, not this process. Baseline `dotnet test -c Release`: 468 total, 1 skipped, 0 failed.
+
+## Phase 2
+
+- **deviation** (2026-09-14, worker, Phase 2). Plan said: four page helpers (`stateChip`,
+  `loginLine`, `loginExpired`, `ago`). Found: the seven-day test is needed by both the line's `warn`
+  class and the action-row condition. Chose: a fifth helper `loginSoon(account, at)`; the
+  action-row condition is `!hasCredentials || loginSoon`, which covers the expired case because
+  `secondsUntil` clamps at zero (`app.js:405-407`). Revisit: none.
+- **deviation** (2026-09-14, worker, Phase 2). Plan said: the `login-expiry` line goes "after the
+  `next-reset` line". Found: the Brief and design T5 say "at the usage block's foot", which is
+  after the `refresh-state` line. Chose: the foot. Revisit: none.
+- **deviation** (2026-09-14, worker, Phase 2). Plan said: the standing line is suppressed on a
+  paused card. Chose: flip the existing `standing === "paused"` branch of `nextReset` to null
+  rather than add a roster test; the wire `standing` is derived from the same roster flag
+  (`DashboardAssembler.cs:186`, `AccountAvailability.cs:85-87`). Revisit: none.
+- **deviation** (2026-09-14, worker, Phase 2). `editPanel(account, offerLogin)` gains a second
+  parameter; the `Log in again` button inside it is `type="button"` via `actionButton`, so it
+  cannot submit the Edit form. `at` is computed per card inside the `forEach` so no changed line
+  falls within the render guard's diff context. Revisit: none.
+- **plan-confirmed** (2026-09-14, verifier, Phase 2). All seventeen Phase 2 criteria PASS on
+  `0e7da2a`; build 0 warnings, 474 tests, 0 failed, `node --check` clean. Note for the operator: a
+  login younger than 48 hours reads `logged in 3 h 12 min ago`, mirroring `relative()`'s buckets;
+  the `<N> d ago` shape applies past 48 hours.

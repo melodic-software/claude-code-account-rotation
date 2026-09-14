@@ -230,7 +230,7 @@ implementation behind it is the field with its default, so the fact fails on `nu
 | `tests/ClaudeCodeAccountRotation.App.Tests/Dashboard/DashboardAssemblerTests.cs` | Modify | Five facts |
 | `tests/ClaudeCodeAccountRotation.App.Tests/Endpoints/RosterEndpointTests.cs` | Modify | One fact |
 
-### Phase 2: The page leads with the alias, states the chip, and says when the login expires [TODO]
+### Phase 2: The page leads with the alias, states the chip, and says when the login expires [DONE]
 
 Review: code
 
