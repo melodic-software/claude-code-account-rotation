@@ -71,3 +71,23 @@ Append-only. One entry per decision. Types: plan-confirmed, discovery, deviation
   already does on `main`. Chose: drop the handle from this plan; the precedent on `main` is left for
   a separate sweep. `eng/check-no-machine-paths.sh` checks names only when
   `CHECK_NO_MACHINE_PATHS_NAMES` is set, so the CI gate does not cover this axis. Revisit: none.
+
+## Code review before the PR
+
+- **deviation** (2026-09-14, reviewer, whole diff). Plan said: the standing line is omitted on a
+  paused card. Found: the chip puts `live` before `paused`, so a paused live account said `paused`
+  nowhere. Chose: the standing line still reads `paused` on the live card (`app.js:541`, commit
+  `a8ee0ca`). Revisit: none.
+- **deviation** (2026-09-14, reviewer, whole diff). The warning logged the absolute folder path
+  where every other `{Folder}` log passes the leaf; now `FolderName()` as in `QuotaRefresh`. The
+  guard also catches `InvalidOperationException` (`CredentialPair.FromJson` on a non-string token
+  value), so it matches the "unreadable" wording; the history aside in its doc comment is gone;
+  `ago()` and `relative()` share one `span()` ladder; the card-height comment and CHANGELOG line
+  say every row is as tall as the tallest card. All in `a8ee0ca`.
+- **discovery** (2026-09-14, reviewer). The warning repeats on every ten-second poll while a
+  parked file stays unreadable. Left as is: parked writes are atomic, so the case is transient in
+  practice, and a persistently bad file belongs with the error-mapping work (#9).
+- **deviation** (2026-09-14, fix worker). Plan said (via the reviewer): pin "a pair without
+  `refreshTokenExpiresAt` yields null" in an App fact. Found: `CredentialFiles.Shape` always
+  writes the field. Chose: rely on the Core pin `CredentialPairTests.cs:50`
+  (`LoginExpiresAt.ShouldBeNull()`); no second fixture shape. Revisit: none.
