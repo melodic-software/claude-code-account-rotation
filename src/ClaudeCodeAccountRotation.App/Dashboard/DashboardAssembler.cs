@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.App.Switching;
@@ -8,6 +9,7 @@ using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Ports;
 using ClaudeCodeAccountRotation.Core.Quota;
 using ClaudeCodeAccountRotation.Core.Routing;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeCodeAccountRotation.App.Dashboard;
 
@@ -23,7 +25,7 @@ namespace ClaudeCodeAccountRotation.App.Dashboard;
 /// availability order and not one computed here; the ranked queue of switch
 /// candidates, a filter and a truncation over that same order, joins later.
 /// </summary>
-internal sealed class DashboardAssembler(
+internal sealed partial class DashboardAssembler(
     ClaudeStateFile stateFile,
     ICredentialPairStore pairs,
     ProfileFolderStore profiles,
@@ -33,7 +35,8 @@ internal sealed class DashboardAssembler(
     DashboardState state,
     QuotaState quota,
     RecoveryFiles recovery,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    ILogger<DashboardAssembler> logger)
 {
     /// <summary>The roster entry as the page reads it.</summary>
     public static RosterEntryView? View(RosterEntry? entry) => entry is null
@@ -62,19 +65,32 @@ internal sealed class DashboardAssembler(
         {
             ParkedProfile? ownFolder = parked.FirstOrDefault(profile => profile.Email == live);
             (UsageSnapshot? observed, string? note) = Attribute(snapshot, live);
-            built.Add(Card(live, isLive: true, livePair is not null, ownFolder?.FolderPath, observed, note, roster, capturedAt));
+            built.Add(Card(live, isLive: true, livePair is not null, ownFolder?.FolderPath, observed, note, roster, capturedAt, livePair?.LoginExpiresAt, liveAccount?.ProfileFetchedAt));
         }
 
-        built.AddRange(parked
-            .Where(profile => profile.Email != liveEmail)
-            .Select(profile => Card(profile.Email, isLive: false, profile.HasCredentials, profile.FolderPath, observed: null, note: null, roster, capturedAt)));
+        // A read per parked folder rather than a projection, because the expiry
+        // sits inside the credential file and only the file can answer for it.
+        foreach (ParkedProfile profile in parked.Where(candidate => candidate.Email != liveEmail))
+        {
+            built.Add(Card(
+                profile.Email,
+                isLive: false,
+                profile.HasCredentials,
+                profile.FolderPath,
+                observed: null,
+                note: null,
+                roster,
+                capturedAt,
+                await ReadLoginExpiryAsync(profile, cancellationToken),
+                profile.Account?.ProfileFetchedAt));
+        }
 
         // A roster entry the operator added but has not logged in yet owns no
         // identity file, so the folder listing above cannot see it. Its card is
         // what makes Add visible on the page at all.
         List<(AccountCardView Card, AccountStanding Standing)> rosterOnly = [.. roster.Entries
             .Where(entry => !built.Exists(pair => string.Equals(pair.Card.Email, entry.Email.Value, StringComparison.Ordinal)))
-            .Select(entry => Card(entry.Email, isLive: false, hasCredentials: false, profiles.FolderPathFor(entry.Email), observed: null, note: null, roster, capturedAt))];
+            .Select(entry => Card(entry.Email, isLive: false, hasCredentials: false, profiles.FolderPathFor(entry.Email), observed: null, note: null, roster, capturedAt, loginExpiresAt: null, loggedInAt: null))];
         built.AddRange(rosterOnly);
 
         // One arrangement for the whole payload, and the cards go out in the
@@ -138,7 +154,9 @@ internal sealed class DashboardAssembler(
         UsageSnapshot? observed,
         string? note,
         Roster roster,
-        DateTimeOffset capturedAt)
+        DateTimeOffset capturedAt,
+        DateTimeOffset? loginExpiresAt,
+        DateTimeOffset? loggedInAt)
     {
         List<UsageSnapshot> sources = [];
         if (observed is not null)
@@ -162,9 +180,48 @@ internal sealed class DashboardAssembler(
                 Usage(merged, capturedAt),
                 note,
                 Refresh(email, folder),
-                View(entry)),
-            new AccountStanding(email, isLive, entry?.Paused ?? false, hasCredentials, merged?.Merged));
+                View(entry),
+                LoginExpiresAt: loginExpiresAt,
+                LoggedInAt: loggedInAt),
+            new AccountStanding(email, isLive, entry?.Paused ?? false, hasCredentials, merged?.Merged, loginExpiresAt));
     }
+
+    /// <summary>
+    /// The login expiry inside one parked folder's credential file, or null when
+    /// the folder holds no file or the file cannot be read.
+    /// <para>
+    /// An unreadable file is one blank line on one card and never a failed page.
+    /// Parked writes in this process are atomic (a temp file and a replace), so a
+    /// torn read is belt and braces against ourselves; it is real for anyone else
+    /// who writes into a profile folder, a hand edit or another tool or a folder
+    /// swapped out mid-poll. The precedent is the watcher hotfix: a file read
+    /// while someone else is rewriting it must cost the reader nothing more than
+    /// the value it went for.
+    /// </para>
+    /// <para>
+    /// Only the folder reaches the log, never anything the file holds.
+    /// </para>
+    /// </summary>
+    private async Task<DateTimeOffset?> ReadLoginExpiryAsync(ParkedProfile profile, CancellationToken cancellationToken)
+    {
+        if (!profile.HasCredentials)
+        {
+            return null;
+        }
+
+        try
+        {
+            return (await pairs.ReadParkedAsync(profile.FolderPath, cancellationToken))?.LoginExpiresAt;
+        }
+        catch (Exception exception) when (exception is JsonException or InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            LogLoginExpiryUnreadable(profile.FolderPath, exception.Message);
+            return null;
+        }
+    }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "login expiry unreadable for {Folder}: {Reason}")]
+    private partial void LogLoginExpiryUnreadable(string folder, string reason);
 
     /// <summary>
     /// The merged numbers as the card shows them: the five-hour and seven-day
