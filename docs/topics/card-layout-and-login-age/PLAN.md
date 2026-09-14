@@ -158,7 +158,7 @@ so they run one after the other.
 Baseline to record before Phase 1: `dotnet test -c Release` total on `2b65a31` (expected 468, 1
 skipped).
 
-### Phase 1: The assembler fills the instants and the card carries them [TODO]
+### Phase 1: The assembler fills the instants and the card carries them [DONE]
 
 Review: code
 
@@ -212,10 +212,11 @@ implementation behind it is the field with its default, so the fact fails on `nu
 - `grep -c "new AccountStanding(" src/ClaudeCodeAccountRotation.App/Dashboard/DashboardAssembler.cs`
   prints `1` and that call passes six arguments (Read assertion).
 - `git diff --stat 2b65a31 -- src/ClaudeCodeAccountRotation.Core` prints nothing.
-- `! grep -q "UtcNow" tests/ClaudeCodeAccountRotation.App.Tests/Dashboard/DashboardAssemblerTests.cs`
-  (every stamp comes from the clock).
-- `dotnet test -c Release --filter "FullyQualifiedName~DashboardAssemblerTests|FullyQualifiedName~RosterEndpointTests"`
-  green; then the unfiltered `dotnet test -c Release` reports a total `>= 474` with 0 failed;
+- `grep -c "DateTimeOffset.UtcNow" tests/ClaudeCodeAccountRotation.App.Tests/Dashboard/DashboardAssemblerTests.cs`
+  prints `0` (every stamp comes from `factory.Clock.GetUtcNow()`).
+- `dotnet test -c Release --filter-class "*DashboardAssemblerTests" --filter-class "*RosterEndpointTests"`
+  green for the App tests (the runner has no `--filter`, and the Core assembly matching nothing
+  exits non-zero on its own); then the unfiltered `dotnet test -c Release` reports a total `>= 474` with 0 failed;
   `dotnet build -c Release` 0 warnings; `git status --short -- '**/packages.lock.json'` empty after
   the revert.
 
