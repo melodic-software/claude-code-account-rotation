@@ -3,6 +3,9 @@
 
   var POLL_MS = 10000;
   var BROWSERS = ["", "chrome", "edge", "brave"];
+  // The window the refresh pass renews a paused login in, so the page's "soon"
+  // and the pass's "renew now" name one span.
+  var LOGIN_WARN_SECONDS = 7 * 24 * 3600;
   // The select value that means "this profile is not in the list"; every other
   // value is an index into profileCatalog, because a directory name can hold
   // any character and a joined key would break on the separator.
@@ -365,7 +368,7 @@
       .then(function () { busy = false; setButtonsDisabled(false); });
   }
 
-  function editPanel(account) {
+  function editPanel(account, offerLogin) {
     var panel = element("details", "edit");
     panel.appendChild(element("summary", null, "Edit"));
     var form = element("form", "roster-form");
@@ -373,6 +376,11 @@
     var save = element("button", null, "Save");
     save.type = "submit";
     form.appendChild(save);
+    // A card that does not need a login still lets the operator force one; here
+    // it is reachable without inviting a click from the card's face.
+    if (offerLogin) {
+      form.appendChild(actionButton("Log in again", "secondary", function () { startLogin(account.email); }));
+    }
     form.addEventListener("submit", function (event) {
       event.preventDefault();
       panel.open = false;
@@ -405,6 +413,52 @@
     if (minutes < 60) { return "in " + minutes + " min"; }
     var hours = Math.floor(minutes / 60);
     return hours < 48 ? "in " + hours + " h " + (minutes % 60) + " min" : "in " + Math.round(hours / 24) + " d";
+  }
+
+  // An age in the buckets a countdown uses, said the other way round, so the
+  // operator reads "logged in 12 d ago" against "login expires in 16 d" without
+  // translating between two shapes.
+  function ago(instant, from) {
+    var seconds = Math.max(0, Math.round((from - new Date(instant).getTime()) / 1000));
+    if (seconds < 60) { return seconds + " s ago"; }
+    var minutes = Math.round(seconds / 60);
+    if (minutes < 60) { return minutes + " min ago"; }
+    var hours = Math.floor(minutes / 60);
+    return hours < 48 ? hours + " h " + (minutes % 60) + " min ago" : Math.round(hours / 24) + " d ago";
+  }
+
+  // One reading of the refresh token's life, shared by the chip, the Switch
+  // guard, the standing line, and the expiry line, measured from the payload's
+  // own instant like every other countdown on the page.
+  function loginExpired(account, at) {
+    return !!account.loginExpiresAt && new Date(account.loginExpiresAt).getTime() <= at;
+  }
+
+  function loginSoon(account, at) {
+    return !!account.loginExpiresAt && secondsUntil(account.loginExpiresAt, at) <= LOGIN_WARN_SECONDS;
+  }
+
+  // How old the login is and how long it has left, in one line: either half is
+  // dropped with its instant, and the line itself when neither is known.
+  function loginLine(account, at) {
+    var parts = [];
+    if (account.loggedInAt) { parts.push("logged in " + ago(account.loggedInAt, at)); }
+    if (account.loginExpiresAt) {
+      parts.push(loginExpired(account, at) ? "login expired" : "login expires " + relative(account.loginExpiresAt, at));
+    }
+    return parts.length ? parts.join(" \u00b7 ") : null;
+  }
+
+  // The credential axis in one word: whether the operator can switch to this
+  // account at all. The standing line under the usage rows is the quota axis,
+  // so a card reading "ready" with "usable in 2 h" beneath it states two facts.
+  function stateChip(account, at) {
+    if (account.isLive) { return "live"; }
+    if (account.roster && account.roster.paused) { return "paused"; }
+    if (!account.hasCredentials) { return "needs login"; }
+    if (loginExpired(account, at)) { return "login expired"; }
+    if (account.refresh.state === "stranded") { return "error"; }
+    return "ready";
   }
 
   // A figure whose age and origin go unsaid is exactly what this card exists to
@@ -475,10 +529,15 @@
   // A usable account's countdown is not repeated here: the seven-day row above
   // already reads "resets in 2 h 14 min", and the same phrase twice on one card
   // reads as two different facts.
+  // The chip above states the credential facts, so a paused card says "paused"
+  // once, and a parked card whose login has expired is spared a "usable now" its
+  // Switch button refuses; the live account keeps its quota standing, which is
+  // the operative fact whatever its login says.
   function nextReset(account, at) {
+    if (loginExpired(account, at) && !account.isLive) { return null; }
     if (account.standing === "usable") { return "usable now"; }
     if (account.standing === "unread") { return "no usage read yet"; }
-    if (account.standing === "paused") { return "paused"; }
+    if (account.standing === "paused") { return null; }
     // A spent account whose reset nothing can date has no wait to state, and the
     // rows above already say which figure is missing.
     if (account.standing === "exhausted" && account.nextResetAt) { return "usable " + relative(account.nextResetAt, at); }
@@ -498,6 +557,14 @@
     if (account.usageNote) { section.appendChild(element("p", "muted", account.usageNote)); }
     var state = refreshState(account, dashboard);
     if (state) { section.appendChild(element("p", "refresh-state", state)); }
+    var login = loginLine(account, at);
+    if (login) {
+      var line = element("p", "login-expiry" + (loginSoon(account, at) ? " warn" : ""), login);
+      // new Date(null) is the 1970 epoch, which would date every card without an
+      // expiry to a lie, so the absolute instant is offered only when there is one.
+      if (account.loginExpiresAt) { line.title = new Date(account.loginExpiresAt).toLocaleString(); }
+      section.appendChild(line);
+    }
     return section;
   }
 
@@ -563,29 +630,34 @@
       var roster = account.roster;
       var paused = !!(roster && roster.paused);
       var card = element("section", "card" + (account.isLive ? " live" : "") + (paused ? " paused" : ""));
-      card.appendChild(element("h2", null, (roster && roster.alias) ? roster.alias + " (" + account.email + ")" : account.email));
+      var at = new Date(dashboard.capturedAt).getTime();
+      var chip = stateChip(account, at);
+      var alias = roster && roster.alias;
+      card.appendChild(element("h2", null, alias || account.email));
+      // The alias is what the operator calls this account and the address is what
+      // the tool acts on; on its own line the address costs no heading room.
+      if (alias) { card.appendChild(element("p", "address", account.email)); }
 
       var badges = element("div", "badges");
-      if (account.isLive) { badges.appendChild(element("span", "badge live", "live")); }
-      if (paused) { badges.appendChild(element("span", "badge paused", "paused")); }
-      if (!account.hasCredentials && !account.isLive) { badges.appendChild(element("span", "badge needs-login", "needs login")); }
+      badges.appendChild(element("span", "badge " + chip.replace(/ /g, "-"), chip));
       if (!roster) { badges.appendChild(element("span", "badge off-roster", "not on roster")); }
       card.appendChild(badges);
+
+      card.appendChild(usage(account, dashboard));
 
       if (roster && roster.browser) {
         card.appendChild(element("p", "muted", roster.browser + (roster.browserProfileDirectory ? " / " + profileCardLabel(roster.browser, roster.browserProfileDirectory) : "")));
       }
-
-      card.appendChild(usage(account, dashboard));
 
       var actions = element("div", "actions");
       var switchButton = actionButton(account.isLive ? "Live now" : "Switch", "switch", function () { switchTo(account.email); });
       // A paused account is out of the ranked queue, not off the page: the operator
       // can still switch to it by hand. A stranded folder is the exception: its
       // credential file is the dead lineage, and switching would move it live
-      // where no restore can reach it.
+      // where no restore can reach it. An expired refresh token is the same dead
+      // end from the other direction, and the planner refuses it anyway.
       switchButton.disabled = account.isLive || !account.hasCredentials || busy || !!dashboard.banner
-        || dashboard.refresh.inProgress || account.refresh.state === "stranded";
+        || dashboard.refresh.inProgress || account.refresh.state === "stranded" || loginExpired(account, at);
       actions.appendChild(switchButton);
 
       var refreshButton = actionButton("Refresh", "secondary", function () { refreshAccount(account.email); });
@@ -599,20 +671,28 @@
       }
 
       // The live account is signed in already; logging it into its parked folder
-      // would leave one account holding two logins.
-      if (roster && !account.isLive) {
+      // would leave one account holding two logins. A card with a login good for
+      // longer than the warning window does not need the button on its face; an
+      // expired login is inside that window, so the one test covers both.
+      var needsLogin = !account.hasCredentials || loginSoon(account, at);
+      if (roster && !account.isLive && needsLogin) {
         actions.appendChild(actionButton(
           account.hasCredentials ? "Log in again" : "Login",
           "secondary",
           function () { startLogin(account.email); }));
       }
 
+      card.appendChild(actions);
+
+      // Remove revokes the login and deletes the folder, so it stands in its own
+      // group rather than a pointer's width from Switch.
       if (!account.isLive) {
-        actions.appendChild(actionButton("Remove", "danger", function () { remove(account.email); }));
+        var danger = element("div", "actions danger-zone");
+        danger.appendChild(actionButton("Remove", "danger", function () { remove(account.email); }));
+        card.appendChild(danger);
       }
 
-      card.appendChild(actions);
-      if (roster) { card.appendChild(editPanel(account)); }
+      if (roster) { card.appendChild(editPanel(account, !account.isLive && !needsLogin)); }
       cardNodes[account.email] = card;
       cards.appendChild(card);
     });

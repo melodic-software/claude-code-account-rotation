@@ -51,6 +51,9 @@ header h1 { margin: 0; font-size: 1.6rem; letter-spacing: 0.01em; }
 .cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  /* Every card in a row is as tall as the tallest, so the action rows of a row
+     of cards sit on one line instead of stepping. */
+  grid-auto-rows: 1fr;
   gap: 1rem;
   margin-top: 1.5rem;
 }
@@ -67,6 +70,8 @@ header h1 { margin: 0; font-size: 1.6rem; letter-spacing: 0.01em; }
 
 .card.live { border-color: var(--live); box-shadow: 0 0 0 2px color-mix(in srgb, var(--live) 30%, transparent); }
 .card h2 { margin: 0; font-size: 1.05rem; word-break: break-all; }
+/* An address has no spaces to wrap at and a card is 280px wide. */
+.address { margin: 0; color: var(--muted); font-size: 0.85rem; word-break: break-all; }
 
 .badges { display: flex; gap: 0.4rem; min-height: 1.4rem; }
 .badge {
@@ -81,6 +86,8 @@ header h1 { margin: 0; font-size: 1.6rem; letter-spacing: 0.01em; }
 .badge.needs-login { color: var(--warn); }
 .badge.paused { color: var(--muted); }
 .badge.off-roster { color: var(--accent); }
+.badge.login-expired, .badge.error { color: var(--error); }
+.badge.ready { color: var(--ink); }
 
 .card.paused { opacity: 0.75; }
 
@@ -106,12 +113,17 @@ header h1 { margin: 0; font-size: 1.6rem; letter-spacing: 0.01em; }
 /* The whole basis, so neither line steals the bar's row. */
 .limit .resets, .limit .asof { flex-basis: 100%; color: var(--muted); }
 
-.asof, .next-reset, .refresh-state { margin: 0; color: var(--muted); font-size: 0.8rem; }
+.asof, .next-reset, .refresh-state, .login-expiry { margin: 0; color: var(--muted); font-size: 0.8rem; }
+.login-expiry.warn { color: var(--warn); }
 
 header button { margin-top: 0.6rem; }
 #refresh-state { margin: 0.4rem 0 0; min-height: 1.2rem; }
 
-.actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+/* The first element of the card's trailing group, so the buttons of a row of
+   cards sit at one height however much each card has to say above them. */
+.actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: auto; }
+/* The group after it is already at the bottom; a second push would split them. */
+.actions.danger-zone { margin-top: 0; }
 
 button {
   padding: 0.5rem 1rem;
