@@ -178,6 +178,12 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- The tool no longer exits when it reads the state file in the middle of Claude Code's rewrite of it.
+  Claude Code truncates `~/.claude.json` and writes it again in place, so the watcher's read could
+  land on zero bytes or half a document, and the parse failure took the background service, and with
+  it the whole host, down. Such a read is now refused as the torn read it is: the watcher
+  logs a warning and repairs on the next change, and a switch fails cleanly rather than splicing an
+  account block into bytes that are not a whole document.
 - A swept temporary file is classified by the name it was going to take rather than by parsing it, so
   a write a crash truncated is quarantined rather than deleted: those bytes can be the only copy of a
   rotated refresh token. A 401 refund is remembered for the rest of the window, so a rejected token

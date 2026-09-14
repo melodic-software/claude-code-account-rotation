@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Threading.Channels;
 using ClaudeCodeAccountRotation.App.Switching;
 using Microsoft.Extensions.Hosting;
@@ -70,6 +71,14 @@ internal sealed partial class StateFileWatcher : BackgroundService
             }
             catch (InvalidDataException exception)
             {
+                LogRepairFailed(exception.Message);
+            }
+            catch (JsonException exception)
+            {
+                // The state file reader turns a torn read into an InvalidDataException
+                // above. This is the guard for every other file the repair parses: a
+                // parse failure anywhere under it is a bad file, never a reason to stop
+                // the host, which is what an unhandled one here does.
                 LogRepairFailed(exception.Message);
             }
             catch (ArgumentException exception)

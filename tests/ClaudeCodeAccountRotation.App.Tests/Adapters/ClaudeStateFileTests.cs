@@ -70,6 +70,45 @@ public sealed class ClaudeStateFileTests : IDisposable
     }
 
     [Fact]
+    public async Task ReadRefusesAnEmptyFileRatherThanReportingNoAccount()
+    {
+        // Claude Code truncates this file before rewriting it, so a read can land on
+        // zero bytes. Reporting that as "no account block" would tell a caller
+        // planning a switch that nobody is logged in.
+        await File.WriteAllBytesAsync(_path, [], TestContext.Current.CancellationToken);
+
+        InvalidDataException failure = await Should.ThrowAsync<InvalidDataException>(
+            async () => await new ClaudeStateFile(_path).ReadAccountBlockAsync(TestContext.Current.CancellationToken));
+
+        failure.Message.ShouldContain(_path);
+    }
+
+    [Fact]
+    public async Task ReadRefusesAFileCaughtHalfWritten()
+    {
+        byte[] whole = Encoding.UTF8.GetBytes(LargeStateFile("a@example.com"));
+        await File.WriteAllBytesAsync(_path, whole[..40], TestContext.Current.CancellationToken);
+
+        InvalidDataException failure = await Should.ThrowAsync<InvalidDataException>(
+            async () => await new ClaudeStateFile(_path).ReadAccountBlockAsync(TestContext.Current.CancellationToken));
+
+        failure.Message.ShouldContain(_path);
+    }
+
+    [Fact]
+    public async Task PatchRefusesAFileCaughtHalfWrittenRatherThanPatchingOverIt()
+    {
+        byte[] whole = Encoding.UTF8.GetBytes(LargeStateFile("a@example.com"));
+        await File.WriteAllBytesAsync(_path, whole[..40], TestContext.Current.CancellationToken);
+
+        await Should.ThrowAsync<InvalidDataException>(
+            async () => await new ClaudeStateFile(_path).PatchAccountBlockAsync(Account("b@example.com"), TestContext.Current.CancellationToken));
+
+        (await File.ReadAllBytesAsync(_path, TestContext.Current.CancellationToken)).ShouldBe(whole[..40]);
+        Directory.GetFiles(_directory).ShouldBe([_path]);
+    }
+
+    [Fact]
     public async Task PatchChangesOnlyTheAccountSpan()
     {
         string original = LargeStateFile("a@example.com");

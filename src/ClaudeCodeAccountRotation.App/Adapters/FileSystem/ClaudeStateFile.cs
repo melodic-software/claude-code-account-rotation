@@ -45,14 +45,20 @@ internal sealed class ClaudeStateFile
         }
 
         byte[] bytes = await SharedFileReader.ReadAllBytesAsync(Path, cancellationToken);
-        AccountSpan? span = LocateAccountValue(bytes);
-        if (span is null)
+        if (LocateAccountValue(bytes) is not AccountSpan span)
         {
             return null;
         }
 
-        var node = JsonNode.Parse(bytes.AsSpan(span.Value.Start, span.Value.Length));
-        return node is JsonObject raw ? OAuthAccountBlock.FromJson(raw) : null;
+        try
+        {
+            var node = JsonNode.Parse(bytes.AsSpan(span.Start, span.Length));
+            return node is JsonObject raw ? OAuthAccountBlock.FromJson(raw) : null;
+        }
+        catch (JsonException exception)
+        {
+            throw CaughtHalfWritten(exception);
+        }
     }
 
     /// <summary>
@@ -65,7 +71,9 @@ internal sealed class ClaudeStateFile
     /// inside one timestamp tick. The only unguarded window is the rename itself.
     /// A file that keeps changing across <see cref="MaxPatchAttempts"/> attempts
     /// fails the patch instead of guessing; the journal then completes it at the
-    /// next startup.
+    /// next startup. A read that lands on a half-written file fails the same way,
+    /// from <see cref="LocateAccountValue"/>: splicing a block into bytes that are
+    /// not a whole document would write the file out as garbage.
     /// </summary>
     public async Task PatchAccountBlockAsync(OAuthAccountBlock account, CancellationToken cancellationToken)
     {
@@ -111,42 +119,64 @@ internal sealed class ClaudeStateFile
     private async Task<byte[]?> ReadBytesOrNullAsync(CancellationToken cancellationToken) =>
         File.Exists(Path) ? await SharedFileReader.ReadAllBytesAsync(Path, cancellationToken) : null;
 
-    private static AccountSpan? LocateAccountValue(byte[] bytes)
+    /// <summary>
+    /// The span the <c>oauthAccount</c> value occupies, or null when the file is a
+    /// JSON object without that property. Bytes that are not a whole JSON document
+    /// throw <see cref="InvalidDataException"/> rather than reading as null: Claude
+    /// Code truncates this file and rewrites it in place, so a read lands on zero
+    /// bytes or half a document often enough to have taken the tool down, and "no
+    /// account block" is the answer every caller reads as "nobody is logged in". A
+    /// switch planned over that would park the live pair without the outgoing
+    /// account's block. The state file watcher already logs this exception and waits
+    /// for the next change; a switch fails with it and the journal completes at the
+    /// next startup.
+    /// </summary>
+    private AccountSpan? LocateAccountValue(byte[] bytes)
     {
-        Utf8JsonReader reader = new(bytes, new JsonReaderOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip });
-        if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
+        try
         {
-            return null;
-        }
-
-        while (reader.Read())
-        {
-            if (reader.TokenType == JsonTokenType.EndObject && reader.CurrentDepth == 0)
+            Utf8JsonReader reader = new(bytes, new JsonReaderOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip });
+            if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
             {
                 return null;
             }
 
-            if (reader.TokenType != JsonTokenType.PropertyName || reader.CurrentDepth != 1)
+            while (reader.Read())
             {
-                continue;
-            }
+                if (reader.TokenType == JsonTokenType.EndObject && reader.CurrentDepth == 0)
+                {
+                    return null;
+                }
 
-            bool isAccount = reader.ValueTextEquals(AccountPropertyName);
-            reader.Read();
-            if (!isAccount)
-            {
+                if (reader.TokenType != JsonTokenType.PropertyName || reader.CurrentDepth != 1)
+                {
+                    continue;
+                }
+
+                bool isAccount = reader.ValueTextEquals(AccountPropertyName);
+                reader.Read();
+                if (!isAccount)
+                {
+                    reader.TrySkip();
+                    continue;
+                }
+
+                int start = checked((int)reader.TokenStartIndex);
                 reader.TrySkip();
-                continue;
+                int end = checked((int)reader.BytesConsumed);
+                return new AccountSpan(start, end - start);
             }
 
-            int start = checked((int)reader.TokenStartIndex);
-            reader.TrySkip();
-            int end = checked((int)reader.BytesConsumed);
-            return new AccountSpan(start, end - start);
+            return null;
         }
-
-        return null;
+        catch (JsonException exception)
+        {
+            throw CaughtHalfWritten(exception);
+        }
     }
+
+    private InvalidDataException CaughtHalfWritten(JsonException cause) =>
+        new("The state file " + Path + " was empty or only partly written when it was read; Claude Code rewrites it in place, so this is normally a read that landed mid-write.", cause);
 
     private static byte[] Splice(byte[] original, int start, int length, byte[] value)
     {
