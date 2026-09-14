@@ -151,8 +151,9 @@ record (`type-inventory.md` rows for `AccountStanding` and `CredentialPair`,
 two prior chains recorded them (full-sentence test names over Shouldly, long "why" doc comments,
 page helpers as small named functions, `element(tag, class, text)` for every node).
 
-Scale: Medium (about nine files across App, tests, the page, and three markdown files). Three
-phases: Phases 1 and 2 are file-disjoint and parallel-safe; Phase 3 follows both.
+Scale: Medium (about ten files across App, tests, the page, and three markdown files). Three
+sequential phases; Phases 1 and 2 are file-disjoint, but they share one worktree and one branch,
+so they run one after the other.
 
 Baseline to record before Phase 1: `dotnet test -c Release` total on `2b65a31` (expected 468, 1
 skipped).
@@ -420,26 +421,29 @@ guard needs no change, and the PR body contract accepts two `Closes #` lines.
 
 Phase 2 reads `account.loginExpiresAt` and `account.loggedInAt`, which are null until Phase 1
 lands, but its code and its Sanity Check do not depend on Phase 1's build: the fields are read
-defensively and every grep is on the page. Phase 3 depends on both. Wave A: Phases 1 and 2 in
-parallel; Wave B: Phase 3.
+defensively and every grep is on the page. Phase 3 depends on both. The phases are file-disjoint,
+yet every worker commits on this one branch in this one worktree, so two concurrent workers would
+collide on the index lock and interleave commits under the phase verifiers' diffs. Sequential is
+the shape: Phase 1, verify, Phase 2, verify, Phase 3. Parallel is possible only if each worker
+self-provisions its own worktree and the two branches are merged back, which this plan does not
+describe.
 
 ### Per-phase routing table
 
 | Phase | Surface | Basis |
 |---|---|---|
 | 1 | `implementation:implementer` worker (Opus), then `implementation:phase-verifier` | Bounded C# change with a test seam |
-| 2 | `implementation:implementer` worker (Opus), then `implementation:phase-verifier` | Page-only, file-disjoint from Phase 1 |
+| 2 | `implementation:implementer` worker (Opus), then `implementation:phase-verifier` | Page-only, file-disjoint from Phase 1, run after it |
 | 3 | `implementation:implementer` worker (Sonnet), main session drafts the PR body | Markdown edits |
 
-Cost: two workers in parallel for Wave A versus one after the other; the saving is one worker's
-wall time (about 150 lines each). Sequential fallback: run Phase 1 then Phase 2 in one worker
-if either reports a scope-fence violation or the parallel dispatch is unavailable.
+Cost: three workers one after the other. A parallel Wave A would save one worker's wall time on
+about 150 lines and costs a second worktree plus a merge; not taken.
 
 ## Decisions made (gate-passed)
 
 | Decision | What it changes in the plan | Basis |
 |---|---|---|
-| `[EXEC-SHAPE]` Phases 1 and 2 run in parallel | Two workers in Wave A | Zero file overlap; both greps and tests are phase-local |
+| `[EXEC-SHAPE]` The three phases run sequentially in this one worktree | One worker at a time, a verifier between | Zero file overlap between 1 and 2, but one branch and one index; concurrent commits would collide and blur the verifiers' diffs |
 | `[EXEC-SHAPE]` The parked read is guarded per account and logs a warning | Phase 1 item 2 | `ReadPairAsync` throws on a torn file; the watcher hotfix (PR #58) showed what an unguarded read on a poll path costs |
 | `[EXEC-SHAPE]` The assembler gains an `ILogger` through its primary constructor and a `[LoggerMessage]` method | Phase 1 item 2 | CA1848 is live; `StateFileWatcher` and `StartupReconciliation` are the pattern; DI registration is `AddSingleton<DashboardAssembler>()` |
 | `[EXEC-SHAPE]` The test factory's helpers gain an optional `profileFetchedAt` | Phase 1 item 3 | `AccountJson` writes no stamp today; a stamp from `factory.Clock` keeps the wall clock out of the facts |
@@ -453,6 +457,9 @@ if either reports a scope-fence violation or the parallel dispatch is unavailabl
 - Whether the operator wants `Log in again` reachable from the card face on a healthy card (an
   Edit-panel button is the plan's answer; the row is one line away).
 - Whether the login-age half of the line earns its space, or the operator wants expiry only.
+- The page has no test seam. The only pre-merge visual check would be a screenshot from a second
+  instance on another port with temp app data and `example.com` profiles; offered at approval, not
+  in scope.
 
 ## Handoff to implementation
 
@@ -467,8 +474,9 @@ if either reports a scope-fence violation or the parallel dispatch is unavailabl
 
 ### Execution shape ([EXEC-SHAPE] tagged)
 
-- `[EXEC-SHAPE]` Wave A: Phase 1 and Phase 2 as two parallel `implementation:implementer` workers
-  (Opus), each followed by its own `implementation:phase-verifier`; Wave B: Phase 3.
+- `[EXEC-SHAPE]` Sequential: Phase 1, then Phase 2, then Phase 3, each an
+  `implementation:implementer` worker in this worktree followed by its own
+  `implementation:phase-verifier` before the next worker is dispatched.
 - Scope fences. Phase 1 ALLOWED: `src/ClaudeCodeAccountRotation.App/Dashboard/DashboardViews.cs`,
   `src/ClaudeCodeAccountRotation.App/Dashboard/DashboardAssembler.cs`,
   `tests/ClaudeCodeAccountRotation.App.Tests/AppFactory.cs`,
@@ -490,4 +498,5 @@ if either reports a scope-fence violation or the parallel dispatch is unavailabl
 - After every build: `git checkout -- '**/packages.lock.json'` if it drifted.
 - Verification checkpoints: each phase's Sanity Check list; the Phase 3 gate list; a fresh-context
   phase verifier per phase and on the whole diff before the PR.
-- Sequential fallback: Phase 1 then Phase 2 in one worker.
+- Fallback from a worker divergence: finish that phase through a fresh worker with the narrowed
+  brief, or in the main session as a last resort.
