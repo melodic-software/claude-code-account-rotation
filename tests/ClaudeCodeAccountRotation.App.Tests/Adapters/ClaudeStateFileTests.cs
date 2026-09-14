@@ -69,6 +69,36 @@ public sealed class ClaudeStateFileTests : IDisposable
         (await new ClaudeStateFile(_path).ReadAccountBlockAsync(TestContext.Current.CancellationToken)).ShouldBeNull();
     }
 
+    /// <summary>
+    /// The same file with the account block written first, so a truncation can land
+    /// past a whole <c>oauthAccount</c> value.
+    /// </summary>
+    private static string AccountFirstStateFile(string email)
+    {
+        JsonObject whole = JsonNode.Parse(LargeStateFile(email))!.AsObject();
+        JsonObject reordered = new() { ["oauthAccount"] = whole["oauthAccount"]!.DeepClone() };
+        foreach (KeyValuePair<string, JsonNode?> property in whole.Where(property => property.Key != "oauthAccount"))
+        {
+            reordered[property.Key] = property.Value?.DeepClone();
+        }
+
+        return reordered.ToJsonString();
+    }
+
+    /// <summary>
+    /// A rewrite cut off inside a property that follows a whole <c>oauthAccount</c>
+    /// value. The block alone reads perfectly; only the rest of the document says
+    /// the file is half written.
+    /// </summary>
+    private static byte[] TruncatedPastTheAccountBlock()
+    {
+        byte[] whole = Encoding.UTF8.GetBytes(AccountFirstStateFile("a@example.com"));
+        byte[] prefix = whole[..(whole.Length / 2)];
+        // The account block has to be whole in these bytes, or the truncation proves nothing.
+        Encoding.UTF8.GetString(prefix).ShouldContain("\"organizationRateLimitTier\":\"default_claude_max_20x\"}");
+        return prefix;
+    }
+
     [Fact]
     public async Task ReadRefusesAnEmptyFileRatherThanReportingNoAccount()
     {
@@ -101,10 +131,53 @@ public sealed class ClaudeStateFileTests : IDisposable
         byte[] whole = Encoding.UTF8.GetBytes(LargeStateFile("a@example.com"));
         await File.WriteAllBytesAsync(_path, whole[..40], TestContext.Current.CancellationToken);
 
-        await Should.ThrowAsync<InvalidDataException>(
+        InvalidDataException failure = await Should.ThrowAsync<InvalidDataException>(
             async () => await new ClaudeStateFile(_path).PatchAccountBlockAsync(Account("b@example.com"), TestContext.Current.CancellationToken));
 
+        // Named, so this discriminates the torn-read refusal from AppendProperty's
+        // older "not a JSON object" guard, which these bytes would also trip.
+        failure.Message.ShouldContain(_path);
         (await File.ReadAllBytesAsync(_path, TestContext.Current.CancellationToken)).ShouldBe(whole[..40]);
+        Directory.GetFiles(_directory).ShouldBe([_path]);
+    }
+
+    [Fact]
+    public async Task ReadRefusesAFileCutOffAfterTheAccountBlock()
+    {
+        await File.WriteAllBytesAsync(_path, TruncatedPastTheAccountBlock(), TestContext.Current.CancellationToken);
+
+        InvalidDataException failure = await Should.ThrowAsync<InvalidDataException>(
+            async () => await new ClaudeStateFile(_path).ReadAccountBlockAsync(TestContext.Current.CancellationToken));
+
+        failure.Message.ShouldContain(_path);
+    }
+
+    [Fact]
+    public async Task ReadRefusesBytesLeftAfterAWholeDocument()
+    {
+        // The other half of the same guard: the root object closes, so the span is
+        // sound, and everything after it says these bytes are not one document.
+        await File.WriteAllTextAsync(_path, AccountFirstStateFile("a@example.com") + "{\"numStartups\": 1}", TestContext.Current.CancellationToken);
+
+        InvalidDataException failure = await Should.ThrowAsync<InvalidDataException>(
+            async () => await new ClaudeStateFile(_path).ReadAccountBlockAsync(TestContext.Current.CancellationToken));
+
+        failure.Message.ShouldContain(_path);
+    }
+
+    [Fact]
+    public async Task PatchRefusesAFileCutOffAfterTheAccountBlockRatherThanSplicingIntoIt()
+    {
+        // The span is sound, so the splice would succeed and write the half of the
+        // document that was read back over the whole file.
+        byte[] prefix = TruncatedPastTheAccountBlock();
+        await File.WriteAllBytesAsync(_path, prefix, TestContext.Current.CancellationToken);
+
+        InvalidDataException failure = await Should.ThrowAsync<InvalidDataException>(
+            async () => await new ClaudeStateFile(_path).PatchAccountBlockAsync(Account("b@example.com"), TestContext.Current.CancellationToken));
+
+        failure.Message.ShouldContain(_path);
+        (await File.ReadAllBytesAsync(_path, TestContext.Current.CancellationToken)).ShouldBe(prefix);
         Directory.GetFiles(_directory).ShouldBe([_path]);
     }
 

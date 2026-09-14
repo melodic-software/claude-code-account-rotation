@@ -121,8 +121,11 @@ internal sealed class ClaudeStateFile
 
     /// <summary>
     /// The span the <c>oauthAccount</c> value occupies, or null when the file is a
-    /// JSON object without that property. Bytes that are not a whole JSON document
-    /// throw <see cref="InvalidDataException"/> rather than reading as null: Claude
+    /// JSON object without that property, read out of the whole document every time:
+    /// a file cut off after the block still yields a sound span, so the rest of the
+    /// bytes have to be read before one is handed back. Bytes that are not a whole
+    /// JSON document throw <see cref="InvalidDataException"/> rather than reading
+    /// as null or as a usable span: Claude
     /// Code truncates this file and rewrites it in place, so a read lands on zero
     /// bytes or half a document often enough to have taken the tool down, and "no
     /// account block" is the answer every caller reads as "nobody is logged in". A
@@ -141,11 +144,20 @@ internal sealed class ClaudeStateFile
                 return null;
             }
 
+            AccountSpan? account = null;
             while (reader.Read())
             {
                 if (reader.TokenType == JsonTokenType.EndObject && reader.CurrentDepth == 0)
                 {
-                    return null;
+                    // Read on past the root object rather than returning here: that
+                    // last read is what proves these bytes are a whole document and
+                    // not a prefix of one. A rewrite cut off after the account block
+                    // leaves a span that is sound on its own, and splicing into those
+                    // bytes would replace the file with JSON nothing can read.
+                    // Trailing bytes throw from the read; the answer is asserted
+                    // rather than discarded so the proof does not rest on which
+                    // reader options are set here.
+                    return reader.Read() ? throw CaughtHalfWritten(cause: null) : account;
                 }
 
                 if (reader.TokenType != JsonTokenType.PropertyName || reader.CurrentDepth != 1)
@@ -164,10 +176,10 @@ internal sealed class ClaudeStateFile
                 int start = checked((int)reader.TokenStartIndex);
                 reader.TrySkip();
                 int end = checked((int)reader.BytesConsumed);
-                return new AccountSpan(start, end - start);
+                account = new AccountSpan(start, end - start);
             }
 
-            return null;
+            return account;
         }
         catch (JsonException exception)
         {
@@ -175,8 +187,8 @@ internal sealed class ClaudeStateFile
         }
     }
 
-    private InvalidDataException CaughtHalfWritten(JsonException cause) =>
-        new("The state file " + Path + " was empty or only partly written when it was read; Claude Code rewrites it in place, so this is normally a read that landed mid-write.", cause);
+    private InvalidDataException CaughtHalfWritten(JsonException? cause) =>
+        new("The state file " + Path + " did not hold one whole JSON document when it was read; it was empty or only partly written. Claude Code rewrites it in place, so this is normally a read that landed mid-write.", cause);
 
     private static byte[] Splice(byte[] original, int start, int length, byte[] value)
     {
