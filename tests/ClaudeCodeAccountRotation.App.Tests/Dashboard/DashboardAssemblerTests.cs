@@ -526,7 +526,7 @@ public sealed class DashboardAssemblerTests
     {
         // The expiry is the pair's refreshTokenExpiresAt and nothing else; a
         // profile that was written before the CLI stamped profileFetchedAt leaves
-        // the age half of the line off rather than guessing it (issues #46, #49).
+        // the age half of the line off rather than guessing it.
         await using AppFactory factory = new();
         DateTimeOffset expiry = factory.Clock.GetUtcNow().AddDays(16);
         await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
