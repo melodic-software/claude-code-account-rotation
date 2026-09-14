@@ -506,8 +506,7 @@ decision-point auto-refresh (AC 5). Pure functions over `AccountStanding` rows.
     `DashboardAssembler`, off the account's live or parked credential pair, null when that pair
     cannot be read. 3.2's filter must also drop rows whose `LoginExpiresAt <= now`:
     `AccountAvailability.Arrange` still orders every one of them, and an expired login is not a
-    switch target. The card already shows the `login expired` flag on its own; Core carries no
-    other change from #49.
+    switch target. The card already shows the `login expired` flag on its own; Core is unchanged.
 - [ ] **3.3** `SwitchAdvisor.Evaluate`: proposal `ActiveNearLimit` at ≥ 90, `ActiveTripped` at 100
   or when `~/.claude/rate-limit-guard/stop-events.jsonl` (the reader contract's documented reactive
   file, read by `RateLimitGuardStopEventsReader`) holds a `StopFailure` record newer than the latest

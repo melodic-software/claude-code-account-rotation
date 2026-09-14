@@ -11,7 +11,7 @@ All notable changes to this project are documented in this file. The format foll
 - Each dashboard card leads with the roster alias as its heading, the address on its own line
   beneath (#46). One state chip, `live`, `paused`, `needs login`, `login expired`, `error`, or
   `ready`, first match wins, now says whether the operator can switch to the card at all, in place
-  of the conditional badges that used to say so piecemeal; `not on roster` still rides beside it as
+  of the conditional badges that used to say so piecemeal; `not on roster` still stays beside it as
   a second badge. The standing line is left off a paused card and off a non-live card whose login
   has expired, since the chip has already said so, and `Switch` is disabled once a login has
   expired. `Log in again` stays in the action row only while the card needs it, no credentials, an
@@ -62,13 +62,13 @@ All notable changes to this project are documented in this file. The format foll
 
 - Each card in `GET /api/dashboard` gains `loginExpiresAt` and `loggedInAt` (#49). The first is
   when the account's credential pair, live or parked, says its refresh token runs out; the second
-  is the `profileFetchedAt` the CLI already stamped on the account block, read from the live pair's
-  state file or from a parked account's own `profile.json`. Either is null when the account has no
-  login yet, its source carries no such instant, or that source cannot be read. The usage block
-  gains a `login-expiry` line at its foot, `logged in N d ago · login expires in N d`, in the warn
-  colour inside seven days of expiry and reading `login expired` once past. A parked credential
-  file that is torn or unreadable blanks that one card's expiry and logs a warning instead of
-  failing the whole payload.
+  is the `profileFetchedAt` the CLI already stamped on the account block, read from the state file
+  for the live account or from a parked account's own `profile.json`. Either is null when the
+  account has no login yet, its source carries no such instant, or that source cannot be read. The
+  usage block gains a `login-expiry` line at its foot, `logged in N d ago · login expires in N d`,
+  in the warn colour inside seven days of expiry and reading `login expired` once past. A parked
+  credential file that is torn or unreadable blanks that one card's expiry and logs a warning
+  instead of failing the whole payload.
 - The dashboard lists the accounts in the order they free up, and every card says what its place in
   that order means (#47). The accounts that can be worked now come first, ordered by the weekly
   reset that ends them; then the spent ones, ordered by the reset that actually frees them; then the
