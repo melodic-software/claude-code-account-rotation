@@ -612,6 +612,33 @@ public sealed class DashboardAssemblerTests
         factory.Logs.Lines.ShouldNotContain(line => line.Contains("refresh-b", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task AParkedCredentialFileWithAnEpochOutOfRangeLeavesTheExpiryBlankAndStillListsTheAccount()
+    {
+        // Well-formed JSON the parser still cannot turn into a pair: every field
+        // is the shape the CLI writes and refreshTokenExpiresAt is a whole number
+        // of milliseconds, just one no instant can hold. The card costs the same
+        // as a torn file does, because unreadable is unreadable.
+        await using AppFactory factory = new();
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        string folder = await factory.ParkedProfileAsync(OtherEmail, "refresh-b", TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateClient();
+        JsonObject shape = CredentialFiles.Shape(
+            "refresh-b",
+            accessTokenExpiresAt: factory.Clock.GetUtcNow().AddHours(8),
+            loginExpiresAt: factory.Clock.GetUtcNow().AddDays(28));
+        shape["claudeAiOauth"]!["refreshTokenExpiresAt"] = 99999999999999999L;
+        await File.WriteAllTextAsync(Path.Combine(folder, CredentialFiles.FileName), shape.ToJsonString(), TestContext.Current.CancellationToken);
+
+        JsonElement dashboard = await client.GetFromJsonAsync<JsonElement>(new Uri("/api/dashboard", UriKind.Relative), TestContext.Current.CancellationToken);
+        JsonElement card = Card(dashboard, OtherEmail);
+
+        card.GetProperty("hasCredentials").GetBoolean().ShouldBeTrue();
+        card.GetProperty("loginExpiresAt").ValueKind.ShouldBe(JsonValueKind.Null);
+        factory.Logs.Lines.ShouldContain(line => line.Contains("login expiry unreadable for", StringComparison.Ordinal));
+        factory.Logs.Lines.ShouldNotContain(line => line.Contains("refresh-b", StringComparison.Ordinal));
+    }
+
     /// <summary>The rows a card shows before anything has numbers for it: named, ordered, and every one of them unknown.</summary>
     private static void ShouldBeAllUnknown(JsonElement card)
     {

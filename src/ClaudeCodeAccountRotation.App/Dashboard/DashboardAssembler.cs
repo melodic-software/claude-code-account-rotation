@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Text;
-using System.Text.Json;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.App.Switching;
@@ -190,17 +189,18 @@ internal sealed partial class DashboardAssembler(
     /// The login expiry inside one parked folder's credential file, or null when
     /// the folder holds no file or the file cannot be read.
     /// <para>
-    /// An unreadable file is one blank line on one card and never a failed page.
-    /// Parked writes in this process are atomic (a temp file and a replace), so a
-    /// torn read is belt and braces against ourselves; it is real for anyone else
-    /// who writes into a profile folder, a hand edit or another tool or a folder
-    /// swapped out mid-poll. A file read while someone else is rewriting it must
-    /// cost the reader nothing more than the value it went for.
+    /// Any failure to read or parse the file, whatever its shape, costs the card
+    /// one blank line and the log one warning, never the page: a missing key, a
+    /// value of the wrong type, an epoch outside the range an instant can hold, a
+    /// torn write, a permission error, or whatever the next writer into a profile
+    /// folder invents. The kinds are not listed in the filter, because the list is
+    /// what would go stale; only cancellation is let through.
     /// </para>
     /// <para>
     /// The folder's own leaf reaches the log beside the store's reason. The reason
-    /// can name the file path, since it is the store's own exception message, but
-    /// never a value the file holds.
+    /// can name the file path, since it is the store's own exception message, and a
+    /// framework exception can quote the argument it rejected, so it can name a
+    /// number the file holds, but never a secret the file holds.
     /// </para>
     /// </summary>
     private async Task<DateTimeOffset?> ReadLoginExpiryAsync(ParkedProfile profile, CancellationToken cancellationToken)
@@ -214,7 +214,9 @@ internal sealed partial class DashboardAssembler(
         {
             return (await pairs.ReadParkedAsync(profile.FolderPath, cancellationToken))?.LoginExpiresAt;
         }
-        catch (Exception exception) when (exception is JsonException or InvalidDataException or InvalidOperationException or IOException or UnauthorizedAccessException)
+#pragma warning disable CA1031 // Do not catch general exception types
+        catch (Exception exception) when (exception is not OperationCanceledException)
+#pragma warning restore CA1031
         {
             LogLoginExpiryUnreadable(FolderName(profile.FolderPath), exception.Message);
             return null;
