@@ -59,7 +59,7 @@ nullable fields on the existing card record.
   it, never `throw new NotImplementedException()`.
 - No token content on any view type or in any log line: the assembler lifts two instants off the
   pair and discards it (`DashboardView` doc comment: "No token field exists on any of these types").
-- Repo rules: Conventional Commits titles, `.claude/rules/pr-body-contract.md`, the `kyle-sexton`
+- Repo rules: Conventional Commits titles, `.claude/rules/pr-body-contract.md`, the GitHub
   noreply commit identity (verify `git config user.email` before committing), every commit ending
   `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
 - The live dashboard on the operator's machine (127.0.0.1:48211) is not stopped, restarted,
@@ -300,7 +300,7 @@ reading the diff. Every node goes through `element(tag, className, text)`; no `i
 | `src/ClaudeCodeAccountRotation.App/wwwroot/app.js` | Modify | Header split, chip, expiry line, standing suppression, mapping move, action groups, edit-panel login |
 | `src/ClaudeCodeAccountRotation.App/wwwroot/app.css` | Modify | The rules listed in item 7 |
 
-### Phase 3: The close-out [TODO]
+### Phase 3: The close-out [DONE]
 
 Review: pr
 

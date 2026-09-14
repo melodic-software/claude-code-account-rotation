@@ -60,3 +60,14 @@ Append-only. One entry per decision. Types: plan-confirmed, discovery, deviation
   `0e7da2a`; build 0 warnings, 474 tests, 0 failed, `node --check` clean. Note for the operator: a
   login younger than 48 hours reads `logged in 3 h 12 min ago`, mirroring `relative()`'s buckets;
   the `<N> d ago` shape applies past 48 hours.
+
+## Phase 3 and the whole diff
+
+- **plan-confirmed** (2026-09-14, verifier, Phase 3). The five Phase 3 criteria PASS on `bbbfda4`;
+  whole diff: Core untouched, 12 files, build 0 warnings, 474 tests, 0 failed, format, typos,
+  shellcheck, and the path gate clean, history linear with the trailer on all nine commits.
+- **deviation** (2026-09-14, verifier, whole diff). Plan said: no user name in any tracked file.
+  Found: this plan's Constraints named the commit identity by GitHub handle, as the usage-cards plan
+  already does on `main`. Chose: drop the handle from this plan; the precedent on `main` is left for
+  a separate sweep. `eng/check-no-machine-paths.sh` checks names only when
+  `CHECK_NO_MACHINE_PATHS_NAMES` is set, so the CI gate does not cover this axis. Revisit: none.
