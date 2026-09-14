@@ -91,3 +91,14 @@ Append-only. One entry per decision. Types: plan-confirmed, discovery, deviation
   `refreshTokenExpiresAt` yields null" in an App fact. Found: `CredentialFiles.Shape` always
   writes the field. Chose: rely on the Core pin `CredentialPairTests.cs:50`
   (`LoginExpiresAt.ShouldBeNull()`); no second fixture shape. Revisit: none.
+
+## PR #59 review
+
+- **deviation** (2026-09-14, Codex review, PR #59). Plan said: the parked-read guard catches four
+  named exception types. Found: `CredentialPair.FromJson` throws `ArgumentOutOfRangeException` on
+  an epoch outside the representable range (reproduced red: `GET /api/dashboard` 500). Chose:
+  `when (exception is not OperationCanceledException)` with the CA1031 pragma pair, the shape
+  `QuotaRefresh.cs:350` uses, so the list cannot go stale; one fact with
+  `refreshTokenExpiresAt = 99999999999999999` pins it (commit `9e8e811`, 475 tests). The guard's
+  doc comment now says the reason text can quote a rejected number but never a secret, and the
+  fact asserts the token literal is absent from every log line. Revisit: none.
