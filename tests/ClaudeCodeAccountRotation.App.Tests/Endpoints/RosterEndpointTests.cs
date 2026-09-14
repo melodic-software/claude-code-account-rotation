@@ -90,6 +90,28 @@ public sealed class RosterEndpointTests
     }
 
     [Fact]
+    public async Task TheCardAddHandsBackNamesBothLoginInstantsAndKnowsNeither()
+    {
+        // Add reads no credential file and no profile, so the card it returns has
+        // nothing to date the login by. The fields are still on the wire, null, so
+        // the page renders the new card with the same shape a polled one has.
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsJsonAsync(
+            _accounts,
+            new { email = NewEmail },
+            TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        JsonObject card = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+        card.ContainsKey("loginExpiresAt").ShouldBeTrue();
+        card["loginExpiresAt"].ShouldBeNull();
+        card.ContainsKey("loggedInAt").ShouldBeTrue();
+        card["loggedInAt"].ShouldBeNull();
+    }
+
+    [Fact]
     public async Task AddingTheSameAccountTwiceIsRefused()
     {
         await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);

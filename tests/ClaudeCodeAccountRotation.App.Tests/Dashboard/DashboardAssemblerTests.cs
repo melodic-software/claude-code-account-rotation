@@ -521,6 +521,124 @@ public sealed class DashboardAssemblerTests
         card.GetProperty("nextResetAt").ValueKind.ShouldBe(JsonValueKind.Null);
     }
 
+    [Fact]
+    public async Task AParkedCardTakesItsLoginExpiryFromItsPairAndSaysNothingAboutAgeWithoutAStamp()
+    {
+        // The expiry is the pair's refreshTokenExpiresAt and nothing else; a
+        // profile that was written before the CLI stamped profileFetchedAt leaves
+        // the age half of the line off rather than guessing it.
+        await using AppFactory factory = new();
+        DateTimeOffset expiry = factory.Clock.GetUtcNow().AddDays(16);
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        await factory.ParkedProfileAsync(OtherEmail, "refresh-b", TestContext.Current.CancellationToken, loginExpiresAt: expiry);
+
+        JsonElement card = await CardAsync(factory, OtherEmail);
+
+        card.GetProperty("loginExpiresAt").GetDateTimeOffset().ShouldBe(expiry);
+        card.GetProperty("loggedInAt").ValueKind.ShouldBe(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task AParkedCardTakesItsLoginAgeFromTheProfilesOwnStamp()
+    {
+        await using AppFactory factory = new();
+        DateTimeOffset loggedInAt = factory.Clock.GetUtcNow().AddDays(-12);
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        await factory.ParkedProfileAsync(OtherEmail, "refresh-b", TestContext.Current.CancellationToken, profileFetchedAt: loggedInAt);
+
+        JsonElement card = await CardAsync(factory, OtherEmail);
+
+        card.GetProperty("loggedInAt").GetDateTimeOffset().ShouldBe(loggedInAt);
+    }
+
+    [Fact]
+    public async Task ARosterOnlyCardCarriesNeitherInstant()
+    {
+        // An account the operator has added but never logged in owns no pair and
+        // no profile, so there is nothing to date: both fields are null and the
+        // page shows no login line at all.
+        await using AppFactory factory = new();
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        await RosterAsync(factory, Entry(LiveEmail), Entry(FirstEmail));
+
+        JsonElement card = await CardAsync(factory, FirstEmail);
+
+        card.GetProperty("hasCredentials").GetBoolean().ShouldBeFalse();
+        card.GetProperty("loginExpiresAt").ValueKind.ShouldBe(JsonValueKind.Null);
+        card.GetProperty("loggedInAt").ValueKind.ShouldBe(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task TheLiveCardTakesItsInstantsFromTheLivePairAndTheStateFilesOwnBlock()
+    {
+        // The live account's credentials are not in a profile folder and its
+        // identity is not in a profile.json, so both instants come from the two
+        // files the live directory and the state file actually hold.
+        await using AppFactory factory = new();
+        DateTimeOffset expiry = factory.Clock.GetUtcNow().AddDays(16);
+        DateTimeOffset loggedInAt = factory.Clock.GetUtcNow().AddDays(-12);
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken, profileFetchedAt: loggedInAt);
+        await File.WriteAllTextAsync(
+            Path.Combine(factory.LiveDirectory, CredentialFiles.FileName),
+            CredentialFiles.Shape("live-token", loginExpiresAt: expiry).ToJsonString(),
+            TestContext.Current.CancellationToken);
+
+        JsonElement card = await LiveCardAsync(factory);
+
+        card.GetProperty("loginExpiresAt").GetDateTimeOffset().ShouldBe(expiry);
+        card.GetProperty("loggedInAt").GetDateTimeOffset().ShouldBe(loggedInAt);
+    }
+
+    [Fact]
+    public async Task ATornParkedCredentialFileLeavesTheExpiryBlankAndStillListsTheAccount()
+    {
+        // One unreadable file is one blank line, never a failed page: the card is
+        // still built, still says it has credentials (which is file existence),
+        // and the folder alone reaches the log.
+        await using AppFactory factory = new();
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        string folder = await factory.ParkedProfileAsync(OtherEmail, "refresh-b", TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateClient();
+        // Torn after the host has started, the way a stranded pair is: startup's
+        // own sweep reads every parked pair, and this fact is about the poll.
+        await File.WriteAllTextAsync(Path.Combine(folder, CredentialFiles.FileName), "{", TestContext.Current.CancellationToken);
+
+        JsonElement dashboard = await client.GetFromJsonAsync<JsonElement>(new Uri("/api/dashboard", UriKind.Relative), TestContext.Current.CancellationToken);
+        JsonElement card = Card(dashboard, OtherEmail);
+
+        card.GetProperty("hasCredentials").GetBoolean().ShouldBeTrue();
+        card.GetProperty("loginExpiresAt").ValueKind.ShouldBe(JsonValueKind.Null);
+        factory.Logs.Lines.ShouldContain(line => line.Contains("login expiry unreadable for", StringComparison.Ordinal));
+        factory.Logs.Lines.ShouldNotContain(line => line.Contains("refresh-b", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AParkedCredentialFileWithAnEpochOutOfRangeLeavesTheExpiryBlankAndStillListsTheAccount()
+    {
+        // Well-formed JSON the parser still cannot turn into a pair: every field
+        // is the shape the CLI writes and refreshTokenExpiresAt is a whole number
+        // of milliseconds, just one no instant can hold. The card costs the same
+        // as a torn file does, because unreadable is unreadable.
+        await using AppFactory factory = new();
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        string folder = await factory.ParkedProfileAsync(OtherEmail, "refresh-b", TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateClient();
+        JsonObject shape = CredentialFiles.Shape(
+            "refresh-b",
+            accessTokenExpiresAt: factory.Clock.GetUtcNow().AddHours(8),
+            loginExpiresAt: factory.Clock.GetUtcNow().AddDays(28));
+        shape["claudeAiOauth"]!["refreshTokenExpiresAt"] = 99999999999999999L;
+        await File.WriteAllTextAsync(Path.Combine(folder, CredentialFiles.FileName), shape.ToJsonString(), TestContext.Current.CancellationToken);
+
+        JsonElement dashboard = await client.GetFromJsonAsync<JsonElement>(new Uri("/api/dashboard", UriKind.Relative), TestContext.Current.CancellationToken);
+        JsonElement card = Card(dashboard, OtherEmail);
+
+        card.GetProperty("hasCredentials").GetBoolean().ShouldBeTrue();
+        card.GetProperty("loginExpiresAt").ValueKind.ShouldBe(JsonValueKind.Null);
+        factory.Logs.Lines.ShouldContain(line => line.Contains("login expiry unreadable for", StringComparison.Ordinal));
+        factory.Logs.Lines.ShouldNotContain(line => line.Contains("refresh-b", StringComparison.Ordinal));
+    }
+
     /// <summary>The rows a card shows before anything has numbers for it: named, ordered, and every one of them unknown.</summary>
     private static void ShouldBeAllUnknown(JsonElement card)
     {

@@ -100,15 +100,35 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
     /// </summary>
     public Pacer Waits { get; } = new();
 
-    public static JsonObject AccountJson(string email) => new() { ["accountUuid"] = "uuid-" + email, ["emailAddress"] = email };
-
-    public async Task WriteStateFileAsync(string email, CancellationToken cancellationToken)
+    /// <summary>
+    /// The account block as the CLI writes it, with <c>profileFetchedAt</c> in
+    /// epoch milliseconds only when a caller says when the login was made: a
+    /// block written before the CLI carried that key has no such field, which is
+    /// the state a card has to render as an unknown login age.
+    /// </summary>
+    public static JsonObject AccountJson(string email, DateTimeOffset? profileFetchedAt = null)
     {
-        JsonObject state = new() { ["numStartups"] = 3, ["oauthAccount"] = AccountJson(email) };
+        JsonObject account = new() { ["accountUuid"] = "uuid-" + email, ["emailAddress"] = email };
+        if (profileFetchedAt is DateTimeOffset stamp)
+        {
+            account["profileFetchedAt"] = stamp.ToUnixTimeMilliseconds();
+        }
+
+        return account;
+    }
+
+    public async Task WriteStateFileAsync(string email, CancellationToken cancellationToken, DateTimeOffset? profileFetchedAt = null)
+    {
+        JsonObject state = new() { ["numStartups"] = 3, ["oauthAccount"] = AccountJson(email, profileFetchedAt) };
         await File.WriteAllTextAsync(StateFilePath, state.ToJsonString(), cancellationToken);
     }
 
-    public async Task<string> ParkedProfileAsync(string email, string refreshToken, CancellationToken cancellationToken, DateTimeOffset? loginExpiresAt = null)
+    public async Task<string> ParkedProfileAsync(
+        string email,
+        string refreshToken,
+        CancellationToken cancellationToken,
+        DateTimeOffset? loginExpiresAt = null,
+        DateTimeOffset? profileFetchedAt = null)
     {
         string folder = Path.Combine(ProfilesRoot, email);
         Directory.CreateDirectory(folder);
@@ -116,7 +136,7 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
             Path.Combine(folder, CredentialFiles.FileName),
             CredentialFiles.Shape(refreshToken, loginExpiresAt: loginExpiresAt).ToJsonString(),
             cancellationToken);
-        await File.WriteAllTextAsync(Path.Combine(folder, "profile.json"), AccountJson(email).ToJsonString(), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(folder, "profile.json"), AccountJson(email, profileFetchedAt).ToJsonString(), cancellationToken);
         return folder;
     }
 

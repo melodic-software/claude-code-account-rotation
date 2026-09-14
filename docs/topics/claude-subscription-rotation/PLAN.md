@@ -454,6 +454,10 @@ time, plus login expiry (AC 4). Behavioral references: `spike-usage-probe.py`,
 - [x] **2.6** Endpoints `POST /api/refresh`, `POST /api/accounts/{email}/refresh`; dashboard cards
   gain bars per `UsageLimit`, "as of <time> via snapshot|refresh|cached", "login expires in N days"
   (from `LoginExpiresAt`), "rate limited, retry in N s" state, and the usage-credits state line.
+  - **scope-change note 2026-09-14 (#49):** the "login expires in N days" card text shipped in #49
+    as the `login-expiry` line, `logged in N d ago · login expires in N d`, both halves measured
+    from `dashboard.capturedAt` rather than the browser clock, with a seven-day `warn` state and a
+    `login expired` state once past.
 
 Landed (2026-09-12): 2.1 to 2.4 shipped together in PR #15 and were never ticked; 2.5 and 2.6
 shipped in #52 (`docs/topics/usage-cards/PLAN.md`, its `DEVIATIONS.md` for every departure from
@@ -498,6 +502,11 @@ decision-point auto-refresh (AC 5). Pure functions over `AccountStanding` rows.
     `OrdersByEarliestWeeklyReset`) are already satisfied by `AccountAvailabilityTests`, so 3.2's own
     new tests are `TruncatesToQueueLength` and `FlagsUrgentWeeklyReset`, and that line's
     `AccountRankingTests` reads as "either suite".
+  - **scope-change note 2026-09-14 (#49):** #49 fills `AccountStanding.LoginExpiresAt` from
+    `DashboardAssembler`, off the account's live or parked credential pair, null when that pair
+    cannot be read. 3.2's filter must also drop rows whose `LoginExpiresAt <= now`:
+    `AccountAvailability.Arrange` still orders every one of them, and an expired login is not a
+    switch target. The card already shows the `login expired` flag on its own; Core is unchanged.
 - [ ] **3.3** `SwitchAdvisor.Evaluate`: proposal `ActiveNearLimit` at ≥ 90, `ActiveTripped` at 100
   or when `~/.claude/rate-limit-guard/stop-events.jsonl` (the reader contract's documented reactive
   file, read by `RateLimitGuardStopEventsReader`) holds a `StopFailure` record newer than the latest

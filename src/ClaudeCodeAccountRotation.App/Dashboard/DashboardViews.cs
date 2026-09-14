@@ -17,13 +17,25 @@ internal sealed record LiveAccountView(string? Email, bool HasCredentials, strin
 /// <summary>
 /// One account as the page renders it.
 /// <para>
-/// The last two say where the server placed this card in the list and why, so
-/// the page states the wait without re-deriving it. <c>Standing</c> is the group
-/// the account is in, a lower-case word because the app configures no JSON enum
-/// converter, and <c>NextResetAt</c> is the instant the card sorted by: when the
-/// account frees up, or null when there is no wait to state or none that can be
-/// dated. Both carry defaults, so a route that hands back a card for an account
-/// nothing has read constructs one unchanged.
+/// <c>Standing</c> and <c>NextResetAt</c> say where the server placed this card
+/// in the list and why, so the page states the wait without re-deriving it.
+/// <c>Standing</c> is the group the account is in, a lower-case word because the
+/// app configures no JSON enum converter, and <c>NextResetAt</c> is the instant
+/// the card sorted by: when the account frees up, or null when there is no wait
+/// to state or none that can be dated.
+/// </para>
+/// <para>
+/// <c>LoginExpiresAt</c> is when the login itself runs out: the
+/// <c>refreshTokenExpiresAt</c> of the account's credential pair, live or
+/// parked. <c>LoggedInAt</c> is when that login was last made: the
+/// <c>profileFetchedAt</c> the CLI stamped on the account block, read from the
+/// state file for the live account and from <c>profile.json</c> for a parked
+/// one. Either is null when its source is absent, carries no such instant, or
+/// cannot be read, and the page leaves that half of its line off.
+/// </para>
+/// <para>
+/// Every one of the four carries a default, so a route that hands back a card
+/// for an account nothing has read constructs one unchanged.
 /// </para>
 /// </summary>
 internal sealed record AccountCardView(
@@ -36,7 +48,9 @@ internal sealed record AccountCardView(
     RefreshStateView Refresh,
     RosterEntryView? Roster = null,
     string Standing = "unread",
-    DateTimeOffset? NextResetAt = null);
+    DateTimeOffset? NextResetAt = null,
+    DateTimeOffset? LoginExpiresAt = null,
+    DateTimeOffset? LoggedInAt = null);
 
 /// <summary>
 /// The roster entry behind a card, or null when the account is on the machine
