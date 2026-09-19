@@ -105,6 +105,16 @@ public sealed class ClaudeExecutableLocatorTests : IDisposable
     }
 
     [Fact]
+    public void EveryCommandRunsWithTheCliSOwnBrowserOpenSuppressed()
+    {
+        // Without this the CLI's login opens its callback URL in the default
+        // browser beside the mapped profile this tool opens the sign-in URL in.
+        ClaudeExecutable executable = new(Path.Combine(_root, "claude.exe"), []);
+
+        executable.StartInfo(["auth", "login"], configDirectory: null).Environment["BROWSER"].ShouldBe("true");
+    }
+
+    [Fact]
     public void NothingResolvableIsRefusedWithGuidance()
     {
         Result<ClaudeExecutable, string> result = ClaudeExecutableLocator.Locate(null, Path.Combine(_root, "empty"), isWindows: true);

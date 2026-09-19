@@ -57,6 +57,13 @@ internal sealed record ClaudeExecutable(string FileName, IReadOnlyList<string> A
             startInfo.Environment["CLAUDE_CONFIG_DIR"] = configDirectory;
         }
 
+        // A login's OAuth flow opens its callback URL in the machine's default
+        // browser, which is not the profile the roster maps to the account: the
+        // operator sees two browsers on two URLs. "true" is the CLI's own
+        // no-browser sentinel. Every command is started through here, and no
+        // command this tool runs wants a browser of its own.
+        startInfo.Environment["BROWSER"] = "true";
+
         return startInfo;
     }
 

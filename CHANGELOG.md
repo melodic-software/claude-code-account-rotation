@@ -197,6 +197,10 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- A login opens one browser, the profile the roster maps to the account. The CLI's own OAuth flow
+  was opening its callback URL in the machine's default browser at the same time, so the operator
+  got two windows on two URLs and could sign in through the wrong one. Every CLI command now runs
+  with `BROWSER=true`, the CLI's own no-browser sentinel, so only this tool opens a browser.
 - The tool no longer exits when it reads the state file in the middle of Claude Code's rewrite of it.
   Claude Code truncates `~/.claude.json` and writes it again in place, so the watcher's read could
   land on zero bytes or half a document, and the parse failure took the background service, and with
