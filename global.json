@@ -1,10 +1,10 @@
 {
   "$schema": "https://json.schemastore.org/global.json",
   "sdk": {
-    "version": "10.0.400",
+    "version": "10.0.401",
     "rollForward": "disable",
     "allowPrerelease": false,
-    "errorMessage": "Required .NET SDK 10.0.400 not found. Install it with `winget install Microsoft.DotNet.SDK.10 --version 10.0.400` (Windows) or `curl -sSL https://dot.net/v1/dotnet-install.sh | bash -s -- --version 10.0.400` (macOS/Linux). The exact pin with `rollForward: disable` keeps the committed NuGet lock files in step with the SDK's bundled tooling."
+    "errorMessage": "Required .NET SDK 10.0.401 not found. Install it with `winget install Microsoft.DotNet.SDK.10 --version 10.0.401` (Windows) or `curl -sSL https://dot.net/v1/dotnet-install.sh | bash -s -- --version 10.0.401` (macOS/Linux). The exact pin with `rollForward: disable` keeps the committed NuGet lock files in step with the SDK's bundled tooling."
   },
   "test": {
     "runner": "Microsoft.Testing.Platform"

@@ -7,7 +7,7 @@ Light-form design, 2026-09-04. Repository `melodic-software/claude-code-account-
 ```text
 claude-code-account-rotation/
   ClaudeCodeAccountRotation.slnx
-  global.json                         # SDK 10.0.400, rollForward disable (org pin)
+  global.json                         # SDK 10.0.401, rollForward disable (org pin)
   Directory.Build.props               # imports eng/dotnet-analysis/Directory.Build.props; TargetFramework net10.0
   Directory.Packages.props            # central package versions
   eng/dotnet-analysis/                # synced from melodic-software/standards (dotnet-analysis component)
