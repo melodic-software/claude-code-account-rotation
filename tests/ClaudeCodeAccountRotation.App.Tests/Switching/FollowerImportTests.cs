@@ -241,6 +241,32 @@ public sealed class FollowerImportTests : IDisposable
     }
 
     [Fact]
+    public async Task ASelfAbortThatCannotFinishLeavesTheFollowerServingRatherThanFaultingIt()
+    {
+        // The idle self-abort runs on a timer thread, where nothing is awaiting
+        // it: an escaping exception is not a failed request but a faulted
+        // process, and it would take the follower down along with the import it
+        // was tidying up. Phase 3 flagged this and left it. A directory where
+        // the export should be is the cheapest way to make the delete throw.
+        (_, RefreshTokenFingerprint fb) = await SeedAsync();
+        using FollowerImport follower = _roots.Follower(
+            idleTimeout: TimeSpan.FromSeconds(1),
+            heartbeatInterval: TimeSpan.FromMilliseconds(30));
+        await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
+        File.Delete(_roots.ExportPath(OutgoingEmail));
+        Directory.CreateDirectory(_roots.ExportPath(OutgoingEmail));
+
+        _roots.Clock.Advance(TimeSpan.FromSeconds(30));
+        await Task.Delay(200, Token);
+
+        // Still answering, and still holding the import it could not unwind.
+        ImportStatus status = await follower.StatusAsync(Token, new AccountEmail(IncomingEmail));
+        status.Imported.ShouldBeFalse();
+        (await FollowerRoots.FingerprintOfAsync(_roots.LivePath, Token)).ShouldNotBeNull();
+        Directory.Delete(_roots.ExportPath(OutgoingEmail));
+    }
+
+    [Fact]
     public async Task TheRefreshLockIsHeldFromTheExportUntilTheCommitAndReleasedAfterIt()
     {
         (_, RefreshTokenFingerprint fb) = await SeedAsync();

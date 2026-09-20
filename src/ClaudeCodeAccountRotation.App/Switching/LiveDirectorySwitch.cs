@@ -245,9 +245,20 @@ internal sealed partial class LiveDirectorySwitch
             new WindowsHold(live.Account?.Email, liveCredentials?.Fingerprint),
             cancellationToken);
 
+        // The other half of design 9.5's SlotInTransit, read here with every
+        // other planning input and under the same gate. The account this switch
+        // would park is the live one, and its own slot is empty by definition
+        // while it holds the live pair — so the only thing to learn about it is
+        // whether a hand-off has already claimed it into a mailbox. Parking on
+        // top of that would put a second copy of the outgoing lineage in the
+        // store while the first is still in flight. A store that is not shared
+        // answers false, so this costs the unshared case nothing.
+        bool outgoingInTransit = live.Account?.Email is AccountEmail outgoingAccount
+            && _slots.HasTransitFile(_profiles.FolderPathFor(outgoingAccount));
+
         Result<SwitchPlan, SwitchRefusal> planned = SwitchPlanner.Plan(new SwitchPlanningInput(
             live, targetProfile, liveCredentials, targetCredentials, policy, journalOpen, liveOwner, _options.ProfilesRoot, now, targetStranded,
-            targetSlot?.State ?? SlotState.Parked));
+            targetSlot?.State ?? SlotState.Parked, outgoingInTransit));
         if (planned.IsFailure)
         {
             LogRefused(target.Value, planned.Error);

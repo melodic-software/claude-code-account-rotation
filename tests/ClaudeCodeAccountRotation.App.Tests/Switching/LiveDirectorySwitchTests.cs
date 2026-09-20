@@ -751,6 +751,54 @@ public sealed class LiveDirectorySwitchTests : IDisposable
     }
 
     [Fact]
+    public async Task ASwitchIsRefusedWhenTheAccountItWouldParkIsAlreadyClaimedIntoAMailbox()
+    {
+        // The outgoing half of design 9.5's SlotInTransit, which #67 could only
+        // half build. The target is parked and perfectly switchable; it is the
+        // LIVE account that a hand-off has already claimed, and parking on top
+        // of that would put a second copy of its lineage in the store while the
+        // first is still crossing.
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        await ParkedProfileAsync("b@example.com", "refresh-b");
+        await ClaimIntoTheWslMailboxAsync("a@example.com");
+        _cli.Email = "b@example.com";
+
+        Result<SwitchOutcome, SwitchRefusal> result = await Switch(sharedStore: true).SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken);
+
+        result.Error.ShouldBe(SwitchRefusal.SlotInTransit);
+        (await CredentialFiles.FingerprintAsync(_liveDirectory, TestContext.Current.CancellationToken))
+            .ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
+    }
+
+    [Fact]
+    public async Task TheSameMailboxFileRefusesNothingWhenTheStoreIsNotShared()
+    {
+        // The flag stays an honest rollback for this refusal too: with the store
+        // unshared there are no mailboxes to read, so the same files switch.
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        await ParkedProfileAsync("b@example.com", "refresh-b");
+        await ClaimIntoTheWslMailboxAsync("a@example.com");
+        _cli.Email = "b@example.com";
+
+        Result<SwitchOutcome, SwitchRefusal> result = await Switch().SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken);
+
+        result.IsSuccess.ShouldBeTrue(result.IsFailure ? result.Error.ToString() : "");
+    }
+
+    /// <summary>What the coordinator's L2 leaves behind: the account's pair renamed into the other side's mailbox.</summary>
+    private async Task ClaimIntoTheWslMailboxAsync(string email)
+    {
+        string mailbox = FileSystemCredentialPairStore.MailboxPath(_profilesRoot, SideName.Wsl);
+        Directory.CreateDirectory(mailbox);
+        await File.WriteAllTextAsync(
+            Path.Combine(mailbox, FileSystemCredentialPairStore.ClaimedFileName(email)),
+            CredentialFiles.Shape("refresh-" + email).ToJsonString(),
+            TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public async Task WithTheStoreNotSharedASwitchWritesNoHolderRecordAtAll()
     {
         await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
