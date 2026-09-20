@@ -166,6 +166,7 @@ internal static class RosterEndpoints
             ILoginSessionRunner logins,
             CredentialMutationGate gate,
             RecoveryFiles recovery,
+            SharedStoreSlots slots,
             SwitchOptions options,
             CancellationToken cancellationToken) =>
         {
@@ -203,6 +204,22 @@ internal static class RosterEndpoints
                 }
 
                 string folder = profiles.FolderPathFor(target);
+
+                // A slot the other side holds is empty here and full there. Removing
+                // it would skip the logout for want of a local pair, delete the
+                // holder record that is the only thing on this side saying the pair
+                // exists, take the account off the roster, and report it logged out
+                // while its refresh token is live in the distro. Re-adding it would
+                // then start a second, untracked login. Read under the gate with the
+                // guards above, for the same reason they are.
+                if (await slots.ReadAsync(target, folder, File.Exists(Path.Combine(folder, FileSystemCredentialPairStore.FileName)), new WindowsHold(null, null), cancellationToken)
+                    is { State: SlotState.HeldElsewhere or SlotState.InTransit })
+                {
+                    return Refused(
+                        "HeldByOtherSide",
+                        "The other side of this machine holds that account, or a hand-off for it is in flight; switch it away there first, so the removal can revoke the login it really has.");
+                }
+
                 if (logins.IsRunningAgainst(folder))
                 {
                     // The gate alone does not cover this: a login holds it only at the
@@ -234,6 +251,9 @@ internal static class RosterEndpoints
                         "That account's rotated credentials are held in the recovery directory and could not be put back, so a removal now would revoke the wrong login. The warning on this page says what that account needs; remove it once the recovery file is resolved.");
                 }
 
+                // Read again rather than reusing the value the slot guard took: the
+                // restore above can have put a pair back into the folder, and a
+                // logout skipped on the older answer would leave that login valid.
                 bool hasPair = File.Exists(Path.Combine(folder, FileSystemCredentialPairStore.FileName));
                 bool revoke = logout ?? true;
                 bool revoked = false;

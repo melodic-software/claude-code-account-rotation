@@ -117,6 +117,40 @@ public sealed class SharedStoreEndpointTests
     }
 
     [Fact]
+    public async Task RemovingASlotTheOtherSideHoldsIsRefusedSoTheRecordAndTheRosterEntryStand()
+    {
+        using AppFactory factory = await LiveOnAWithBHeldByWslAsync(sharedStore: true, TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.DeleteAsync(
+            new Uri("/api/accounts/" + Uri.EscapeDataString("b@example.com"), UriKind.Relative),
+            TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+        body["refusal"]!.GetValue<string>().ShouldBe("HeldByOtherSide");
+        // The one thing on this side that says the distro holds a pair is still there,
+        // no logout was attempted against a folder with nothing in it, and the card stays.
+        File.Exists(Path.Combine(factory.ProfilesRoot, "b@example.com", HolderRecordFile.FileName)).ShouldBeTrue();
+        factory.Cli.LogoutCalls.ShouldBeEmpty();
+        JsonObject dashboard = (await client.GetFromJsonAsync<JsonObject>(_dashboard, TestContext.Current.CancellationToken))!;
+        Card(dashboard, "b@example.com")["roster"].ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task WithTheStoreNotSharedTheSameSlotIsStillRemovable()
+    {
+        using AppFactory factory = await LiveOnAWithBHeldByWslAsync(sharedStore: false, TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.DeleteAsync(
+            new Uri("/api/accounts/" + Uri.EscapeDataString("b@example.com"), UriKind.Relative),
+            TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+    }
+
+    [Fact]
     public async Task EveryCardCarriesItsSlotWordAndTheHeldOneNamesTheOtherSide()
     {
         using AppFactory factory = new(sharedStore: true);

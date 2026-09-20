@@ -696,7 +696,12 @@
       // group rather than a pointer's width from Switch.
       if (!account.isLive) {
         var danger = element("div", "actions danger-zone");
-        danger.appendChild(actionButton("Remove", "danger", function () { remove(account.email); }));
+        var removeButton = actionButton("Remove", "danger", function () { remove(account.email); });
+        // Removing a slot the other side holds would skip the logout it cannot
+        // reach and delete the record that says the pair exists at all. The
+        // route refuses it; the button goes with it.
+        removeButton.disabled = heldAway;
+        danger.appendChild(removeButton);
         card.appendChild(danger);
       }
 
