@@ -56,6 +56,14 @@ public static class SwitchPlanner
             return Refuse(SwitchRefusal.SlotInTransit);
         }
 
+        // Design 9.5 refuses a mailbox file for the target "or the outgoing
+        // account". With no live pair there is nothing to park, so the flag
+        // describes no move this switch would make and must not refuse it.
+        if (input.OutgoingSlotInTransit && input.Live.HasCredentials)
+        {
+            return Refuse(SwitchRefusal.SlotInTransit);
+        }
+
         if (!input.Target.HasCredentials || input.TargetCredentials is null)
         {
             return Refuse(SwitchRefusal.TargetHasNoCredentials);

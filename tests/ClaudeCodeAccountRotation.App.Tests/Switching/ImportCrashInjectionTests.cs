@@ -1,6 +1,8 @@
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core.Identity;
+using ClaudeCodeAccountRotation.Core.Peers;
+using ClaudeCodeAccountRotation.Core.Switching;
 using Shouldly;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Switching;

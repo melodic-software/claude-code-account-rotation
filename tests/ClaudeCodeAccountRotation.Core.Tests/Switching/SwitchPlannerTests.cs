@@ -250,6 +250,35 @@ public sealed class SwitchPlannerTests
     }
 
     [Fact]
+    public void AnOutgoingAccountAlreadyClaimedIntoAMailboxIsRefused()
+    {
+        // The other half of design 9.5's SlotInTransit, which #67 could not build:
+        // the target is parked and perfectly switchable, but the account that would
+        // be parked by this switch has already had its pair renamed into a mailbox
+        // by a WSL hand-off. Parking on top of that would put a second copy of the
+        // outgoing lineage in the store while the first is still in flight.
+        SwitchPlanner.Plan(Baseline() with { OutgoingSlotInTransit = true }).Error.ShouldBe(SwitchRefusal.SlotInTransit);
+    }
+
+    [Fact]
+    public void AnOutgoingAccountInAMailboxDoesNotRefuseASwitchWithNothingToPark()
+    {
+        // With no live pair there is no outgoing account, so the flag describes
+        // nothing this switch would move and must not refuse it. The empty live
+        // directory is the phase-5 starting state, so this is the ordinary case.
+        SwitchPlanningInput input = Baseline();
+        input = input with
+        {
+            Live = input.Live with { Account = null, HasCredentials = false, Fingerprint = null },
+            LiveCredentials = null,
+            LiveFingerprintOwner = null,
+            OutgoingSlotInTransit = true,
+        };
+
+        SwitchPlanner.Plan(input).IsSuccess.ShouldBeTrue();
+    }
+
+    [Fact]
     public void AnUnverifiedLiveIdentityOutranksEveryOtherAnswer()
     {
         // The state file already names the target, but with a switch unreconciled that

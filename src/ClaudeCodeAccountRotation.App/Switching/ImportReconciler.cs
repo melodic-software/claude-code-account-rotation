@@ -1,5 +1,6 @@
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.Core.Identity;
+using ClaudeCodeAccountRotation.Core.Switching;
 using Microsoft.Extensions.Logging;
 
 namespace ClaudeCodeAccountRotation.App.Switching;

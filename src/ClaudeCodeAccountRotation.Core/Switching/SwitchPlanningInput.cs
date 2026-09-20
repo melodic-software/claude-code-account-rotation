@@ -24,6 +24,14 @@ namespace ClaudeCodeAccountRotation.Core.Switching;
 /// one value neither of the side guards below refuses, so the construction
 /// sites that know nothing about sides compile and behave unchanged.
 /// </para>
+/// <para>
+/// <paramref name="OutgoingSlotInTransit"/> is the other half of design 9.5's
+/// <see cref="SwitchRefusal.SlotInTransit"/>: a file for the account this
+/// switch would park already sits in a side's mailbox. It is a flag rather
+/// than a second <see cref="SlotState"/> because the outgoing account's slot
+/// is empty by definition — its pair is live here — so the only thing the
+/// planner can learn about it is whether a hand-off has already claimed it.
+/// </para>
 /// </summary>
 public sealed record SwitchPlanningInput(
     LiveAccountState Live,
@@ -36,4 +44,5 @@ public sealed record SwitchPlanningInput(
     string ProfilesRoot,
     DateTimeOffset Now,
     bool TargetHasRecoveryFile = false,
-    SlotState TargetSlot = SlotState.Parked);
+    SlotState TargetSlot = SlotState.Parked,
+    bool OutgoingSlotInTransit = false);

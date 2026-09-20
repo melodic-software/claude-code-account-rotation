@@ -1,5 +1,6 @@
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core.Identity;
+using ClaudeCodeAccountRotation.Core.Switching;
 using Shouldly;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Switching;

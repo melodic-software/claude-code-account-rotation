@@ -1,3 +1,5 @@
+using ClaudeCodeAccountRotation.Core.Switching;
+
 namespace ClaudeCodeAccountRotation.App.Switching;
 
 /// <summary>The paths and bounds a switch runs under; bound from the configuration.</summary>

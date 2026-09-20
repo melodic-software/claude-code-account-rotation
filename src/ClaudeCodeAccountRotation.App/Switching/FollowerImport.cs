@@ -3,52 +3,11 @@ using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
+using ClaudeCodeAccountRotation.Core.Peers;
+using ClaudeCodeAccountRotation.Core.Switching;
 using Microsoft.Extensions.Logging;
 
 namespace ClaudeCodeAccountRotation.App.Switching;
-
-/// <summary>
-/// What the leader asks the follower to take. No token crosses the wire:
-/// identity is the SHA-256 fingerprint and the pair itself is read from
-/// <see cref="ClaimedPath"/>, a file on the store's own volume that the leader
-/// renamed into its mailbox before asking.
-/// </summary>
-internal sealed record ImportRequest(
-    AccountEmail Email,
-    string ClaimedPath,
-    RefreshTokenFingerprint Fingerprint,
-    JsonObject Account,
-    string ExportPath);
-
-/// <summary>
-/// The answer to <c>POST /api/import</c>: the import has run F1 to F4 and
-/// stopped. <see cref="ExportedFingerprint"/> is the outgoing pair the leader
-/// must now read natively and verify before it may commit, or null when this
-/// side held nothing and there is nothing to verify.
-/// </summary>
-internal sealed record ImportAnswer(
-    RefreshTokenFingerprint? ExportedFingerprint,
-    AccountEmail? Outgoing,
-    bool AlreadyImported,
-    ImportResult? Result);
-
-/// <summary>What the commit hands back: which account left this side, and its block for the leader's park.</summary>
-internal sealed record ImportResult(
-    AccountEmail? Outgoing,
-    RefreshTokenFingerprint? OutgoingFingerprint,
-    JsonObject? OutgoingAccount,
-    bool AlreadyImported);
-
-/// <summary>
-/// <c>GET /api/import-status</c>: what the follower believes about the import
-/// the leader is asking after, decided from the files and not only the journal.
-/// </summary>
-internal sealed record ImportStatus(
-    bool Imported,
-    ImportStep? JournalStep,
-    RefreshTokenFingerprint? LiveFingerprint,
-    AccountEmail? LiveAccount,
-    string Detail);
 
 /// <summary>
 /// The follower's staged import, held across two calls.
