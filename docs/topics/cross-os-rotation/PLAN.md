@@ -99,9 +99,9 @@ observation, not a phase gate.
 
 ### Captured assumptions
 
-- **The fleet is two machines**, `melo-lap-001` (laptop) and `melo-desk-001` (desktop). A work
-  machine exists but is outside `~/.config/fleet/FLEET.md` and gets any setup by hand; no phase here
-  targets it. Any statement of "three machines" in an earlier draft is wrong.
+- **The fleet is two machines**, the laptop and the desktop. A work machine exists but is outside
+  the fleet manifest and gets any setup by hand; no phase here targets it. Any statement of "three
+  machines" in an earlier draft is wrong.
 - **No account holds two families anywhere today.** Both WSL lanes were logged out by hand (laptop
   2026-09-19, desktop 2026-09-20), which is the work an earlier migration step would have done. There
   is nothing to retire at rollout, no `Retire the WSL login` route is built, and the `foreign family`
@@ -349,23 +349,35 @@ Work items, in order.
    be writable. The leader's validator is unchanged.
 2. `App/Adapters/FileSystem/StagedImportCredentialPairStore.cs` (new): design section 9.2, steps F3
    to F6. Every copy is followed by `fsync`, a read-back **through a fresh open**, and a fingerprint
-   comparison; a mismatch unwinds and never proceeds.
+   comparison; a mismatch unwinds and never proceeds. **F4 stops**: the follower exports, answers
+   `Exported {fa}`, and refuses to swap until a commit arrives.
 3. `App/Switching/ImportJournal.cs` (new): the `ImportStep` journal and `last-import.json`, in the
    existing `SwitchJournal` shape.
 4. `App/Switching/ImportReconciler.cs` (new): design section 9.3's follower table, run at start under
    the gate before any request is served, allowing for the live pair having been rotated by the CLI
    while the follower was down.
-5. `App/Endpoints/ImportEndpoints.cs` (new): `POST /api/import` and `GET /api/import-status`, taking
-   the follower's gate and the WSL live dir's `.oauth_refresh.lock` from F2 on, idempotent by F1.
-   **No token appears in any request, response, or log line**: identity crosses as a SHA-256
-   fingerprint only.
+5. `App/Endpoints/ImportEndpoints.cs` (new): `POST /api/import` (F1 to F4), `POST /api/import/commit`
+   (F5 to F8), `POST /api/import/abort` (unwind from `Exported`), and `GET /api/import-status`,
+   taking the follower's gate and the WSL live dir's `.oauth_refresh.lock` from F2 on and holding
+   both across the two calls with a 120 s idle self-abort. Idempotent by F1; a commit that arrives
+   after a self-abort is answered "not imported". **No token appears in any request, response, or
+   log line**: identity crosses as a SHA-256 fingerprint only.
+   **Why the commit half exists (the export gate).** It lets the leader read the exported file
+   **natively**, on the store's own volume, and compare its fingerprint before the follower performs
+   the one step that destroys the outgoing account's last local copy. This closes the chain's only
+   lineage-loss window (F4 to F5) at the cost of one extra request per WSL switch. It was briefly
+   planned as a deferred mitigation and is now **in this phase**: the follower half (refuse to swap
+   without a commit, unwind on abort) ships here, and the leader half (L3b, `ExportVerified`) ships
+   with the coordinator in phase 4. The follower must be unable to swap on its own even if a future
+   leader forgets to gate it, which is why the refusal lives in the follower and not in the caller.
 6. `App/Switching/SwitchOptions.cs`: a test-only `FailAfterStep` hook, the mechanism crash injection
    drives.
 7. Publish: a `linux-x64` profile beside the existing `win-x64` one; a POSIX fake `claude` script for
    the Linux CI leg.
 8. Tests: the staged store against two temp directories with on-disk state asserted by fingerprint
    after each of F3 to F6; a claimed file rewritten between the request and F3 fails the verify and
-   unwinds; an export read-back mismatch unwinds; crash injection at **every** `ImportStep` followed
+   unwinds; an export read-back mismatch unwinds; the export-gate facts above; crash injection at
+   **every** `ImportStep` followed
    by a fresh reconciler over the same roots, asserting the section 9.3 outcome and that every
    fingerprint written exists in exactly one non-staging file; validator facts; a fact that the
    follower composition registers no refresh service, no login route and no roster route.
@@ -380,6 +392,12 @@ Work items, in order.
   non-staging file.
 - The negative path is asserted, not implied: a mismatched export read-back unwinds and leaves the
   live pair untouched.
+- **The export gate holds.** `POST /api/import` alone returns with the journal at `Exported` and the
+  WSL live pair **unchanged on disk** (fingerprint still `fa`); the follower answers 409 to a swap
+  attempt in any state but `Exported`; `POST /api/import/abort` from `Exported` deletes the export
+  and the staging file and leaves the live pair `fa`; a commit arriving after the 120 s idle
+  self-abort is answered "not imported" and changes nothing on disk. No code path reaches F5 without
+  a commit.
 - No token literal in the follower's log fixture, the assertion shape PR #59 established.
 - The follower under `--config <tmp>` answers 404 for `POST /api/accounts` and for the login route.
 - A follower whose live dir is under `/mnt/`, and one whose `mailbox` does not exist, each fail
@@ -408,10 +426,16 @@ distro, over real 9P.
 
 Work items, in order.
 
-1. `Core/Switching/WslSwitchStep.cs` (new) and the coordinator's journal.
+1. `Core/Switching/WslSwitchStep.cs` (new: `Claimed`, `ExportVerified`, `Imported`, `Parked`) and
+   the coordinator's journal.
 2. `App/Switching/WslSwitch.cs` (new): the L1 to L4 coordinator of design section 9.1 with the
-   leader-side crash table of section 9.3. `Cancel` is offered **only** after the follower answers
-   "not imported"; there is never a blind unclaim.
+   leader-side crash table of section 9.3, including **L3b, the export gate**: after the follower
+   answers `Exported`, the leader reads the exported file **natively** on the store's own volume and
+   requires its fingerprint to match before it sends `commit`. A mismatch, a short read or an absent
+   file aborts and unclaims, and the switch is refused with nothing swapped. This is the leader half
+   of the mitigation phase 3 (#68) builds into the follower; together they close the chain's only
+   lineage-loss window. `Cancel` is offered **only** after the follower answers "not imported";
+   there is never a blind unclaim.
 3. `Core/Peers/IPeerRotationInstance.cs` and `IPeerProcessHost.cs` (new ports);
    `App/Adapters/Peers/HttpPeerRotationInstance.cs` and `WslDistributionPeerHost.cs` (adapters). The
    host spawns `wsl.exe -d <distro> -u <user> --exec ...` and supervises the child. A version
@@ -420,9 +444,11 @@ Work items, in order.
 5. `App/Endpoints/SideEndpoints.cs` (new): `POST /api/sides/wsl/accounts/{email}/switch` plus a
    minimal `Start WSL side`. **One switch control on the page and one line of side state; the panel,
    the chips and the tee figures are phase 6.**
-6. Tests: the coordinator against a fake `IPeerRotationInstance` (claim-import-park; `AlreadyImported`;
-   a timeout after `Claimed` leaving the journal open with no unclaim; a "not imported" answer
-   unclaiming so the file is back and the record gone; a leader restart at each `WslSwitchStep`); the
+6. Tests: the coordinator against a fake `IPeerRotationInstance` (claim, export-gate, commit, park;
+   `AlreadyImported`; a timeout after `Claimed` leaving the journal open with no unclaim; a
+   "not imported" answer unclaiming so the file is back and the record gone; **an export whose bytes
+   fail the native gate: abort, unclaim, and both sides' live pairs untouched**; a leader restart at
+   each `WslSwitchStep`, `ExportVerified` among them); the
    two-`AppFactory` leader-and-follower test driving a switch through `/api/sides/wsl/...`; a planner
    fact for `SideOffline`.
 7. The **temp-root WSL acceptance** under `tests/acceptance/`: a second follower inside the distro
@@ -434,10 +460,13 @@ Work items, in order.
 
 - `dotnet test -c Release` exit 0, failed 0, total >= baseline + 48.
 - The temp-root WSL acceptance exits 0 having performed **20 WSL switches and 20 Windows switches**,
-  with `kill -9` of the follower at each of the six `ImportStep` values and of the temp leader at each
-  of the three `WslSwitchStep` values, each followed by a restart whose outcome matches its section
-  9.3 row, ending with `check-single-holder.sh` over the four temp roots printing `duplicates=0` and
-  no fingerprint in two non-staging files.
+  with `kill -9` of the follower at each of the six `ImportStep` values and of the temp leader at
+  each of the four `WslSwitchStep` values, each followed by a restart whose outcome matches its
+  section 9.3 row, ending with `check-single-holder.sh` over the four temp roots printing
+  `duplicates=0` and no fingerprint in two non-staging files.
+- At least one acceptance iteration corrupts the exported file between the follower's `Exported`
+  answer and the leader's native read: the gate aborts, the switch is refused, and both sides' live
+  pairs are unchanged.
 - Through the two-`AppFactory` test: after a WSL switch the leader reports the account as held by
   `wsl`, within one `POLL_MS` (10 000 ms) interval of completion.
 - Stopping the follower flips its side to `offline` within 15 s; the leader restarting it reports
@@ -465,7 +494,7 @@ Review: close-out. **Operator present; the first phase that touches a real crede
 phase that makes WSL usable.**
 
 **Goal:** one real account, chosen by the operator, hands from the Windows store to WSL and back on
-`melo-lap-001`, and the operator uses Claude Code in WSL on it.
+the laptop, and the operator uses Claude Code in WSL on it.
 
 Work items, in order.
 
@@ -566,7 +595,7 @@ escape-hatch semantics, since this is the one place the design deliberately allo
 
 Review: close-out
 
-**Goal:** `melo-desk-001` runs the same thing, and neither machine needs a hand-installed follower.
+**Goal:** the desktop runs the same thing, and neither machine needs a hand-installed follower.
 
 Work: the desktop rollout, the same steps as phase 5 with the operator present; filed in the dotfiles
 repository, not here: the follower binary under `~/.local/bin` behind the `isWsl` branch, the follower
@@ -593,16 +622,24 @@ moves"; here F5 replaces the WSL live file, destroying A's last copy on ext4, an
 exists only as the F4 export on the 9P mailbox.
 
 What would make it fail: the measured DrvFs fact is that `fsync` on `/mnt/c` **returns 0**, not that
-the bytes are durable, and the F4 read-back through a fresh open can be served from the mount's cache
-(`cache=0x5`). A host power loss in the F4-to-F5 window, with a non-durable export, loses A. Recovery
-is one short Windows login for that account. Recorded as **[A]**; revisit trigger is any observed
-export that reads back correct and is later absent or short. A mitigation exists and is deliberately
-**not** built now: a leader-side native read of the export before the follower proceeds to F5, at the
-cost of one extra round trip per switch. File it as a decision item if the risk is ever observed
-rather than reasoned about.
+the bytes are durable, and the F4 read-back through a fresh open can be served from the mount's
+cache (`cache=0x5`). A host power loss in the F4-to-F5 window, with a non-durable export, loses A.
+Recovery is one short Windows login for that account.
+
+**Mitigated, by the operator's decision of 2026-09-20: the export gate is in phase 3, not deferred.**
+The follower exports and stops; the leader reads the exported file **natively**, on the store's own
+volume, and only then sends the commit that lets the follower swap. The follower refuses to swap
+without that commit, so the check cannot be skipped by a caller that forgets it. The cost is one
+extra request per WSL switch, against a hand-off that already spends tens of milliseconds per 9P
+call, and it converts an unmeasured durability assumption into a per-switch verification whose
+failure costs a refused switch rather than a login. The residual, now small: a native read proves
+the bytes reached the Windows side's own view of the file, not that they survive a power loss in the
+milliseconds between the gate and the swap. Recorded as **[A]**; revisit trigger is any observed
+export that passes the gate and is later absent or short.
 
 Second: the export-verify is the only thing between a corrupt 9P write and a swap, which is why
-phase 3's acceptance names the negative case as its own line.
+phase 3's acceptance names both the follower's own read-back and the gate as their own lines, and
+why phase 4's acceptance corrupts an export on purpose at least once.
 
 Third, and much smaller: the cross-side `mkdir` anomaly of design section 3. It costs nothing here
 because no lock crosses the boundary, but any future change that introduces one reopens it.

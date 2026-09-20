@@ -1,6 +1,6 @@
 # cross-os-rotation: design resolution
 
-Design chosen 2026-09-19 on `melo-lap-001` against the repository at `9b1740b`; reconciled
+Design chosen 2026-09-19 on the laptop against the repository at `9b1740b`; reconciled
 2026-09-20. This file is the tracked record of the shared-store design. The working drafts
 (`DESIGN-SHARED-STORE.md`, the rejected `DESIGN.md`, `phase-0.md`) live in an untracked memory
 slice, so every fact a later session must act on is carried here instead of cited there.
@@ -31,7 +31,10 @@ the page can read when the distro is off.
 
 The WSL hand-off is a claim-by-rename inside the store (Windows, native, under the app's one
 mutation gate), a staged copy, verify, promote, delete on the WSL side under its own refresh lock
-and journal, and a park-by-rename back into the slot (Windows). The Brief's "moved, never copied" is
+and journal, and a park-by-rename back into the slot (Windows). The one step that destroys a
+lineage's last local copy is gated: the follower exports and stops, the leader reads the exported
+file natively on the store's own volume, and only then does the follower swap (section 9.2). The
+Brief's "moved, never copied" is
 amended to "at most one reachable copy at every instant". No cross-side lock exists, because a
 cross-side exclusive `mkdir` was measured to double-acquire under contention (section 3).
 
@@ -103,7 +106,7 @@ newer WSL is the revisit trigger for every **[A]** below.
 |---|---|---|
 | `rename(2)` from `/mnt/c` to ext4 | `errno 18 EXDEV` **[V]** | a cross-volume move is a copy plus a delete, no exception |
 | `mv -f` over an existing file on `/mnt/c` from WSL | succeeds; Windows reads the new bytes **[V]** | promote-by-rename inside the store works from either side |
-| `fsync` on a `/mnt/c` file from WSL | returns 0 **[V]** | the staged copy can be flushed before the delete. Return 0 is not a durability measurement **[A]** |
+| `fsync` on a `/mnt/c` file from WSL | returns 0 **[V]** | the staged copy can be flushed before the delete. Return 0 is not a durability measurement **[A]**, which is why section 9.2's export gate re-reads the file natively from the Windows side before the follower is allowed to swap |
 | `chmod 600` on `/mnt/c` from WSL | no-op, mode stays `777` **[V]** | the store's protection is the NTFS ACL, never the POSIX mode |
 | Windows writes, WSL re-reads after a Windows temp-plus-rename | fresh content both times **[V]** | `holder.json` and the claimed file written on Windows are read fresh in WSL |
 | directory rename on `/mnt/c` from WSL | succeeds **[V]** | |
@@ -194,11 +197,11 @@ reconciliation.
 | `SlotState` | enum | `Parked`, `HeldHere`, `HeldElsewhere`, `NeverLoggedIn`, `InTransit` | file present to `Parked`; record for this side to `HeldHere`; record for another to `HeldElsewhere`; a file under `.transit/<side>/` to `InTransit` |
 | `SwitchRefusal` | existing enum, extended | `HeldByOtherSide`, `SlotInTransit`, `SideOffline` | `Core/Switching/SwitchRefusal.cs`; `SwitchPlanningInput` gains `SlotState TargetSlot` |
 | `RefreshOutcomeKind` | existing enum, extended | `HeldElsewhere` | `App/Quota/RefreshOutcome.cs`, alongside `Skipped` and `NeedsLogin` |
-| `WslSwitchStep` | enum | `Claimed`, `Imported`, `Parked` | the leader coordinator's journal |
+| `WslSwitchStep` | enum | `Claimed`, `ExportVerified`, `Imported`, `Parked` | the leader coordinator's journal. `ExportVerified` is the native read of section 9.2's export gate |
 | `ImportStep` | enum | `Planned`, `Staged`, `Exported`, `Swapped`, `Released`, `Patched` | the follower's journal |
 | `ImportRequest` / `ImportResult` | records | request: `AccountEmail Email`, `string ClaimedPath`, `RefreshTokenFingerprint Fingerprint`, `OAuthAccountBlock Account`, `string ExportPath`. Result: `AccountEmail? Outgoing`, `RefreshTokenFingerprint? OutgoingFingerprint`, `OAuthAccountBlock? OutgoingAccount`, `bool AlreadyImported` | fingerprints are SHA-256 of tokens, already printed by journals and the acceptance script; **no token crosses the wire** |
 | `ICredentialPairStore` | existing port, unchanged signature | | the follower's adapter implements `MoveParkedToLiveAsync` as "stage from the claimed file and swap" and `MoveLiveToParkedAsync` as "export to the mailbox"; the doc comment's "by a rename on one volume" gains "or by the staged hand-off on a follower" |
-| `IPeerRotationInstance` | port | `ReadDashboardAsync`; `ImportAsync(ImportRequest)`; `ImportStatusAsync(email)` | adapter `HttpPeerRotationInstance` |
+| `IPeerRotationInstance` | port | `ReadDashboardAsync`; `ImportAsync(ImportRequest)`; `CommitImportAsync(email)`; `AbortImportAsync(email)`; `ImportStatusAsync(email)` | adapter `HttpPeerRotationInstance`. The commit and abort pair is the export gate of section 9.2 |
 | `IPeerProcessHost` | port | spawn and supervise the follower | adapter `WslDistributionPeerHost`, `wsl.exe -d <distro> -u <user> --exec` |
 
 ## 8. Configuration
@@ -242,8 +245,10 @@ processes, two journals, one gate each. Fingerprints: `fa` for A, `fb` for B.
 |---|---|---|---|
 | L1 | plan: `GET` the follower's dashboard (side online, live account A, `fa`); B's slot must be `Parked` and not stranded in recovery; no login running against B's folder; managed policy allows; A must be `HeldHere` for wsl or absent | | |
 | L2 | **claim:** rename `<store>/B/.credentials.json` to `<store>/.transit/wsl/B.credentials.json`; write `<store>/B/holder.json {wsl, fb, since}` | B: mailbox / A: unchanged | `Claimed {A, fa, B, fb}` |
-| L3 | release the gate; `POST /api/import` to the follower with `ClaimedPath`, `fb`, B's account block from its `profile.json`, `ExportPath = .transit/wsl/A.credentials.json.incoming`; wait up to 60 s | | |
-| L4 | on `ImportResult`: under the gate, if `Outgoing` is A, verify the exported file's fingerprint equals `OutgoingFingerprint`; rename the export into `<store>/A/.credentials.json`; write A's `profile.json` from `OutgoingAccount`; delete A's `holder.json` | B: none, live in WSL / A: parked | `Parked`, then cleared |
+| L3a | release the gate; `POST /api/import` to the follower with `ClaimedPath`, `fb`, B's account block from its `profile.json`, `ExportPath = .transit/wsl/A.credentials.json.incoming`; wait up to 60 s. The follower stops at F4 and answers `Exported {fa}` | A: live + mailbox / B: mailbox + staging | |
+| L3b | **the export gate:** read the exported file **natively**, on the store's own volume, and require its fingerprint to equal `fa`. On any mismatch, short read, or absent file, `POST /api/import/abort`, unclaim, and refuse the switch: nothing has been swapped, so the operator loses nothing | | `ExportVerified {fa}` |
+| L3c | `POST /api/import/commit`; the follower performs F5 to F8 and answers `ImportResult` | | `Imported` |
+| L4 | under the gate: rename the export into `<store>/A/.credentials.json`; write A's `profile.json` from `OutgoingAccount`; delete A's `holder.json` | B: none, live in WSL / A: parked | `Parked`, then cleared |
 
 L2 and every parked-pair refresh unit run under the same in-process `CredentialMutationGate`
 (`QuotaRefresh.cs:563-637`), so no token POST can straddle a claim: a refresh that read B before the
@@ -252,15 +257,22 @@ refuses `PairChanged` when the file moved), and a refresh admitted after the cla
 records `HeldElsewhere`. This is what closes the strand race that an earlier cross-side-lock draft
 could not.
 
-### 9.2 Follower steps (`POST /api/import`, under the follower's gate and the WSL live dir's `.oauth_refresh.lock` from F2 on)
+### 9.2 Follower steps (two calls, under the follower's gate and the WSL live dir's `.oauth_refresh.lock` from F2 on)
+
+`POST /api/import` runs F1 to F4 and stops. `POST /api/import/commit` runs F5 to F8, and the
+follower refuses it unless its own journal reads `Exported`. **The swap that destroys the outgoing
+account's last local copy never happens until the leader has read the export natively and said so**
+(L3b). `POST /api/import/abort` unwinds from `Exported`. The lock and the gate are held across both
+calls, with a 120 s idle timeout after which the follower aborts itself; a commit that arrives late
+is answered "not imported".
 
 | Step | Action | On disk afterwards (A / B) | Follower journal |
 |---|---|---|---|
 | F1 | idempotency: if `last-import.json` or the live pair already answers this request (live fingerprint is `fb` or its rotation and the owner record names B), return the stored result with `AlreadyImported` | | |
 | F2 | take the refresh lock; read live A (`fa`, or none) | | `Planned` |
 | F3 | **stage B:** copy `ClaimedPath` to `<live>/.credentials.json.incoming`; `fsync`; read back; fingerprint must be `fb` | A: live / B: mailbox + staging | `Staged` |
-| F4 | **export A:** copy `<live>/.credentials.json` to `ExportPath`; `fsync`; read back through a fresh open; fingerprint must be `fa` | A: live + mailbox / B: mailbox + staging | `Exported` |
-| F5 | **swap:** rename the staging file over `<live>/.credentials.json` (ext4, atomic replace); stamp mtime | A: mailbox / B: mailbox + live | `Swapped` |
+| F4 | **export A:** copy `<live>/.credentials.json` to `ExportPath`; `fsync`; read back through a fresh open; fingerprint must be `fa`. **Answer `Exported {fa}` and stop**; do not proceed without a commit | A: live + mailbox / B: mailbox + staging | `Exported` |
+| F5 | **swap**, only on `POST /api/import/commit`: rename the staging file over `<live>/.credentials.json` (ext4, atomic replace); stamp mtime | A: mailbox / B: mailbox + live | `Swapped` |
 | F6 | **release:** delete `ClaimedPath` | A: mailbox / B: live | `Released` |
 | F7 | patch the state file's `oauthAccount` with B's block; write the owner record `{fb, B}` | | `Patched` |
 | F8 | write `last-import.json {A, fa, A's block}`; clear the journal; release the lock; return `ImportResult` | | cleared |
@@ -269,6 +281,16 @@ Two-copy windows: B during F3-F6, A during F4-F5. In every window the second cop
 only this follower and the leader's coordinator open, and the leader's planner and refresh pass
 refuse the account while the mailbox holds it. Nobody can refresh a mailbox file: the leader's
 refresh reads slots only.
+
+**Why the export gate is worth its round trip.** F5 is the one step in the whole design that
+destroys a lineage's last local copy, leaving A alive only as the exported file on the other volume.
+The follower's own F4 read-back is a 9P read and can be served from the mount cache (`cache=0x5`),
+and section 3 measured that `fsync` over DrvFs *returns 0* without measuring durability; the
+Windows-reads-what-WSL-wrote direction is not in the probe table at all. A native read on the
+store's own volume is the only check available that does not go through the layer under suspicion,
+and it turns an unmeasured assumption into a per-switch verification whose failure costs a refused
+switch rather than a login. The price is one extra request per WSL switch, against a hand-off that
+already costs tens of milliseconds per 9P call.
 
 ### 9.3 Crash matrix
 
@@ -280,7 +302,7 @@ CLI may have rotated the live pair while the follower was down (the stale lock i
 |---|---|---|---|
 | `Planned` | nothing moved | clear | not imported; the leader unclaims (L2 reversed) |
 | `Staged` | staging holds `fb` | delete staging; clear | not imported; leader unclaims |
-| `Exported` | live is `fa` or `fa'`; mailbox holds an export `fa` | delete the export and the staging; clear | not imported; leader unclaims. Unwinding rather than completing keeps the existing rule that before the swap nothing changed for a session, so nothing is completed on its behalf |
+| `Exported` | live is `fa` or `fa'`; mailbox holds an export `fa` | delete the export and the staging; clear | not imported; leader unclaims. Unwinding rather than completing keeps the existing rule that before the swap nothing changed for a session, so nothing is completed on its behalf. A commit arriving after this is answered "not imported" |
 | `Swapped` | live is `fb` or `fb'`; `ClaimedPath` still holds `fb`; mailbox holds export `fa` | continue F6-F8 | imported; outgoing A |
 | `Released` | as above minus the claimed file | continue F7-F8 | imported |
 | `Patched` | owner record may be missing | F8 | imported |
@@ -289,7 +311,9 @@ Leader dies mid-coordination; its reconciliation at start, under its gate:
 
 | Leader journal at | Files say | Action |
 |---|---|---|
-| `Claimed`, follower online | | re-issue L3 (idempotent by F1); then L4 or unclaim per the follower's answer |
+| `Claimed`, follower online | | re-issue L3a (idempotent by F1); then L3b, L3c and L4, or unclaim per the follower's answer |
+| `ExportVerified`, follower online | export in the mailbox, follower journal at `Exported` | re-issue L3c; the export has already passed the native gate and is not re-read |
+| `ExportVerified`, follower offline or journal cleared | export may be gone | treat as not imported: unclaim. Nothing was swapped |
 | `Claimed`, follower offline | claimed file in the mailbox, record on the slot | leave both; card shows `in transit to wsl (offline)`; `Cancel` is offered only once the follower answers "not imported"; never a blind unclaim, since the follower may have swapped |
 | `Imported`, park not done | export file in the mailbox | L4 by fingerprint |
 | `Parked` | | clear |
@@ -298,8 +322,9 @@ Leader dies mid-coordination; its reconciliation at start, under its gate:
 No branch deletes a file whose fingerprint is not the one a journal names, and no branch copies
 anything it did not verify by fingerprint after the copy. A pair is lost only if the live file and
 every mailbox and staging copy are gone at once, which no step produces: F6 deletes the claimed file
-only after F5 put the same lineage live, and L4 renames rather than copies. The one residual is
-recorded as the project's top risk in `../PLAN.md`.
+only after F5 put the same lineage live, and L4 renames rather than copies. The one window where a
+lineage could be lost rather than stranded, F4 to F5, is closed by the L3b export gate: the leader
+reads the export natively before the follower is allowed to swap.
 
 ### 9.4 Reconciliation of records against files (leader, at start and on every dashboard read)
 
@@ -391,15 +416,18 @@ here.
 
 - `StagedImportCredentialPairStore` against two temp directories: every step's on-disk state asserted
   by fingerprint after each of F3 to F6; a claimed file rewritten between the request and F3 fails
-  the verify and unwinds; an export read-back mismatch unwinds.
+  the verify and unwinds; an export read-back mismatch unwinds; **the follower refuses to swap
+  without a commit**, and a corrupted or truncated export makes the leader's native gate abort with
+  the live pair untouched.
 - Crash injection: a test-only `FailAfterStep` hook (through `SwitchOptions`) aborts the import after
   each `ImportStep`; a fresh executor over the same roots reconciles; assert the section 9.3 outcome
   and that every fingerprint the test's `CredentialFiles` helper wrote exists in exactly one
   non-staging file.
-- `WslSwitch` coordinator against a fake `IPeerRotationInstance`: claim, import, park; the follower
-  answering `AlreadyImported`; the follower timing out after `Claimed` (journal stays open, no
-  unclaim); the follower answering "not imported" (unclaim: file back, record gone); the leader
-  restarting at each `WslSwitchStep`.
+- `WslSwitch` coordinator against a fake `IPeerRotationInstance`: claim, export-gate, commit, park;
+  the follower answering `AlreadyImported`; the follower timing out after `Claimed` (journal stays
+  open, no unclaim); the follower answering "not imported" (unclaim: file back, record gone); an
+  export that fails the native gate (abort, unclaim, live pair untouched on both sides); the leader
+  restarting at each `WslSwitchStep`, `ExportVerified` among them.
 - Planner: `HeldByOtherSide`, `SlotInTransit`, `SideOffline` over fixtures; the Windows planner
   refuses a slot carrying a `wsl` record.
 - Refresh: the leader's pass records `HeldElsewhere` for a slot with a record and sends nothing; a
