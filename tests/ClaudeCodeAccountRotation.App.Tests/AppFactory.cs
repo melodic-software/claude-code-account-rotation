@@ -61,7 +61,7 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
         };
         if (peerStorePath is not null)
         {
-            // The address is never dialled: a two-host test replaces the registry
+            // The address is never called: a two-host test replaces the registry
             // with one built over the other factory's client. What the entry buys
             // is the composition path, so the peer the page sees is the configured
             // one and not something only a test knows how to make.

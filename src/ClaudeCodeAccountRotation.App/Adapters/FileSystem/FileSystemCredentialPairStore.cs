@@ -110,7 +110,7 @@ internal sealed class FileSystemCredentialPairStore : ICredentialPairStore
     /// <b>L3b, the export gate.</b> Reads the file the other side exported,
     /// <b>natively</b>, on the store's own volume, through a fresh open, and
     /// answers its fingerprint. An absent file, a short or torn read, and an
-    /// unparseable one are all failures with a reason, never an exception: the
+    /// one that will not parse are all failures with a reason, never an exception: the
     /// gate exists so that a bad crossing costs a refused switch, and a
     /// refusal is how it says so.
     /// <para>
