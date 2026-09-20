@@ -43,6 +43,14 @@ internal sealed class HttpPeerRotationInstance : IPeerRotationInstance
 
     public SideName Side { get; }
 
+    /// <summary>
+    /// What a read of that side is allowed to cost. A side that is off refuses
+    /// the connection at once and needs none of this; a side that is listening
+    /// but wedged would otherwise hold the page's own poll for the client's
+    /// whole timeout, and the page asks every ten seconds.
+    /// </summary>
+    public TimeSpan ReadTimeout { get; init; } = TimeSpan.FromSeconds(10);
+
     public Task<Result<PeerDashboard, string>> ReadDashboardAsync(CancellationToken cancellationToken) =>
         GetAsync<ImportEndpoints.FollowerDashboardView, PeerDashboard>(
             "/api/dashboard",
@@ -96,14 +104,18 @@ internal sealed class HttpPeerRotationInstance : IPeerRotationInstance
 
     private async Task<Result<TOut, string>> GetAsync<TView, TOut>(string route, Func<TView, TOut> project, CancellationToken cancellationToken)
     {
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        bounded.CancelAfter(ReadTimeout);
         try
         {
-            using HttpResponseMessage response = await _client.GetAsync(new Uri(route, UriKind.Relative), cancellationToken);
-            return await ProjectAsync(response, route, project, cancellationToken);
+            using HttpResponseMessage response = await _client.GetAsync(new Uri(route, UriKind.Relative), bounded.Token);
+            return await ProjectAsync(response, route, project, bounded.Token);
         }
         catch (Exception exception) when (Unreachable(exception))
         {
-            return Result<TOut, string>.Failure(route + ": " + exception.Message);
+            return Result<TOut, string>.Failure(cancellationToken.IsCancellationRequested
+                ? route + ": " + exception.Message
+                : route + " did not answer within " + ReadTimeout.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture) + " s");
         }
     }
 

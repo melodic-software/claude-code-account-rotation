@@ -147,11 +147,23 @@ stop_follower() {
   fi
 }
 
+# Whatever holds this run's follower port inside the distro, by the PID that
+# holds it and never by name. The liveness step has the leader start a follower
+# of its own, whose PID this script never learns; left behind, it would squat
+# the port and the next run would talk to it instead of its own follower, which
+# is a confusing failure a long way from its cause.
+# Invoked by cleanup above, which shellcheck does not follow through the trap.
+# shellcheck disable=SC2329
+free_follower_port() {
+  wsl_run "for pid in \$(ss -ltnp 2>/dev/null | sed -n 's/.*:$follower_port .*pid=\([0-9]*\).*/\1/p' | sort -u); do kill -9 \"\$pid\" 2>/dev/null; done; true" >/dev/null 2>&1 || true
+}
+
 # Invoked by the EXIT trap below, which shellcheck does not follow.
 # shellcheck disable=SC2329
 cleanup() {
   stop_leader || true
   stop_follower || true
+  free_follower_port || true
   if [[ "$keep_roots" == "yes" ]]; then
     printf 'kept: %s (and %s inside the distro)\n' "$win_root_here" "$wsl_root"
     return
@@ -161,6 +173,17 @@ cleanup() {
   wsl_run "rm -rf '$wsl_root'" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
+
+# Before anything binds. A port already in use means some earlier run left a
+# process behind, and a run that talked to it instead of its own follower would
+# report nonsense with the cause hours upstream.
+for port_in_use in "$leader_port" "$follower_port"; do
+  if curl -fsS --max-time 2 "http://127.0.0.1:$port_in_use/healthz" >/dev/null 2>&1 \
+    || curl -fsS --max-time 2 "http://127.0.0.1:$port_in_use/api/dashboard" >/dev/null 2>&1; then
+    echo "something is already answering on port $port_in_use; stop it before running this" >&2
+    exit 2
+  fi
+done
 
 mkdir -p "$store_here" "$win_live_here" "$win_appdata_here" "$mailbox_here" "$log_dir"
 wsl_run "mkdir -p '$wsl_live' '$wsl_appdata'" >/dev/null

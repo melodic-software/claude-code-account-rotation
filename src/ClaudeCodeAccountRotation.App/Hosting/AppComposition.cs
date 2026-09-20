@@ -219,7 +219,14 @@ internal static class AppComposition
     {
         foreach (PeerConfiguration peer in configuration.Peers ?? [])
         {
-            services.AddHttpClient(PeerClientName(peer.Side), client => client.BaseAddress = peer.BaseAddress);
+            services.AddHttpClient(PeerClientName(peer.Side), client =>
+            {
+                client.BaseAddress = peer.BaseAddress;
+                // Above the coordinator's own 60 s import bound, so the bound
+                // that fires is the one whose failure the crash table is
+                // written for rather than the client's generic one.
+                client.Timeout = WslSwitch.ImportTimeout + TimeSpan.FromSeconds(30);
+            });
         }
 
         services.AddSingleton(provider => new PeerRegistry(

@@ -135,6 +135,50 @@ public sealed class FollowerConfigurationTests : IDisposable
         verdict.Error.ShouldContain("mailbox");
     }
 
+    /// <summary>
+    /// Two mount points every Linux has and no Windows machine does. Phase 3
+    /// left this rule untested for want of a portable second volume; there is
+    /// one on the operating system the follower actually runs on, because
+    /// <c>/dev/shm</c> and <c>/tmp</c> are separate tmpfs mounts and
+    /// <see cref="ConfigurationValidator.VolumeOf"/> resolves a Unix path to
+    /// the longest mount point that owns it.
+    /// </summary>
+    /// <remarks>
+    /// Gated on the product's own resolver rather than on the two directories
+    /// existing: a leg where it cannot tell the two mounts apart would fail
+    /// this fact for a reason that is not the rule under test.
+    /// </remarks>
+    public static bool HasTwoVolumes =>
+        !OperatingSystem.IsWindows()
+        && Directory.Exists("/dev/shm")
+        && Directory.Exists("/tmp")
+        && ConfigurationValidator.VolumeOf("/dev/shm") != ConfigurationValidator.VolumeOf("/tmp");
+
+    [Fact(SkipUnless = nameof(HasTwoVolumes), Skip = "Needs two mount points, which only the Unix legs have")]
+    public void AFollowerWhoseAppDataIsOnAnotherVolumeThanItsLiveDirectoryIsRefused()
+    {
+        // The journal is what decides, after a crash, whether the swap happened,
+        // so a journal that can be present when the live file it describes is not
+        // (or the reverse) is the one arrangement the crash table cannot survive.
+        string live = Path.Combine("/tmp", "ccar-volume-" + Guid.NewGuid().ToString("N"));
+        string appData = Path.Combine("/dev/shm", "ccar-volume-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(live);
+        Directory.CreateDirectory(appData);
+        try
+        {
+            Result<Unit, string> verdict = Validate(Follower(liveDirectory: live) with { AppDataDirectory = appData });
+
+            verdict.IsFailure.ShouldBeTrue();
+            verdict.Error.ShouldContain("app data directory");
+            verdict.Error.ShouldContain("same volume");
+        }
+        finally
+        {
+            Directory.Delete(live, recursive: true);
+            Directory.Delete(appData, recursive: true);
+        }
+    }
+
     [Fact]
     public void AFollowerIsNotHeldToTheLeadersProfilesRootRules()
     {
