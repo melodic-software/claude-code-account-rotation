@@ -17,6 +17,13 @@ namespace ClaudeCodeAccountRotation.Core.Switching;
 /// record with a default so the construction sites that know nothing about
 /// refreshes compile unchanged.
 /// </para>
+/// <para>
+/// <paramref name="TargetSlot"/> is the target account's slot in the store the
+/// two sides of a machine share, as <see cref="SlotStateRule.Resolve"/> reads
+/// it. It trails the record and defaults to <see cref="SlotState.Parked"/>, the
+/// one value neither of the side guards below refuses, so the construction
+/// sites that know nothing about sides compile and behave unchanged.
+/// </para>
 /// </summary>
 public sealed record SwitchPlanningInput(
     LiveAccountState Live,
@@ -28,4 +35,5 @@ public sealed record SwitchPlanningInput(
     AccountEmail? LiveFingerprintOwner,
     string ProfilesRoot,
     DateTimeOffset Now,
-    bool TargetHasRecoveryFile = false);
+    bool TargetHasRecoveryFile = false,
+    SlotState TargetSlot = SlotState.Parked);

@@ -5,7 +5,8 @@ namespace ClaudeCodeAccountRotation.Core.Switching;
 /// <summary>
 /// Decides whether a switch may proceed and what it moves. Pure: every guard
 /// from the swap spike, in the spike's order, then the three the plan review
-/// added. Nothing here touches the machine.
+/// added, with the two the shared store needs among the target's guards.
+/// Nothing here touches the machine.
 /// </summary>
 public static class SwitchPlanner
 {
@@ -39,6 +40,20 @@ public static class SwitchPlanner
         if (liveEmail is not null && input.Target.Account?.Email == liveEmail)
         {
             return Refuse(SwitchRefusal.AlreadyOnTarget);
+        }
+
+        // Before the credential guards, not after them: a slot the other side holds,
+        // or one with a hand-off in flight, holds no pair by construction, so
+        // TargetHasNoCredentials would fire first and tell the operator to log in
+        // again for an account that is merely in use somewhere else.
+        if (input.TargetSlot is SlotState.HeldElsewhere)
+        {
+            return Refuse(SwitchRefusal.HeldByOtherSide);
+        }
+
+        if (input.TargetSlot is SlotState.InTransit)
+        {
+            return Refuse(SwitchRefusal.SlotInTransit);
         }
 
         if (!input.Target.HasCredentials || input.TargetCredentials is null)

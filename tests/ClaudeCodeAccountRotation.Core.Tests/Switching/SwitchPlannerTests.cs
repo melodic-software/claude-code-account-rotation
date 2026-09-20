@@ -48,6 +48,21 @@ public sealed class SwitchPlannerTests
             Now: _now);
     }
 
+    /// <summary>
+    /// The baseline with the target's pair out of its slot, which is how a slot
+    /// the other side holds and one with a hand-off in flight both look on disk.
+    /// </summary>
+    private static SwitchPlanningInput EmptiedSlot(SlotState slot)
+    {
+        SwitchPlanningInput input = Baseline();
+        return input with
+        {
+            Target = input.Target with { HasCredentials = false },
+            TargetCredentials = null,
+            TargetSlot = slot,
+        };
+    }
+
     [Fact]
     public void RefusesWhenTheManagedPolicyCouldNotBeRead()
     {
@@ -218,6 +233,20 @@ public sealed class SwitchPlannerTests
         };
 
         SwitchPlanner.Plan(input).Error.ShouldBe(SwitchRefusal.TargetHasNoCredentials);
+    }
+
+    [Fact]
+    public void ASlotHeldByTheOtherSideIsRefused()
+    {
+        // The refusal has to name the holder, not the missing pair: an account the
+        // other side holds is in use, not logged out.
+        SwitchPlanner.Plan(EmptiedSlot(SlotState.HeldElsewhere)).Error.ShouldBe(SwitchRefusal.HeldByOtherSide);
+    }
+
+    [Fact]
+    public void ASlotInTransitIsRefused()
+    {
+        SwitchPlanner.Plan(EmptiedSlot(SlotState.InTransit)).Error.ShouldBe(SwitchRefusal.SlotInTransit);
     }
 
     [Fact]
