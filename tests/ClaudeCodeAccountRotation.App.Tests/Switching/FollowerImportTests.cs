@@ -420,13 +420,86 @@ public sealed class FollowerImportTests : IDisposable
 
         Result<Unit, string> aborted = await follower.AbortAsync(new AccountEmail(IncomingEmail), Token);
 
-        aborted.IsSuccess.ShouldBeTrue(aborted.IsFailure ? aborted.Error : null);
+        // The abort is refused, not obeyed, and says why: answering "aborted" for
+        // an import that happened would have the leader unclaim a slot whose
+        // claimed file F6 has just deleted and never park the export.
+        aborted.IsFailure.ShouldBeTrue();
+        aborted.Error.ShouldContain("not aborted");
         (await FollowerRoots.FingerprintOfAsync(_roots.ExportPath(OutgoingEmail), Token)).ShouldBe(fa);
         (await FollowerRoots.FingerprintOfAsync(_roots.LivePath, Token)).ShouldBe(fb);
         File.Exists(_roots.ClaimedPath(IncomingEmail)).ShouldBeFalse();
         (await _roots.Journal().ReadOpenAsync(Token)).ShouldBeNull();
         (await _roots.NonStagingFilesHoldingAsync(fa, Token)).Count.ShouldBe(1);
         (await _roots.NonStagingFilesHoldingAsync(fb, Token)).Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task ACommitRetriedAfterAFirstOneDiedPastTheSwapAnswersImported()
+    {
+        // The first commit swapped and then failed before its journal write, so
+        // the journal still reads Exported and the live pair is already the
+        // incoming one. The retry must finish it and say so: answering "not
+        // imported" would have the leader unclaim a slot whose claimed file F6
+        // deletes, and never park the outgoing pair's export.
+        (RefreshTokenFingerprint fa, RefreshTokenFingerprint fb) = await SeedAsync();
+        using FollowerImport follower = _roots.Follower();
+        await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
+        File.Move(_roots.StagingPath, _roots.LivePath, overwrite: true);
+
+        Result<ImportResult, string> retried = await follower.CommitAsync(new AccountEmail(IncomingEmail), Token);
+
+        retried.IsSuccess.ShouldBeTrue(retried.IsFailure ? retried.Error : null);
+        retried.Value.Outgoing?.Value.ShouldBe(OutgoingEmail);
+        retried.Value.OutgoingFingerprint.ShouldBe(fa);
+        (await FollowerRoots.FingerprintOfAsync(_roots.LivePath, Token)).ShouldBe(fb);
+        (await FollowerRoots.FingerprintOfAsync(_roots.ExportPath(OutgoingEmail), Token)).ShouldBe(fa);
+        (await _roots.NonStagingFilesHoldingAsync(fa, Token)).Count.ShouldBe(1);
+        (await _roots.NonStagingFilesHoldingAsync(fb, Token)).Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task ARequestWhoseClaimedAndExportPathsAreTheSameFileIsRefused()
+    {
+        // F4 would write the export over the claimed file it had just staged
+        // from, and F6 would then delete the outgoing pair's only copy: a
+        // request that passed every fingerprint check and still lost a pair.
+        (RefreshTokenFingerprint fa, RefreshTokenFingerprint fb) = await SeedAsync();
+        using FollowerImport follower = _roots.Follower();
+        string shared = _roots.ClaimedPath(IncomingEmail);
+
+        Result<ImportAnswer, string> answer = await follower.ImportAsync(
+            _roots.Request(IncomingEmail, fb) with { ExportPath = shared },
+            Token);
+
+        answer.IsFailure.ShouldBeTrue();
+        answer.Error.ShouldContain("same file");
+        (await FollowerRoots.FingerprintOfAsync(_roots.LivePath, Token)).ShouldBe(fa);
+        (await FollowerRoots.FingerprintOfAsync(shared, Token)).ShouldBe(fb);
+        Directory.Exists(_roots.RefreshLockDirectory).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task AReconcilerUnwindLeavesNoStateThatReadsAsATornSwap()
+    {
+        // The reconciler's own cleanup, interrupted after its first step. With the
+        // staging file deleted first it would leave journal=Exported and no
+        // staging file; a later rotation of the live pair would then read as a
+        // torn F5 and finish an import whose F5 never ran. Ordered as it is, the
+        // export goes first and the evidence stays unambiguous.
+        RefreshTokenFingerprint fa = await _roots.WriteLiveAsync(OutgoingEmail, OutgoingToken, Token);
+        RefreshTokenFingerprint fb = await _roots.WriteClaimedAsync(IncomingEmail, IncomingToken, Token);
+        using (FollowerImport follower = _roots.Follower())
+        {
+            await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
+        }
+
+        await _roots.Reconciler().ReconcileAsync(Token);
+
+        File.Exists(_roots.StagingPath).ShouldBeFalse();
+        File.Exists(_roots.ExportPath(OutgoingEmail)).ShouldBeFalse();
+        (await _roots.Journal().ReadOpenAsync(Token)).ShouldBeNull();
+        (await FollowerRoots.FingerprintOfAsync(_roots.LivePath, Token)).ShouldBe(fa);
+        (await FollowerRoots.FingerprintOfAsync(_roots.ClaimedPath(IncomingEmail), Token)).ShouldBe(fb);
     }
 
     [Fact]
