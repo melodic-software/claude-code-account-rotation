@@ -239,7 +239,7 @@ product allowed to be on the other volume, and only files under it are ever copi
 A WSL switch from A (live in WSL) to B (parked in the store), clicked on the Windows page. Two
 processes, two journals, one gate each. Fingerprints: `fa` for A, `fb` for B.
 
-### 9.1 Leader steps (`WslSwitch` coordinator; the leader's mutation gate for L1-L2, and again for L4)
+### 9.1 Leader steps (`WslSwitch` coordinator; the leader's mutation gate for L1-L2, for L3b's abort-and-unclaim, and again for L4)
 
 | Step | Action | Store afterwards | Leader journal |
 |---|---|---|---|
