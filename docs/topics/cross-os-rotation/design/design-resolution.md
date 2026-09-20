@@ -87,7 +87,7 @@ login-age signal the app has.
 Consequences carried forward:
 
 - The parent plan's captured assumption "refreshing a parked pair's token renews its four-week login"
-  is **false**. It must be corrected by a dated note, not a silent body edit (phase 4).
+  is **false**. It must be corrected by a dated note, not a silent body edit (phase 5).
 - Recorded expiry creeps about +1.3 s forward per refresh, so `loginExpiresAt` is an upper bound.
 - The re-read trigger that would have reopened the two-family comparison (`2419200` returned by the
   server) did not fire. The shared-store recommendation stands.
