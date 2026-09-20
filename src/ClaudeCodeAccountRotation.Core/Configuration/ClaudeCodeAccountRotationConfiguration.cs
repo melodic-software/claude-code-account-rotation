@@ -15,4 +15,6 @@ public sealed record ClaudeCodeAccountRotationConfiguration(
     TimeSpan RefreshLockWaitBound,
     string? ClaudeExecutable,
     string UserAgentProductToken,
-    IReadOnlyDictionary<string, string> BrowserExecutables);
+    IReadOnlyDictionary<string, string> BrowserExecutables,
+    RotationRole Role = RotationRole.Leader,
+    string? Mailbox = null);
