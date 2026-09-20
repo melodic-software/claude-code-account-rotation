@@ -430,6 +430,47 @@ public sealed class FollowerImportTests : IDisposable
     }
 
     [Fact]
+    public async Task ACleanupInterruptedAfterItsStagingDeleteIsStillReadAsNotSwapped()
+    {
+        // The state an unwind would leave if it deleted the staging file first and
+        // then died: journal at Exported, no staging file, a live pair. By the
+        // absence of the staging file alone that is indistinguishable from a torn
+        // F5, and finishing it would delete the incoming pair's only copy in the
+        // mailbox and record an import that never happened. The live fingerprint
+        // is what tells them apart: a cleanup never changes it.
+        RefreshTokenFingerprint fa = await _roots.WriteLiveAsync(OutgoingEmail, OutgoingToken, Token);
+        RefreshTokenFingerprint fb = await _roots.WriteClaimedAsync(IncomingEmail, IncomingToken, Token);
+        using (FollowerImport follower = _roots.Follower())
+        {
+            await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
+            File.Delete(_roots.StagingPath);
+        }
+
+        ImportReconciliation done = await _roots.Reconciler().ReconcileAsync(Token);
+
+        done.Imported.ShouldBeFalse();
+        (await FollowerRoots.FingerprintOfAsync(_roots.LivePath, Token)).ShouldBe(fa);
+        (await FollowerRoots.FingerprintOfAsync(_roots.ClaimedPath(IncomingEmail), Token)).ShouldBe(fb);
+        File.Exists(_roots.ExportPath(OutgoingEmail)).ShouldBeFalse();
+        (await _roots.NonStagingFilesHoldingAsync(fa, Token)).Count.ShouldBe(1);
+        (await _roots.NonStagingFilesHoldingAsync(fb, Token)).Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task AStatusReadForOneAccountIgnoresAnImportInFlightForAnother()
+    {
+        (_, RefreshTokenFingerprint fb) = await SeedAsync();
+        using FollowerImport follower = _roots.Follower();
+        await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
+        File.Move(_roots.StagingPath, _roots.LivePath, overwrite: true);
+
+        ImportStatus other = await follower.StatusAsync(Token, new AccountEmail("c@example.com"));
+
+        other.Imported.ShouldBeFalse();
+        other.Detail.ShouldContain(IncomingEmail);
+    }
+
+    [Fact]
     public async Task AStatusReadWhileTheSwapIsFinishingReportsImported()
     {
         (_, RefreshTokenFingerprint fb) = await SeedAsync();
