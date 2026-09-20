@@ -402,6 +402,36 @@ public sealed class FollowerImportTests : IDisposable
         Directory.Exists(_roots.RefreshLockDirectory).ShouldBeFalse();
     }
 
+    public static bool OnUnix => !OperatingSystem.IsWindows();
+
+    /// <summary>
+    /// The staging file is the one F5 renames over the live pair, and a rename
+    /// carries the mode with it: a staging file at the umask default would
+    /// hand the CLI's own owner-only credential file a world-readable mode on
+    /// every import. One leg runs per machine; CI runs both.
+    /// </summary>
+    [Fact(SkipUnless = nameof(OnUnix), Skip = "File modes are a Unix behavior")]
+    public async Task TheStagedAndSwappedPairsAreOwnerOnlyOnUnix()
+    {
+        (_, RefreshTokenFingerprint fb) = await SeedAsync();
+        using FollowerImport follower = _roots.Follower();
+
+        await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
+
+        // The guard is for the platform analyzer; the attribute keeps the leg off Windows.
+        if (!OperatingSystem.IsWindows())
+        {
+            File.GetUnixFileMode(_roots.StagingPath).ShouldBe(UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+
+        await follower.CommitAsync(new AccountEmail(IncomingEmail), Token);
+
+        if (!OperatingSystem.IsWindows())
+        {
+            File.GetUnixFileMode(_roots.LivePath).ShouldBe(UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
         DateTime deadline = DateTime.UtcNow.AddSeconds(5);
