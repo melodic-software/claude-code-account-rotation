@@ -172,7 +172,17 @@ internal sealed class StagedImportCredentialPairStore
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(destinationPath))!);
-        await using (FileStream destination = new(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None))
+        // Owner-only, through the same creator every other credential file in this
+        // product goes through. It matters most for the staging file: F5 renames it
+        // over the live pair and a rename carries the source's mode with it, so a
+        // staging file left at the umask default would hand the CLI's own 0600 file
+        // a world-readable mode. On the mailbox the mode is a no-op (design
+        // section 3 measured chmod over DrvFs as one), and the NTFS ACL stands.
+        // The destination is deleted first because the creator is CreateNew: both
+        // destinations are this import's own files, and the outgoing pair is still
+        // live when the export is written.
+        DeleteIfPresent(destinationPath);
+        await using (FileStream destination = AtomicBytesFile.CreateOwnerOnly(destinationPath))
         {
             await destination.WriteAsync(bytes, cancellationToken);
             // flushToDisk is the fsync: over DrvFs it returns 0 without proving the

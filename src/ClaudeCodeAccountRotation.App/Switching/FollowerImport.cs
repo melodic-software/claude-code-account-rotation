@@ -604,8 +604,18 @@ internal sealed partial class FollowerImport : IDisposable
             // Same.
         }
 
-        if (!_sync.Wait(0))
+        try
         {
+            if (!_sync.Wait(0))
+            {
+                return;
+            }
+        }
+        catch (ObjectDisposedException)
+        {
+            // Shutdown disposed the gate between this tick being scheduled and it
+            // running. Disposing a timer does not wait for a callback already in
+            // flight, so this arrives after the hold has been given back.
             return;
         }
 
@@ -618,7 +628,14 @@ internal sealed partial class FollowerImport : IDisposable
         }
         finally
         {
-            _sync.Release();
+            try
+            {
+                _sync.Release();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Same race, one step later.
+            }
         }
     }
 
