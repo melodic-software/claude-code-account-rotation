@@ -44,6 +44,7 @@ internal sealed partial class OAuthRefreshLock
         {
             if (TryCreateExclusively(_lockDirectory))
             {
+                Stamp();
                 return Result<IAsyncDisposable, string>.Success(new Held(_lockDirectory));
             }
 
@@ -72,6 +73,30 @@ internal sealed partial class OAuthRefreshLock
     /// the mtime is re-read right before the call, so a directory another process
     /// re-created between the two reads is left alone. Returns whether it removed.
     /// </summary>
+    /// <summary>
+    /// Puts the directory's mtime on this lock's own clock, right after the
+    /// create. Staleness is decided by comparing that mtime against
+    /// <see cref="TimeProvider.GetUtcNow"/>, and the create leaves it on the
+    /// file system's clock instead — so without this the one field is written
+    /// by one clock and read against another. On a real machine the two agree
+    /// and nothing changes; anywhere the clock is injected they need not, and
+    /// a holder that stamps itself into the past reads as stale the moment it
+    /// is taken.
+    /// </summary>
+    private void Stamp()
+    {
+        try
+        {
+            Directory.SetLastWriteTimeUtc(_lockDirectory, _timeProvider.GetUtcNow().UtcDateTime);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Best effort, as the heartbeat's own re-stamp is: a lock whose
+            // mtime could not be set is still held, and the create is what
+            // made it exclusive.
+        }
+    }
+
     private bool TryRemoveIfStale()
     {
         if (!IsStale())

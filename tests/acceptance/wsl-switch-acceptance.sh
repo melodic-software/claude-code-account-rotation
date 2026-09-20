@@ -294,8 +294,13 @@ start_follower() {
 start_leader() {
   local fail_after="${1:-}" corrupt="${2:-}" log
   log="$log_dir/leader-$(date -u +%H%M%S)-$RANDOM.log"
-  CCAR_FAIL_AFTER_STEP="$fail_after" CCAR_CORRUPT_EXPORT_BEFORE_GATE="$corrupt" \
-    "$leader_exe" --config "$win_root_here/leader-config.json" > "$log" 2>&1 &
+  if [[ -n "$corrupt" ]]; then
+    CCAR_FAIL_AFTER_STEP="$fail_after" CCAR_CORRUPT_EXPORT_BEFORE_GATE=1 \
+      "$leader_exe" --config "$win_root_here/leader-config.json" > "$log" 2>&1 &
+  else
+    CCAR_FAIL_AFTER_STEP="$fail_after" \
+      "$leader_exe" --config "$win_root_here/leader-config.json" > "$log" 2>&1 &
+  fi
   leader_pid=$!
   leader_log="$log"
   wait_for "$leader_url/healthz" || { fail "the leader did not come up; see $log"; return 1; }

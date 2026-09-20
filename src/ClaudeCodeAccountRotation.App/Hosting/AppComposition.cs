@@ -89,7 +89,11 @@ internal static class AppComposition
             MutationGateTimeout: TimeSpan.Zero,
             configuration.Mailbox,
             Environment.GetEnvironmentVariable(CrashInjection.EnvironmentVariableName),
-            Environment.GetEnvironmentVariable(CrashInjection.CorruptExportEnvironmentVariableName) is not null));
+            // Whitespace is off, not on. A caller that sets the variable to an
+            // empty string means "no injection", and a launcher that exports it
+            // unconditionally is the ordinary way to write one; reading that as
+            // "on" turns every later run into a corrupted export.
+            !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(CrashInjection.CorruptExportEnvironmentVariableName))));
         if (configuration.Role == RotationRole.Follower)
         {
             ComposeFollower(services, configuration);

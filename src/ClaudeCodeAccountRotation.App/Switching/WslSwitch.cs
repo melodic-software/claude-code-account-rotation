@@ -203,7 +203,7 @@ internal sealed partial class WslSwitch : IDisposable
         WslSwitchJournalEntry? entry = await _journal.ReadOpenAsync(cancellationToken);
         if (entry is null)
         {
-            return new WslReconciliation("no hand-off in flight", null);
+            return await ReconcileOrphansAsync(cancellationToken);
         }
 
         if (_peers.For(entry.Side) is not Peer peer)
@@ -229,6 +229,107 @@ internal sealed partial class WslSwitch : IDisposable
             refusal => refusal is SwitchRefusal.SideOffline
                 ? InTransitBanner(entry, "the side stopped answering mid-hand-off")
                 : new WslReconciliation("the hand-off of " + entry.Incoming.Value + " was unwound from " + entry.StepReached + ": " + refusal, null));
+    }
+
+    /// <summary>
+    /// Design 9.3's last leader row: <b>no journal, but a file under the
+    /// mailbox</b>. It is reached when the process died between the claim's
+    /// rename and its own journal write, and it is the one crash point where a
+    /// pair sits in a mailbox with nothing at all pointing at it — so the rule
+    /// is read off the file's own name, which is the slot it came from.
+    /// <para>
+    /// A <i>claim</i> is treated as the <c>Claimed</c> row: the side is asked,
+    /// and only a definite "not imported" puts it back. A journal write is
+    /// what precedes L3a, so a claim with no journal has almost certainly
+    /// never been offered to anyone — but "almost certainly" is not what a
+    /// credential is put back on, and the side answers for itself.
+    /// </para>
+    /// <para>
+    /// An <i>export</i> is treated as the <c>Imported</c> row: the other side
+    /// has already swapped, so this pair exists here and nowhere else, and L4
+    /// parks it by its own fingerprint. There is no journal fingerprint left
+    /// to compare it against, which is why the rename's refusal to overwrite
+    /// an occupied slot is the check that matters here.
+    /// </para>
+    /// </summary>
+    private async Task<WslReconciliation> ReconcileOrphansAsync(CancellationToken cancellationToken)
+    {
+        List<string> acted = [];
+        foreach (Peer peer in _peers.All)
+        {
+            string mailbox = FileSystemCredentialPairStore.MailboxPath(_options.ProfilesRoot, peer.Side);
+            if (!Directory.Exists(mailbox))
+            {
+                continue;
+            }
+
+            foreach (string path in Directory.EnumerateFiles(mailbox))
+            {
+                string name = Path.GetFileName(path);
+                bool isExport = name.EndsWith(FileSystemCredentialPairStore.IncomingSuffix, StringComparison.Ordinal);
+                string claimName = isExport ? name[..^FileSystemCredentialPairStore.IncomingSuffix.Length] : name;
+                if (!claimName.EndsWith(FileSystemCredentialPairStore.FileName, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                string folderName = claimName[..^FileSystemCredentialPairStore.FileName.Length];
+                if (folderName.Length == 0 || AccountEmail.Parse(folderName).IsFailure)
+                {
+                    continue;
+                }
+
+                string folder = Path.Combine(_options.ProfilesRoot, folderName);
+                acted.Add(isExport
+                    ? await ParkOrphanExportAsync(peer, folder, folderName, cancellationToken)
+                    : await UnclaimOrphanAsync(peer, folder, folderName, cancellationToken));
+            }
+        }
+
+        return acted.Count == 0
+            ? new WslReconciliation("no hand-off in flight", null)
+            : new WslReconciliation(string.Join("; ", acted), null);
+    }
+
+    private async Task<string> ParkOrphanExportAsync(Peer peer, string folder, string folderName, CancellationToken cancellationToken)
+    {
+        Result<RefreshTokenFingerprint, string> exported = await _pairs.ReadExportedFingerprintAsync(folder, peer.Side, cancellationToken);
+        if (exported.IsFailure)
+        {
+            LogParkRefused(folderName, exported.Error);
+            return "an export for " + folderName + " is in the mailbox and could not be read: " + exported.Error;
+        }
+
+        using IDisposable permit = await _gate.AcquireAsync(_options.MutationGateTimeout, cancellationToken);
+        Result<Unit, string> promoted = await _pairs.PromoteFromMailboxAsync(folder, peer.Side, exported.Value, cancellationToken);
+        if (promoted.IsFailure)
+        {
+            LogParkRefused(folderName, promoted.Error);
+            return "an export for " + folderName + " could not be parked: " + promoted.Error;
+        }
+
+        await _slots.ReleaseAsync(folder, cancellationToken);
+        LogOrphanParked(folderName);
+        return "an export for " + folderName + " with no journal was parked back into its slot";
+    }
+
+    private async Task<string> UnclaimOrphanAsync(Peer peer, string folder, string folderName, CancellationToken cancellationToken)
+    {
+        Result<AccountEmail, string> email = AccountEmail.Parse(folderName);
+        Result<ImportStatus, string> asked = email.IsSuccess
+            ? await peer.Instance.ImportStatusAsync(email.Value, cancellationToken)
+            : Result<ImportStatus, string>.Failure("the mailbox file does not name an account");
+        if (asked.IsFailure || asked.Value.Imported)
+        {
+            return "a claim of " + folderName + " with no journal was left alone: "
+                + (asked.IsFailure ? asked.Error : "that side says it is imported, so its export is what settles this");
+        }
+
+        using IDisposable permit = await _gate.AcquireAsync(_options.MutationGateTimeout, cancellationToken);
+        await _pairs.UnclaimFromMailboxAsync(folder, peer.Side, cancellationToken);
+        await _slots.ReleaseAsync(folder, cancellationToken);
+        LogOrphanUnclaimed(folderName);
+        return "a claim of " + folderName + " with no journal was put back: " + asked.Value.Detail;
     }
 
     /// <summary>The one line of side state the page shows. A side that does not answer is offline, not an error.</summary>
@@ -778,6 +879,12 @@ internal sealed partial class WslSwitch : IDisposable
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "the {Side} side is incompatible and was sent no import: {Reason}")]
     private partial void LogIncompatible(string side, string reason);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "an export for {Account} was in the mailbox with no journal; it is parked back in its slot")]
+    private partial void LogOrphanParked(string account);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "a claim of {Account} was in the mailbox with no journal and that side says it never imported it; it is back in its slot")]
+    private partial void LogOrphanUnclaimed(string account);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "switch of {Side} to {Target} refused: {Refusal}")]
     private partial void LogRefused(string side, string target, SwitchRefusal refusal);
