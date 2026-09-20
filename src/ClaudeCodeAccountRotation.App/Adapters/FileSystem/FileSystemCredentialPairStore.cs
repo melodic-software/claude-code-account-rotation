@@ -1,7 +1,9 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Ports;
+using ClaudeCodeAccountRotation.Core.Switching;
 
 namespace ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 
@@ -14,6 +16,18 @@ namespace ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 internal sealed class FileSystemCredentialPairStore : ICredentialPairStore
 {
     public const string FileName = ".credentials.json";
+
+    /// <summary>
+    /// The mailbox root inside the store, one directory per other side. It sits
+    /// under the profiles root so a claim stays a single-volume rename, and it
+    /// is named with a leading dot so the folder listing, which wants an
+    /// identity file in every directory it reports, passes over it.
+    /// </summary>
+    public const string TransitDirectoryName = ".transit";
+
+    /// <summary>What the other side calls a pair it has exported but this side has not promoted yet.</summary>
+    public const string IncomingSuffix = ".incoming";
+
     private const string DaemonLockFileName = "daemon.lock";
 
     private readonly string _liveConfigDirectory;
@@ -57,6 +71,65 @@ internal sealed class FileSystemCredentialPairStore : ICredentialPairStore
         // cached; a rename keeps the parked file's old mtime, so stamp it now.
         File.SetLastWriteTimeUtc(_livePath, _timeProvider.GetUtcNow().UtcDateTime);
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// The claim: renames a slot's parked pair into the named side's mailbox
+    /// under the store, and answers where it went. One volume, because the
+    /// mailbox is inside the store, so this is the same rename park and unpark
+    /// already are and there is no copy path on this side, ever.
+    /// </summary>
+    public Task<string> ClaimToMailboxAsync(string folderPath, SideName side, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        string folder = ProfileFolder(folderPath);
+        string mailbox = MailboxFor(side);
+        Directory.CreateDirectory(mailbox);
+        string destination = Path.Combine(mailbox, ClaimedName(folder));
+        Rename(Path.Combine(folder, FileName), destination);
+        return Task.FromResult(destination);
+    }
+
+    /// <summary>
+    /// The promote: renames the pair the other side exported into this slot,
+    /// but only once its fingerprint is the one the caller expected. A
+    /// mismatch, a short read, or an absent export is a refusal and moves
+    /// nothing, which is what keeps a lineage the leader has not verified out
+    /// of the store.
+    /// </summary>
+    public async Task<Result<Unit, string>> PromoteFromMailboxAsync(
+        string folderPath,
+        SideName side,
+        RefreshTokenFingerprint expected,
+        CancellationToken cancellationToken)
+    {
+        string folder = ProfileFolder(folderPath);
+        string export = Path.Combine(MailboxFor(side), ClaimedName(folder) + IncomingSuffix);
+        CredentialPair? exported;
+        try
+        {
+            exported = await ReadPairAsync(export, cancellationToken);
+        }
+        catch (Exception exception) when (exception is InvalidDataException or JsonException)
+        {
+            // An export the other side truncated is a refusal, not a fault: the
+            // whole point of the gate is that a bad crossing costs a switch.
+            return Result<Unit, string>.Failure("the exported pair for " + Path.GetFileName(folder) + " could not be read");
+        }
+
+        if (exported is null)
+        {
+            return Result<Unit, string>.Failure("no exported pair to promote for " + Path.GetFileName(folder));
+        }
+
+        if (exported.Fingerprint != expected)
+        {
+            return Result<Unit, string>.Failure("the exported pair for " + Path.GetFileName(folder) + " is not the one that was verified (fingerprint " + exported.Fingerprint.Sha256Hex[..12] + " vs expected " + expected.Sha256Hex[..12] + ")");
+        }
+
+        Directory.CreateDirectory(folder);
+        Rename(export, Path.Combine(folder, FileName));
+        return Result<Unit, string>.Success(Unit.Value);
     }
 
     public Task MoveParkedToQuarantineAsync(string folderPath, string destinationDirectory, CancellationToken cancellationToken)
@@ -119,6 +192,21 @@ internal sealed class FileSystemCredentialPairStore : ICredentialPairStore
 
         return null;
     }
+
+    /// <summary>Where a side's mailbox sits under a store: <c>&lt;store&gt;/.transit/&lt;side&gt;</c>.</summary>
+    public static string MailboxPath(string profilesRoot, SideName side) =>
+        Path.Combine(Path.GetFullPath(profilesRoot), TransitDirectoryName, side.Value);
+
+    /// <summary>
+    /// What a claimed pair is called in the mailbox: the slot's folder name and
+    /// the credential file name it had, so one mailbox holds one file per
+    /// account and the name says which account it belongs to.
+    /// </summary>
+    public static string ClaimedFileName(string folderName) => folderName + FileName;
+
+    private string MailboxFor(SideName side) => MailboxPath(_profilesRoot, side);
+
+    private static string ClaimedName(string folder) => ClaimedFileName(Path.GetFileName(folder));
 
     private static async Task<CredentialPair?> ReadPairAsync(string path, CancellationToken cancellationToken)
     {

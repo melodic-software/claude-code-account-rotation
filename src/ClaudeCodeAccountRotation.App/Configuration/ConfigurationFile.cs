@@ -60,6 +60,7 @@ internal static class ConfigurationFile
         ["claudeExecutable"] = configuration.ClaudeExecutable,
         ["userAgentProductToken"] = configuration.UserAgentProductToken,
         ["browserExecutables"] = BrowserExecutablesToJson(configuration.BrowserExecutables),
+        ["store"] = new JsonObject { ["shared"] = configuration.SharedStore },
     };
 
     private static JsonObject BrowserExecutablesToJson(IReadOnlyDictionary<string, string> executables)
@@ -89,8 +90,17 @@ internal static class ConfigurationFile
             Number(raw, "refreshLockWaitSeconds") is double seconds ? TimeSpan.FromSeconds(seconds) : defaults.RefreshLockWaitBound,
             Text(raw, "claudeExecutable") ?? defaults.ClaudeExecutable,
             Text(raw, "userAgentProductToken") ?? defaults.UserAgentProductToken,
-            BrowserExecutables(raw) ?? defaults.BrowserExecutables);
+            BrowserExecutables(raw) ?? defaults.BrowserExecutables,
+            SharedStore(raw) ?? defaults.SharedStore);
     }
+
+    /// <summary>
+    /// <c>store.shared</c>: whether the two sides of this machine share one
+    /// account store. Nested under <c>store</c> because the follower's own keys
+    /// join it there, and absent or malformed means the default, which is off.
+    /// </summary>
+    private static bool? SharedStore(JsonObject raw) =>
+        raw["store"] is JsonObject store ? Flag(store, "shared") : null;
 
     /// <summary>
     /// <c>browserExecutables</c>: a browser name (<c>chrome</c>, <c>edge</c>,

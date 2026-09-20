@@ -2,10 +2,12 @@ using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Dashboard;
 using ClaudeCodeAccountRotation.App.Security;
+using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Ports;
+using ClaudeCodeAccountRotation.Core.Switching;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -42,6 +44,7 @@ internal static class LoginEndpoints
             ClaudeStateFile stateFile,
             ILoginSessionRunner runner,
             IBrowserLauncher browsers,
+            SharedStoreSlots slots,
             CancellationToken cancellationToken) =>
         {
             Result<AccountEmail, string> parsed = AccountEmail.Parse(email);
@@ -66,6 +69,23 @@ internal static class LoginEndpoints
             }
 
             ParkedProfile folder = await profiles.EnsureFolderAsync(target, cancellationToken);
+
+            // The same rule as the guard above, one side over: an empty slot the
+            // other side holds is not an account waiting to be logged in, and a
+            // login into it would put a second token family on the machine while
+            // the first is live in the distro. The reconciliation rule would then
+            // drop that side's record, because the slot holds a pair again, and
+            // nothing would be left saying the family in the distro exists. A
+            // deliberate, banner-carrying "log in again on Windows" over this
+            // refusal is the escape hatch design section 11 describes; it is
+            // phase 7's, and it needs a refusal here to override.
+            AccountEmail? liveAccount = (await stateFile.ReadAccountBlockAsync(cancellationToken))?.Email;
+            if (await slots.ReadAsync(target, folder.FolderPath, folder.HasCredentials, new WindowsHold(liveAccount, null), cancellationToken)
+                is { State: SlotState.HeldElsewhere or SlotState.InTransit })
+            {
+                return Refused("HeldByOtherSide", "The other side of this machine holds that account, or a hand-off for it is in flight; switch it away there first.");
+            }
+
             Result<LoginSession, string> started = await runner.StartAsync(target, folder.FolderPath, cancellationToken);
             if (started.IsFailure)
             {
