@@ -245,10 +245,10 @@ processes, two journals, one gate each. Fingerprints: `fa` for A, `fb` for B.
 |---|---|---|---|
 | L1 | plan: `GET` the follower's dashboard (side online, live account A, `fa`); B's slot must be `Parked` and not stranded in recovery; no login running against B's folder; managed policy allows; A must be `HeldHere` for wsl or absent | | |
 | L2 | **claim:** rename `<store>/B/.credentials.json` to `<store>/.transit/wsl/B.credentials.json`; write `<store>/B/holder.json {wsl, fb, since}` | B: mailbox / A: unchanged | `Claimed {A, fa, B, fb}` |
-| L3a | release the gate; `POST /api/import` to the follower with `ClaimedPath`, `fb`, B's account block from its `profile.json`, `ExportPath = .transit/wsl/A.credentials.json.incoming`; wait up to 60 s. The follower stops at F4 and answers `Exported {fa}` | A: live + mailbox / B: mailbox + staging | |
-| L3b | **the export gate:** read the exported file **natively**, on the store's own volume, and require its fingerprint to equal `fa`. On any mismatch, short read, or absent file, `POST /api/import/abort`, unclaim, and refuse the switch: nothing has been swapped, so the operator loses nothing | | `ExportVerified {fa}` |
-| L3c | `POST /api/import/commit`; the follower performs F5 to F8 and answers `ImportResult` | | `Imported` |
-| L4 | under the gate: rename the export into `<store>/A/.credentials.json`; write A's `profile.json` from `OutgoingAccount`; delete A's `holder.json` | B: none, live in WSL / A: parked | `Parked`, then cleared |
+| L3a | release the gate; `POST /api/import` to the follower with `ClaimedPath`, `fb`, B's account block from its `profile.json`, `ExportPath = .transit/wsl/A.credentials.json.incoming`; wait up to 60 s. The follower stops at F4 and answers `Exported {fa}`, or `Exported {none}` when WSL held nothing | A: live + mailbox / B: mailbox + staging | |
+| L3b | **the export gate:** read the exported file **natively**, on the store's own volume, and require its fingerprint to equal `fa`. On any mismatch, short read, or absent file, `POST /api/import/abort`, unclaim, and refuse the switch: nothing has been swapped, so the operator loses nothing. Skipped outright on `Exported {none}` | | `ExportVerified {fa}` or `{none}` |
+| L3c | `POST /api/import/commit` **within 20 s of the `Exported` answer** (the follower's hold budget, section 9.2); the follower performs F5 to F8 and answers `ImportResult` | | `Imported` |
+| L4 | under the gate, and only when `Outgoing` is A: rename the export into `<store>/A/.credentials.json`; write A's `profile.json` from `OutgoingAccount`; delete A's `holder.json`. Nothing to park on `{none}` | B: none, live in WSL / A: parked | `Parked`, then cleared |
 
 L2 and every parked-pair refresh unit run under the same in-process `CredentialMutationGate`
 (`QuotaRefresh.cs:563-637`), so no token POST can straddle a claim: a refresh that read B before the
@@ -262,17 +262,41 @@ could not.
 `POST /api/import` runs F1 to F4 and stops. `POST /api/import/commit` runs F5 to F8, and the
 follower refuses it unless its own journal reads `Exported`. **The swap that destroys the outgoing
 account's last local copy never happens until the leader has read the export natively and said so**
-(L3b). `POST /api/import/abort` unwinds from `Exported`. The lock and the gate are held across both
-calls, with a 120 s idle timeout after which the follower aborts itself; a commit that arrives late
-is answered "not imported".
+(L3b). `POST /api/import/abort` unwinds from `Exported`.
+
+**The hold must stay inside the lock's own stale threshold.** `.oauth_refresh.lock` is stolen after
+60 s and its holder does not refresh the directory's mtime (`OAuthRefreshLock.cs:7-24`), so a hold
+that outlives 60 s is not exclusion: a CLI session could steal it and rotate the live pair between
+F4 and F5, and the swap would then overwrite a pair newer than the one exported. Three rules, all
+required:
+
+1. The idle window between the `Exported` answer and the commit is **20 s**, comfortably inside the
+   threshold. The leader's L3b is one native file read; it has no reason to take longer, and a
+   leader that does is one that has died.
+2. The follower **re-reads the live file immediately before F5** and requires its fingerprint to be
+   the `fa` it exported. A rotation aborts the import (delete the export and the staging file,
+   answer "not imported"); the leader unclaims and the operator retries, which is a refused switch
+   rather than a lost pair. This is the check that makes rule 1 a latency budget rather than a
+   safety argument.
+3. The follower renews the lock by re-stamping the directory's mtime every 20 s for as long as it
+   holds it, so the ordinary case never races the threshold at all.
+
+A commit arriving after a self-abort is answered "not imported".
+
+**No outgoing account is a first-class case, not an edge.** L1 and F2 both allow the WSL live
+account to be absent, and after both WSL lanes were logged out by hand that is exactly the state of
+the first real hand-off (phase 5). With no live pair, F4 exports nothing and the follower answers
+`Exported {none}`; the leader skips L3b (there is nothing to verify), commits, and skips L4's park.
+`ImportResult.Outgoing` is already nullable for this reason. Every step below reads "A" as "the
+outgoing pair, if there is one".
 
 | Step | Action | On disk afterwards (A / B) | Follower journal |
 |---|---|---|---|
 | F1 | idempotency: if `last-import.json` or the live pair already answers this request (live fingerprint is `fb` or its rotation and the owner record names B), return the stored result with `AlreadyImported` | | |
 | F2 | take the refresh lock; read live A (`fa`, or none) | | `Planned` |
 | F3 | **stage B:** copy `ClaimedPath` to `<live>/.credentials.json.incoming`; `fsync`; read back; fingerprint must be `fb` | A: live / B: mailbox + staging | `Staged` |
-| F4 | **export A:** copy `<live>/.credentials.json` to `ExportPath`; `fsync`; read back through a fresh open; fingerprint must be `fa`. **Answer `Exported {fa}` and stop**; do not proceed without a commit | A: live + mailbox / B: mailbox + staging | `Exported` |
-| F5 | **swap**, only on `POST /api/import/commit`: rename the staging file over `<live>/.credentials.json` (ext4, atomic replace); stamp mtime | A: mailbox / B: mailbox + live | `Swapped` |
+| F4 | **export A:** copy `<live>/.credentials.json` to `ExportPath`; `fsync`; read back through a fresh open; fingerprint must be `fa`. With no live pair, export nothing. **Answer `Exported {fa}` or `Exported {none}` and stop**; do not proceed without a commit | A: live + mailbox / B: mailbox + staging | `Exported` |
+| F5 | **swap**, only on `POST /api/import/commit`: re-read the live file and require `fa` (or still absent); then rename the staging file over `<live>/.credentials.json` (ext4, atomic replace); stamp mtime. A rotation found here aborts instead of swapping | A: mailbox / B: mailbox + live | `Swapped` |
 | F6 | **release:** delete `ClaimedPath` | A: mailbox / B: live | `Released` |
 | F7 | patch the state file's `oauthAccount` with B's block; write the owner record `{fb, B}` | | `Patched` |
 | F8 | write `last-import.json {A, fa, A's block}`; clear the journal; release the lock; return `ImportResult` | | cleared |
@@ -302,7 +326,8 @@ CLI may have rotated the live pair while the follower was down (the stale lock i
 |---|---|---|---|
 | `Planned` | nothing moved | clear | not imported; the leader unclaims (L2 reversed) |
 | `Staged` | staging holds `fb` | delete staging; clear | not imported; leader unclaims |
-| `Exported` | live is `fa` or `fa'`; mailbox holds an export `fa` | delete the export and the staging; clear | not imported; leader unclaims. Unwinding rather than completing keeps the existing rule that before the swap nothing changed for a session, so nothing is completed on its behalf. A commit arriving after this is answered "not imported" |
+| `Exported`, live is `fa` or `fa'` | the swap did not happen | delete the export and the staging; clear | not imported; leader unclaims. Unwinding rather than completing keeps the existing rule that before the swap nothing changed for a session, so nothing is completed on its behalf. A commit arriving after this is answered "not imported" |
+| `Exported`, **live is `fb` or its rotation** | F5 landed and the process died before the journal write; `ClaimedPath` may still hold `fb`; mailbox holds export `fa` | treat as `Swapped`: continue F6-F8 | imported; outgoing A. **The journal is a hint and the fingerprints are the evidence**: every row of this table is decided by reading the live, staging, claimed and export fingerprints, and the journal only says where to look first. Without this row a torn F5 would unwind a swap that already happened, losing A and leaving two holders of B |
 | `Swapped` | live is `fb` or `fb'`; `ClaimedPath` still holds `fb`; mailbox holds export `fa` | continue F6-F8 | imported; outgoing A |
 | `Released` | as above minus the claimed file | continue F7-F8 | imported |
 | `Patched` | owner record may be missing | F8 | imported |
@@ -312,8 +337,9 @@ Leader dies mid-coordination; its reconciliation at start, under its gate:
 | Leader journal at | Files say | Action |
 |---|---|---|
 | `Claimed`, follower online | | re-issue L3a (idempotent by F1); then L3b, L3c and L4, or unclaim per the follower's answer |
-| `ExportVerified`, follower online | export in the mailbox, follower journal at `Exported` | re-issue L3c; the export has already passed the native gate and is not re-read |
-| `ExportVerified`, follower offline or journal cleared | export may be gone | treat as not imported: unclaim. Nothing was swapped |
+| `ExportVerified`, follower online, its journal at `Exported` | export in the mailbox | re-issue L3c; the export has already passed the native gate and is not re-read |
+| `ExportVerified`, follower online, **its journal cleared** | ask `ImportStatusAsync` first, never infer from the cleared journal | `last-import.json` or the live fingerprint says the import completed, so resume at L4; only a definite "not imported" unclaims. This is the leader-crashed-after-the-commit-response case, and treating a cleared journal as "nothing happened" would unclaim a slot whose pair is already live in WSL and strand A's export |
+| `ExportVerified`, follower offline | export may be in the mailbox; its state is unknown | leave both, card shows `in transit to wsl (offline)`; decide when the follower answers. **Never a blind unclaim**, for the same reason as the `Claimed` row: the follower may have swapped |
 | `Claimed`, follower offline | claimed file in the mailbox, record on the slot | leave both; card shows `in transit to wsl (offline)`; `Cancel` is offered only once the follower answers "not imported"; never a blind unclaim, since the follower may have swapped |
 | `Imported`, park not done | export file in the mailbox | L4 by fingerprint |
 | `Parked` | | clear |
@@ -422,7 +448,14 @@ here.
 - Crash injection: a test-only `FailAfterStep` hook (through `SwitchOptions`) aborts the import after
   each `ImportStep`; a fresh executor over the same roots reconciles; assert the section 9.3 outcome
   and that every fingerprint the test's `CredentialFiles` helper wrote exists in exactly one
-  non-staging file.
+  non-staging file. **The hook fires between the disk mutation and the journal write as well as
+  after it**, so the torn F5 row is exercised and not merely written down.
+- The lock budget: a test drives a commit later than the 20 s window and asserts the follower
+  self-aborted with the live pair untouched; another rotates the live pair between the `Exported`
+  answer and the commit and asserts F5 refuses rather than swapping.
+- No outgoing account: a follower whose live dir is empty answers `Exported {none}`, the coordinator
+  skips the gate and the park, and the switch completes. This is the phase-5 starting state, so it
+  is a first-class fact and not an edge case.
 - `WslSwitch` coordinator against a fake `IPeerRotationInstance`: claim, export-gate, commit, park;
   the follower answering `AlreadyImported`; the follower timing out after `Claimed` (journal stays
   open, no unclaim); the follower answering "not imported" (unclaim: file back, record gone); an

@@ -362,6 +362,18 @@ Work items, in order.
    both across the two calls with a 120 s idle self-abort. Idempotent by F1; a commit that arrives
    after a self-abort is answered "not imported". **No token appears in any request, response, or
    log line**: identity crosses as a SHA-256 fingerprint only.
+   Three rules keep the two-call hold safe, all of them required: the idle window between the
+   `Exported` answer and the commit is **20 s**, inside `.oauth_refresh.lock`'s 60 s stale
+   threshold (`OAuthRefreshLock.cs:7-24`); the follower **re-reads the live file immediately before
+   F5** and aborts if it is no longer the pair it exported, so a stolen lock and a CLI rotation
+   cost a refused switch rather than a lost pair; and the follower re-stamps the lock directory's
+   mtime every 20 s while it holds it. A commit arriving after a self-abort is answered
+   "not imported".
+
+   **No outgoing account is a first-class case.** After both WSL lanes were logged out by hand, an
+   empty WSL live dir is exactly the state of the first real hand-off in phase 5. F4 then exports
+   nothing and answers `Exported {none}`; the leader skips the gate and the park.
+
    **Why the commit half exists (the export gate).** It lets the leader read the exported file
    **natively**, on the store's own volume, and compare its fingerprint before the follower performs
    the one step that destroys the outgoing account's last local copy. This closes the chain's only
@@ -387,7 +399,17 @@ Work items, in order.
 - `dotnet test -c Release` exit 0, failed 0, total >= baseline + 30, **on both CI legs**.
 - The crash-injection suite covers all six `ImportStep` values: a test asserts
   `Enum.GetValues<ImportStep>().Length` equals the number of injection cases, so a new step cannot be
-  added without a case.
+  added without a case. It fires **both** after the journal write and between the disk mutation and
+  the journal write, so the torn-F5 case (live already holds B while the journal still reads
+  `Exported`) is exercised; reconciliation continues F6 to F8 there rather than unwinding, asserted
+  on disk.
+- **The lock budget holds.** A commit sent later than the 20 s window finds the follower
+  self-aborted with the live pair untouched; a live pair rotated between the `Exported` answer and
+  the commit makes F5 refuse rather than swap; the follower re-stamps the lock directory's mtime
+  while it holds it, asserted by mtime movement over a hold longer than one interval.
+- **No outgoing account works.** A follower whose live dir is empty answers `Exported {none}` and
+  the import completes with nothing exported and nothing parked. This is the phase-5 starting
+  state, so it is a required fact, not an edge case.
 - After every injection case, a scan of the temp roots finds each fingerprint in exactly one
   non-staging file.
 - The negative path is asserted, not implied: a mismatched export read-back unwinds and leaves the
@@ -467,6 +489,13 @@ Work items, in order.
 - At least one acceptance iteration corrupts the exported file between the follower's `Exported`
   answer and the leader's native read: the gate aborts, the switch is refused, and both sides' live
   pairs are unchanged.
+- **The leader-crashed-after-commit case resolves forward.** A coordinator fact kills the leader
+  after the follower has answered the commit but before `Imported` is journaled, with the
+  follower's journal already cleared: the restarted leader asks `ImportStatusAsync`, sees the
+  import completed, and resumes at L4. It must not unclaim. A cleared follower journal is never
+  read as "nothing happened".
+- The first acceptance iteration runs with an **empty** follower live dir, the phase-5 starting
+  state: `Exported {none}`, no gate, no park, switch completes.
 - Through the two-`AppFactory` test: after a WSL switch the leader reports the account as held by
   `wsl`, within one `POLL_MS` (10 000 ms) interval of completion.
 - Stopping the follower flips its side to `offline` within 15 s; the leader restarting it reports
