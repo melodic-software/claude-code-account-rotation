@@ -110,7 +110,7 @@ internal static class ConfigurationFile
 
     /// <summary>
     /// <c>role</c>: <c>follower</c> puts this process on the WSL side, and
-    /// anything else — including an absent or misspelled value — leaves it the
+    /// anything else — including an absent or unrecognized value — leaves it the
     /// leader. A machine that mistypes its role gets the side that owns the
     /// store and refuses nothing it could do before, rather than a process with
     /// no roster and no page.

@@ -11,7 +11,7 @@ namespace ClaudeCodeAccountRotation.App.Tests.Switching;
 /// directory and app data) and a "Windows" side (the store and its
 /// <c>.transit/wsl</c> mailbox). They are two directories on one real volume,
 /// which is enough for every fact in this phase — the cross-volume
-/// <c>EXDEV</c> behaviour itself is phase 4's in-distro acceptance — and it
+/// <c>EXDEV</c> behavior itself is phase 4's in-distro acceptance — and it
 /// means no test here ever reaches a real store, a real live directory, or a
 /// real login.
 /// </summary>
