@@ -105,9 +105,14 @@ internal static class ImportEndpoints
             FollowerImport import,
             CancellationToken cancellationToken) =>
         {
+            // The status read first, because it is what runs reconciliation, and
+            // reconciliation is what makes the live pair and the state file agree.
+            // Reading them before it would answer the leader's L1 with the account
+            // a crash between F5 and F7 left behind, beside the fingerprint of the
+            // pair that replaced it.
+            ImportStatus status = await import.StatusAsync(cancellationToken);
             CredentialPair? live = await pairs.ReadLiveAsync(cancellationToken);
             OAuthAccountBlock? account = await stateFile.ReadAccountBlockAsync(cancellationToken);
-            ImportStatus status = await import.StatusAsync(cancellationToken);
             return Results.Ok(new FollowerDashboardView(
                 "follower",
                 SideName.Wsl.Value,
