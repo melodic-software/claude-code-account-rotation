@@ -44,6 +44,12 @@ jobs:
         run: dotnet test ClaudeCodeAccountRotation.slnx -c Release --no-build
       - name: Whitespace format
         run: dotnet format whitespace ClaudeCodeAccountRotation.slnx --verify-no-changes
+      # The WSL side runs this same executable published for linux-x64. The
+      # smoke proves the published follower serves the dashboard the leader
+      # reads (anchor issue #65, R4) against temp roots only.
+      - name: linux-x64 publish serves the follower dashboard
+        if: matrix.os == 'ubuntu-24.04'
+        run: bash eng/smoke-linux-publish.sh
 
   gates:
     name: Repository gates

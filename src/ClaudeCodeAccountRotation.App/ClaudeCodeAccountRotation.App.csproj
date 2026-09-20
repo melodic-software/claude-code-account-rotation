@@ -6,6 +6,11 @@
     <RootNamespace>ClaudeCodeAccountRotation.App</RootNamespace>
     <AssemblyName>claude-code-account-rotation</AssemblyName>
     <IsPackable>false</IsPackable>
+    <!-- Both sides of a machine: the Windows leader and the WSL follower are
+         one executable published twice. Declared here rather than passed to
+         publish, so a locked-mode restore resolves both runtime graphs and a
+         RID publish adds nothing to packages.lock.json. -->
+    <RuntimeIdentifiers>win-x64;linux-x64</RuntimeIdentifiers>
     <!-- LibraryImport's generated string marshalling for the exclusive-mkdir
          P/Invokes behind the refresh lock. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>

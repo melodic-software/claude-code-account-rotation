@@ -84,9 +84,10 @@ internal static class ImportEndpoints
                 static reason => Results.Json(new { error = reason }, statusCode: StatusCodes.Status409Conflict));
         });
 
-        routes.MapGet("/api/import-status", static async (FollowerImport import, CancellationToken cancellationToken) =>
+        routes.MapGet("/api/import-status", static async (string? email, FollowerImport import, CancellationToken cancellationToken) =>
         {
-            ImportStatus status = await import.StatusAsync(cancellationToken);
+            AccountEmail? about = string.IsNullOrWhiteSpace(email) ? null : AccountEmail.Parse(email).Match(static parsed => (AccountEmail?)parsed, static _ => null);
+            ImportStatus status = await import.StatusAsync(cancellationToken, about);
             return Results.Ok(new ImportStatusView(
                 status.Imported,
                 status.JournalStep?.ToString(),

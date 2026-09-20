@@ -36,7 +36,7 @@ public sealed class FollowerImportTests : IDisposable
     public async Task ImportAloneExportsTheOutgoingPairAndLeavesTheLivePairUntouched()
     {
         (RefreshTokenFingerprint fa, RefreshTokenFingerprint fb) = await SeedAsync();
-        FollowerImport follower = _roots.Follower();
+        using FollowerImport follower = _roots.Follower();
 
         Result<ImportAnswer, string> answer = await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
 
@@ -54,7 +54,7 @@ public sealed class FollowerImportTests : IDisposable
     public async Task ACommitAfterTheExportSwapsReleasesAndPatches()
     {
         (RefreshTokenFingerprint fa, RefreshTokenFingerprint fb) = await SeedAsync();
-        FollowerImport follower = _roots.Follower();
+        using FollowerImport follower = _roots.Follower();
         await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
 
         Result<ImportResult, string> result = await follower.CommitAsync(new AccountEmail(IncomingEmail), Token);
@@ -74,7 +74,7 @@ public sealed class FollowerImportTests : IDisposable
     public async Task EveryFingerprintLandsInExactlyOneNonStagingFileAfterACompletedImport()
     {
         (RefreshTokenFingerprint fa, RefreshTokenFingerprint fb) = await SeedAsync();
-        FollowerImport follower = _roots.Follower();
+        using FollowerImport follower = _roots.Follower();
         await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
         await follower.CommitAsync(new AccountEmail(IncomingEmail), Token);
 
@@ -86,7 +86,7 @@ public sealed class FollowerImportTests : IDisposable
     public async Task NoCodePathReachesTheSwapWithoutACommit()
     {
         (RefreshTokenFingerprint fa, RefreshTokenFingerprint fb) = await SeedAsync();
-        FollowerImport follower = _roots.Follower();
+        using FollowerImport follower = _roots.Follower();
 
         // Every request the follower serves, in every order, with no commit among
         // them: the live pair must still be A at the end of all of it.
@@ -101,7 +101,7 @@ public sealed class FollowerImportTests : IDisposable
     public async Task ACommitIsRefusedInEveryJournalStateButExported()
     {
         (_, RefreshTokenFingerprint fb) = await SeedAsync();
-        FollowerImport follower = _roots.Follower();
+        using FollowerImport follower = _roots.Follower();
 
         Result<ImportResult, string> beforeAnyImport = await follower.CommitAsync(new AccountEmail(IncomingEmail), Token);
         beforeAnyImport.IsFailure.ShouldBeTrue();
@@ -120,7 +120,7 @@ public sealed class FollowerImportTests : IDisposable
     public async Task AnAbortFromExportedDeletesTheExportAndTheStagingFileAndLeavesTheLivePair()
     {
         (RefreshTokenFingerprint fa, RefreshTokenFingerprint fb) = await SeedAsync();
-        FollowerImport follower = _roots.Follower();
+        using FollowerImport follower = _roots.Follower();
         await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
 
         Result<Unit, string> aborted = await follower.AbortAsync(new AccountEmail(IncomingEmail), Token);
@@ -144,7 +144,7 @@ public sealed class FollowerImportTests : IDisposable
         // truncated, and aborts instead of committing. The operator loses a switch,
         // not a login, which is the whole point of the gate.
         (RefreshTokenFingerprint fa, RefreshTokenFingerprint fb) = await SeedAsync();
-        FollowerImport follower = _roots.Follower();
+        using FollowerImport follower = _roots.Follower();
         await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
 
         await File.WriteAllTextAsync(_roots.ExportPath(OutgoingEmail), "{\"claudeAiOauth\":", Token);
@@ -163,7 +163,7 @@ public sealed class FollowerImportTests : IDisposable
         // No commit and no abort ever arrive: the leader died at L3b. The idle
         // self-abort unwinds the hold, and A is still live.
         (RefreshTokenFingerprint fa, RefreshTokenFingerprint fb) = await SeedAsync();
-        FollowerImport follower = _roots.Follower(idleTimeout: TimeSpan.FromSeconds(120), heartbeatInterval: TimeSpan.FromMilliseconds(30));
+        using FollowerImport follower = _roots.Follower(idleTimeout: TimeSpan.FromSeconds(120), heartbeatInterval: TimeSpan.FromMilliseconds(30));
         await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
 
         _roots.Clock.Advance(TimeSpan.FromSeconds(121));
@@ -181,7 +181,7 @@ public sealed class FollowerImportTests : IDisposable
     public async Task ACommitLaterThanTheBudgetSelfAbortsWithTheLivePairUntouched()
     {
         (RefreshTokenFingerprint fa, RefreshTokenFingerprint fb) = await SeedAsync();
-        FollowerImport follower = _roots.Follower(commitBudget: TimeSpan.FromSeconds(20));
+        using FollowerImport follower = _roots.Follower(commitBudget: TimeSpan.FromSeconds(20));
         await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
 
         _roots.Clock.Advance(TimeSpan.FromSeconds(21));
@@ -198,7 +198,7 @@ public sealed class FollowerImportTests : IDisposable
     public async Task ALivePairRotatedBetweenTheExportAndTheCommitMakesTheSwapRefuse()
     {
         (RefreshTokenFingerprint fa, RefreshTokenFingerprint fb) = await SeedAsync();
-        FollowerImport follower = _roots.Follower();
+        using FollowerImport follower = _roots.Follower();
         await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
 
         // A session stole the lock and rotated A's token while the leader was
@@ -221,7 +221,7 @@ public sealed class FollowerImportTests : IDisposable
     public async Task TheLockDirectoryMtimeIsRestampedWhileTheHoldLasts()
     {
         (_, RefreshTokenFingerprint fb) = await SeedAsync();
-        FollowerImport follower = _roots.Follower(heartbeatInterval: TimeSpan.FromMilliseconds(30));
+        using FollowerImport follower = _roots.Follower(heartbeatInterval: TimeSpan.FromMilliseconds(30));
         await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
 
         Directory.Exists(_roots.RefreshLockDirectory).ShouldBeTrue();
@@ -238,7 +238,7 @@ public sealed class FollowerImportTests : IDisposable
     public async Task TheRefreshLockIsHeldFromTheExportUntilTheCommitAndReleasedAfterIt()
     {
         (_, RefreshTokenFingerprint fb) = await SeedAsync();
-        FollowerImport follower = _roots.Follower();
+        using FollowerImport follower = _roots.Follower();
 
         await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
         Directory.Exists(_roots.RefreshLockDirectory).ShouldBeTrue();
@@ -253,7 +253,7 @@ public sealed class FollowerImportTests : IDisposable
         // The state both WSL lanes are in after they were logged out by hand, and
         // therefore the state of the first real hand-off.
         RefreshTokenFingerprint fb = await _roots.WriteClaimedAsync(IncomingEmail, IncomingToken, Token);
-        FollowerImport follower = _roots.Follower();
+        using FollowerImport follower = _roots.Follower();
 
         Result<ImportAnswer, string> answer = await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
 
@@ -280,7 +280,7 @@ public sealed class FollowerImportTests : IDisposable
             _roots.ClaimedPath(IncomingEmail),
             CredentialFiles.Shape("refresh-something-else").ToJsonString(),
             Token);
-        FollowerImport follower = _roots.Follower();
+        using FollowerImport follower = _roots.Follower();
 
         Result<ImportAnswer, string> answer = await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
 
@@ -296,7 +296,7 @@ public sealed class FollowerImportTests : IDisposable
     public async Task AnExportReadBackMismatchUnwindsAndLeavesTheLivePairUntouched()
     {
         (RefreshTokenFingerprint fa, RefreshTokenFingerprint fb) = await SeedAsync();
-        FollowerImport follower = _roots.Follower();
+        using FollowerImport follower = _roots.Follower();
         // The mailbox refuses the export's bytes: a directory in the export's place
         // is a write that cannot land, which is the shape a short or failed 9P
         // write takes from this side.
@@ -316,7 +316,7 @@ public sealed class FollowerImportTests : IDisposable
     public async Task AReIssuedRequestAfterACompletedImportIsAnsweredAlreadyImported()
     {
         (RefreshTokenFingerprint fa, RefreshTokenFingerprint fb) = await SeedAsync();
-        FollowerImport follower = _roots.Follower();
+        using FollowerImport follower = _roots.Follower();
         await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
         await follower.CommitAsync(new AccountEmail(IncomingEmail), Token);
 
@@ -336,7 +336,7 @@ public sealed class FollowerImportTests : IDisposable
     {
         // L3a is re-issued after a leader restart; F1 must not export twice.
         (RefreshTokenFingerprint fa, RefreshTokenFingerprint fb) = await SeedAsync();
-        FollowerImport follower = _roots.Follower();
+        using FollowerImport follower = _roots.Follower();
         await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
 
         Result<ImportAnswer, string> again = await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
@@ -351,13 +351,55 @@ public sealed class FollowerImportTests : IDisposable
     {
         (RefreshTokenFingerprint fa, RefreshTokenFingerprint fb) = await SeedAsync();
         RefreshTokenFingerprint fc = await _roots.WriteClaimedAsync("c@example.com", "refresh-c", Token);
-        FollowerImport follower = _roots.Follower();
+        using FollowerImport follower = _roots.Follower();
         await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
 
         Result<ImportAnswer, string> other = await follower.ImportAsync(_roots.Request("c@example.com", fc), Token);
 
         other.IsFailure.ShouldBeTrue();
         (await FollowerRoots.FingerprintOfAsync(_roots.LivePath, Token)).ShouldBe(fa);
+    }
+
+    [Fact]
+    public async Task ARequestNamingAPathOutsideTheMailboxIsRefusedBeforeAnythingIsCopied()
+    {
+        (RefreshTokenFingerprint fa, RefreshTokenFingerprint fb) = await SeedAsync();
+        using FollowerImport follower = _roots.Follower();
+        string outside = Path.Combine(_roots.Root, "elsewhere.credentials.json");
+        await File.WriteAllTextAsync(outside, CredentialFiles.Shape(IncomingToken).ToJsonString(), Token);
+
+        Result<ImportAnswer, string> claimedOutside = await follower.ImportAsync(
+            _roots.Request(IncomingEmail, fb) with { ClaimedPath = outside },
+            Token);
+        Result<ImportAnswer, string> exportOutside = await follower.ImportAsync(
+            _roots.Request(IncomingEmail, fb) with { ExportPath = Path.Combine(_roots.Root, "stolen.json") },
+            Token);
+
+        claimedOutside.IsFailure.ShouldBeTrue();
+        claimedOutside.Error.ShouldContain("mailbox");
+        exportOutside.IsFailure.ShouldBeTrue();
+        exportOutside.Error.ShouldContain("mailbox");
+        (await FollowerRoots.FingerprintOfAsync(_roots.LivePath, Token)).ShouldBe(fa);
+        File.Exists(Path.Combine(_roots.Root, "stolen.json")).ShouldBeFalse();
+        File.Exists(_roots.StagingPath).ShouldBeFalse();
+        Directory.Exists(_roots.RefreshLockDirectory).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task ALivePairTheStateFileNamesNoAccountForIsRefusedRatherThanExported()
+    {
+        RefreshTokenFingerprint fa = await _roots.WriteLiveAsync(OutgoingEmail, OutgoingToken, Token);
+        RefreshTokenFingerprint fb = await _roots.WriteClaimedAsync(IncomingEmail, IncomingToken, Token);
+        await File.WriteAllTextAsync(_roots.StateFilePath, "{\"numStartups\":4}", Token);
+        using FollowerImport follower = _roots.Follower();
+
+        Result<ImportAnswer, string> answer = await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
+
+        answer.IsFailure.ShouldBeTrue();
+        answer.Error.ShouldContain("names no account");
+        (await FollowerRoots.FingerprintOfAsync(_roots.LivePath, Token)).ShouldBe(fa);
+        File.Exists(_roots.ExportPath(OutgoingEmail)).ShouldBeFalse();
+        Directory.Exists(_roots.RefreshLockDirectory).ShouldBeFalse();
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition)

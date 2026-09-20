@@ -129,12 +129,23 @@ internal sealed class StagedImportCredentialPairStore
             bytes = buffer.ToArray();
         }
 
-        if (JsonNode.Parse(bytes) is not JsonObject raw)
+        // A short or torn file is "no credential pair", not an exception: reading
+        // one back is precisely what this class does to find out whether a copy
+        // landed, and a truncated export is the failure the export gate exists
+        // to catch rather than a fault to propagate.
+        JsonNode? node;
+        try
+        {
+            node = JsonNode.Parse(bytes);
+        }
+        catch (System.Text.Json.JsonException)
         {
             return null;
         }
 
-        return CredentialPair.FromJson(raw).Match(static pair => pair, static _ => (CredentialPair?)null);
+        return node is JsonObject raw
+            ? CredentialPair.FromJson(raw).Match(static pair => pair, static _ => (CredentialPair?)null)
+            : null;
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1849:Call async methods when in an async method", Justification = "FlushAsync does not reach the device; Flush(flushToDisk: true) is the fsync this step exists for and has no asynchronous form.")]
