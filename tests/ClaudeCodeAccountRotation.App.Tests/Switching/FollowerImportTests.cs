@@ -225,6 +225,10 @@ public sealed class FollowerImportTests : IDisposable
         await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
 
         Directory.Exists(_roots.RefreshLockDirectory).ShouldBeTrue();
+        // Creation stamped the directory from the OS clock; the heartbeat re-stamps
+        // from the test clock. Anchor the baseline to the test clock so both sides of
+        // the comparison sit on one timeline, whatever the wall clock reads.
+        Directory.SetLastWriteTimeUtc(_roots.RefreshLockDirectory, _roots.Clock.GetUtcNow().UtcDateTime);
         DateTime before = Directory.GetLastWriteTimeUtc(_roots.RefreshLockDirectory);
         _roots.Clock.Advance(TimeSpan.FromSeconds(19));
         await WaitUntilAsync(() => Directory.Exists(_roots.RefreshLockDirectory)
