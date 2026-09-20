@@ -66,17 +66,39 @@ internal sealed partial class ImportReconciler
     /// path ask this one question, so no caller can decide it differently and
     /// delete an export whose lineage is no longer live.
     /// </summary>
-    internal static bool SwapHasHappened(ImportJournalEntry entry, StagedImportCredentialPairStore pairs)
+    internal static async Task<bool> SwapHasHappenedAsync(
+        ImportJournalEntry entry,
+        StagedImportCredentialPairStore pairs,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(entry);
         ArgumentNullException.ThrowIfNull(pairs);
-        return entry.StepReached switch
+        if (entry.StepReached is ImportStep.Planned or ImportStep.Staged)
         {
-            ImportStep.Planned or ImportStep.Staged => false,
-            // The torn F5: the staging file is gone, so the rename ran.
-            ImportStep.Exported => !File.Exists(pairs.StagingPath) && File.Exists(pairs.LivePath),
-            _ => true,
-        };
+            return false;
+        }
+
+        if (entry.StepReached != ImportStep.Exported)
+        {
+            return true;
+        }
+
+        // The torn F5, and the only row this file has to infer rather than read.
+        // Two facts together, because neither alone is enough. The staging file is
+        // gone, since F5 is a rename and nothing else moves it — but an unwind
+        // deletes it too, so its absence by itself cannot tell a swap from a
+        // cleanup. And the live pair is no longer the one this entry recorded as
+        // outgoing, which a cleanup never changes and a swap always does. A
+        // rotation after the swap moves the live fingerprint again and still
+        // satisfies the second fact, which is the case the fingerprint of the
+        // incoming pair alone would miss.
+        if (File.Exists(pairs.StagingPath))
+        {
+            return false;
+        }
+
+        CredentialPair? live = await pairs.ReadLiveAsync(cancellationToken);
+        return live is not null && live.Fingerprint != entry.OutgoingFingerprint;
     }
 
     public async Task<ImportReconciliation> ReconcileAsync(CancellationToken cancellationToken)
@@ -87,7 +109,7 @@ internal sealed partial class ImportReconciler
             return new ImportReconciliation(false, null, "no import journal; nothing was in flight");
         }
 
-        if (!SwapHasHappened(entry, _pairs))
+        if (!await SwapHasHappenedAsync(entry, _pairs, cancellationToken))
         {
             return await UnwindAsync(entry, cancellationToken);
         }
