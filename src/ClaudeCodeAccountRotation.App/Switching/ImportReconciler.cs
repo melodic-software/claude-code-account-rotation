@@ -60,6 +60,25 @@ internal sealed partial class ImportReconciler
         _logger = logger;
     }
 
+    /// <summary>
+    /// Whether F5 has already run, for a journal entry and the files beside it.
+    /// The single derivation: the reconciler, the status route and every unwind
+    /// path ask this one question, so no caller can decide it differently and
+    /// delete an export whose lineage is no longer live.
+    /// </summary>
+    internal static bool SwapHasHappened(ImportJournalEntry entry, StagedImportCredentialPairStore pairs)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        ArgumentNullException.ThrowIfNull(pairs);
+        return entry.StepReached switch
+        {
+            ImportStep.Planned or ImportStep.Staged => false,
+            // The torn F5: the staging file is gone, so the rename ran.
+            ImportStep.Exported => !File.Exists(pairs.StagingPath) && File.Exists(pairs.LivePath),
+            _ => true,
+        };
+    }
+
     public async Task<ImportReconciliation> ReconcileAsync(CancellationToken cancellationToken)
     {
         ImportJournalEntry? entry = await _journal.ReadOpenAsync(cancellationToken);
@@ -68,15 +87,7 @@ internal sealed partial class ImportReconciler
             return new ImportReconciliation(false, null, "no import journal; nothing was in flight");
         }
 
-        bool swapHasHappened = entry.StepReached switch
-        {
-            ImportStep.Planned or ImportStep.Staged => false,
-            // The torn F5: the staging file is gone, so the rename ran.
-            ImportStep.Exported => !File.Exists(_pairs.StagingPath) && File.Exists(_pairs.LivePath),
-            _ => true,
-        };
-
-        if (!swapHasHappened)
+        if (!SwapHasHappened(entry, _pairs))
         {
             return await UnwindAsync(entry, cancellationToken);
         }

@@ -264,7 +264,19 @@ internal sealed partial class FollowerImport : IDisposable
         CredentialPair? live = await _pairs.ReadLiveAsync(cancellationToken);
         if (journal is not null)
         {
-            return new ImportStatus(false, journal.StepReached, live?.Fingerprint, "an import is in flight at " + journal.StepReached);
+            // A journal past the swap, read while F6 to F8 are still running or
+            // after a crash between them, is an import that HAS happened. This
+            // route is the leader's reconciliation signal, and answering "not
+            // imported" here would have it unclaim a slot whose pair is already
+            // live on this side and strand the outgoing account's export.
+            bool swapped = ImportReconciler.SwapHasHappened(journal, _pairs);
+            return new ImportStatus(
+                swapped,
+                journal.StepReached,
+                live?.Fingerprint,
+                swapped
+                    ? "the swap has run and the import is finishing from " + journal.StepReached
+                    : "an import is in flight at " + journal.StepReached + ", before the swap");
         }
 
         LastImportEntry? last = await _journal.ReadLastImportAsync(cancellationToken);
@@ -377,7 +389,6 @@ internal sealed partial class FollowerImport : IDisposable
                 // A pair this side cannot name is a pair the leader cannot park, so
                 // exporting it would strand it in the mailbox under no account's
                 // name. A refused switch is the cheaper answer.
-                hold.Dispose();
                 return Result<ImportAnswer, string>.Failure(
                     "not imported: the live pair is here but the state file names no account for it, so nothing can say what would be leaving");
             }
@@ -405,7 +416,6 @@ internal sealed partial class FollowerImport : IDisposable
             Result<Unit, string> staged = await _pairs.StageAsync(request.ClaimedPath, request.Fingerprint, cancellationToken);
             if (staged.IsFailure)
             {
-                await UnwindAsync(hold, cancellationToken);
                 return Result<ImportAnswer, string>.Failure(staged.Error);
             }
 
@@ -419,7 +429,6 @@ internal sealed partial class FollowerImport : IDisposable
                 Result<Unit, string> exported = await _pairs.ExportAsync(request.ExportPath, outgoing, cancellationToken);
                 if (exported.IsFailure)
                 {
-                    await UnwindAsync(hold, cancellationToken);
                     return Result<ImportAnswer, string>.Failure(exported.Error);
                 }
             }
@@ -436,13 +445,23 @@ internal sealed partial class FollowerImport : IDisposable
         }
         catch (IOException exception)
         {
-            await UnwindAsync(hold, cancellationToken);
             return Result<ImportAnswer, string>.Failure("the import could not be staged: " + exception.Message);
         }
         catch (UnauthorizedAccessException exception)
         {
-            await UnwindAsync(hold, cancellationToken);
             return Result<ImportAnswer, string>.Failure("the import could not be staged: " + exception.Message);
+        }
+        finally
+        {
+            // Every exit that did not hand the hold over, including the client
+            // hanging up mid-export: a cancellation is not an IOException and
+            // would otherwise leave this process holding the mutation gate and
+            // the refresh lock until it restarts, refusing every later import.
+            // The cleanup runs on no token, because the token is what failed.
+            if (!hold.Released && !ReferenceEquals(_hold, hold))
+            {
+                await UnwindAsync(hold, CancellationToken.None);
+            }
         }
     }
 
@@ -468,11 +487,17 @@ internal sealed partial class FollowerImport : IDisposable
             return Result<ImportResult, string>.Failure(swapped.Error);
         }
 
+        // Past this line the outgoing pair's last local copy is gone and F6 to F8
+        // are bookkeeping that must happen. A caller that hung up does not get to
+        // cancel them: an abandoned journal reading Exported over a live file that
+        // already holds the incoming pair is the torn case, and reaching it on
+        // purpose, every time a browser navigates away, would be a defect rather
+        // than a crash. The remaining steps run on no token at all.
         CrashInjection.KillIfConfigured(_options.FailAfterStep, ImportStep.Swapped, beforeJournal: true);
-        await _journal.WriteAsync(entry with { StepReached = ImportStep.Swapped }, cancellationToken);
+        await _journal.WriteAsync(entry with { StepReached = ImportStep.Swapped }, CancellationToken.None);
         CrashInjection.KillIfConfigured(_options.FailAfterStep, ImportStep.Swapped, beforeJournal: false);
 
-        ImportResult result = await FinishAsync(entry, _journal, _stateFile, _pairs, _liveOwnerPath, _options.FailAfterStep, _timeProvider, ImportStep.Swapped, cancellationToken);
+        ImportResult result = await FinishAsync(entry, _journal, _stateFile, _pairs, _liveOwnerPath, _options.FailAfterStep, _timeProvider, ImportStep.Swapped, CancellationToken.None);
         Release(hold);
         LogImported(entry.Incoming.Value, entry.Outgoing?.Value ?? "none");
         return Result<ImportResult, string>.Success(result);
@@ -568,6 +593,23 @@ internal sealed partial class FollowerImport : IDisposable
     /// </summary>
     private async Task UnwindAsync(Hold hold, CancellationToken cancellationToken)
     {
+        // The one thing an unwind must never do. Once F5 has run, the outgoing
+        // pair exists only as the export, so deleting it loses the lineage
+        // rather than stranding it. Every caller of this method reaches it
+        // believing the swap has not happened — a refused commit, an abort, the
+        // idle self-abort, a failure part way through F3 or F4 — and the belief
+        // is checked here, against the files, instead of being trusted. A swap
+        // that did happen is finished rather than reversed, which is the crash
+        // table's own answer to the same evidence.
+        ImportJournalEntry? entry = await _journal.ReadOpenAsync(CancellationToken.None);
+        if (entry is not null && ImportReconciler.SwapHasHappened(entry, _pairs))
+        {
+            await FinishAsync(entry, _journal, _stateFile, _pairs, _liveOwnerPath, failAfterStep: null, _timeProvider, ImportStep.Swapped, CancellationToken.None);
+            Release(hold);
+            LogFinishedInsteadOfUnwound(hold.Request.Email.Value);
+            return;
+        }
+
         _pairs.DeleteStaging();
         StagedImportCredentialPairStore.DeleteIfPresent(hold.Request.ExportPath);
         await _journal.ClearAsync(cancellationToken);
@@ -578,6 +620,7 @@ internal sealed partial class FollowerImport : IDisposable
     private void Release(Hold hold)
     {
         _hold = null;
+        hold.Released = true;
         hold.Dispose();
     }
 
@@ -651,6 +694,9 @@ internal sealed partial class FollowerImport : IDisposable
     [LoggerMessage(Level = LogLevel.Information, Message = "the import of {Incoming} was unwound; the live pair was not touched")]
     private partial void LogUnwound(string incoming);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the import of {Incoming} was asked to unwind after the swap had already run; it was finished instead, because the outgoing pair exists only as the export")]
+    private partial void LogFinishedInsteadOfUnwound(string incoming);
+
     /// <summary>
     /// The state that spans the two calls: what was asked, what was exported,
     /// and the two things that must be given back however the import ends.
@@ -664,6 +710,9 @@ internal sealed partial class FollowerImport : IDisposable
         public DateTimeOffset StartedAt { get; } = startedAt;
 
         public DateTimeOffset ExportedAt { get; set; } = startedAt;
+
+        /// <summary>Whether the gate permit and the refresh lock have already gone back.</summary>
+        public bool Released { get; set; }
 
         public AccountEmail? Outgoing { get; set; }
 
