@@ -8,6 +8,7 @@ using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Ports;
 using ClaudeCodeAccountRotation.Core.Quota;
 using ClaudeCodeAccountRotation.Core.Routing;
+using ClaudeCodeAccountRotation.Core.Switching;
 using Microsoft.Extensions.Logging;
 
 namespace ClaudeCodeAccountRotation.App.Dashboard;
@@ -34,6 +35,7 @@ internal sealed partial class DashboardAssembler(
     DashboardState state,
     QuotaState quota,
     RecoveryFiles recovery,
+    SharedStoreSlots slots,
     TimeProvider timeProvider,
     ILogger<DashboardAssembler> logger)
 {
@@ -59,12 +61,29 @@ internal sealed partial class DashboardAssembler(
         AccountEmail? liveEmail = liveAccount?.Email;
         DateTimeOffset capturedAt = timeProvider.GetUtcNow();
 
+        // The one reading of what this side holds, shared by every slot verdict
+        // below: the account the state file names settles the design's "or its
+        // rotation" once the CLI has rotated the live token past the record.
+        WindowsHold hold = new(liveEmail, livePair?.Fingerprint);
+
         List<(AccountCardView Card, AccountStanding Standing)> built = [];
         if (liveEmail is AccountEmail live)
         {
             ParkedProfile? ownFolder = parked.FirstOrDefault(profile => profile.Email == live);
+            string liveFolder = ownFolder?.FolderPath ?? profiles.FolderPathFor(live);
             (UsageSnapshot? observed, string? note) = Attribute(snapshot, live);
-            built.Add(Card(live, isLive: true, livePair is not null, ownFolder?.FolderPath, observed, note, roster, capturedAt, livePair?.LoginExpiresAt, liveAccount?.ProfileFetchedAt));
+            built.Add(Card(
+                live,
+                isLive: true,
+                livePair is not null,
+                ownFolder?.FolderPath,
+                observed,
+                note,
+                roster,
+                capturedAt,
+                livePair?.LoginExpiresAt,
+                liveAccount?.ProfileFetchedAt,
+                await SlotWordAsync(live, liveFolder, ownFolder?.HasCredentials ?? false, hold, cancellationToken)));
         }
 
         // A read per parked folder rather than a projection, because the expiry
@@ -81,16 +100,23 @@ internal sealed partial class DashboardAssembler(
                 roster,
                 capturedAt,
                 await ReadLoginExpiryAsync(profile, cancellationToken),
-                profile.Account?.ProfileFetchedAt));
+                profile.Account?.ProfileFetchedAt,
+                await SlotWordAsync(profile.Email, profile.FolderPath, profile.HasCredentials, hold, cancellationToken)));
         }
 
         // A roster entry the operator added but has not logged in yet owns no
         // identity file, so the folder listing above cannot see it. Its card is
         // what makes Add visible on the page at all.
-        List<(AccountCardView Card, AccountStanding Standing)> rosterOnly = [.. roster.Entries
-            .Where(entry => !built.Exists(pair => string.Equals(pair.Card.Email, entry.Email.Value, StringComparison.Ordinal)))
-            .Select(entry => Card(entry.Email, isLive: false, hasCredentials: false, profiles.FolderPathFor(entry.Email), observed: null, note: null, roster, capturedAt, loginExpiresAt: null, loggedInAt: null))];
-        built.AddRange(rosterOnly);
+        foreach (RosterEntry entry in roster.Entries
+            .Where(entry => !built.Exists(pair => string.Equals(pair.Card.Email, entry.Email.Value, StringComparison.Ordinal))))
+        {
+            string folder = profiles.FolderPathFor(entry.Email);
+            built.Add(Card(
+                entry.Email, isLive: false, hasCredentials: false, folder, observed: null, note: null, roster, capturedAt,
+                loginExpiresAt: null,
+                loggedInAt: null,
+                slot: await SlotWordAsync(entry.Email, folder, slotHoldsPair: false, hold, cancellationToken)));
+        }
 
         // One arrangement for the whole payload, and the cards go out in the
         // order it hands back: the group and the instant on each card are read
@@ -155,7 +181,8 @@ internal sealed partial class DashboardAssembler(
         Roster roster,
         DateTimeOffset capturedAt,
         DateTimeOffset? loginExpiresAt,
-        DateTimeOffset? loggedInAt)
+        DateTimeOffset? loggedInAt,
+        string? slot)
     {
         List<UsageSnapshot> sources = [];
         if (observed is not null)
@@ -181,8 +208,40 @@ internal sealed partial class DashboardAssembler(
                 Refresh(email, folder),
                 View(entry),
                 LoginExpiresAt: loginExpiresAt,
-                LoggedInAt: loggedInAt),
+                LoggedInAt: loggedInAt,
+                Slot: slot),
             new AccountStanding(email, isLive, entry?.Paused ?? false, hasCredentials, merged?.Merged, loginExpiresAt));
+    }
+
+    /// <summary>
+    /// One account's slot as a plain word, and the design's reconciliation on
+    /// the way past: a record the files contradict is dropped here, on the read
+    /// that noticed it, because the page is the only thing that looks at every
+    /// slot on a schedule. The drop takes the mutation gate with a zero wait, so
+    /// a poll that lands inside a switch leaves that switch's record alone and
+    /// the next poll deals with it. Null when the store is not shared, and the
+    /// card then carries no word at all.
+    /// </summary>
+    private async Task<string?> SlotWordAsync(AccountEmail email, string folder, bool slotHoldsPair, WindowsHold hold, CancellationToken cancellationToken)
+    {
+        if (await slots.ReadAsync(email, folder, slotHoldsPair, hold, cancellationToken) is not SlotSnapshot slot)
+        {
+            return null;
+        }
+
+        if (slot.StaleRecord)
+        {
+            await slots.DropStaleRecordAsync(email, folder, cancellationToken);
+        }
+
+        return slot.State switch
+        {
+            SlotState.Parked => "parked",
+            SlotState.HeldHere => "held-here",
+            SlotState.HeldElsewhere => "held-elsewhere",
+            SlotState.InTransit => "in-transit",
+            _ => "never-logged-in",
+        };
     }
 
     /// <summary>

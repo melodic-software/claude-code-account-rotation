@@ -566,6 +566,9 @@
       if (account.loginExpiresAt) { line.title = new Date(account.loginExpiresAt).toLocaleString(); }
       section.appendChild(line);
     }
+    // The shared store's one plain word, present only while store.shared is on.
+    // Deliberately unstyled and unrenamed: the chip vocabulary is a later phase's.
+    if (account.slot) { section.appendChild(element("p", "muted", "slot: " + account.slot)); }
     return section;
   }
 

@@ -4,6 +4,12 @@ The Brief's criteria that need the real CLI, real sessions, and a real browser. 
 the desktop with the user present; record each pass in the log at the bottom. Nothing here runs in
 CI.
 
+`check-single-holder.sh` takes either form. `<profiles-root> <live-dir> [app-data-dir]` is the
+single-side check every step below uses. `--root <dir>`, repeatable, sweeps whole trees instead and
+is the form a machine whose two sides share one store needs: it counts a mailbox claim under
+`.transit/` and a `*.incoming` staging name as holders like any other file, so a hand-off in flight
+is checked rather than passed over.
+
 ## The state-file patch probe (plan item 1.5a, run 2026-09-06)
 
 Run once, before the first real switch, with the patch disabled: three sessions open, one switch to a

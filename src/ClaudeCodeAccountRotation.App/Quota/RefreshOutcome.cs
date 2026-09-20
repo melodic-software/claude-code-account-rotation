@@ -34,6 +34,13 @@ internal enum RefreshOutcomeKind
     NeedsLogin,
 
     /// <summary>
+    /// The other side of this machine holds this account's pair, or a hand-off
+    /// for it is in flight. There is no pair here to read with and nothing to
+    /// ask the endpoint, so the turn costs no request at all.
+    /// </summary>
+    HeldElsewhere,
+
+    /// <summary>
     /// The token endpoint rotated the pair and the write-back could not land it,
     /// so the rotated pair is in the recovery directory and the file in the folder
     /// is dead. A restart or a per-card refresh clears it.
@@ -73,6 +80,7 @@ internal static class RefreshMessages
     public const string LiveIdentityUnverified = "live identity unverified";
     public const string SessionWillRefresh = "session will refresh";
     public const string NeedsLogin = "no credentials on this machine; log in again";
+    public const string HeldElsewhere = "in use by the other side of this machine";
     public const string Read = "read just now";
     public const string TokenRefreshFailed = "the token endpoint did not answer with new credentials";
     public const string Stranded = "credentials stranded in recovery";
