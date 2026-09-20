@@ -450,7 +450,8 @@ internal sealed partial class WslSwitch : IDisposable
             remote.LiveFingerprint,
             outgoingFolder,
             WslSwitchStep.Claimed,
-            _timeProvider.GetUtcNow()));
+            _timeProvider.GetUtcNow(),
+            remote.LiveAccountBlock));
     }
 
     /// <summary>
@@ -531,6 +532,7 @@ internal sealed partial class WslSwitch : IDisposable
                 return await AbortAndUnclaimAsync(peer, entry, SwitchRefusal.ExportNotVerified, CancellationToken.None);
             }
 
+            CrashInjection.CorruptIfConfigured(_options.CorruptExportBeforeGate, _pairs.ExportPathFor(outgoingFolder, peer.Side));
             Result<RefreshTokenFingerprint, string> native = await _pairs.ReadExportedFingerprintAsync(outgoingFolder, peer.Side, CancellationToken.None);
             if (native.IsFailure || native.Value != exported)
             {

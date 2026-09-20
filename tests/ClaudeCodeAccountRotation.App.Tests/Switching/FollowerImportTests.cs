@@ -554,9 +554,9 @@ public sealed class FollowerImportTests : IDisposable
         ImportStatus snapshot = await during!;
 
         held.LiveFingerprint.ShouldBe(fa);
-        held.LiveAccount?.Value.ShouldBe(OutgoingEmail);
+        held.LiveAccount?.Email?.Value.ShouldBe(OutgoingEmail);
         snapshot.LiveFingerprint.ShouldBe(fb);
-        snapshot.LiveAccount?.Value.ShouldBe(IncomingEmail);
+        snapshot.LiveAccount?.Email?.Value.ShouldBe(IncomingEmail);
     }
 
     [Fact]

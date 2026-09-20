@@ -18,14 +18,15 @@ namespace ClaudeCodeAccountRotation.App.Switching;
 /// stale.
 /// </para>
 /// <para>
-/// <paramref name="OutgoingAccount"/> is written at <c>Imported</c> and not
-/// before, because the leader does not know it before: the other side's
-/// dashboard names the account it holds but not the block under it, and the
-/// block arrives with the commit's answer. It is journaled there for the same
-/// reason the follower journals both blocks — a crash between the commit and
-/// the park leaves nothing else that could write the outgoing account's
-/// <c>profile.json</c>, and an account that has only ever lived on the other
-/// side may have no folder here at all.
+/// <paramref name="OutgoingAccount"/> is written at the <b>claim</b>, from the
+/// other side's dashboard, and refreshed from the commit's answer. It has to
+/// be there from the first write for the same reason the follower journals
+/// both blocks: a leader that dies between the commit and its own journal
+/// write can never learn it again, because by then the other side's state file
+/// names the incoming account. Without it the park would put the outgoing pair
+/// into a folder with no identity — a slot <c>ProfileFolderStore</c> skips, so
+/// no card and a later switch refused — which is the whole failure for an
+/// account that has only ever lived on the other side.
 /// </para>
 /// </summary>
 internal sealed record WslSwitchJournalEntry(

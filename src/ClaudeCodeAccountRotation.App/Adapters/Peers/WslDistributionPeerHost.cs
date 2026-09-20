@@ -97,13 +97,20 @@ internal sealed partial class WslDistributionPeerHost : IPeerProcessHost, IDispo
     public static IReadOnlyList<string> Arguments(PeerLaunch launch)
     {
         ArgumentNullException.ThrowIfNull(launch);
-        return
+        List<string> arguments =
         [
             "-d", launch.Distribution,
             "-u", launch.User,
             "--exec", launch.ExecutablePath,
             "--port", launch.Port.ToString(CultureInfo.InvariantCulture),
         ];
+        if (!string.IsNullOrWhiteSpace(launch.ConfigPath))
+        {
+            arguments.Add("--config");
+            arguments.Add(launch.ConfigPath);
+        }
+
+        return arguments;
     }
 
     /// <summary>

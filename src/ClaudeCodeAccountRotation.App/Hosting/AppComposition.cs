@@ -88,7 +88,8 @@ internal static class AppComposition
             configuration.RefreshLockWaitBound,
             MutationGateTimeout: TimeSpan.Zero,
             configuration.Mailbox,
-            Environment.GetEnvironmentVariable(CrashInjection.EnvironmentVariableName)));
+            Environment.GetEnvironmentVariable(CrashInjection.EnvironmentVariableName),
+            Environment.GetEnvironmentVariable(CrashInjection.CorruptExportEnvironmentVariableName) is not null));
         if (configuration.Role == RotationRole.Follower)
         {
             ComposeFollower(services, configuration);

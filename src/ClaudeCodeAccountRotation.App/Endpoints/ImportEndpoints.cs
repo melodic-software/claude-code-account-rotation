@@ -111,10 +111,11 @@ internal static class ImportEndpoints
             return Results.Ok(new FollowerDashboardView(
                 "follower",
                 SideName.Wsl.Value,
-                status.LiveAccount?.Value,
+                status.LiveAccount?.Email?.Value,
                 status.LiveFingerprint?.Sha256Hex,
                 status.JournalStep?.ToString(),
-                Hosting.AppComposition.Version));
+                Hosting.AppComposition.Version,
+                status.LiveAccount?.Raw));
         });
     }
 
@@ -167,5 +168,5 @@ internal static class ImportEndpoints
 
     internal sealed record ImportStatusView(bool Imported, string? JournalStep, string? LiveFingerprint, string Detail);
 
-    internal sealed record FollowerDashboardView(string Role, string Side, string? LiveAccount, string? LiveFingerprint, string? ImportJournalStep, string? Version);
+    internal sealed record FollowerDashboardView(string Role, string Side, string? LiveAccount, string? LiveFingerprint, string? ImportJournalStep, string? Version, JsonObject? LiveAccountBlock);
 }

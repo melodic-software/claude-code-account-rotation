@@ -307,11 +307,8 @@ public sealed class WslSwitchTests
         // pair is the export, and that side's own journal has been cleared.
         StagedImportCredentialPairStore.DeleteIfPresent(harness.ClaimedPath(Incoming));
         await harness.WriteExportAsync(Outgoing, "refresh-a", Token);
-        // The outgoing slot's identity has to be on disk already: an
-        // ExportVerified journal carries no account block, because the block
-        // arrives with the commit's answer and that answer is what was lost.
         await harness.IdentifiedSlotAsync(Outgoing, Token);
-        await JournalAtAsync(harness, WslSwitchStep.ExportVerified, incoming);
+        await JournalAtAsync(harness, WslSwitchStep.ExportVerified, incoming, withOutgoingAccount: true);
         harness.Side.Status = new ImportStatus(true, null, incoming, null, "imported: the live pair here is the one that was claimed");
         using WslSwitch coordinator = harness.Coordinator();
 
@@ -329,6 +326,53 @@ public sealed class WslSwitchTests
         File.Exists(harness.PairPath(Incoming)).ShouldBeFalse();
         harness.MailboxFiles().ShouldBeEmpty();
         File.Exists(harness.JournalPath).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task AnAccountThatHasOnlyEverLivedOnTheOtherSideGetsItsIdentityWhenItIsParkedBack()
+    {
+        // The hole this closes: the leader learns the outgoing account's block
+        // from the other side's dashboard at the claim and journals it there,
+        // because after the swap that side's state file names the INCOMING
+        // account and a leader that died between the commit and its own journal
+        // write could never learn it again. Without it the park writes a pair
+        // into a folder with no profile.json, which ProfileFolderStore skips:
+        // no card for the account, and the next switch to it refused.
+        using WslSwitchHarness harness = new();
+        await harness.WriteLeaderLiveAsync("w@example.com", "refresh-w", Token);
+        RefreshTokenFingerprint incoming = CredentialFiles.Pair("refresh-b").Fingerprint;
+        await harness.ClaimBySideAsync(Incoming, "refresh-b", Token);
+        StagedImportCredentialPairStore.DeleteIfPresent(harness.ClaimedPath(Incoming));
+        await harness.WriteExportAsync(Outgoing, "refresh-a", Token);
+        // No slot at all for the outgoing account: it has never been on this side.
+        await JournalAtAsync(harness, WslSwitchStep.ExportVerified, incoming, withOutgoingAccount: true);
+        harness.Side.Status = new ImportStatus(true, null, incoming, null, "imported");
+        using WslSwitch coordinator = harness.Coordinator();
+
+        await coordinator.ReconcileAsync(Token);
+
+        (await FingerprintAtAsync(harness.PairPath(Outgoing))).ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
+        File.Exists(Path.Combine(harness.FolderFor(Outgoing), ProfileFolderStore.ProfileFileName)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task TheClaimJournalsTheOutgoingAccountsBlockSoAParkNeverNeedsToAskForItAgain()
+    {
+        // The claim is the one moment the block is readable: it comes off the
+        // other side's dashboard, before the swap rewrites that side's state
+        // file. The journal at Claimed is therefore where it has to land.
+        using WslSwitchHarness harness = new();
+        await SetUpAsync(harness);
+        harness.Side.OnImport = static _ => Task.FromResult(Result<ImportAnswer, string>.Failure("the side went away after the claim"));
+        using WslSwitch coordinator = harness.Coordinator();
+
+        await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), Token);
+
+        WslSwitchJournalEntry? open = await harness.Journal.ReadOpenAsync(Token);
+        open.ShouldNotBeNull();
+        open.StepReached.ShouldBe(WslSwitchStep.Claimed);
+        open.OutgoingAccount.ShouldNotBeNull();
+        open.OutgoingAccount["emailAddress"]!.GetValue<string>().ShouldBe(Outgoing);
     }
 
     [Fact]

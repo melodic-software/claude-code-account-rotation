@@ -83,6 +83,7 @@ internal static class ConfigurationFile
                     ["user"] = peer.Launch.User,
                     ["executablePath"] = peer.Launch.ExecutablePath,
                     ["port"] = peer.Launch.Port,
+                    ["configPath"] = peer.Launch.ConfigPath,
                 },
             });
         }
@@ -164,7 +165,7 @@ internal static class ConfigurationFile
         && Text(launch, "user") is string user
         && Text(launch, "executablePath") is string executablePath
         && Number(launch, "port") is double port
-            ? new PeerLaunch(distribution, user, executablePath, (int)port)
+            ? new PeerLaunch(distribution, user, executablePath, (int)port, Text(launch, "configPath"))
             : null;
 
     /// <summary>

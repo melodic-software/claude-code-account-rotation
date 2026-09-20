@@ -51,7 +51,8 @@ internal sealed class HttpPeerRotationInstance : IPeerRotationInstance
                 Email(view.LiveAccount),
                 Fingerprint(view.LiveFingerprint),
                 Step(view.ImportJournalStep),
-                view.Version),
+                view.Version,
+                view.LiveAccountBlock),
             cancellationToken);
 
     public Task<Result<ImportAnswer, string>> ImportAsync(ImportRequest request, CancellationToken cancellationToken)

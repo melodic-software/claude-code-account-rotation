@@ -252,7 +252,7 @@ internal sealed partial class FollowerImport : IDisposable
         {
             ImportJournalEntry? journal = await _journal.ReadOpenAsync(cancellationToken);
             CredentialPair? live = await _pairs.ReadLiveAsync(cancellationToken);
-            AccountEmail? liveAccount = (await _stateFile.ReadAccountBlockAsync(cancellationToken))?.Email;
+            OAuthAccountBlock? liveAccount = await _stateFile.ReadAccountBlockAsync(cancellationToken);
             return await StatusOfAsync(journal, live, liveAccount, about, cancellationToken);
         }
         finally
@@ -264,7 +264,7 @@ internal sealed partial class FollowerImport : IDisposable
     private async Task<ImportStatus> StatusOfAsync(
         ImportJournalEntry? journal,
         CredentialPair? live,
-        AccountEmail? liveAccount,
+        OAuthAccountBlock? liveAccount,
         AccountEmail? about,
         CancellationToken cancellationToken)
     {

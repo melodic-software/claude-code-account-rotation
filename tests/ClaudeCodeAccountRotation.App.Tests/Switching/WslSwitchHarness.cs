@@ -214,7 +214,8 @@ internal sealed class FakePeerRotationInstance(string mailbox) : IPeerRotationIn
                 OutgoingEmail is null ? null : WslSwitchHarness.Email(OutgoingEmail),
                 OutgoingFingerprint,
                 null,
-                Version)));
+                Version,
+                OutgoingEmail is null ? null : WslSwitchHarness.AccountJson(OutgoingEmail))));
     }
 
     public async Task<Result<ImportAnswer, string>> ImportAsync(ImportRequest request, CancellationToken cancellationToken)

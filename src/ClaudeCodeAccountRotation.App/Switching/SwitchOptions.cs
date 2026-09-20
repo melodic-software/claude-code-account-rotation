@@ -11,7 +11,8 @@ internal sealed record SwitchOptions(
     TimeSpan RefreshLockWaitBound,
     TimeSpan MutationGateTimeout,
     string? Mailbox = null,
-    string? FailAfterStep = null);
+    string? FailAfterStep = null,
+    bool CorruptExportBeforeGate = false);
 
 /// <summary>
 /// The crash-injection hook, bound from <c>CCAR_FAIL_AFTER_STEP</c> and never
@@ -34,6 +35,29 @@ internal sealed record SwitchOptions(
 internal static class CrashInjection
 {
     public const string EnvironmentVariableName = "CCAR_FAIL_AFTER_STEP";
+
+    /// <summary>
+    /// The export-gate injection, bound from <c>CCAR_CORRUPT_EXPORT_BEFORE_GATE</c>
+    /// and, like the step hook, never from the configuration file.
+    /// <para>
+    /// It overwrites the exported file between the follower's <c>Exported</c>
+    /// answer and the leader's native read, which is the one window the gate
+    /// exists to cover and the one window no external script can hit
+    /// deterministically: the two events are a single round trip apart. The
+    /// acceptance needs a corruption that lands there every time, not
+    /// sometimes, so the hook lives where the window is.
+    /// </para>
+    /// </summary>
+    public const string CorruptExportEnvironmentVariableName = "CCAR_CORRUPT_EXPORT_BEFORE_GATE";
+
+    /// <summary>Truncates the export so the leader's native read cannot make a pair of it.</summary>
+    public static void CorruptIfConfigured(bool configured, string exportPath)
+    {
+        if (configured && File.Exists(exportPath))
+        {
+            File.WriteAllText(exportPath, "{\"claudeAiOauth\":{\"refre");
+        }
+    }
 
     /// <summary>Kills this process when <paramref name="configured"/> names this follower step and timing.</summary>
     public static void KillIfConfigured(string? configured, ImportStep step, bool beforeJournal) =>

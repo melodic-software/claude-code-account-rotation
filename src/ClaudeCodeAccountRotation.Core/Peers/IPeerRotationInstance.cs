@@ -48,7 +48,7 @@ public sealed record ImportStatus(
     bool Imported,
     ImportStep? JournalStep,
     RefreshTokenFingerprint? LiveFingerprint,
-    AccountEmail? LiveAccount,
+    OAuthAccountBlock? LiveAccount,
     string Detail);
 
 /// <summary>
@@ -58,12 +58,22 @@ public sealed record ImportStatus(
 /// built from different sources is refused the import before anything moves,
 /// rather than after a rename it cannot finish.
 /// </summary>
+/// <remarks>
+/// <see cref="LiveAccountBlock"/> is that side's <c>oauthAccount</c> block, the
+/// same identity its slot's <c>profile.json</c> would carry. It rides along
+/// because the leader has to journal it at the claim: after the swap the other
+/// side's state file names the <i>incoming</i> account, so a leader that died
+/// between the commit and its own journal write could never learn it again,
+/// and would park the outgoing pair into a folder with no identity — a slot
+/// the roster skips and a later switch refuses. No token is in it.
+/// </remarks>
 public sealed record PeerDashboard(
     SideName Side,
     AccountEmail? LiveAccount,
     RefreshTokenFingerprint? LiveFingerprint,
     ImportStep? ImportJournalStep,
-    string? Version);
+    string? Version,
+    JsonObject? LiveAccountBlock = null);
 
 /// <summary>
 /// The other side of this machine, as the leader's coordinator talks to it:
