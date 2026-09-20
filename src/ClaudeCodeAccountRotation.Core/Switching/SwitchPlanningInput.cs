@@ -18,11 +18,11 @@ namespace ClaudeCodeAccountRotation.Core.Switching;
 /// refreshes compile unchanged.
 /// </para>
 /// <para>
-/// <paramref name="TargetSlot"/> is the target account's slot as
-/// <see cref="SlotStateRule.Resolve"/> reads it, for the shared store the two
-/// sides of a machine share. It defaults to <see cref="SlotState.Parked"/>,
-/// which is what every slot is on a machine with one side, so the sites that
-/// know nothing about sides compile unchanged.
+/// <paramref name="TargetSlot"/> is the target account's slot in the store the
+/// two sides of a machine share, as <see cref="SlotStateRule.Resolve"/> reads
+/// it. It trails the record and defaults to <see cref="SlotState.Parked"/>, the
+/// one value neither of the side guards below refuses, so the construction
+/// sites that know nothing about sides compile and behave unchanged.
 /// </para>
 /// </summary>
 public sealed record SwitchPlanningInput(
