@@ -376,6 +376,85 @@ public sealed class WslSwitchTests
     }
 
     [Fact]
+    public async Task AClaimWithNoJournalAtAllIsPutBackOnlyOnceTheSideSaysItNeverImportedIt()
+    {
+        // Design 9.3's last leader row. The claim's rename lands before the
+        // journal write, so a leader killed between the two leaves a pair in a
+        // mailbox with nothing at all pointing at it; the file's own name is
+        // the slot it came from, and the side is still asked before it goes
+        // back, because "the journal write precedes L3a" is an argument and a
+        // credential is not put back on an argument.
+        using WslSwitchHarness harness = new();
+        await harness.WriteLeaderLiveAsync("w@example.com", "refresh-w", Token);
+        await harness.ClaimBySideAsync(Incoming, "refresh-b", Token);
+        using WslSwitch coordinator = harness.Coordinator();
+
+        WslReconciliation reconciled = await coordinator.ReconcileAsync(Token);
+
+        reconciled.Outcome.ShouldContain("no journal was put back");
+        harness.Side.Calls.ShouldContain("Status");
+        (await FingerprintAtAsync(harness.PairPath(Incoming))).ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
+        (await HolderRecordFile.ReadAsync(harness.FolderFor(Incoming), Token)).ShouldBeNull();
+        harness.MailboxFiles().ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task AClaimWithNoJournalIsLeftAloneWhenThatSideSaysItDidImportIt()
+    {
+        using WslSwitchHarness harness = new();
+        await harness.WriteLeaderLiveAsync("w@example.com", "refresh-w", Token);
+        await harness.ClaimBySideAsync(Incoming, "refresh-b", Token);
+        harness.Side.Status = new ImportStatus(true, null, CredentialFiles.Pair("refresh-b").Fingerprint, null, "imported");
+        using WslSwitch coordinator = harness.Coordinator();
+
+        await coordinator.ReconcileAsync(Token);
+
+        // Nothing is taken back from a side that holds the pair live: that
+        // would be the second holder the whole design exists to refuse.
+        harness.MailboxFiles().Count.ShouldBe(1);
+        File.Exists(harness.PairPath(Incoming)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task AnExportWithNoJournalIsParkedBackIntoTheSlotItsNameGives()
+    {
+        // The other half of the same row: the side has already swapped, so this
+        // pair is here and nowhere else, and leaving it in the mailbox strands
+        // the lineage for good.
+        using WslSwitchHarness harness = new();
+        await harness.WriteLeaderLiveAsync("w@example.com", "refresh-w", Token);
+        await harness.IdentifiedSlotAsync(Outgoing, Token);
+        await harness.WriteExportAsync(Outgoing, "refresh-a", Token);
+        using WslSwitch coordinator = harness.Coordinator();
+
+        WslReconciliation reconciled = await coordinator.ReconcileAsync(Token);
+
+        reconciled.Outcome.ShouldContain("was parked back into its slot");
+        (await FingerprintAtAsync(harness.PairPath(Outgoing))).ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
+        harness.MailboxFiles().ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task AnExportWithNoJournalIsLeftWhereItIsWhenTheSlotAlreadyHoldsAPair()
+    {
+        // The rename's refusal to overwrite is the check that matters here:
+        // with no journal there is no fingerprint to have verified the export
+        // against, so a slot that is already full is a disagreement to report
+        // rather than one to resolve by picking a winner.
+        using WslSwitchHarness harness = new();
+        await harness.WriteLeaderLiveAsync("w@example.com", "refresh-w", Token);
+        await harness.ParkedSlotAsync(Outgoing, "refresh-a2", Token);
+        await harness.WriteExportAsync(Outgoing, "refresh-a", Token);
+        using WslSwitch coordinator = harness.Coordinator();
+
+        WslReconciliation reconciled = await coordinator.ReconcileAsync(Token);
+
+        reconciled.Outcome.ShouldContain("could not be parked");
+        (await FingerprintAtAsync(harness.PairPath(Outgoing))).ShouldBe(CredentialFiles.Pair("refresh-a2").Fingerprint);
+        harness.MailboxFiles().Count.ShouldBe(1);
+    }
+
+    [Fact]
     public async Task ARestartAtImportedParksTheExportWithoutAskingTheSideAnything()
     {
         using WslSwitchHarness harness = new();

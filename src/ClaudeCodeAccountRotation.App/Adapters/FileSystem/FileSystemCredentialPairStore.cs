@@ -172,7 +172,20 @@ internal sealed class FileSystemCredentialPairStore : ICredentialPairStore
         }
 
         Directory.CreateDirectory(folder);
-        Rename(ExportPathFor(folderPath, side), Path.Combine(folder, FileName));
+        try
+        {
+            Rename(ExportPathFor(folderPath, side), Path.Combine(folder, FileName));
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException)
+        {
+            // Every other way this method declines is a failure it returns, and
+            // so is this one: a slot that already holds a pair, or an export
+            // that went away between the read and the move, is a disagreement
+            // for the caller to report and leave alone. Throwing would carry it
+            // out of a dashboard poll as a 500 and strand the export anyway.
+            return Result<Unit, string>.Failure("the exported pair for " + Path.GetFileName(folder) + " could not be moved into its slot: " + exception.Message);
+        }
+
         return Result<Unit, string>.Success(Unit.Value);
     }
 
