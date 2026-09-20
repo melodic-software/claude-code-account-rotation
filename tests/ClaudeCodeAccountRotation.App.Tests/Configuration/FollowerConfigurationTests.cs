@@ -137,10 +137,10 @@ public sealed class FollowerConfigurationTests : IDisposable
     }
 
     [Fact]
-    public async Task AnAbsentOrMisspelledRoleLeavesTheProcessTheLeader()
+    public async Task AnAbsentOrUnrecognizedRoleLeavesTheProcessTheLeader()
     {
         string path = Path.Combine(_root, "config.json");
-        await File.WriteAllTextAsync(path, new JsonObject { ["role"] = "folower" }.ToJsonString(), Token);
+        await File.WriteAllTextAsync(path, new JsonObject { ["role"] = "peer" }.ToJsonString(), Token);
 
         Result<ClaudeCodeAccountRotationConfiguration, string> loaded = await ConfigurationFile.LoadOrCreateAsync(
             path,

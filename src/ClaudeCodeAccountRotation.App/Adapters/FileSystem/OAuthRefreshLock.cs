@@ -19,6 +19,7 @@ internal sealed partial class OAuthRefreshLock
     public static readonly TimeSpan StaleAfter = TimeSpan.FromSeconds(60);
 
     private const int WindowsErrorAlreadyExists = 183;
+    private const int WindowsErrorAccessDenied = 5;
     private const int UnixErrorExists = 17;
     private const int MaxStaleRemovals = 3;
     private static readonly TimeSpan _pollInterval = TimeSpan.FromMilliseconds(250);
@@ -137,9 +138,19 @@ internal sealed partial class OAuthRefreshLock
             }
 
             int error = Marshal.GetLastPInvokeError();
-            return error == WindowsErrorAlreadyExists
-                ? false
-                : throw new IOException("CreateDirectoryW failed for " + lockDirectory + " (Win32 error " + error.ToString(System.Globalization.CultureInfo.InvariantCulture) + ")");
+            return error switch
+            {
+                WindowsErrorAlreadyExists => false,
+                // A name whose delete has been issued but whose last reference is
+                // not gone yet is delete-pending, and a create against it answers
+                // ACCESS_DENIED rather than ALREADY_EXISTS. That is what the holder
+                // releasing the lock a moment ago looks like to the next acquirer,
+                // so it is "not mine yet" and the caller polls inside its wait
+                // bound. A permission fault that really is one produces the same
+                // answer every time and ends as the bound's own refusal.
+                WindowsErrorAccessDenied => false,
+                _ => throw new IOException("CreateDirectoryW failed for " + lockDirectory + " (Win32 error " + error.ToString(System.Globalization.CultureInfo.InvariantCulture) + ")"),
+            };
         }
 
         if (MakeDirectoryUnix(lockDirectory, 0x1C0) == 0)
