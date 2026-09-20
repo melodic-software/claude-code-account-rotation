@@ -61,7 +61,11 @@ internal static class ConfigurationFile
         ["userAgentProductToken"] = configuration.UserAgentProductToken,
         ["browserExecutables"] = BrowserExecutablesToJson(configuration.BrowserExecutables),
         ["store"] = new JsonObject { ["shared"] = configuration.SharedStore },
+        ["role"] = RoleName(configuration.Role),
+        ["mailbox"] = configuration.Mailbox,
     };
+
+    private static string RoleName(RotationRole role) => role == RotationRole.Follower ? "follower" : "leader";
 
     private static JsonObject BrowserExecutablesToJson(IReadOnlyDictionary<string, string> executables)
     {
@@ -91,7 +95,9 @@ internal static class ConfigurationFile
             Text(raw, "claudeExecutable") ?? defaults.ClaudeExecutable,
             Text(raw, "userAgentProductToken") ?? defaults.UserAgentProductToken,
             BrowserExecutables(raw) ?? defaults.BrowserExecutables,
-            SharedStore(raw) ?? defaults.SharedStore);
+            SharedStore(raw) ?? defaults.SharedStore,
+            Role(raw) ?? defaults.Role,
+            Text(raw, "mailbox") ?? defaults.Mailbox);
     }
 
     /// <summary>
@@ -101,6 +107,18 @@ internal static class ConfigurationFile
     /// </summary>
     private static bool? SharedStore(JsonObject raw) =>
         raw["store"] is JsonObject store ? Flag(store, "shared") : null;
+
+    /// <summary>
+    /// <c>role</c>: <c>follower</c> puts this process on the WSL side, and
+    /// anything else — including an absent or misspelled value — leaves it the
+    /// leader. A machine that mistypes its role gets the side that owns the
+    /// store and refuses nothing it could do before, rather than a process with
+    /// no roster and no page.
+    /// </summary>
+    private static RotationRole? Role(JsonObject raw) =>
+        Text(raw, "role") is string role && role.Trim().Equals("follower", StringComparison.OrdinalIgnoreCase)
+            ? RotationRole.Follower
+            : null;
 
     /// <summary>
     /// <c>browserExecutables</c>: a browser name (<c>chrome</c>, <c>edge</c>,
