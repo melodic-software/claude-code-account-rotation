@@ -191,9 +191,12 @@ public sealed class SharedStoreSlotsTests : IDisposable
     public async Task DroppingAStaleRecordRemovesTheFile()
     {
         string folder = await RecordedAsync("a@example.com", SideName.Wsl);
+        await CredentialFiles.WriteAsync(folder, "refresh-a", TestContext.Current.CancellationToken);
+        SlotSnapshot observed = (await Slots().ReadAsync(Email("a@example.com"), folder, slotHoldsPair: true, default, TestContext.Current.CancellationToken))!;
 
-        await Slots().DropStaleRecordAsync(Email("a@example.com"), folder, TestContext.Current.CancellationToken);
+        await Slots().DropStaleRecordAsync(Email("a@example.com"), folder, observed, default, TestContext.Current.CancellationToken);
 
+        observed.StaleRecord.ShouldBeTrue();
         File.Exists(Path.Combine(folder, HolderRecordFile.FileName)).ShouldBeFalse();
     }
 
@@ -201,11 +204,43 @@ public sealed class SharedStoreSlotsTests : IDisposable
     public async Task ADropWhileAMutationHoldsTheGateLeavesTheRecordForTheNextRead()
     {
         string folder = await RecordedAsync("a@example.com", SideName.Wsl);
+        await CredentialFiles.WriteAsync(folder, "refresh-a", TestContext.Current.CancellationToken);
+        SlotSnapshot observed = (await Slots().ReadAsync(Email("a@example.com"), folder, slotHoldsPair: true, default, TestContext.Current.CancellationToken))!;
         using IDisposable permit = await _gate.AcquireAsync(TimeSpan.Zero, TestContext.Current.CancellationToken);
 
-        await Slots().DropStaleRecordAsync(Email("a@example.com"), folder, TestContext.Current.CancellationToken);
+        await Slots().DropStaleRecordAsync(Email("a@example.com"), folder, observed, default, TestContext.Current.CancellationToken);
 
         File.Exists(Path.Combine(folder, HolderRecordFile.FileName)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task ADropDoesNotTakeARecordWrittenSinceTheReadThatJudgedTheOldOneStale()
+    {
+        string folder = await RecordedAsync("a@example.com", SideName.Wsl);
+        await CredentialFiles.WriteAsync(folder, "refresh-a", TestContext.Current.CancellationToken);
+        SlotSnapshot observed = (await Slots().ReadAsync(Email("a@example.com"), folder, slotHoldsPair: true, default, TestContext.Current.CancellationToken))!;
+        // What a switch that finished between the read and the drop leaves: the
+        // pair taken to live, and this side's own record in its place.
+        File.Delete(Path.Combine(folder, FileSystemCredentialPairStore.FileName));
+        await Slots().TakeAsync(folder, CredentialFiles.Pair("refresh-a").Fingerprint, DateTimeOffset.UnixEpoch, TestContext.Current.CancellationToken);
+
+        await Slots().DropStaleRecordAsync(Email("a@example.com"), folder, observed, default, TestContext.Current.CancellationToken);
+
+        (await HolderRecordFile.ReadAsync(folder, TestContext.Current.CancellationToken))!.Side.ShouldBe(SideName.Windows);
+    }
+
+    [Fact]
+    public async Task ADropDoesNotTakeARecordThatIsNoLongerStale()
+    {
+        string folder = await RecordedAsync("a@example.com", SideName.Wsl);
+        await CredentialFiles.WriteAsync(folder, "refresh-a", TestContext.Current.CancellationToken);
+        SlotSnapshot observed = (await Slots().ReadAsync(Email("a@example.com"), folder, slotHoldsPair: true, default, TestContext.Current.CancellationToken))!;
+        // The pair leaves the slot, so the same wsl record now says something true.
+        File.Delete(Path.Combine(folder, FileSystemCredentialPairStore.FileName));
+
+        await Slots().DropStaleRecordAsync(Email("a@example.com"), folder, observed, default, TestContext.Current.CancellationToken);
+
+        (await HolderRecordFile.ReadAsync(folder, TestContext.Current.CancellationToken))!.Side.ShouldBe(SideName.Wsl);
     }
 
     [Fact]

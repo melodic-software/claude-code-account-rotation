@@ -231,7 +231,7 @@ internal sealed partial class DashboardAssembler(
 
         if (slot.StaleRecord)
         {
-            await slots.DropStaleRecordAsync(email, folder, cancellationToken);
+            await slots.DropStaleRecordAsync(email, folder, slot, hold, cancellationToken);
         }
 
         return slot.State switch

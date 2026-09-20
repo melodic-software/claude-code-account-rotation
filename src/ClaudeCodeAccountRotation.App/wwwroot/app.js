@@ -678,7 +678,11 @@
       // would leave one account holding two logins. A card with a login good for
       // longer than the warning window does not need the button on its face; an
       // expired login is inside that window, so the one test covers both.
-      var needsLogin = !account.hasCredentials || loginSoon(account, at);
+      // A slot the other side holds is empty for a reason, and logging into it
+      // would put a second token family on the machine. The route refuses it
+      // anyway; the button goes so the operator is not sent at a 409.
+      var heldAway = account.slot === "held-elsewhere" || account.slot === "in-transit";
+      var needsLogin = !heldAway && (!account.hasCredentials || loginSoon(account, at));
       if (roster && !account.isLive && needsLogin) {
         actions.appendChild(actionButton(
           account.hasCredentials ? "Log in again" : "Login",
