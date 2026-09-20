@@ -133,12 +133,17 @@ internal sealed class FollowerRoots : IDisposable
         return RefreshTokenFingerprint.FromRefreshToken(refreshToken);
     }
 
-    public ImportRequest Request(string email, RefreshTokenFingerprint fingerprint) => new(
+    /// <summary>
+    /// The request as the leader's L3a sends it: the claimed file is named for
+    /// the incoming account and the export path for the outgoing one, which the
+    /// leader learned from the follower's dashboard at L1.
+    /// </summary>
+    public ImportRequest Request(string email, RefreshTokenFingerprint fingerprint, string outgoingEmail = "a@example.com") => new(
         new AccountEmail(email),
         ClaimedPath(email),
         fingerprint,
         AccountJson(email),
-        ExportPath(email));
+        ExportPath(outgoingEmail));
 
     public static async Task<RefreshTokenFingerprint?> FingerprintOfAsync(string path, CancellationToken cancellationToken)
     {
@@ -163,7 +168,18 @@ internal sealed class FollowerRoots : IDisposable
                 continue;
             }
 
-            CredentialPair? pair = await StagedImportCredentialPairStore.ReadFreshAsync(path, cancellationToken);
+            CredentialPair? pair;
+            try
+            {
+                pair = await StagedImportCredentialPairStore.ReadFreshAsync(path, cancellationToken);
+            }
+            catch (IOException)
+            {
+                // A file no other process will let this one open is not a reachable
+                // copy of anything: a running follower holds instance.lock exclusively.
+                continue;
+            }
+
             if (pair?.Fingerprint == fingerprint)
             {
                 found.Add(path);
@@ -173,12 +189,31 @@ internal sealed class FollowerRoots : IDisposable
         return found;
     }
 
+    /// <summary>
+    /// Best effort, and deliberately so: a follower this test killed holds its
+    /// <c>instance.lock</c> open with delete-on-close, and on Windows the name
+    /// survives in a delete-pending state for a moment after the process goes.
+    /// A temp directory that outlives the run by a few seconds is not a defect
+    /// worth failing an assertion over.
+    /// </summary>
     public void Dispose()
     {
         Gate.Dispose();
-        if (Directory.Exists(Root))
+        for (int attempt = 0; attempt < 10 && Directory.Exists(Root); attempt++)
         {
-            Directory.Delete(Root, recursive: true);
+            try
+            {
+                Directory.Delete(Root, recursive: true);
+                return;
+            }
+            catch (IOException)
+            {
+                Thread.Sleep(100);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                Thread.Sleep(100);
+            }
         }
     }
 }
