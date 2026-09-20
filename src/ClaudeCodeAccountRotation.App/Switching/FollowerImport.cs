@@ -211,7 +211,7 @@ internal sealed partial class FollowerImport : IDisposable
             TimeSpan waited = _timeProvider.GetUtcNow() - hold.ExportedAt;
             if (waited > CommitBudget)
             {
-                await UnwindAsync(hold, cancellationToken);
+                await UnwindAsync(hold);
                 return Result<ImportResult, string>.Failure(
                     "not imported: the commit arrived " + waited.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)
                     + " s after the export, past the " + CommitBudget.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture) + " s budget; the import was unwound");
@@ -242,7 +242,7 @@ internal sealed partial class FollowerImport : IDisposable
                 return Result<Unit, string>.Failure("the open import is for " + hold.Request.Email.Value + ", not " + email.Value);
             }
 
-            await UnwindAsync(hold, cancellationToken);
+            await UnwindAsync(hold);
             return Result<Unit, string>.Success(Unit.Value);
         }
         finally
@@ -264,12 +264,20 @@ internal sealed partial class FollowerImport : IDisposable
         CredentialPair? live = await _pairs.ReadLiveAsync(cancellationToken);
         if (journal is not null)
         {
+            // An open journal for another account says nothing about this one, and
+            // this route is the leader's reconciliation signal for one named
+            // transaction: reporting B's completed swap to a leader asking after A
+            // would close A on B's evidence.
+            if (about is AccountEmail named && journal.Incoming != named)
+            {
+                return new ImportStatus(false, journal.StepReached, live?.Fingerprint, "not imported: the import in flight here is of " + journal.Incoming.Value);
+            }
+
             // A journal past the swap, read while F6 to F8 are still running or
-            // after a crash between them, is an import that HAS happened. This
-            // route is the leader's reconciliation signal, and answering "not
-            // imported" here would have it unclaim a slot whose pair is already
-            // live on this side and strand the outgoing account's export.
-            bool swapped = ImportReconciler.SwapHasHappened(journal, _pairs);
+            // after a crash between them, is an import that HAS happened. Answering
+            // "not imported" would have the leader unclaim a slot whose pair is
+            // already live on this side and strand the outgoing account's export.
+            bool swapped = await ImportReconciler.SwapHasHappenedAsync(journal, _pairs, cancellationToken);
             return new ImportStatus(
                 swapped,
                 journal.StepReached,
@@ -460,7 +468,7 @@ internal sealed partial class FollowerImport : IDisposable
             // The cleanup runs on no token, because the token is what failed.
             if (!hold.Released && !ReferenceEquals(_hold, hold))
             {
-                await UnwindAsync(hold, CancellationToken.None);
+                await UnwindAsync(hold);
             }
         }
     }
@@ -473,7 +481,7 @@ internal sealed partial class FollowerImport : IDisposable
         CredentialPair? live = await _pairs.ReadLiveAsync(cancellationToken);
         if (live?.Fingerprint != hold.OutgoingFingerprint)
         {
-            await UnwindAsync(hold, cancellationToken);
+            await UnwindAsync(hold);
             return Result<ImportResult, string>.Failure(
                 "not imported: the live pair is no longer the one that was exported ("
                 + (live?.Fingerprint.Sha256Hex[..12] ?? "none") + " against " + (hold.OutgoingFingerprint?.Sha256Hex[..12] ?? "none")
@@ -483,7 +491,7 @@ internal sealed partial class FollowerImport : IDisposable
         Result<Unit, string> swapped = _pairs.Swap();
         if (swapped.IsFailure)
         {
-            await UnwindAsync(hold, cancellationToken);
+            await UnwindAsync(hold);
             return Result<ImportResult, string>.Failure(swapped.Error);
         }
 
@@ -591,7 +599,7 @@ internal sealed partial class FollowerImport : IDisposable
     /// pair is never touched here, which is what makes "the outgoing pair is
     /// recoverable" true of every path through this method.
     /// </summary>
-    private async Task UnwindAsync(Hold hold, CancellationToken cancellationToken)
+    private async Task UnwindAsync(Hold hold)
     {
         // The one thing an unwind must never do. Once F5 has run, the outgoing
         // pair exists only as the export, so deleting it loses the lineage
@@ -602,7 +610,7 @@ internal sealed partial class FollowerImport : IDisposable
         // that did happen is finished rather than reversed, which is the crash
         // table's own answer to the same evidence.
         ImportJournalEntry? entry = await _journal.ReadOpenAsync(CancellationToken.None);
-        if (entry is not null && ImportReconciler.SwapHasHappened(entry, _pairs))
+        if (entry is not null && await ImportReconciler.SwapHasHappenedAsync(entry, _pairs, CancellationToken.None))
         {
             await FinishAsync(entry, _journal, _stateFile, _pairs, _liveOwnerPath, failAfterStep: null, _timeProvider, ImportStep.Swapped, CancellationToken.None);
             Release(hold);
@@ -610,9 +618,21 @@ internal sealed partial class FollowerImport : IDisposable
             return;
         }
 
-        _pairs.DeleteStaging();
+        // The order is the point, and it is the opposite of the obvious one. An
+        // unwind that deleted the staging file first would leave, until the
+        // journal is cleared, a journal reading Exported over a live directory
+        // with no staging file — which is what a torn F5 looks like. A crash or
+        // a status read inside that window would finish an import that never
+        // swapped, delete the incoming pair's only copy in the mailbox, and
+        // record it as imported. So: the export goes while the staging file
+        // still proves nothing was swapped, then the journal goes, and only
+        // then the staging file, whose orphan the next F3 overwrites and which
+        // no fingerprint scan counts. No token either: the caller's request is
+        // what failed, and half an unwind is the state this ordering exists to
+        // prevent.
         StagedImportCredentialPairStore.DeleteIfPresent(hold.Request.ExportPath);
-        await _journal.ClearAsync(cancellationToken);
+        await _journal.ClearAsync(CancellationToken.None);
+        _pairs.DeleteStaging();
         Release(hold);
         LogUnwound(hold.Request.Email.Value);
     }
@@ -666,7 +686,7 @@ internal sealed partial class FollowerImport : IDisposable
         {
             if (_hold is Hold hold && _timeProvider.GetUtcNow() - hold.ExportedAt > IdleTimeout)
             {
-                UnwindAsync(hold, CancellationToken.None).GetAwaiter().GetResult();
+                UnwindAsync(hold).GetAwaiter().GetResult();
             }
         }
         finally
