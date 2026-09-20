@@ -402,6 +402,69 @@ public sealed class FollowerImportTests : IDisposable
         Directory.Exists(_roots.RefreshLockDirectory).ShouldBeFalse();
     }
 
+    [Fact]
+    public async Task AnUnwindAskedForAfterTheSwapFinishesTheImportInsteadOfDeletingTheExport()
+    {
+        // The swap landed and something then asked the hold to unwind: a commit
+        // that failed part way through F6 to F8, the idle self-abort, an abort
+        // arriving late. The outgoing pair exists only as the export by then, so
+        // deleting it would lose the lineage rather than strand it — the one
+        // failure in this chain that costs a login.
+        (RefreshTokenFingerprint fa, RefreshTokenFingerprint fb) = await SeedAsync();
+        using FollowerImport follower = _roots.Follower();
+        await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
+
+        // F5 by hand, behind the follower's back: the journal still reads Exported.
+        File.Move(_roots.StagingPath, _roots.LivePath, overwrite: true);
+        (await _roots.Journal().ReadOpenAsync(Token))!.StepReached.ShouldBe(ImportStep.Exported);
+
+        Result<Unit, string> aborted = await follower.AbortAsync(new AccountEmail(IncomingEmail), Token);
+
+        aborted.IsSuccess.ShouldBeTrue(aborted.IsFailure ? aborted.Error : null);
+        (await FollowerRoots.FingerprintOfAsync(_roots.ExportPath(OutgoingEmail), Token)).ShouldBe(fa);
+        (await FollowerRoots.FingerprintOfAsync(_roots.LivePath, Token)).ShouldBe(fb);
+        File.Exists(_roots.ClaimedPath(IncomingEmail)).ShouldBeFalse();
+        (await _roots.Journal().ReadOpenAsync(Token)).ShouldBeNull();
+        (await _roots.NonStagingFilesHoldingAsync(fa, Token)).Count.ShouldBe(1);
+        (await _roots.NonStagingFilesHoldingAsync(fb, Token)).Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task AStatusReadWhileTheSwapIsFinishingReportsImported()
+    {
+        (_, RefreshTokenFingerprint fb) = await SeedAsync();
+        using FollowerImport follower = _roots.Follower();
+        await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
+        File.Move(_roots.StagingPath, _roots.LivePath, overwrite: true);
+
+        ImportStatus status = await follower.StatusAsync(Token);
+
+        // The journal still reads Exported, and the leader must not read that as
+        // "nothing happened" and unclaim a slot whose pair is already live here.
+        status.JournalStep.ShouldBe(ImportStep.Exported);
+        status.Imported.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task AnImportCancelledPartWayThroughGivesTheGateAndTheLockBack()
+    {
+        (RefreshTokenFingerprint fa, RefreshTokenFingerprint fb) = await SeedAsync();
+        using FollowerImport follower = _roots.Follower();
+        using CancellationTokenSource cancelled = new();
+        await cancelled.CancelAsync();
+
+        await Should.ThrowAsync<OperationCanceledException>(
+            () => follower.ImportAsync(_roots.Request(IncomingEmail, fb), cancelled.Token));
+
+        // A cancellation is not an IOException, so without a cleanup path that
+        // does not use the failed token the process would hold the refresh lock
+        // and the mutation gate until it restarted.
+        Directory.Exists(_roots.RefreshLockDirectory).ShouldBeFalse();
+        Result<ImportAnswer, string> next = await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
+        next.IsSuccess.ShouldBeTrue(next.IsFailure ? next.Error : null);
+        next.Value.ExportedFingerprint.ShouldBe(fa);
+    }
+
     public static bool OnUnix => !OperatingSystem.IsWindows();
 
     /// <summary>
