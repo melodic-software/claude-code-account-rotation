@@ -43,9 +43,9 @@ public sealed class PeerTests
     public void TheLaunchCommandNamesTheDistributionTheUserTheBinaryAndThePort()
     {
         IReadOnlyList<string> arguments = WslDistributionPeerHost.Arguments(
-            new PeerLaunch("Some-Distribution", "someone", "/home/someone/.local/bin/rotation", 48212));
+            new PeerLaunch("Some-Distribution", "someone", "/opt/rotation/claude-code-account-rotation", 48212));
 
-        arguments.ShouldBe(["-d", "Some-Distribution", "-u", "someone", "--exec", "/home/someone/.local/bin/rotation", "--port", "48212"]);
+        arguments.ShouldBe(["-d", "Some-Distribution", "-u", "someone", "--exec", "/opt/rotation/claude-code-account-rotation", "--port", "48212"]);
     }
 
     [Fact]
@@ -55,7 +55,7 @@ public sealed class PeerTests
         // and the default role is leader. Over temp roots that is how a leader
         // ends up squatting the follower's port.
         IReadOnlyList<string> arguments = WslDistributionPeerHost.Arguments(
-            new PeerLaunch("Some-Distribution", "someone", "/home/someone/.local/bin/rotation", 48212, "/mnt/c/tmp/follower.json"));
+            new PeerLaunch("Some-Distribution", "someone", "/opt/rotation/claude-code-account-rotation", 48212, "/mnt/c/tmp/follower.json"));
 
         arguments.TakeLast(2).ShouldBe(["--config", "/mnt/c/tmp/follower.json"]);
     }
