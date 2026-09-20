@@ -69,20 +69,34 @@ internal sealed partial class SharedStoreSlots
 
         return state switch
         {
-            SlotState.Parked when record is not null => new SlotSnapshot(SlotState.Parked, StaleRecord: true),
-            SlotState.HeldHere when !windowsHoldsIt => new SlotSnapshot(SlotState.NeverLoggedIn, StaleRecord: true),
-            SlotState.NeverLoggedIn when windowsHoldsIt => new SlotSnapshot(SlotState.HeldHere, StaleRecord: false),
-            _ => new SlotSnapshot(state, StaleRecord: false),
+            SlotState.Parked when record is not null => new SlotSnapshot(SlotState.Parked, StaleRecord: true, record),
+            SlotState.HeldHere when !windowsHoldsIt => new SlotSnapshot(SlotState.NeverLoggedIn, StaleRecord: true, record),
+            SlotState.NeverLoggedIn when windowsHoldsIt => new SlotSnapshot(SlotState.HeldHere, StaleRecord: false, record),
+            _ => new SlotSnapshot(state, StaleRecord: false, record),
         };
     }
 
     /// <summary>
-    /// Drops a record the files disagree with, under the mutation gate with a
-    /// zero wait so a dashboard poll never deletes a record a switch in flight
-    /// has just written. A busy gate leaves the record for the next read.
+    /// Drops the record <paramref name="observed"/> was judged stale on, under
+    /// the mutation gate with a zero wait. A busy gate leaves the record for
+    /// the next read.
+    /// <para>
+    /// The whole verdict is taken again under the gate, from the files as they
+    /// are then, and the record must still be the same one: a switch that
+    /// finished between the read and this acquisition has written a record of
+    /// its own, and deleting that would throw away the fresh statement of who
+    /// holds the pair. Only a slot that is still stale, and stale about the
+    /// same record, loses it.
+    /// </para>
     /// </summary>
-    public async Task DropStaleRecordAsync(AccountEmail account, string folderPath, CancellationToken cancellationToken)
+    public async Task DropStaleRecordAsync(
+        AccountEmail account,
+        string folderPath,
+        SlotSnapshot observed,
+        WindowsHold live,
+        CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(observed);
         if (!Enabled)
         {
             return;
@@ -100,14 +114,13 @@ internal sealed partial class SharedStoreSlots
                 return;
             }
 
-            // Re-read under the gate: the switch that was holding it may have
-            // written the very record this read decided to drop.
-            if (await HolderRecordFile.ReadAsync(folderPath, cancellationToken) is null)
+            bool holdsPair = File.Exists(Path.Combine(folderPath, FileSystemCredentialPairStore.FileName));
+            if (await ReadAsync(account, folderPath, holdsPair, live, cancellationToken) is not { StaleRecord: true } current
+                || current.Record != observed.Record)
             {
                 return;
             }
 
-            bool holdsPair = File.Exists(Path.Combine(folderPath, FileSystemCredentialPairStore.FileName));
             await HolderRecordFile.DeleteAsync(folderPath, cancellationToken);
             if (holdsPair)
             {
@@ -176,6 +189,7 @@ internal readonly record struct WindowsHold(AccountEmail? Account, RefreshTokenF
 /// <summary>
 /// One slot as this side reads it. <paramref name="StaleRecord"/> is the
 /// design's reconciliation: a record the files contradict, which the next
-/// dashboard read drops.
+/// dashboard read drops. <paramref name="Record"/> is the record that verdict
+/// was formed on, so the drop can tell it from one written since.
 /// </summary>
-internal sealed record SlotSnapshot(SlotState State, bool StaleRecord);
+internal sealed record SlotSnapshot(SlotState State, bool StaleRecord, HolderRecord? Record);

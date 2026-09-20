@@ -16,6 +16,8 @@ public sealed class SharedStoreEndpointTests
 {
     private static Uri SwitchUri(string email) => new("/api/accounts/" + Uri.EscapeDataString(email) + "/switch", UriKind.Relative);
 
+    private static Uri LoginUri(string email) => new("/api/accounts/" + Uri.EscapeDataString(email) + "/login", UriKind.Relative);
+
     private static readonly Uri _dashboard = new("/api/dashboard", UriKind.Relative);
 
     /// <summary>A slot as a held one really looks: an identity, no pair, and a record naming the other side.</summary>
@@ -66,6 +68,52 @@ public sealed class SharedStoreEndpointTests
         response.StatusCode.ShouldBe(HttpStatusCode.Conflict);
         JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
         body["refusal"]!.GetValue<string>().ShouldBe(nameof(SwitchRefusal.TargetHasNoCredentials));
+    }
+
+    /// <summary>Live on a@example.com, with a b@example.com slot the other side holds and a roster entry for it.</summary>
+    private static async Task<AppFactory> LiveOnAWithBHeldByWslAsync(bool sharedStore, CancellationToken cancellationToken)
+    {
+        AppFactory factory = new(sharedStore);
+        await CredentialFiles.WriteAsync(factory.LiveDirectory, "refresh-a", cancellationToken);
+        await factory.WriteStateFileAsync("a@example.com", cancellationToken);
+        factory.Cli.Email = "a@example.com";
+        await HeldByWslAsync(factory, "b@example.com", "refresh-b", cancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        using HttpResponseMessage added = await client.PostAsJsonAsync(
+            new Uri("/api/accounts", UriKind.Relative),
+            new { email = "b@example.com", browser = "brave", browserProfileDirectory = "Profile 3" },
+            cancellationToken);
+        added.StatusCode.ShouldBe(HttpStatusCode.OK);
+        return factory;
+    }
+
+    [Fact]
+    public async Task ALoginIntoASlotTheOtherSideHoldsIsRefusedSoNoSecondFamilyIsCreated()
+    {
+        using AppFactory factory = await LiveOnAWithBHeldByWslAsync(sharedStore: true, TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(LoginUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+        body["refusal"]!.GetValue<string>().ShouldBe("HeldByOtherSide");
+        // Nothing was started, so no CLI child ever ran against that folder and
+        // the slot did not gain a second family beside the one the distro holds.
+        factory.LoginChild.Children.ShouldBeEmpty();
+        File.Exists(Path.Combine(factory.ProfilesRoot, "b@example.com", CredentialFiles.FileName)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task WithTheStoreNotSharedTheSameSlotStillAcceptsALogin()
+    {
+        using AppFactory factory = await LiveOnAWithBHeldByWslAsync(sharedStore: false, TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(LoginUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        factory.LoginChild.Children.ShouldNotBeEmpty();
     }
 
     [Fact]
