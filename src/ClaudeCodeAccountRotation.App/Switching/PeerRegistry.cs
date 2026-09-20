@@ -29,10 +29,26 @@ internal sealed record Peer(IPeerRotationInstance Instance, IPeerProcessHost? Ho
 /// The sides <c>peers[]</c> configured. Empty is the ordinary state and the
 /// whole lane's rollback: with no peer there is no WSL side on the page and
 /// nothing here is ever called.
+/// <para>
+/// It owns its hosts and disposes them, which is what makes design 11's "the
+/// follower is the leader's child, so it goes down too" true of a graceful
+/// stop as well as a crash. The hosts are built inside this registry's own
+/// factory, so the container has no other handle on them; without this a
+/// stopped leader would leave its <c>wsl.exe</c> follower running, holding an
+/// import and the configured port.
+/// </para>
 /// </summary>
-internal sealed class PeerRegistry(IReadOnlyList<Peer> peers)
+internal sealed class PeerRegistry(IReadOnlyList<Peer> peers) : IDisposable
 {
     public IReadOnlyList<Peer> All { get; } = peers;
 
     public Peer? For(SideName side) => All.FirstOrDefault(peer => peer.Side == side);
+
+    public void Dispose()
+    {
+        foreach (Peer peer in All)
+        {
+            (peer.Host as IDisposable)?.Dispose();
+        }
+    }
 }

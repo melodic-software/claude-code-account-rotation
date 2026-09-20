@@ -311,9 +311,13 @@ start_leader() {
 
 # --- the routes --------------------------------------------------------------
 
+# The last three characters, because curl writes one code per connection it
+# made and a leader killed mid-request leaves it having made two.
 wsl_switch() {
-  curl -sS -o /dev/null -w '%{http_code}' --max-time 180 -X POST -H "$header" \
-    "$leader_url/api/sides/wsl/accounts/$1/switch" 2>/dev/null || echo "000"
+  local code
+  code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 180 -X POST -H "$header" \
+    "$leader_url/api/sides/wsl/accounts/$1/switch" 2>/dev/null || echo "000")"
+  printf '%s' "${code: -3}"
 }
 
 windows_switch() {

@@ -376,6 +376,131 @@ public sealed class WslSwitchTests
     }
 
     [Fact]
+    public async Task AnOutgoingAccountThatChangedSinceThePlanIsRefusedBeforeTheCommit()
+    {
+        // The identity the fingerprint gate cannot see. The export is written
+        // to the path this leader named, so its NAME is always the account L1
+        // planned; the bytes are whatever was live over there at F2. A switch
+        // on that side in between makes those two different accounts, every
+        // fingerprint check still passes, and the park would put one account's
+        // pair into another account's slot under that account's block.
+        using WslSwitchHarness harness = new();
+        await SetUpAsync(harness);
+        // The dashboard at L1 still names the planned account; the answer at F2
+        // names another, which is the drift no fingerprint can show.
+        harness.Side.OnImport = async request =>
+        {
+            await File.WriteAllTextAsync(request.ExportPath, CredentialFiles.Shape("refresh-c").ToJsonString(), Token);
+            return Result<ImportAnswer, string>.Success(new ImportAnswer(
+                CredentialFiles.Pair("refresh-c").Fingerprint,
+                WslSwitchHarness.Email("someone-else@example.com"),
+                false,
+                null));
+        };
+        using WslSwitch coordinator = harness.Coordinator();
+
+        Result<WslSwitchOutcome, SwitchRefusal> result =
+            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), Token);
+
+        result.Error.ShouldBe(SwitchRefusal.ExportNotVerified);
+        harness.Side.Calls.ShouldNotContain("Commit");
+        harness.Side.Calls.ShouldContain("Abort");
+        (await FingerprintAtAsync(harness.PairPath(Incoming))).ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
+        (await HolderRecordFile.ReadAsync(harness.FolderFor(Incoming), Token)).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task TheFingerprintTheGateVerifiedIsTheOneTheJournalCarriesForward()
+    {
+        // A rotation between L1's dashboard read and F2 makes the pair that is
+        // actually exported a different one from the pair the plan named. The
+        // journal has to carry the verified one, because on the resume after a
+        // crash between the commit and the Imported write it is the only
+        // statement left of what the export is supposed to be - and L4
+        // promotes against it.
+        using WslSwitchHarness harness = new();
+        await SetUpAsync(harness);
+        RefreshTokenFingerprint rotated = CredentialFiles.Pair("refresh-a-rotated").Fingerprint;
+        harness.Side.OnImport = async request =>
+        {
+            await File.WriteAllTextAsync(request.ExportPath, CredentialFiles.Shape("refresh-a-rotated").ToJsonString(), Token);
+            return Result<ImportAnswer, string>.Success(new ImportAnswer(rotated, WslSwitchHarness.Email(Outgoing), false, null));
+        };
+        harness.Side.OnCommit = () => Task.FromResult(Result<ImportResult, string>.Failure("the answer was lost on the way back"));
+        harness.Side.Status = new ImportStatus(false, ImportStep.Exported, null, null, "the hold is still open here");
+        using WslSwitch coordinator = harness.Coordinator();
+
+        await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), Token);
+
+        // The commit was retried from the ExportVerified journal rather than
+        // unclaimed, and whatever the outcome, the fingerprint that survived
+        // into the journal is the rotated one the gate read natively.
+        WslSwitchJournalEntry? open = await harness.Journal.ReadOpenAsync(Token);
+        if (open is not null)
+        {
+            open.OutgoingFingerprint.ShouldBe(rotated);
+        }
+        else
+        {
+            (await FingerprintAtAsync(harness.PairPath(Outgoing))).ShouldBe(rotated);
+        }
+    }
+
+    [Fact]
+    public async Task ARestartAtImportedFinishesWhenTheParkItselfAlreadyRan()
+    {
+        // The crash between L4's rename and its own journal write. The slot
+        // already holds exactly the pair this hand-off was parking and there
+        // is no export left to promote, so a park that insisted on running the
+        // rename again would fail for want of a source and leave the journal
+        // open - and an open journal refuses every switch after it. The
+        // in-distro run found this one: it was the single leader row of eight
+        // that did not settle, and every switch in the rest of that hour then
+        // answered 409.
+        using WslSwitchHarness harness = new();
+        await harness.WriteLeaderLiveAsync("w@example.com", "refresh-w", Token);
+        RefreshTokenFingerprint incoming = CredentialFiles.Pair("refresh-b").Fingerprint;
+        await harness.ClaimBySideAsync(Incoming, "refresh-b", Token);
+        StagedImportCredentialPairStore.DeleteIfPresent(harness.ClaimedPath(Incoming));
+        // The park has run: the outgoing slot holds the export's pair and the
+        // mailbox is empty.
+        await harness.ParkedSlotAsync(Outgoing, "refresh-a", Token);
+        await JournalAtAsync(harness, WslSwitchStep.Imported, incoming, withOutgoingAccount: true);
+        using WslSwitch coordinator = harness.Coordinator();
+
+        WslReconciliation reconciled = await coordinator.ReconcileAsync(Token);
+
+        reconciled.Outcome.ShouldContain("was finished from " + nameof(WslSwitchStep.Imported));
+        File.Exists(harness.JournalPath).ShouldBeFalse();
+        (await FingerprintAtAsync(harness.PairPath(Outgoing))).ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
+        (await HolderRecordFile.ReadAsync(harness.FolderFor(Outgoing), Token)).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task AnIncompatibleSideIsLeftInTransitRatherThanResumedInto()
+    {
+        // The switch path refuses to send an import to a version this leader
+        // does not know. A resumption must refuse for the same reason: an
+        // upgrade with a hand-off open is exactly when the two processes
+        // disagree about the journal and the request shape.
+        using WslSwitchHarness harness = new();
+        await harness.WriteLeaderLiveAsync("w@example.com", "refresh-w", Token);
+        RefreshTokenFingerprint incoming = CredentialFiles.Pair("refresh-b").Fingerprint;
+        await harness.ClaimBySideAsync(Incoming, "refresh-b", Token);
+        await JournalAtAsync(harness, WslSwitchStep.Claimed, incoming, withOutgoingAccount: true);
+        harness.Side.Version = "0.0.0-from-another-build";
+        using WslSwitch coordinator = harness.Coordinator();
+
+        WslReconciliation reconciled = await coordinator.ReconcileAsync(Token);
+
+        reconciled.Banner.ShouldNotBeNull();
+        reconciled.Outcome.ShouldContain("incompatible");
+        harness.Side.Calls.ShouldBe(["Dashboard"]);
+        harness.MailboxFiles().Count.ShouldBe(1);
+        (await HolderRecordFile.ReadAsync(harness.FolderFor(Incoming), Token))!.Side.ShouldBe(SideName.Wsl);
+    }
+
+    [Fact]
     public async Task AClaimWithNoJournalAtAllIsPutBackOnlyOnceTheSideSaysItNeverImportedIt()
     {
         // Design 9.3's last leader row. The claim's rename lands before the

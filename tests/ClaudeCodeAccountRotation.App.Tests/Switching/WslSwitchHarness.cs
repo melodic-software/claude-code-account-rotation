@@ -87,7 +87,11 @@ internal sealed class WslSwitchHarness : IDisposable
         SwitchOptions options = Options;
         var pairs = new FileSystemCredentialPairStore(LiveDirectory, Store, Clock);
         ProfileFolderStore profiles = new(Store);
+        // The registry disposes the hosts it owns, and these facts configure
+        // none, so the analyzer's scope rule is satisfied by saying so once.
+#pragma warning disable CA2000
         PeerRegistry peers = new(withPeer ? [new Peer(Side, null, Store)] : []);
+#pragma warning restore CA2000
         return new WslSwitch(
             peers,
             pairs,

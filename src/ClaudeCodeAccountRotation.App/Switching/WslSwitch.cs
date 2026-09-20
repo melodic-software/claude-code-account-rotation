@@ -215,10 +215,26 @@ internal sealed partial class WslSwitch : IDisposable
         // The follower may have swapped, so an unclaim here would create a
         // second holder of the incoming lineage; the card says in transit and
         // the decision waits for the side to answer.
-        if (entry.StepReached is WslSwitchStep.Claimed or WslSwitchStep.ExportVerified
-            && (await peer.Instance.ReadDashboardAsync(cancellationToken)).IsFailure)
+        //
+        // A side that answers with a version this leader does not know is the
+        // same case, not a lesser one: the switch path refuses to send it an
+        // import at all, and resuming one into it would drive the very
+        // protocol the refusal exists to protect through a process that may
+        // reconcile by other rules. An upgrade with a hand-off open is exactly
+        // when that happens.
+        if (entry.StepReached is WslSwitchStep.Claimed or WslSwitchStep.ExportVerified)
         {
-            return InTransitBanner(entry, "the side is not answering");
+            Result<PeerDashboard, string> reachable = await peer.Instance.ReadDashboardAsync(cancellationToken);
+            if (reachable.IsFailure)
+            {
+                return InTransitBanner(entry, "the side is not answering");
+            }
+
+            if (Incompatible(reachable.Value) is string mismatch)
+            {
+                LogIncompatible(entry.Side.Value, mismatch);
+                return InTransitBanner(entry, "the side is incompatible (" + mismatch + ")");
+            }
         }
 
         Result<WslSwitchOutcome, SwitchRefusal> resumed = await HandOffAsync(peer, entry, cancellationToken);
@@ -567,7 +583,7 @@ internal sealed partial class WslSwitch : IDisposable
             case WslSwitchStep.Claimed:
                 return await ImportAsync(peer, entry, cancellationToken);
             case WslSwitchStep.ExportVerified:
-                return await ResumeAfterVerificationAsync(peer, entry, cancellationToken);
+                return await ResumeAfterVerificationAsync(peer, entry, mayCommit: true, cancellationToken);
             case WslSwitchStep.Imported:
                 return await ParkAsync(peer, entry, cancellationToken);
             default:
@@ -612,6 +628,27 @@ internal sealed partial class WslSwitch : IDisposable
         }
 
         ImportAnswer answer = answered.Value;
+
+        // The identity the gate cannot see. The export is written to the path
+        // this leader named, so its name is always the account L1 planned; the
+        // bytes are whatever was live over there at F2. A refresh or a switch
+        // on that side between the two makes those different accounts, and the
+        // fingerprint gate would pass every check and park one account's pair
+        // into another account's slot under that account's block. Only the
+        // answer's own `Outgoing` says which it really is.
+        AccountEmail? answered_outgoing = answer.AlreadyImported ? answer.Result?.Outgoing : answer.Outgoing;
+        if (answered_outgoing != entry.Outgoing)
+        {
+            LogOutgoingChanged(peer.Side.Value, entry.Outgoing?.Value ?? "none", answered_outgoing?.Value ?? "none");
+            return answer.AlreadyImported
+                // The swap has already run, so there is nothing to abort and
+                // nothing safe to park. The journal stays open and the card
+                // says in transit: a pair in a mailbox is recoverable, and one
+                // in the wrong slot is a second family waiting to happen.
+                ? Result<WslSwitchOutcome, SwitchRefusal>.Failure(SwitchRefusal.ExportNotVerified)
+                : await AbortAndUnclaimAsync(peer, entry, SwitchRefusal.ExportNotVerified, CancellationToken.None);
+        }
+
         if (answer.AlreadyImported && answer.Result is ImportResult done)
         {
             // F1 answered from its record: this import already ran, so there is
@@ -647,8 +684,19 @@ internal sealed partial class WslSwitch : IDisposable
             LogGatePassed(peer.Side.Value, exported.Sha256Hex[..12]);
         }
 
-        await JournalAsync(entry with { StepReached = WslSwitchStep.ExportVerified }, CancellationToken.None);
-        return await CommitAsync(peer, entry with { StepReached = WslSwitchStep.ExportVerified }, CancellationToken.None);
+        // The fingerprint that goes in the journal is the one the gate just
+        // verified, not the one L1 read off the dashboard. A rotation between
+        // those two moments makes them different, and this value is what L4
+        // promotes against — including on the resume after a crash between the
+        // commit and the Imported write, where it is the only copy left of
+        // what the export is supposed to be.
+        WslSwitchJournalEntry verified = entry with
+        {
+            StepReached = WslSwitchStep.ExportVerified,
+            OutgoingFingerprint = answer.ExportedFingerprint ?? entry.OutgoingFingerprint,
+        };
+        await JournalAsync(verified, CancellationToken.None);
+        return await CommitAsync(peer, verified, CancellationToken.None);
     }
 
     /// <summary>L3c: the commit the gate has earned, and the park that follows it.</summary>
@@ -661,7 +709,14 @@ internal sealed partial class WslSwitch : IDisposable
             // been lost on the way back from a swap that did happen. The status
             // route, which reads the files rather than the journal, decides.
             LogCommitFailed(peer.Side.Value, entry.Incoming.Value, committed.Error);
-            return await ResumeAfterVerificationAsync(peer, entry, cancellationToken);
+            // Not a second commit from here, whatever the status says. A side
+            // that keeps answering "still at Exported" to a commit that keeps
+            // failing would otherwise bounce between these two methods until
+            // the stack ran out, and a leader that dies mid-hand-off is the
+            // one outcome this whole class exists to avoid. One attempt per
+            // pass; the retry is the next reconciliation poll, which is the
+            // backoff design 11 asks for rather than a spin.
+            return await ResumeAfterVerificationAsync(peer, entry, mayCommit: false, cancellationToken);
         }
 
         return await ParkAsync(peer, await ImportedAsync(entry, committed.Value, CancellationToken.None), CancellationToken.None);
@@ -696,7 +751,7 @@ internal sealed partial class WslSwitch : IDisposable
     /// strand the outgoing account's export.
     /// </para>
     /// </summary>
-    private async Task<Result<WslSwitchOutcome, SwitchRefusal>> ResumeAfterVerificationAsync(Peer peer, WslSwitchJournalEntry entry, CancellationToken cancellationToken)
+    private async Task<Result<WslSwitchOutcome, SwitchRefusal>> ResumeAfterVerificationAsync(Peer peer, WslSwitchJournalEntry entry, bool mayCommit, CancellationToken cancellationToken)
     {
         Result<ImportStatus, string> asked = await peer.Instance.ImportStatusAsync(entry.Incoming, cancellationToken);
         if (asked.IsFailure)
@@ -720,7 +775,13 @@ internal sealed partial class WslSwitch : IDisposable
         {
             // The hold is still open on the other side and the export has
             // already passed the native gate, so it is not read again.
-            return await CommitAsync(peer, entry, cancellationToken);
+            return mayCommit
+                ? await CommitAsync(peer, entry, cancellationToken)
+                // Already tried once this pass. The journal stays at
+                // ExportVerified and the card says in transit; the next poll
+                // tries again, and nothing is unclaimed against a side that
+                // is still holding the import open.
+                : Result<WslSwitchOutcome, SwitchRefusal>.Failure(SwitchRefusal.SideOffline);
         }
 
         // A definite "not imported": no journal there and no record of this
@@ -744,14 +805,27 @@ internal sealed partial class WslSwitch : IDisposable
                 await _profiles.WriteProfileAsync(folder, OAuthAccountBlock.FromJson(entry.OutgoingAccount), cancellationToken);
             }
 
-            Result<Unit, string> promoted = await _pairs.PromoteFromMailboxAsync(folder, peer.Side, fingerprint, cancellationToken);
-            if (promoted.IsFailure)
+            // "L4 by fingerprint" means decided from the files, and the files
+            // may already say done: a crash between the rename and the journal
+            // write leaves the slot holding exactly this pair and no export to
+            // promote. Re-running the rename there would fail for want of a
+            // source and leave the journal open for good, which turns one
+            // crash into a leader that refuses every switch afterwards.
+            if (await _pairs.ReadParkedAsync(folder, cancellationToken) is CredentialPair parked && parked.Fingerprint == fingerprint)
             {
-                // The export stays where it is. A pair stranded in the mailbox
-                // is recoverable; one promoted without matching the fingerprint
-                // the journal named would be a lineage nobody verified.
-                LogParkRefused(outgoing.Value, promoted.Error);
-                return Result<WslSwitchOutcome, SwitchRefusal>.Failure(SwitchRefusal.LiveIdentityUnverified);
+                LogParkAlreadyDone(outgoing.Value);
+            }
+            else
+            {
+                Result<Unit, string> promoted = await _pairs.PromoteFromMailboxAsync(folder, peer.Side, fingerprint, cancellationToken);
+                if (promoted.IsFailure)
+                {
+                    // The export stays where it is. A pair stranded in the mailbox
+                    // is recoverable; one promoted without matching the fingerprint
+                    // the journal named would be a lineage nobody verified.
+                    LogParkRefused(outgoing.Value, promoted.Error);
+                    return Result<WslSwitchOutcome, SwitchRefusal>.Failure(SwitchRefusal.LiveIdentityUnverified);
+                }
             }
 
             // The slot holds its pair again, so its record goes: design 9.4 row 2.
@@ -780,7 +854,7 @@ internal sealed partial class WslSwitch : IDisposable
             LogAbortRefused(peer.Side.Value, entry.Incoming.Value, aborted.Error);
             WslSwitchJournalEntry verified = entry with { StepReached = WslSwitchStep.ExportVerified };
             await JournalAsync(verified, cancellationToken);
-            return await ResumeAfterVerificationAsync(peer, verified, cancellationToken);
+            return await ResumeAfterVerificationAsync(peer, verified, mayCommit: true, cancellationToken);
         }
 
         return await UnclaimAsync(peer, entry, refusal, cancellationToken);
@@ -871,6 +945,9 @@ internal sealed partial class WslSwitch : IDisposable
     [LoggerMessage(Level = LogLevel.Warning, Message = "{Side} refused the abort of {Incoming} ({Reason}); the swap may have run, so nothing is unclaimed")]
     private partial void LogAbortRefused(string side, string incoming, string reason);
 
+    [LoggerMessage(Level = LogLevel.Information, Message = "the slot for {Outgoing} already holds the pair this hand-off was parking; only the journal was left to finish")]
+    private partial void LogParkAlreadyDone(string outgoing);
+
     [LoggerMessage(Level = LogLevel.Warning, Message = "the export for {Outgoing} could not be parked: {Reason}; it stays in the mailbox")]
     private partial void LogParkRefused(string outgoing, string reason);
 
@@ -879,6 +956,9 @@ internal sealed partial class WslSwitch : IDisposable
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "the {Side} side is incompatible and was sent no import: {Reason}")]
     private partial void LogIncompatible(string side, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the {Side} side exported {Answered} where this hand-off planned to park {Planned}; the switch is refused rather than parking one account's pair in another's slot")]
+    private partial void LogOutgoingChanged(string side, string planned, string answered);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "an export for {Account} was in the mailbox with no journal; it is parked back in its slot")]
     private partial void LogOrphanParked(string account);
