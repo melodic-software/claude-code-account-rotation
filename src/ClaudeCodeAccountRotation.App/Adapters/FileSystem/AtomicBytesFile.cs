@@ -86,7 +86,7 @@ internal static class AtomicBytesFile
     /// preserves the replaced file's own DACL, so a file another program
     /// created keeps the permissions that program gave it.
     /// </summary>
-    private static FileStream CreateOwnerOnly(string path)
+    internal static FileStream CreateOwnerOnly(string path)
     {
         if (OperatingSystem.IsWindows())
         {

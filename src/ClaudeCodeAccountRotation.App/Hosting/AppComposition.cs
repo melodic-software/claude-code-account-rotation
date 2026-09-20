@@ -84,7 +84,17 @@ internal static class AppComposition
             configuration.ProfilesRoot,
             configuration.AppDataDirectory,
             configuration.RefreshLockWaitBound,
-            MutationGateTimeout: TimeSpan.Zero));
+            MutationGateTimeout: TimeSpan.Zero,
+            configuration.Mailbox,
+            Environment.GetEnvironmentVariable(CrashInjection.EnvironmentVariableName)));
+        if (configuration.Role == RotationRole.Follower)
+        {
+            ComposeFollower(services, configuration);
+            builder.WebHost.ConfigureKestrel(kestrel => kestrel.ListenLocalhost(configuration.ListenPort));
+            services.Configure<HostFilteringOptions>(static options => options.AllowedHosts = ["localhost", "127.0.0.1", "[::1]"]);
+            return Result<Unit, string>.Success(Unit.Value);
+        }
+
         services.AddSingleton<ICredentialPairStore>(new FileSystemCredentialPairStore(configuration.LiveConfigDirectory, configuration.ProfilesRoot, TimeProvider.System));
         services.AddSingleton(new ClaudeStateFile(configuration.StateFilePath));
         services.AddSingleton(new ProfileFolderStore(configuration.ProfilesRoot));
@@ -160,20 +170,66 @@ internal static class AppComposition
     {
         ArgumentNullException.ThrowIfNull(app);
         app.UseMiddleware<LoopbackHostMiddleware>();
-        app.UseStaticFiles(new StaticFileOptions
-        {
-            FileProvider = new EmbeddedFileProvider(typeof(AppComposition).Assembly, "ClaudeCodeAccountRotation.App.wwwroot"),
-        });
 
         // The framework's liveness probe with no checks registered: the body is the
         // status word and the middleware writes the no-store cache headers itself.
         app.MapHealthChecks("/healthz");
+
+        // The follower serves four import routes and a dashboard the leader reads,
+        // and nothing else. The roster, login, switch and refresh routes are not
+        // mapped at all, so R1's "the WSL side exposes no add, no login, no roster
+        // write" is a 404 from the router rather than a check inside a handler that
+        // a later edit could forget.
+        if (app.Services.GetRequiredService<ClaudeCodeAccountRotationConfiguration>().Role == RotationRole.Follower)
+        {
+            ImportEndpoints.Map(app);
+            return;
+        }
+
+        app.UseStaticFiles(new StaticFileOptions
+        {
+            FileProvider = new EmbeddedFileProvider(typeof(AppComposition).Assembly, "ClaudeCodeAccountRotation.App.wwwroot"),
+        });
         app.MapGet("/", static () => Results.Content(EmbeddedPage.IndexHtml, "text/html; charset=utf-8"));
         DashboardEndpoints.Map(app);
         SwitchEndpoints.Map(app);
         RosterEndpoints.Map(app);
         RefreshEndpoints.Map(app);
         LoginEndpoints.Map(app);
+    }
+
+    /// <summary>
+    /// The follower's container: a live directory, a journal, and the staged
+    /// import. No profiles root, no roster, no login runner, no refresh engine,
+    /// no browser — the WSL side holds one live pair and takes another when the
+    /// leader hands it one.
+    /// </summary>
+    private static void ComposeFollower(IServiceCollection services, ClaudeCodeAccountRotationConfiguration configuration)
+    {
+        services.AddSingleton(new ClaudeStateFile(configuration.StateFilePath));
+        services.AddSingleton<CredentialMutationGate>();
+        services.AddSingleton(new ImportJournal(configuration.AppDataDirectory));
+        services.AddSingleton(provider => new StagedImportCredentialPairStore(
+            configuration.LiveConfigDirectory,
+            provider.GetRequiredService<TimeProvider>()));
+        services.AddSingleton(provider => new ImportReconciler(
+            provider.GetRequiredService<SwitchOptions>(),
+            provider.GetRequiredService<StagedImportCredentialPairStore>(),
+            provider.GetRequiredService<ImportJournal>(),
+            provider.GetRequiredService<ClaudeStateFile>(),
+            provider.GetRequiredService<TimeProvider>(),
+            provider.GetRequiredService<ILogger<ImportReconciler>>()));
+        services.AddSingleton(provider => new FollowerImport(
+            provider.GetRequiredService<SwitchOptions>(),
+            provider.GetRequiredService<StagedImportCredentialPairStore>(),
+            provider.GetRequiredService<ImportJournal>(),
+            provider.GetRequiredService<ImportReconciler>(),
+            provider.GetRequiredService<ClaudeStateFile>(),
+            provider.GetRequiredService<CredentialMutationGate>(),
+            provider.GetRequiredService<TimeProvider>(),
+            provider.GetRequiredService<ILogger<FollowerImport>>()));
+        services.AddHostedService<InstanceLockHolder>();
+        services.AddHealthChecks();
     }
 
     /// <summary>

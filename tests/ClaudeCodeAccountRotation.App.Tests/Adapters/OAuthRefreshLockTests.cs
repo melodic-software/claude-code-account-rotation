@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.Core;
 
@@ -90,6 +92,54 @@ public sealed class OAuthRefreshLockTests : IDisposable
         finished.ShouldBeSameAs(acquire, "the acquisition must honor the wait bound instead of spinning");
         (await acquire).IsFailure.ShouldBeTrue();
         Directory.Exists(_lockDirectory).ShouldBeTrue();
+    }
+
+    public static bool OnWindows => OperatingSystem.IsWindows();
+
+    /// <summary>
+    /// A create that cannot make the directory is a refusal, never a throw.
+    /// <para>
+    /// The case this exists for is not a misconfigured machine: it is the
+    /// ordinary release. A directory whose delete has been issued but whose
+    /// last reference is not gone yet is delete-pending, and Windows answers a
+    /// create against that name with <c>ACCESS_DENIED</c> rather than
+    /// <c>ALREADY_EXISTS</c>. A contending acquirer polling every 250 ms lands
+    /// in that window on a loaded machine, and treating it as a fault turned an
+    /// ordinary hand-off into an <c>IOException</c> out of
+    /// <c>AcquireAsync</c>. A denied parent is the deterministic way to
+    /// reach the same branch.
+    /// </para>
+    /// </summary>
+    [Fact(SkipUnless = nameof(OnWindows), Skip = "Access control lists are a Windows behavior")]
+    public async Task RefusesWithinTheBoundWhenTheLockDirectoryCannotBeCreated()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        SecurityIdentifier user = WindowsIdentity.GetCurrent().User!;
+        FileSystemAccessRule deny = new(user, FileSystemRights.CreateDirectories, AccessControlType.Deny);
+        DirectoryInfo directory = new(_liveDirectory);
+        DirectorySecurity security = directory.GetAccessControl();
+        security.AddAccessRule(deny);
+        directory.SetAccessControl(security);
+        try
+        {
+            OAuthRefreshLock refreshLock = new(_liveDirectory, TimeProvider.System);
+
+            Task<Result<IAsyncDisposable, string>> acquire = refreshLock.AcquireAsync(TimeSpan.FromMilliseconds(400), TestContext.Current.CancellationToken);
+            Task finished = await Task.WhenAny(acquire, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+
+            finished.ShouldBeSameAs(acquire, "a denied create must honor the wait bound instead of throwing or spinning");
+            (await acquire).IsFailure.ShouldBeTrue();
+        }
+        finally
+        {
+            DirectorySecurity restored = directory.GetAccessControl();
+            restored.RemoveAccessRule(deny);
+            directory.SetAccessControl(restored);
+        }
     }
 
     public void Dispose()
