@@ -7,6 +7,7 @@ using ClaudeCodeAccountRotation.App.Tests.Adapters;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Ports;
+using ClaudeCodeAccountRotation.Core.Switching;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -28,12 +29,21 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
     /// test written before this key existed still exercises the behavior the
     /// operator's own build has.
     /// </param>
-    public AppFactory(bool sharedStore = false)
+    /// <param name="profilesRoot">
+    /// Where the store sits, for the one case that cannot use a root of its
+    /// own: a leader and a follower hosted together share one store, and the
+    /// mailbox both of them name is derived from this path.
+    /// </param>
+    /// <param name="peerStorePath">
+    /// <c>peers[].storePathFromPeer</c> for a <c>wsl</c> entry, or null for no
+    /// peers at all, which is the ordinary state.
+    /// </param>
+    public AppFactory(bool sharedStore = false, string? profilesRoot = null, string? peerStorePath = null)
     {
         Root = Path.Combine(Path.GetTempPath(), "claude-code-account-rotation-tests", Guid.NewGuid().ToString("N"));
         LiveDirectory = Path.Combine(Root, "live");
         StateFilePath = Path.Combine(Root, ".claude.json");
-        ProfilesRoot = Path.Combine(Root, "profiles");
+        ProfilesRoot = profilesRoot ?? Path.Combine(Root, "profiles");
         AppData = Path.Combine(Root, "appdata");
         Directory.CreateDirectory(LiveDirectory);
         Directory.CreateDirectory(ProfilesRoot);
@@ -49,8 +59,29 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
             ["claudeExecutable"] = null,
             ["store"] = new JsonObject { ["shared"] = sharedStore },
         };
+        if (peerStorePath is not null)
+        {
+            // The address is never dialled: a two-host test replaces the registry
+            // with one built over the other factory's client. What the entry buys
+            // is the composition path, so the peer the page sees is the configured
+            // one and not something only a test knows how to make.
+            configuration["peers"] = new JsonArray(new JsonObject
+            {
+                ["side"] = SideName.Wsl.Value,
+                ["baseAddress"] = "http://127.0.0.1:1/",
+                ["storePathFromPeer"] = peerStorePath,
+            });
+        }
+
         File.WriteAllText(ConfigPath, configuration.ToJsonString());
     }
+
+    /// <summary>
+    /// Services replaced after this factory's own, for the dependency a test
+    /// must build from another host: the peer registry of a leader wired to a
+    /// follower. Set before the first client, which is when the host is built.
+    /// </summary>
+    public Action<IServiceCollection>? Overrides { get; set; }
 
     public string Root { get; }
 
@@ -190,6 +221,7 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
                 provider.GetRequiredService<IClaudeCliAuthStatus>(),
                 provider.GetRequiredService<IClaudeCliLogout>(),
                 Clock)));
+            Overrides?.Invoke(services);
         });
     }
 
