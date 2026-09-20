@@ -35,15 +35,27 @@ internal static class CrashInjection
 {
     public const string EnvironmentVariableName = "CCAR_FAIL_AFTER_STEP";
 
-    /// <summary>Kills this process when <paramref name="configured"/> names this step and timing.</summary>
-    public static void KillIfConfigured(string? configured, ImportStep step, bool beforeJournal)
+    /// <summary>Kills this process when <paramref name="configured"/> names this follower step and timing.</summary>
+    public static void KillIfConfigured(string? configured, ImportStep step, bool beforeJournal) =>
+        KillIfConfigured(configured, step.ToString(), beforeJournal);
+
+    /// <summary>
+    /// The same hook for the leader's coordinator. One environment variable
+    /// serves both processes because the two step vocabularies share no name
+    /// and the leader and the follower are separate launches with separate
+    /// environments; the acceptance sets it on whichever one it means to kill.
+    /// </summary>
+    public static void KillIfConfigured(string? configured, WslSwitchStep step, bool beforeJournal) =>
+        KillIfConfigured(configured, step.ToString(), beforeJournal);
+
+    private static void KillIfConfigured(string? configured, string step, bool beforeJournal)
     {
         if (string.IsNullOrWhiteSpace(configured))
         {
             return;
         }
 
-        string wanted = step.ToString() + (beforeJournal ? ":before-journal" : string.Empty);
+        string wanted = step + (beforeJournal ? ":before-journal" : string.Empty);
         if (!string.Equals(configured.Trim(), wanted, StringComparison.OrdinalIgnoreCase))
         {
             return;

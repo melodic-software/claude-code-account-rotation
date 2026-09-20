@@ -18,6 +18,12 @@ namespace ClaudeCodeAccountRotation.Core.Configuration;
 /// its own live directory from files under <paramref name="Mailbox"/>, the
 /// one path in the product allowed to sit on the other volume.
 /// </para>
+/// <para>
+/// <paramref name="Peers"/> is <c>peers[]</c>, the other sides of this
+/// machine. An absent or empty list is the rollback for the whole WSL lane:
+/// no side appears on the page and the Windows side behaves exactly as it did
+/// before the coordinator existed.
+/// </para>
 /// </summary>
 public sealed record ClaudeCodeAccountRotationConfiguration(
     string LiveConfigDirectory,
@@ -32,4 +38,5 @@ public sealed record ClaudeCodeAccountRotationConfiguration(
     IReadOnlyDictionary<string, string> BrowserExecutables,
     bool SharedStore = false,
     RotationRole Role = RotationRole.Leader,
-    string? Mailbox = null);
+    string? Mailbox = null,
+    IReadOnlyList<PeerConfiguration>? Peers = null);

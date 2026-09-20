@@ -1,6 +1,7 @@
 using System.Reflection;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Adapters.Http;
+using ClaudeCodeAccountRotation.App.Adapters.Peers;
 using ClaudeCodeAccountRotation.App.Adapters.Process;
 using ClaudeCodeAccountRotation.App.Configuration;
 using ClaudeCodeAccountRotation.App.Dashboard;
@@ -12,6 +13,7 @@ using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Configuration;
 using ClaudeCodeAccountRotation.Core.Ports;
 using ClaudeCodeAccountRotation.Core.Quota;
+using ClaudeCodeAccountRotation.Core.Switching;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.HostFiltering;
@@ -95,7 +97,11 @@ internal static class AppComposition
             return Result<Unit, string>.Success(Unit.Value);
         }
 
-        services.AddSingleton<ICredentialPairStore>(new FileSystemCredentialPairStore(configuration.LiveConfigDirectory, configuration.ProfilesRoot, TimeProvider.System));
+        // Registered as itself as well as behind the port: the coordinator needs
+        // the mailbox operations, which are the leader's alone and deliberately
+        // not on ICredentialPairStore, since a follower has no store to claim in.
+        services.AddSingleton(new FileSystemCredentialPairStore(configuration.LiveConfigDirectory, configuration.ProfilesRoot, TimeProvider.System));
+        services.AddSingleton<ICredentialPairStore>(static provider => provider.GetRequiredService<FileSystemCredentialPairStore>());
         services.AddSingleton(new ClaudeStateFile(configuration.StateFilePath));
         services.AddSingleton(new ProfileFolderStore(configuration.ProfilesRoot));
         services.AddSingleton(new RateLimitGuardTeeFileReader(configuration.StatuslineTeePath));
@@ -133,6 +139,9 @@ internal static class AppComposition
             provider.GetRequiredService<IClaudeCliLogout>(),
             provider.GetRequiredService<TimeProvider>()));
         services.AddSingleton<LiveDirectorySwitch>();
+        ComposePeers(services, configuration);
+        services.AddSingleton(new WslSwitchJournal(configuration.AppDataDirectory));
+        services.AddSingleton<WslSwitch>();
         services.AddSingleton<DashboardState>();
         services.AddSingleton<DashboardAssembler>();
         AddRefresh(services);
@@ -193,10 +202,39 @@ internal static class AppComposition
         app.MapGet("/", static () => Results.Content(EmbeddedPage.IndexHtml, "text/html; charset=utf-8"));
         DashboardEndpoints.Map(app);
         SwitchEndpoints.Map(app);
+        SideEndpoints.Map(app);
         RosterEndpoints.Map(app);
         RefreshEndpoints.Map(app);
         LoginEndpoints.Map(app);
     }
+
+    /// <summary>
+    /// The other sides of this machine, from <c>peers[]</c>. An empty list
+    /// registers an empty registry: the coordinator resolves, refuses every
+    /// side as offline, and the page shows no side — which is this lane's
+    /// whole rollback.
+    /// </summary>
+    private static void ComposePeers(IServiceCollection services, ClaudeCodeAccountRotationConfiguration configuration)
+    {
+        foreach (PeerConfiguration peer in configuration.Peers ?? [])
+        {
+            services.AddHttpClient(PeerClientName(peer.Side), client => client.BaseAddress = peer.BaseAddress);
+        }
+
+        services.AddSingleton(provider => new PeerRegistry(
+        [
+            .. (configuration.Peers ?? []).Select(peer => new Peer(
+                new HttpPeerRotationInstance(
+                    peer.Side,
+                    provider.GetRequiredService<IHttpClientFactory>().CreateClient(PeerClientName(peer.Side))),
+                peer.Launch is null
+                    ? null
+                    : new WslDistributionPeerHost(peer.Side, peer.Launch, provider.GetRequiredService<ILogger<WslDistributionPeerHost>>()),
+                peer.StorePathFromPeer)),
+        ]));
+    }
+
+    private static string PeerClientName(SideName side) => "peer-" + side.Value;
 
     /// <summary>
     /// The follower's container: a live directory, a journal, and the staged

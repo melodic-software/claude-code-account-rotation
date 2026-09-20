@@ -760,6 +760,17 @@ internal sealed partial class FollowerImport : IDisposable
                 UnwindAsync(hold).GetAwaiter().GetResult();
             }
         }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException or System.Text.Json.JsonException)
+        {
+            // This runs on a timer thread, where an escaping exception is not a
+            // failed request but a faulted process: nothing is awaiting this
+            // call, so the unhandled exception would take the follower down and
+            // with it the import it was trying to tidy up. A self-abort that
+            // cannot finish leaves the hold open for the next request or the
+            // next tick, which is strictly better than no process at all.
+            // Phase 3 flagged this and left it; this is the fix.
+            LogSelfAbortFailed(exception.Message);
+        }
         finally
         {
             try
@@ -784,6 +795,9 @@ internal sealed partial class FollowerImport : IDisposable
 
     [LoggerMessage(Level = LogLevel.Information, Message = "the import of {Incoming} was unwound; the live pair was not touched")]
     private partial void LogUnwound(string incoming);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the idle self-abort could not finish ({Reason}); the hold stays open for the next request")]
+    private partial void LogSelfAbortFailed(string reason);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "the import of {Incoming} was asked to unwind after the swap had already run; it was finished instead, because the outgoing pair exists only as the export")]
     private partial void LogFinishedInsteadOfUnwound(string incoming);

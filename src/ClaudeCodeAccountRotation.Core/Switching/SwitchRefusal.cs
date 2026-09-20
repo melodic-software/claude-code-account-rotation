@@ -57,6 +57,25 @@ public enum SwitchRefusal
     /// </summary>
     SideOffline,
 
+    /// <summary>
+    /// <b>The export gate refused it.</b> The other side answered that it had
+    /// exported the pair it holds, and the leader's native read of that file,
+    /// on the store's own volume, did not find the fingerprint it named — a
+    /// mismatch, a short read, or no file at all. The import was aborted and
+    /// the claim taken back before the commit that would have destroyed the
+    /// outgoing pair's last local copy, so nothing was swapped and both sides'
+    /// live pairs are exactly where they were.
+    /// </summary>
+    ExportNotVerified,
+
+    /// <summary>
+    /// The other side answered a definite "not imported" for this account: its
+    /// own crash table unwound the import, or it never reached one. The claim
+    /// has been taken back and the slot holds its pair again. This is never
+    /// inferred from a cleared journal; it is only ever that side's own answer.
+    /// </summary>
+    PeerDidNotImport,
+
     MutationInProgress,
 
     /// <summary>

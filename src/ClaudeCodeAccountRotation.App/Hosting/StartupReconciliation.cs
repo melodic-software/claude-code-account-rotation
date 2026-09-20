@@ -15,6 +15,7 @@ namespace ClaudeCodeAccountRotation.App.Hosting;
 /// </summary>
 internal sealed partial class StartupReconciliation(
     LiveDirectorySwitch executor,
+    WslSwitch coordinator,
     RecoveryFiles recovery,
     UsageSnapshotCache cache,
     QuotaState quota,
@@ -28,6 +29,12 @@ internal sealed partial class StartupReconciliation(
         ReconciliationReport report = await executor.ReconcileAsync(cancellationToken);
         state.LastReconciliation = report;
         LogReconciled(report.JournalOutcome, report.Quarantined.Count, report.SwitchingBlocked);
+        // The leader half of the hand-off crash table, after the Windows one and
+        // before the first request: a hand-off this process died in the middle of
+        // is finished or left in transit by its own rules, not by a Windows
+        // switch's, which know nothing about mailboxes.
+        WslReconciliation handOff = await coordinator.ReconcileAsync(cancellationToken);
+        LogHandOffReconciled(handOff.Outcome);
         await RestoreStrandedPairsAsync(cancellationToken);
         await LoadCachedUsageAsync(cancellationToken);
     }
@@ -87,6 +94,9 @@ internal sealed partial class StartupReconciliation(
 
     [LoggerMessage(Level = LogLevel.Information, Message = "startup reconciliation: {JournalOutcome}; quarantined {QuarantinedCount}; switching blocked: {Blocked}")]
     private partial void LogReconciled(string journalOutcome, int quarantinedCount, bool blocked);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "hand-off reconciliation at start: {Outcome}")]
+    private partial void LogHandOffReconciled(string outcome);
 
     // The type and the curated reason where the operator will see them, the
     // exception itself at Debug: a stack trace from a startup sweep over the

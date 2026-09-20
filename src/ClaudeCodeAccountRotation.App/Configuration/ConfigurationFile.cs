@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Configuration;
+using ClaudeCodeAccountRotation.Core.Switching;
 
 namespace ClaudeCodeAccountRotation.App.Configuration;
 
@@ -63,7 +64,31 @@ internal static class ConfigurationFile
         ["store"] = new JsonObject { ["shared"] = configuration.SharedStore },
         ["role"] = RoleName(configuration.Role),
         ["mailbox"] = configuration.Mailbox,
+        ["peers"] = PeersToJson(configuration.Peers),
     };
+
+    private static JsonArray PeersToJson(IReadOnlyList<PeerConfiguration>? peers)
+    {
+        JsonArray json = [];
+        foreach (PeerConfiguration peer in peers ?? [])
+        {
+            json.Add(new JsonObject
+            {
+                ["side"] = peer.Side.Value,
+                ["baseAddress"] = peer.BaseAddress.ToString(),
+                ["storePathFromPeer"] = peer.StorePathFromPeer,
+                ["launch"] = peer.Launch is null ? null : new JsonObject
+                {
+                    ["distribution"] = peer.Launch.Distribution,
+                    ["user"] = peer.Launch.User,
+                    ["executablePath"] = peer.Launch.ExecutablePath,
+                    ["port"] = peer.Launch.Port,
+                },
+            });
+        }
+
+        return json;
+    }
 
     private static string RoleName(RotationRole role) => role == RotationRole.Follower ? "follower" : "leader";
 
@@ -97,8 +122,50 @@ internal static class ConfigurationFile
             BrowserExecutables(raw) ?? defaults.BrowserExecutables,
             SharedStore(raw) ?? defaults.SharedStore,
             Role(raw) ?? defaults.Role,
-            Text(raw, "mailbox") ?? defaults.Mailbox);
+            Text(raw, "mailbox") ?? defaults.Mailbox,
+            Peers(raw) ?? defaults.Peers);
     }
+
+    /// <summary>
+    /// <c>peers[]</c>: the other sides of this machine. An entry missing
+    /// <c>side</c>, a usable <c>baseAddress</c>, or <c>storePathFromPeer</c> is
+    /// dropped rather than failing the whole file, because the alternative is a
+    /// tool that will not start over a key that only disables one lane. The
+    /// dropped entry shows up as a side that is simply not on the page.
+    /// </summary>
+    private static List<PeerConfiguration>? Peers(JsonObject raw)
+    {
+        if (raw["peers"] is not JsonArray entries)
+        {
+            return null;
+        }
+
+        List<PeerConfiguration> peers = [];
+        foreach (JsonNode? node in entries)
+        {
+            if (node is not JsonObject peer
+                || Text(peer, "side") is not string side
+                || Text(peer, "baseAddress") is not string address
+                || !Uri.TryCreate(address, UriKind.Absolute, out Uri? baseAddress)
+                || Text(peer, "storePathFromPeer") is not string storePath)
+            {
+                continue;
+            }
+
+            peers.Add(new PeerConfiguration(new SideName(side), baseAddress, storePath, Launch(peer)));
+        }
+
+        return peers;
+    }
+
+    private static PeerLaunch? Launch(JsonObject peer) =>
+        peer["launch"] is JsonObject launch
+        && Text(launch, "distribution") is string distribution
+        && Text(launch, "user") is string user
+        && Text(launch, "executablePath") is string executablePath
+        && Number(launch, "port") is double port
+            ? new PeerLaunch(distribution, user, executablePath, (int)port)
+            : null;
 
     /// <summary>
     /// <c>store.shared</c>: whether the two sides of this machine share one

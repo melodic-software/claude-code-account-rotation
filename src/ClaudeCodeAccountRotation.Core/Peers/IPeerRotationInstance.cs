@@ -51,12 +51,19 @@ public sealed record ImportStatus(
     AccountEmail? LiveAccount,
     string Detail);
 
-/// <summary>What the follower's dashboard tells the leader's L1 about that side.</summary>
+/// <summary>
+/// What the follower's dashboard tells the leader's L1 about that side.
+/// <see cref="Version"/> is what the version check refuses on: the two
+/// processes share a journal vocabulary and a request shape, so a follower
+/// built from different sources is refused the import before anything moves,
+/// rather than after a rename it cannot finish.
+/// </summary>
 public sealed record PeerDashboard(
     SideName Side,
     AccountEmail? LiveAccount,
     RefreshTokenFingerprint? LiveFingerprint,
-    ImportStep? ImportJournalStep);
+    ImportStep? ImportJournalStep,
+    string? Version);
 
 /// <summary>
 /// The other side of this machine, as the leader's coordinator talks to it:

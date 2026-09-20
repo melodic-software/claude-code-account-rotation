@@ -113,7 +113,8 @@ internal static class ImportEndpoints
                 SideName.Wsl.Value,
                 status.LiveAccount?.Value,
                 status.LiveFingerprint?.Sha256Hex,
-                status.JournalStep?.ToString()));
+                status.JournalStep?.ToString(),
+                Hosting.AppComposition.Version));
         });
     }
 
@@ -166,5 +167,5 @@ internal static class ImportEndpoints
 
     internal sealed record ImportStatusView(bool Imported, string? JournalStep, string? LiveFingerprint, string Detail);
 
-    internal sealed record FollowerDashboardView(string Role, string Side, string? LiveAccount, string? LiveFingerprint, string? ImportJournalStep);
+    internal sealed record FollowerDashboardView(string Role, string Side, string? LiveAccount, string? LiveFingerprint, string? ImportJournalStep, string? Version);
 }

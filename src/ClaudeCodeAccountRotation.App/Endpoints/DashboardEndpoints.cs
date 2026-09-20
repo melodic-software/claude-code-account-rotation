@@ -1,4 +1,5 @@
 using ClaudeCodeAccountRotation.App.Dashboard;
+using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Ports;
 using Microsoft.AspNetCore.Builder;
@@ -12,8 +13,16 @@ internal static class DashboardEndpoints
     public static void Map(IEndpointRouteBuilder routes)
     {
         ArgumentNullException.ThrowIfNull(routes);
-        routes.MapGet("/api/dashboard", static async (DashboardAssembler assembler, CancellationToken cancellationToken) =>
-            Results.Ok(await assembler.AssembleAsync(cancellationToken)));
+        routes.MapGet("/api/dashboard", static async (DashboardAssembler assembler, WslSwitch coordinator, CancellationToken cancellationToken) =>
+        {
+            // The leader's own crash table, on every poll. Startup is not enough:
+            // the case the acceptance exercises most is a follower killed while
+            // this process stays up, and nothing else would notice until a
+            // restart. It costs one File.Exists when no hand-off is in flight,
+            // and it steps aside when one is.
+            _ = await coordinator.ReconcileAsync(cancellationToken);
+            return Results.Ok(await assembler.AssembleAsync(cancellationToken));
+        });
 
         // What the roster's profile picker is populated from. A read, so it takes
         // the read endpoints' shape: no mutation header and no same-origin filter,
