@@ -8,6 +8,7 @@ using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Ports;
 using ClaudeCodeAccountRotation.Core.Quota;
+using ClaudeCodeAccountRotation.Core.Switching;
 using Microsoft.Extensions.Logging;
 
 namespace ClaudeCodeAccountRotation.App.Quota;
@@ -99,6 +100,7 @@ internal sealed partial class QuotaRefresh
     private readonly CredentialMutationGate _gate;
     private readonly ILoginSessionRunner _logins;
     private readonly RecoveryFiles _recovery;
+    private readonly SharedStoreSlots _slots;
     private readonly TimeProvider _timeProvider;
     private readonly Func<TimeSpan, CancellationToken, Task> _pace;
     private readonly ILogger<QuotaRefresh> _logger;
@@ -118,6 +120,7 @@ internal sealed partial class QuotaRefresh
         CredentialMutationGate gate,
         ILoginSessionRunner logins,
         RecoveryFiles recovery,
+        SharedStoreSlots slots,
         TimeProvider timeProvider,
         Func<TimeSpan, CancellationToken, Task> pace,
         ILogger<QuotaRefresh> logger,
@@ -136,6 +139,7 @@ internal sealed partial class QuotaRefresh
         _gate = gate;
         _logins = logins;
         _recovery = recovery;
+        _slots = slots;
         _timeProvider = timeProvider;
         _pace = pace;
         _logger = logger;
@@ -238,6 +242,19 @@ internal sealed partial class QuotaRefresh
         {
             if (profile.Email == liveEmail || !Wanted(profile.Email))
             {
+                continue;
+            }
+
+            // Before the paused branch and before the credential branch, because
+            // both of them would speak for a slot this side does not hold: a
+            // paused account can still cost a token request to renew its login,
+            // and an empty slot would otherwise report "log in again" for an
+            // account that is merely in use on the other side. Nothing is sent
+            // for it either way.
+            if (await _slots.ReadAsync(profile.Email, profile.FolderPath, profile.HasCredentials, new WindowsHold(liveEmail, null), stopping)
+                is { State: SlotState.HeldElsewhere or SlotState.InTransit })
+            {
+                Record(profile.Email, Outcome(RefreshOutcomeKind.HeldElsewhere, RefreshMessages.HeldElsewhere), summary);
                 continue;
             }
 

@@ -14,23 +14,55 @@
 # clear rather than a duplicate to fail on, so those files are named and counted
 # and the exit code is left to the duplicate scan.
 #
+# Two forms. The positional one below is the single-machine check and is
+# unchanged. The `--root <dir>` form, repeatable, sweeps whole trees instead and
+# is what a machine whose two sides share one store needs: the Windows live
+# directory, the store including its `.transit/` mailboxes, the WSL live
+# directory including the `*.incoming` staging names, and the WSL app data. A
+# file in a mailbox is a holder like any other, so a hand-off in flight is
+# counted rather than passed over, and a claim and its account's slot holding
+# the same lineage at once is the duplicate this script exists to catch.
+#
 # Usage: check-single-holder.sh <profiles-root> <live-dir> [app-data-dir]
+#        check-single-holder.sh --root <dir> [--root <dir>]...
 set -euo pipefail
 
-if [[ $# -lt 2 || $# -gt 3 ]]; then
+product="claude-code-account-rotation"
+declare -a roots=()
+declare -a positional=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --root)
+      [[ $# -ge 2 ]] || { echo "usage: $0 --root <dir> [--root <dir>]..." >&2; exit 2; }
+      roots+=("$2")
+      shift 2
+      ;;
+    *)
+      positional+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [[ ${#roots[@]} -gt 0 ]]; then
+  if [[ ${#positional[@]} -gt 0 ]]; then
+    echo "usage: $0 --root <dir> [--root <dir>]...  (no positional arguments with --root)" >&2
+    exit 2
+  fi
+elif [[ ${#positional[@]} -lt 2 || ${#positional[@]} -gt 3 ]]; then
   echo "usage: $0 <profiles-root> <live-dir> [app-data-dir]" >&2
+  echo "   or: $0 --root <dir> [--root <dir>]..." >&2
   exit 2
 fi
 
-product="claude-code-account-rotation"
-profiles_root="$1"
-live_dir="$2"
+profiles_root="${positional[0]:-}"
+live_dir="${positional[1]:-}"
 # The same per-user location the app composes: the platform's local application
 # data directory (which the .NET runtime resolves to %LOCALAPPDATA% on Windows
 # and to $XDG_DATA_HOME or ~/.local/share elsewhere) plus the product name. The
 # Windows value arrives with backslashes under Git Bash.
-if [[ -n "${3:-}" ]]; then
-  app_data="$3"
+if [[ -n "${positional[2]:-}" ]]; then
+  app_data="${positional[2]}"
 elif [[ -n "${LOCALAPPDATA:-}" ]]; then
   app_data="${LOCALAPPDATA//\\//}/$product"
 else
@@ -65,7 +97,28 @@ collect_temps() {
   done < <(find "$dir" -maxdepth 1 -name "$pattern" -type f -print0 | sort -z)
 }
 
+# A whole tree, for the --root form: every settled credential file whatever it
+# is called, every mailbox claim (`<folder>.credentials.json`), every staging
+# name the other side writes (`*.incoming`), and every crash temp beside them.
+# Recovery envelopes are left out here exactly as they are below: they nest the
+# pair one level down and are counted on their own line rather than as holders.
+collect_root() {
+  local root="$1" entry
+  [[ -d "$root" ]] || return 0
+  while IFS= read -r -d '' entry; do
+    files+=("$entry")
+  done < <(find "$root" -type f \
+    \( -name "*$credential_file" -o -name '*.incoming' -o -name '.*.tmp' \) \
+    -not -path "*/recovery/*" -print0 | sort -z)
+}
+
 declare -a files=()
+if [[ ${#roots[@]} -gt 0 ]]; then
+  for root in "${roots[@]}"; do
+    collect_root "$root"
+  done
+else
+
 [[ -f "$live_dir/$credential_file" ]] && files+=("$live_dir/$credential_file")
 collect_temps "$live_dir"
 
@@ -92,6 +145,8 @@ if [[ -d "$profiles_root" ]]; then
   while IFS= read -r -d '' dir; do
     collect_temps "$dir"
   done < <(find "$profiles_root" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
+fi
+
 fi
 
 declare -A holders=()
@@ -124,8 +179,17 @@ echo "files=${#files[@]} distinct=${#holders[@]} duplicates=$duplicates unreadab
 # fingerprinted beside the settled ones; each is named by its file so the
 # operator can see which account is stranded, and the count is the number the
 # runbook expects to be zero.
+declare -a recovery_roots=()
+if [[ ${#roots[@]} -gt 0 ]]; then
+  for root in "${roots[@]}"; do
+    recovery_roots+=("$root/recovery" "$root/recovery/stale")
+  done
+else
+  recovery_roots+=("$app_data/recovery" "$app_data/recovery/stale")
+fi
+
 declare -a recovery_files=()
-for directory in "$app_data/recovery" "$app_data/recovery/stale"; do
+for directory in "${recovery_roots[@]}"; do
   [[ -d "$directory" ]] || continue
   while IFS= read -r -d '' entry; do
     recovery_files+=("$entry")

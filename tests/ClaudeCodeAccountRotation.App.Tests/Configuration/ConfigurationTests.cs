@@ -55,6 +55,49 @@ public sealed class ConfigurationTests : IDisposable
         JsonObject written = JsonNode.Parse(await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken))!.AsObject();
         written["profilesRoot"]!.GetValue<string>().ShouldBe(Defaults().ProfilesRoot);
         written["listenPort"]!.GetValue<int>().ShouldBe(48211);
+        written["store"]!["shared"]!.GetValue<bool>().ShouldBeFalse();
+    }
+
+    [Fact]
+    public void TheStoreIsNotSharedUntilItIsSaidToBe()
+    {
+        Defaults().SharedStore.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task StoreSharedTurnsTheSharedStoreOnAndNothingElseDoes()
+    {
+        string path = Path.Combine(_root, "appdata", "config.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, """{"store": {"shared": true}}""", TestContext.Current.CancellationToken);
+
+        Result<ClaudeCodeAccountRotationConfiguration, string> loaded = await ConfigurationFile.LoadOrCreateAsync(path, Defaults(), TestContext.Current.CancellationToken);
+
+        loaded.Value.SharedStore.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task AFileWithNoStoreSectionKeepsTheStoreUnshared()
+    {
+        string path = Path.Combine(_root, "appdata", "config.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, """{"listenPort": 5000}""", TestContext.Current.CancellationToken);
+
+        Result<ClaudeCodeAccountRotationConfiguration, string> loaded = await ConfigurationFile.LoadOrCreateAsync(path, Defaults(), TestContext.Current.CancellationToken);
+
+        loaded.Value.SharedStore.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task AStoreSectionThatIsNotABooleanKeepsTheDefault()
+    {
+        string path = Path.Combine(_root, "appdata", "config.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, """{"store": {"shared": "yes please"}}""", TestContext.Current.CancellationToken);
+
+        Result<ClaudeCodeAccountRotationConfiguration, string> loaded = await ConfigurationFile.LoadOrCreateAsync(path, Defaults(), TestContext.Current.CancellationToken);
+
+        loaded.Value.SharedStore.ShouldBeFalse();
     }
 
     [Fact]

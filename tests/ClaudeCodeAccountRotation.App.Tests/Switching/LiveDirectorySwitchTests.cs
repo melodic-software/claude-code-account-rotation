@@ -57,7 +57,8 @@ public sealed class LiveDirectorySwitchTests : IDisposable
         TimeSpan? lockWait = null,
         TimeSpan? gateTimeout = null,
         ICredentialPairStore? pairs = null,
-        ILoginSessionRunner? logins = null)
+        ILoginSessionRunner? logins = null,
+        bool sharedStore = false)
     {
         SwitchOptions options = new(_liveDirectory, _stateFilePath, _profilesRoot, _appData, lockWait ?? TimeSpan.FromSeconds(2), gateTimeout ?? TimeSpan.FromMilliseconds(200));
         ICredentialPairStore store = pairs ?? new FileSystemCredentialPairStore(_liveDirectory, _profilesRoot, TimeProvider.System);
@@ -73,6 +74,7 @@ public sealed class LiveDirectorySwitchTests : IDisposable
             new ManagedLoginPolicyReader(Path.Combine(_root, "managed-settings.json"), static () => null, static () => null),
             new RecoveryFiles(options, store, folders, _quota, NullLogger<RecoveryFiles>.Instance),
             _quota,
+            new SharedStoreSlots(_profilesRoot, sharedStore, _gate, NullLogger<SharedStoreSlots>.Instance),
             options,
             TimeProvider.System,
             NullLogger<LiveDirectorySwitch>.Instance);
@@ -721,10 +723,135 @@ public sealed class LiveDirectorySwitchTests : IDisposable
         }
     }
 
+    private string Record(string email) => Path.Combine(_profilesRoot, email, HolderRecordFile.FileName);
+
+    private Task<HolderRecord?> ReadRecordAsync(string email) =>
+        HolderRecordFile.ReadAsync(Path.Combine(_profilesRoot, email), TestContext.Current.CancellationToken);
+
+    [Fact]
+    public async Task WithTheStoreSharedASwitchRecordsTheIncomingSlotAsWindowsAndClearsTheOutgoingOne()
+    {
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        await ParkedProfileAsync("b@example.com", "refresh-b");
+        // The record the previous switch to a@example.com left on its own slot.
+        await HolderRecordFile.WriteAsync(
+            Path.Combine(_profilesRoot, "a@example.com"),
+            new HolderRecord(SideName.Windows, CredentialFiles.Pair("refresh-a").Fingerprint, DateTimeOffset.UnixEpoch),
+            TestContext.Current.CancellationToken);
+        _cli.Email = "b@example.com";
+
+        Result<SwitchOutcome, SwitchRefusal> result = await Switch(sharedStore: true).SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken);
+
+        result.IsSuccess.ShouldBeTrue(result.IsFailure ? result.Error.ToString() : "");
+        HolderRecord? incoming = await ReadRecordAsync("b@example.com");
+        incoming!.Side.ShouldBe(SideName.Windows);
+        incoming.Fingerprint.ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
+        File.Exists(Record("a@example.com")).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task WithTheStoreNotSharedASwitchWritesNoHolderRecordAtAll()
+    {
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        await ParkedProfileAsync("b@example.com", "refresh-b");
+        _cli.Email = "b@example.com";
+
+        Result<SwitchOutcome, SwitchRefusal> result = await Switch().SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken);
+
+        result.IsSuccess.ShouldBeTrue(result.IsFailure ? result.Error.ToString() : "");
+        Directory.EnumerateFiles(_profilesRoot, HolderRecordFile.FileName, SearchOption.AllDirectories).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task ASwitchToASlotTheOtherSideHoldsIsRefusedBeforeTheMissingPairIsNoticed()
+    {
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        // The shape a held slot really has: an identity but no pair, plus the record.
+        string folder = Path.Combine(_profilesRoot, "b@example.com");
+        Directory.CreateDirectory(folder);
+        await File.WriteAllTextAsync(Path.Combine(folder, "profile.json"), AccountJson("b@example.com").ToJsonString(), TestContext.Current.CancellationToken);
+        await HolderRecordFile.WriteAsync(
+            folder,
+            new HolderRecord(SideName.Wsl, CredentialFiles.Pair("refresh-b").Fingerprint, DateTimeOffset.UnixEpoch),
+            TestContext.Current.CancellationToken);
+
+        Result<SwitchOutcome, SwitchRefusal> result = await Switch(sharedStore: true).SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken);
+
+        result.IsFailure.ShouldBeTrue();
+        result.Error.ShouldBe(SwitchRefusal.HeldByOtherSide);
+    }
+
+    [Fact]
+    public async Task TheSameRecordOnASlotThatStillHoldsItsPairDoesNotRefuseTheSwitchBecausePossessionWins()
+    {
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        string folder = await ParkedProfileAsync("b@example.com", "refresh-b");
+        await HolderRecordFile.WriteAsync(
+            folder,
+            new HolderRecord(SideName.Wsl, CredentialFiles.Pair("refresh-b").Fingerprint, DateTimeOffset.UnixEpoch),
+            TestContext.Current.CancellationToken);
+        _cli.Email = "b@example.com";
+
+        Result<SwitchOutcome, SwitchRefusal> result = await Switch(sharedStore: true).SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken);
+
+        result.IsSuccess.ShouldBeTrue(result.IsFailure ? result.Error.ToString() : "");
+        (await ReadRecordAsync("b@example.com"))!.Side.ShouldBe(SideName.Windows);
+    }
+
+    [Fact]
+    public async Task ASwitchToASlotWithAHandOffInFlightIsRefused()
+    {
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        await ParkedProfileAsync("b@example.com", "refresh-b");
+        string mailbox = FileSystemCredentialPairStore.MailboxPath(_profilesRoot, SideName.Wsl);
+        Directory.CreateDirectory(mailbox);
+        await File.WriteAllTextAsync(
+            Path.Combine(mailbox, FileSystemCredentialPairStore.ClaimedFileName("b@example.com")),
+            string.Empty,
+            TestContext.Current.CancellationToken);
+
+        Result<SwitchOutcome, SwitchRefusal> result = await Switch(sharedStore: true).SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken);
+
+        result.IsFailure.ShouldBeTrue();
+        result.Error.ShouldBe(SwitchRefusal.SlotInTransit);
+    }
+
+    [Fact]
+    public async Task ACrashBetweenTheRecordWriteAndTheUnparkLeavesASlotReconciliationHeals()
+    {
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        await ParkedProfileAsync("b@example.com", "refresh-b");
+        DelegatingPairStore crashing = new(new FileSystemCredentialPairStore(_liveDirectory, _profilesRoot, TimeProvider.System))
+        {
+            BeforeUnpark = static () => throw new IOException("the machine went away"),
+        };
+
+        await Should.ThrowAsync<IOException>(() => Switch(pairs: crashing, sharedStore: true).SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken));
+
+        // The slot holds its pair and a record at once, which is exactly the row
+        // the reconciliation table drops: the file wins and nothing is stranded.
+        string folder = Path.Combine(_profilesRoot, "b@example.com");
+        File.Exists(Path.Combine(folder, FileSystemCredentialPairStore.FileName)).ShouldBeTrue();
+        (await ReadRecordAsync("b@example.com")).ShouldNotBeNull();
+        SharedStoreSlots slots = new(_profilesRoot, enabled: true, _gate, NullLogger<SharedStoreSlots>.Instance);
+        SlotSnapshot? reconciled = await slots.ReadAsync(Email("b@example.com"), folder, slotHoldsPair: true, default, TestContext.Current.CancellationToken);
+        reconciled!.State.ShouldBe(SlotState.Parked);
+        reconciled.StaleRecord.ShouldBeTrue();
+    }
+
     /// <summary>Forwards to the real store and runs a hook after the park, the seam a request abort needs.</summary>
     private sealed class DelegatingPairStore(ICredentialPairStore inner) : ICredentialPairStore
     {
         public Action? AfterPark { get; init; }
+
+        /// <summary>Runs just before the unpark rename: the seam a crash between the record write and the move needs.</summary>
+        public Action? BeforeUnpark { get; init; }
 
         public Task<CredentialPair?> ReadLiveAsync(CancellationToken cancellationToken) => inner.ReadLiveAsync(cancellationToken);
 
@@ -736,7 +863,11 @@ public sealed class LiveDirectorySwitchTests : IDisposable
             AfterPark?.Invoke();
         }
 
-        public Task MoveParkedToLiveAsync(string folderPath, CancellationToken cancellationToken) => inner.MoveParkedToLiveAsync(folderPath, cancellationToken);
+        public Task MoveParkedToLiveAsync(string folderPath, CancellationToken cancellationToken)
+        {
+            BeforeUnpark?.Invoke();
+            return inner.MoveParkedToLiveAsync(folderPath, cancellationToken);
+        }
 
         public Task MoveParkedToQuarantineAsync(string folderPath, string destinationDirectory, CancellationToken cancellationToken) => inner.MoveParkedToQuarantineAsync(folderPath, destinationDirectory, cancellationToken);
 
