@@ -98,9 +98,14 @@ public sealed class SideEndpointTests
         body["now"]!.GetValue<string>().ShouldBe(Incoming);
         body["parkedAs"]!.GetValue<string>().ShouldBe(Outgoing);
 
-        // The WSL side: the claimed pair is its live pair now.
+        // The WSL side: the claimed pair is its live pair, its state file names
+        // the account that came with it, and the staging copy the swap went
+        // through is gone.
         (await FollowerRoots.FingerprintOfAsync(follower.Roots.LivePath, Token))
             .ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
+        JsonNode state = JsonNode.Parse(await File.ReadAllTextAsync(follower.Roots.StateFilePath, Token))!;
+        state["oauthAccount"]!["emailAddress"]!.GetValue<string>().ShouldBe(Incoming);
+        File.Exists(follower.Roots.StagingPath).ShouldBeFalse();
         // The store: the incoming slot names the side that holds its pair and
         // holds none itself, the outgoing slot has its pair back, and the
         // mailbox both sides used is empty again.

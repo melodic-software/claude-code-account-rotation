@@ -307,6 +307,9 @@ public sealed class WslSwitchTests
         // pair is the export, and that side's own journal has been cleared.
         StagedImportCredentialPairStore.DeleteIfPresent(harness.ClaimedPath(Incoming));
         await harness.WriteExportAsync(Outgoing, "refresh-a", Token);
+        // The outgoing slot's identity has to be on disk already: an
+        // ExportVerified journal carries no account block, because the block
+        // arrives with the commit's answer and that answer is what was lost.
         await harness.IdentifiedSlotAsync(Outgoing, Token);
         await JournalAtAsync(harness, WslSwitchStep.ExportVerified, incoming);
         harness.Side.Status = new ImportStatus(true, null, incoming, null, "imported: the live pair here is the one that was claimed");
