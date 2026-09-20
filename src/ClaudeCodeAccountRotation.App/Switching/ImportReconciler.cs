@@ -11,25 +11,31 @@ internal sealed record ImportReconciliation(bool Imported, AccountEmail? Outgoin
 /// The follower's crash table (design section 9.3), run at start under the
 /// gate before any request is served.
 /// <para>
-/// <b>The journal is a hint and the fingerprints are the evidence.</b> Every
-/// row is decided by reading the live, staging, claimed and export files; the
-/// journal only says where to look first. The row that makes this matter is a
-/// journal reading <see cref="ImportStep.Exported"/> over a live file that
-/// already holds the incoming pair: F5 landed and the process died before the
-/// journal write. Unwinding there would delete an export whose lineage is no
-/// longer live anywhere else, so that torn swap is continued, not reversed.
+/// <b>The journal is a hint and the fingerprints are the evidence.</b> The row
+/// that makes this matter is a journal reading <see cref="ImportStep.Exported"/>
+/// over a live directory whose staging file is gone: F5 renamed it over the
+/// live pair and the process died before the journal write. Unwinding there
+/// would delete an export whose lineage is no longer live anywhere else, which
+/// is the one way this design could lose a pair rather than strand one.
 /// </para>
 /// <para>
-/// The CLI may have rotated the live pair while the follower was down — the
-/// stale lock is stolen after 60 s — so every comparison allows for a
-/// fingerprint having moved on: what is asserted is which <i>lineage</i> is
-/// live, judged by the account the live pair's owner record names, not by
-/// fingerprint equality alone.
+/// The <b>absence of the staging file</b> is what decides that row, not a
+/// fingerprint comparison. F5 is a rename, so the staging file exists exactly
+/// when the swap has not happened; a fingerprint test would have to assume the
+/// live pair still reads as the one that was staged, and the CLI may have
+/// rotated it while the follower was down — the stale lock is stolen after
+/// 60 s. The rename is the fact; the fingerprints confirm it.
 /// </para>
 /// </summary>
-internal sealed class ImportReconciler
+internal sealed partial class ImportReconciler
 {
     private readonly SwitchOptions _options;
+    private readonly StagedImportCredentialPairStore _pairs;
+    private readonly ImportJournal _journal;
+    private readonly ClaudeStateFile _stateFile;
+    private readonly string _liveOwnerPath;
+    private readonly TimeProvider _timeProvider;
+    private readonly ILogger<ImportReconciler> _logger;
 
     public ImportReconciler(
         SwitchOptions options,
@@ -46,11 +52,70 @@ internal sealed class ImportReconciler
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
         _options = options;
+        _pairs = pairs;
+        _journal = journal;
+        _stateFile = stateFile;
+        _liveOwnerPath = Path.Combine(Path.GetFullPath(options.AppDataDirectory), "state", "live-owner.json");
+        _timeProvider = timeProvider;
+        _logger = logger;
     }
 
-    public Task<ImportReconciliation> ReconcileAsync(CancellationToken cancellationToken)
+    public async Task<ImportReconciliation> ReconcileAsync(CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(new ImportReconciliation(false, null, "not implemented: " + _options.AppDataDirectory));
+        ImportJournalEntry? entry = await _journal.ReadOpenAsync(cancellationToken);
+        if (entry is null)
+        {
+            return new ImportReconciliation(false, null, "no import journal; nothing was in flight");
+        }
+
+        bool swapHasHappened = entry.StepReached switch
+        {
+            ImportStep.Planned or ImportStep.Staged => false,
+            // The torn F5: the staging file is gone, so the rename ran.
+            ImportStep.Exported => !File.Exists(_pairs.StagingPath) && File.Exists(_pairs.LivePath),
+            _ => true,
+        };
+
+        if (!swapHasHappened)
+        {
+            return await UnwindAsync(entry, cancellationToken);
+        }
+
+        ImportStep from = entry.StepReached == ImportStep.Exported ? ImportStep.Swapped : entry.StepReached;
+        await FollowerImport.FinishAsync(
+            entry,
+            _journal,
+            _stateFile,
+            _pairs,
+            _liveOwnerPath,
+            // A reconciliation never injects a crash: the hook belongs to the pass
+            // that is being crashed, and a second kill here would make the table
+            // untestable.
+            failAfterStep: null,
+            _timeProvider,
+            from,
+            cancellationToken);
+        LogContinued(entry.Incoming.Value, entry.StepReached);
+        return new ImportReconciliation(true, entry.Outgoing, "the swap had already happened at " + entry.StepReached + "; F6 to F8 were finished");
     }
+
+    /// <summary>
+    /// Before the swap, nothing has changed for a session, so nothing is
+    /// completed on its behalf: the two files this import created go and the
+    /// leader unclaims. The live pair is never touched.
+    /// </summary>
+    private async Task<ImportReconciliation> UnwindAsync(ImportJournalEntry entry, CancellationToken cancellationToken)
+    {
+        _pairs.DeleteStaging();
+        StagedImportCredentialPairStore.DeleteIfPresent(entry.ExportPath);
+        await _journal.ClearAsync(cancellationToken);
+        LogUnwound(entry.Incoming.Value, entry.StepReached);
+        return new ImportReconciliation(false, null, "the import of " + entry.Incoming.Value + " stopped at " + entry.StepReached + " before the swap and was unwound");
+    }
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "the import of {Incoming} had passed the swap at {Step}; finishing it")]
+    private partial void LogContinued(string incoming, ImportStep step);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the import of {Incoming} was unwound from {Step}; the live pair was not touched and the leader unclaims")]
+    private partial void LogUnwound(string incoming, ImportStep step);
 }
