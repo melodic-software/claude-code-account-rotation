@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json.Nodes;
+using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.App.Tests.Switching;
 using ClaudeCodeAccountRotation.Core.Identity;
 using Shouldly;
@@ -65,6 +66,45 @@ public sealed class ImportEndpointTests : IAsyncDisposable
         dashboard["side"]!.GetValue<string>().ShouldBe("wsl");
         dashboard["liveAccount"]!.GetValue<string>().ShouldBe(OutgoingEmail);
         dashboard["liveFingerprint"]!.GetValue<string>().ShouldBe(fa.Sha256Hex);
+    }
+
+    [Fact]
+    public async Task TheDashboardReconcilesBeforeItReadsEitherFile()
+    {
+        // The roots as a crash between F5 and F7 leaves them, written before this
+        // host has served anything: the live file holds the incoming pair, the
+        // state file still names the outgoing account, the journal still reads
+        // Exported, and no staging file remains. This route is the leader's L1
+        // view, so it must not answer with one account's name beside the other's
+        // fingerprint.
+        var fa = RefreshTokenFingerprint.FromRefreshToken("refresh-a");
+        var fb = RefreshTokenFingerprint.FromRefreshToken("refresh-b");
+        await CredentialFiles.WriteAsync(_factory.Roots.LiveDirectory, "refresh-b", Token);
+        await _factory.Roots.WriteStateFileAsync(OutgoingEmail, Token);
+        await _factory.Roots.WriteClaimedAsync(IncomingEmail, "refresh-b", Token);
+        await File.WriteAllTextAsync(
+            _factory.Roots.ExportPath(OutgoingEmail),
+            CredentialFiles.Shape("refresh-a").ToJsonString(),
+            Token);
+        await _factory.Roots.Journal().WriteAsync(
+            new ImportJournalEntry(
+                new AccountEmail(IncomingEmail),
+                fb,
+                _factory.Roots.ClaimedPath(IncomingEmail),
+                _factory.Roots.ExportPath(OutgoingEmail),
+                new AccountEmail(OutgoingEmail),
+                fa,
+                FollowerRoots.AccountJson(IncomingEmail),
+                FollowerRoots.AccountJson(OutgoingEmail),
+                ImportStep.Exported,
+                _factory.Roots.Clock.GetUtcNow()),
+            Token);
+        using HttpClient client = _factory.CreateClient();
+
+        JsonObject dashboard = (await client.GetFromJsonAsync<JsonObject>(_dashboard, Token))!;
+
+        dashboard["liveAccount"]!.GetValue<string>().ShouldBe(IncomingEmail);
+        dashboard["liveFingerprint"]!.GetValue<string>().ShouldBe(fb.Sha256Hex);
     }
 
     [Fact]

@@ -19,12 +19,9 @@ internal sealed record ImportReconciliation(bool Imported, AccountEmail? Outgoin
 /// is the one way this design could lose a pair rather than strand one.
 /// </para>
 /// <para>
-/// The <b>absence of the staging file</b> is what decides that row, not a
-/// fingerprint comparison. F5 is a rename, so the staging file exists exactly
-/// when the swap has not happened; a fingerprint test would have to assume the
-/// live pair still reads as the one that was staged, and the CLI may have
-/// rotated it while the follower was down — the stale lock is stolen after
-/// 60 s. The rename is the fact; the fingerprints confirm it.
+/// Two facts decide that row, and neither alone would.
+/// <see cref="SwapHasHappenedAsync"/> holds the rule; every unwind path and the
+/// status route ask it rather than deciding for themselves.
 /// </para>
 /// </summary>
 internal sealed partial class ImportReconciler
@@ -111,7 +108,7 @@ internal sealed partial class ImportReconciler
 
         if (!await SwapHasHappenedAsync(entry, _pairs, cancellationToken))
         {
-            return await UnwindAsync(entry, cancellationToken);
+            return await UnwindAsync(entry);
         }
 
         ImportStep from = entry.StepReached == ImportStep.Exported ? ImportStep.Swapped : entry.StepReached;
@@ -137,11 +134,19 @@ internal sealed partial class ImportReconciler
     /// completed on its behalf: the two files this import created go and the
     /// leader unclaims. The live pair is never touched.
     /// </summary>
-    private async Task<ImportReconciliation> UnwindAsync(ImportJournalEntry entry, CancellationToken cancellationToken)
+    private async Task<ImportReconciliation> UnwindAsync(ImportJournalEntry entry)
     {
-        _pairs.DeleteStaging();
+        // The same order, and for the same reason, as FollowerImport's own unwind:
+        // the export goes while the staging file still proves nothing was swapped,
+        // then the journal, then the staging file. Deleting the staging file first
+        // would leave a journal reading Exported over a live directory with no
+        // staging file, and if this pass died there and a session later rotated
+        // the live pair, the next pass would read that as a torn F5 and finish an
+        // import whose F5 never ran. On no token, because a half-finished cleanup
+        // is the state the order exists to prevent.
         StagedImportCredentialPairStore.DeleteIfPresent(entry.ExportPath);
-        await _journal.ClearAsync(cancellationToken);
+        await _journal.ClearAsync(CancellationToken.None);
+        _pairs.DeleteStaging();
         LogUnwound(entry.Incoming.Value, entry.StepReached);
         return new ImportReconciliation(false, null, "the import of " + entry.Incoming.Value + " stopped at " + entry.StepReached + " before the swap and was unwound");
     }

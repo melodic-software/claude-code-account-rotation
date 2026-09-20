@@ -211,7 +211,11 @@ internal sealed partial class FollowerImport : IDisposable
             TimeSpan waited = _timeProvider.GetUtcNow() - hold.ExportedAt;
             if (waited > CommitBudget)
             {
-                await UnwindAsync(hold);
+                if (await UnwindAsync(hold) is ImportResult late)
+                {
+                    return Result<ImportResult, string>.Success(late);
+                }
+
                 return Result<ImportResult, string>.Failure(
                     "not imported: the commit arrived " + waited.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)
                     + " s after the export, past the " + CommitBudget.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture) + " s budget; the import was unwound");
@@ -242,8 +246,12 @@ internal sealed partial class FollowerImport : IDisposable
                 return Result<Unit, string>.Failure("the open import is for " + hold.Request.Email.Value + ", not " + email.Value);
             }
 
-            await UnwindAsync(hold);
-            return Result<Unit, string>.Success(Unit.Value);
+            // An abort that arrives after the swap is refused rather than obeyed,
+            // and says so: the import happened, the outgoing pair is in the export,
+            // and the leader must park it instead of unclaiming.
+            return await UnwindAsync(hold) is null
+                ? Result<Unit, string>.Success(Unit.Value)
+                : Result<Unit, string>.Failure("not aborted: the swap had already run, so the import was finished instead; the outgoing pair is in the export and GET /api/import-status says so");
         }
         finally
         {
@@ -347,6 +355,18 @@ internal sealed partial class FollowerImport : IDisposable
         if (string.IsNullOrWhiteSpace(_options.Mailbox))
         {
             return Result<Unit, string>.Failure("this process has no mailbox configured and cannot import");
+        }
+
+        // One file cannot be both. F4 would write the export over the claimed
+        // file it had just staged from, and F6 would then delete what is by that
+        // point the outgoing pair's only copy — a request that passed every
+        // fingerprint check and still lost a credential.
+        if (string.Equals(
+            Path.GetFullPath(request.ClaimedPath),
+            Path.GetFullPath(request.ExportPath),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+        {
+            return Result<Unit, string>.Failure("the claimedPath and the exportPath are the same file; the incoming and outgoing pairs never share a name");
         }
 
         string mailbox = Path.TrimEndingDirectorySeparator(Path.GetFullPath(_options.Mailbox));
@@ -481,7 +501,14 @@ internal sealed partial class FollowerImport : IDisposable
         CredentialPair? live = await _pairs.ReadLiveAsync(cancellationToken);
         if (live?.Fingerprint != hold.OutgoingFingerprint)
         {
-            await UnwindAsync(hold);
+            // Not always a rotation: a first commit whose journal write failed
+            // after the swap leaves the live pair as the incoming one, and this
+            // retry is what finishes it. The unwind tells the two apart.
+            if (await UnwindAsync(hold) is ImportResult alreadySwapped)
+            {
+                return Result<ImportResult, string>.Success(alreadySwapped);
+            }
+
             return Result<ImportResult, string>.Failure(
                 "not imported: the live pair is no longer the one that was exported ("
                 + (live?.Fingerprint.Sha256Hex[..12] ?? "none") + " against " + (hold.OutgoingFingerprint?.Sha256Hex[..12] ?? "none")
@@ -598,8 +625,15 @@ internal sealed partial class FollowerImport : IDisposable
     /// import created go, the journal goes, and the hold is released. The live
     /// pair is never touched here, which is what makes "the outgoing pair is
     /// recoverable" true of every path through this method.
+    /// <para>
+    /// Returns null when it unwound, and the result of the import when it found
+    /// the swap had already run and finished it instead. A caller that ignored
+    /// that difference would answer "not imported" for an import that did
+    /// happen, and the leader would unclaim a slot whose claimed file F6 has
+    /// just deleted and never park the outgoing pair's export.
+    /// </para>
     /// </summary>
-    private async Task UnwindAsync(Hold hold)
+    private async Task<ImportResult?> UnwindAsync(Hold hold)
     {
         // The one thing an unwind must never do. Once F5 has run, the outgoing
         // pair exists only as the export, so deleting it loses the lineage
@@ -612,10 +646,10 @@ internal sealed partial class FollowerImport : IDisposable
         ImportJournalEntry? entry = await _journal.ReadOpenAsync(CancellationToken.None);
         if (entry is not null && await ImportReconciler.SwapHasHappenedAsync(entry, _pairs, CancellationToken.None))
         {
-            await FinishAsync(entry, _journal, _stateFile, _pairs, _liveOwnerPath, failAfterStep: null, _timeProvider, ImportStep.Swapped, CancellationToken.None);
+            ImportResult finished = await FinishAsync(entry, _journal, _stateFile, _pairs, _liveOwnerPath, failAfterStep: null, _timeProvider, ImportStep.Swapped, CancellationToken.None);
             Release(hold);
             LogFinishedInsteadOfUnwound(hold.Request.Email.Value);
-            return;
+            return finished;
         }
 
         // The order is the point, and it is the opposite of the obvious one. An
@@ -635,6 +669,7 @@ internal sealed partial class FollowerImport : IDisposable
         _pairs.DeleteStaging();
         Release(hold);
         LogUnwound(hold.Request.Email.Value);
+        return null;
     }
 
     private void Release(Hold hold)
