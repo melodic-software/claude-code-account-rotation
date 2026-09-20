@@ -182,7 +182,7 @@ public sealed class SideEndpointTests
         running["online"]!.GetValue<bool>().ShouldBeTrue();
         running["liveAccount"]!.GetValue<string>().ShouldBe(Outgoing);
 
-        // Stopped is modelled as the socket refusing, which is exactly what the
+        // Stopped is the socket refusing, which is exactly what the
         // leader sees when the distribution is not running: disposing the host
         // would take the shared store's directory with it.
         link.Offline = true;

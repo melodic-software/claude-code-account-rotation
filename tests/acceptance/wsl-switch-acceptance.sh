@@ -283,8 +283,11 @@ start_follower() {
   log="$log_dir/follower-$(date -u +%H%M%S)-$RANDOM.log"
   # The wsl.exe child is what holds the distro session open: a process started
   # and abandoned by a one-shot `wsl.exe -e` is reaped with that session.
+  # Into its own root first. `wsl.exe` inherits this shell's working directory,
+  # which is a Windows path under the mount, and a host started there has its
+  # content root there.
   wsl.exe -d "$distro" -u "$wsl_user" -e bash -c \
-    "echo \$\$ > '$wsl_root/follower.pid'; exec env CCAR_FAIL_AFTER_STEP='$fail_after' '$follower_exe' --config '$win_root_wsl/follower-config.json'" \
+    "cd '$wsl_root' && echo \$\$ > follower.pid; exec env CCAR_FAIL_AFTER_STEP='$fail_after' '$follower_exe' --config '$win_root_wsl/follower-config.json'" \
     > "$log" 2>&1 &
   follower_wrapper_pid=$!
   cp -f "$log" "$log_dir/follower-latest.log" 2>/dev/null || true
