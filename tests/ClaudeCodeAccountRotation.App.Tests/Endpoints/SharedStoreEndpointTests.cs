@@ -168,6 +168,34 @@ public sealed class SharedStoreEndpointTests
     }
 
     [Fact]
+    public async Task RemovingAnAccountIsRefusedWhileAnotherSideStillHoldsASupersededFamilyOfIt()
+    {
+        // The slot reads `parked` after the escape hatch, because the re-login
+        // put a fresh family in it, so the held-by-other-side guard cannot see
+        // this. A removal here would revoke the fresh family, delete the record
+        // with the folder, and report success while a live refresh token stayed
+        // on the side that is not answering.
+        using AppFactory factory = await LiveOnAWithBHeldByWslAsync(sharedStore: true, TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        using HttpResponseMessage superseded = await client.PostAsync(
+            LoginUri("b@example.com", "?supersede=true"),
+            content: null,
+            TestContext.Current.CancellationToken);
+        superseded.StatusCode.ShouldBe(HttpStatusCode.OK);
+        await CredentialFiles.WriteAsync(Path.Combine(factory.ProfilesRoot, "b@example.com"), "refresh-b-fresh", TestContext.Current.CancellationToken);
+
+        using HttpResponseMessage response = await client.DeleteAsync(
+            new Uri("/api/accounts/" + Uri.EscapeDataString("b@example.com"), UriKind.Relative),
+            TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+        body["refusal"]!.GetValue<string>().ShouldBe("SupersededFamilyStanding");
+        factory.Cli.LogoutCalls.ShouldBeEmpty();
+        File.Exists(Path.Combine(factory.ProfilesRoot, "b@example.com", SupersededFamilyFile.FileName)).ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task NoClickOverridesASlotWithAHandOffInFlight()
     {
         using AppFactory factory = await LiveOnAWithBHeldByWslAsync(sharedStore: true, TestContext.Current.CancellationToken);

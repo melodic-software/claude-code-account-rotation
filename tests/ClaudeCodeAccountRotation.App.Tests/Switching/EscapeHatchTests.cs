@@ -185,6 +185,56 @@ public sealed class EscapeHatchTests
     }
 
     [Fact]
+    public async Task AQuarantineThatAlreadyRanIsFinishedRatherThanRepeated()
+    {
+        // The crash between the quarantine's rename and the journal write. The
+        // export is in quarantine and nothing else is done, so neither branch
+        // of L4 could finish from there on its own: the quarantine would find
+        // no export to move and the park no export to promote, and the journal
+        // would stay open and refuse every switch after it. Asserted twice
+        // over, with the record still standing and with it already gone, which
+        // are the two windows that crash leaves.
+        foreach (bool recordCleared in new[] { false, true })
+        {
+            using WslSwitchHarness harness = new();
+            RefreshTokenFingerprint incoming = await SupersededAsync(harness);
+            RefreshTokenFingerprint outgoing = CredentialFiles.Pair("refresh-a").Fingerprint;
+            if (recordCleared)
+            {
+                await SupersededFamilyFile.DeleteAsync(harness.FolderFor(Outgoing), Token);
+            }
+
+            // What the rename left behind: the pair in quarantine, the mailbox
+            // empty, and the journal still at Imported.
+            string quarantined = Path.Combine(QuarantineRoot(harness), Outgoing + "-" + outgoing.Sha256Hex[..12], CredentialFiles.FileName);
+            Directory.CreateDirectory(Path.GetDirectoryName(quarantined)!);
+            await File.WriteAllTextAsync(quarantined, CredentialFiles.Shape("refresh-a").ToJsonString(), Token);
+            await harness.Journal.WriteAsync(
+                new WslSwitchJournalEntry(
+                    SideName.Wsl,
+                    WslSwitchHarness.Email(Incoming),
+                    incoming,
+                    harness.FolderFor(Incoming),
+                    WslSwitchHarness.Email(Outgoing),
+                    outgoing,
+                    harness.FolderFor(Outgoing),
+                    WslSwitchStep.Imported,
+                    harness.Clock.GetUtcNow(),
+                    WslSwitchHarness.AccountJson(Outgoing)),
+                Token);
+            using WslSwitch coordinator = harness.Coordinator();
+
+            WslReconciliation pass = await coordinator.ReconcileAsync(Token);
+
+            pass.Banner.ShouldBeNull();
+            File.Exists(harness.JournalPath).ShouldBeFalse();
+            QuarantinedFiles(harness).ShouldHaveSingleItem().ShouldBe(quarantined);
+            (await SupersededFamilyFile.ReadAsync(harness.FolderFor(Outgoing), Token)).ShouldBeNull();
+            (await FingerprintAtAsync(harness.PairPath(Outgoing))).ShouldBe(CredentialFiles.Pair("refresh-a-fresh").Fingerprint);
+        }
+    }
+
+    [Fact]
     public async Task ASupersededRecordWithNoFamilyBehindItIsIgnoredAndTheHandOffParksNormally()
     {
         // A login the operator abandoned leaves the record with nothing to show

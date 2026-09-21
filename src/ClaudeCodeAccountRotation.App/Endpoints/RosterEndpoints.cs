@@ -212,12 +212,28 @@ internal static class RosterEndpoints
                 // while its refresh token is live in the distro. Re-adding it would
                 // then start a second, untracked login. Read under the gate with the
                 // guards above, for the same reason they are.
-                if (await slots.ReadAsync(target, folder, File.Exists(Path.Combine(folder, FileSystemCredentialPairStore.FileName)), new WindowsHold(null, null), cancellationToken)
+                bool slotHoldsPair = File.Exists(Path.Combine(folder, FileSystemCredentialPairStore.FileName));
+                if (await slots.ReadAsync(target, folder, slotHoldsPair, new WindowsHold(null, null), cancellationToken)
                     is { State: SlotState.HeldElsewhere or SlotState.InTransit })
                 {
                     return Refused(
                         "HeldByOtherSide",
                         "The other side of this machine holds that account, or a hand-off for it is in flight; switch it away there first, so the removal can revoke the login it really has.");
+                }
+
+                // The escape hatch's own case, which the verdict above cannot
+                // see: the slot reads Parked because the re-login put a fresh
+                // family in it, and the family the other side still holds is
+                // recorded beside it. Removing here would revoke the fresh
+                // family, delete the record with the folder, and report success
+                // while a live refresh token stayed in the distro with nothing
+                // left on this machine naming it.
+                if (await slots.ReadSupersededAsync(target, folder, slotHoldsPair, new WindowsHold(null, null), cancellationToken)
+                    is { Stale: false } superseded)
+                {
+                    return Refused(
+                        "SupersededFamilyStanding",
+                        "The " + superseded.Record.Side.Value + " side still holds a second token family for that account, made when it was logged in again here. Switch that side away from it first, which quarantines that family; removing now would leave a live login there with nothing on this machine naming it.");
                 }
 
                 if (logins.IsRunningAgainst(folder))

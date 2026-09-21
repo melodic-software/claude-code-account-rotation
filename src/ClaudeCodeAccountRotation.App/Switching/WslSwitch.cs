@@ -1039,9 +1039,28 @@ internal sealed partial class WslSwitch : IDisposable
             // park for ever. The superseded record is the consent, and it is on
             // disk.
             bool slotHoldsPair = File.Exists(Path.Combine(folder, FileSystemCredentialPairStore.FileName));
+
+            // The quarantine, replayed. A crash between its rename and the
+            // journal write leaves the export in quarantine and nothing else
+            // done, and neither branch below could finish from there: the
+            // quarantine would find no export to move and the park no export to
+            // promote, so the journal would stay open and refuse every switch
+            // after it. Asked before either, and only when the mailbox is
+            // empty, so a hand-off whose export is still there cannot mistake
+            // an older quarantine of the same lineage for its own.
+            string quarantined = QuarantinePathFor(folder, fingerprint);
+            if (!File.Exists(_pairs.ExportPathFor(folder, peer.Side)) && File.Exists(quarantined))
+            {
+                await _slots.ClearSupersededAsync(folder, cancellationToken);
+                await JournalAsync(entry with { StepReached = WslSwitchStep.Parked }, cancellationToken);
+                await _journal.ClearAsync(cancellationToken);
+                LogQuarantineAlreadyDone(outgoing.Value, quarantined);
+                return Result<WslSwitchOutcome, SwitchRefusal>.Success(Outcome(entry) with { ParkedAs = null, QuarantinedAt = quarantined });
+            }
+
             if (await ForeignFamilyAsync(outgoing, folder, slotHoldsPair, await WindowsHoldAsync(cancellationToken), peer.Side, cancellationToken))
             {
-                return await QuarantineForeignFamilyAsync(peer, entry, outgoing, folder, cancellationToken);
+                return await QuarantineForeignFamilyAsync(peer, entry, outgoing, folder, quarantined, cancellationToken);
             }
 
             if (entry.OutgoingAccount is not null)
@@ -1104,11 +1123,14 @@ internal sealed partial class WslSwitch : IDisposable
         WslSwitchJournalEntry entry,
         AccountEmail outgoing,
         string folder,
+        string destinationPath,
         CancellationToken cancellationToken)
     {
-        string stamp = _timeProvider.GetUtcNow().ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture);
-        string destination = Path.Combine(_options.SupersededQuarantineDirectory, stamp + "-" + Path.GetFileName(Path.TrimEndingDirectorySeparator(folder)));
-        Result<string, string> quarantined = await _pairs.MoveExportToQuarantineAsync(folder, peer.Side, destination, cancellationToken);
+        Result<string, string> quarantined = await _pairs.MoveExportToQuarantineAsync(
+            folder,
+            peer.Side,
+            Path.GetDirectoryName(destinationPath)!,
+            cancellationToken);
         if (quarantined.IsFailure)
         {
             // The export stays in the mailbox, which is recoverable, and the
@@ -1160,6 +1182,24 @@ internal sealed partial class WslSwitch : IDisposable
         LogUnclaimed(peer.Side.Value, entry.Incoming.Value);
         return Result<WslSwitchOutcome, SwitchRefusal>.Failure(refusal);
     }
+
+    /// <summary>
+    /// Where a superseded family of this account ends up, named after the slot
+    /// and the lineage rather than the moment. Deterministic on purpose: it is
+    /// what lets a crash between the move and the journal write be seen
+    /// on the next pass instead of leaving the hand-off open for ever, and it
+    /// says which family it is rather than only when it arrived.
+    /// <para>
+    /// Two different families of one account get two directories. The same
+    /// family arriving twice gets one, and the second move is refused by the
+    /// store's own rename — which is right: an export and a quarantined file
+    /// holding one refresh token is the duplicate nothing here may create.
+    /// </para>
+    /// </summary>
+    private string QuarantinePathFor(string folder, RefreshTokenFingerprint fingerprint) => Path.Combine(
+        _options.SupersededQuarantineDirectory,
+        Path.GetFileName(Path.TrimEndingDirectorySeparator(folder)) + "-" + fingerprint.Sha256Hex[..12],
+        FileSystemCredentialPairStore.FileName);
 
     /// <summary>
     /// Whether <paramref name="side"/> holds a second token family for this
@@ -1290,6 +1330,9 @@ internal sealed partial class WslSwitch : IDisposable
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "a superseded family of {Outgoing} came back from {Side} and was quarantined at {Destination}; it is never promoted and never deleted")]
     private partial void LogFamilyQuarantined(string side, string outgoing, string destination);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "the superseded family of {Outgoing} is already quarantined at {Destination}; only the journal was left to finish")]
+    private partial void LogQuarantineAlreadyDone(string outgoing, string destination);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "the hand-off of {Incoming} to {Side} was cancelled by the operator: {Detail}")]
     private partial void LogCancelled(string side, string incoming, string detail);
