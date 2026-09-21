@@ -396,11 +396,25 @@
     setButtonsDisabled(true);
     return send(accountPath(email, "/login"), "POST", null)
       .then(function (result) {
-        if (!result.ok) {
-          showToast(refused(result.body), "error");
+        if (result.ok) {
+          openLoginPanel(email, result.body);
           return null;
         }
-        openLoginPanel(email, result.body);
+        // The escape hatch, and the one click in this page that makes an
+        // account a second token family. Offered only on this refusal, which
+        // the server raises only while the other side is unreachable, and only
+        // after the operator reads what it costs.
+        if (result.body.refusal === "HeldByOtherSide"
+          && window.confirm(result.body.message + "\n\nLog in again here anyway? That side keeps the login it has, so " + email + " will have two. The one it keeps is quarantined when that side is switched off the account.")) {
+          return send(accountPath(email, "/login") + "?supersede=true", "POST", null).then(function (forced) {
+            if (forced.ok) {
+              openLoginPanel(email, forced.body);
+            } else {
+              showToast(refused(forced.body), "error");
+            }
+          });
+        }
+        showToast(refused(result.body), "error");
         return null;
       })
       .catch(function (error) { showToast("Request failed: " + error, "error"); })

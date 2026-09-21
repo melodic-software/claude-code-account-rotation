@@ -168,6 +168,25 @@ public sealed class SharedStoreEndpointTests
     }
 
     [Fact]
+    public async Task ThePageOffersTheEscapeHatchOnlyBehindAConfirmationThatSaysWhatItCosts()
+    {
+        // The one click on this page that makes an account a second token
+        // family. It hangs off the refusal the server raises only while the
+        // other side is unreachable, and it is never sent without the
+        // confirmation in between.
+        using AppFactory factory = new(sharedStore: true);
+        using HttpClient client = factory.CreateClient();
+
+        string script = await client.GetStringAsync(new Uri("/app.js", UriKind.Relative), TestContext.Current.CancellationToken);
+
+        script.ShouldContain("?supersede=true");
+        script.ShouldContain("window.confirm");
+        script.ShouldContain("HeldByOtherSide");
+        // Nothing sends the flag except the branch the confirmation guards.
+        script.Split("?supersede=true").Length.ShouldBe(2);
+    }
+
+    [Fact]
     public async Task RemovingAnAccountIsRefusedWhileAnotherSideStillHoldsASupersededFamilyOfIt()
     {
         // The slot reads `parked` after the escape hatch, because the re-login

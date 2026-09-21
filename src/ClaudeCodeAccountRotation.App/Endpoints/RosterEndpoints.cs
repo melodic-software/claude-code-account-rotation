@@ -227,7 +227,10 @@ internal static class RosterEndpoints
                 // recorded beside it. Removing here would revoke the fresh
                 // family, delete the record with the folder, and report success
                 // while a live refresh token stayed in the distro with nothing
-                // left on this machine naming it.
+                // left on this machine naming it. The empty hold costs nothing
+                // here: its only use is the "this side is live on the account"
+                // half of the staleness rule, and the guard above has already
+                // refused that case.
                 if (await slots.ReadSupersededAsync(target, folder, slotHoldsPair, new WindowsHold(null, null), cancellationToken)
                     is { Stale: false } superseded)
                 {
