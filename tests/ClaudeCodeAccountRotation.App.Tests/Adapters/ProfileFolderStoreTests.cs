@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.Core.Identity;
+using ClaudeCodeAccountRotation.Core.Switching;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Adapters;
 
@@ -115,6 +116,28 @@ public sealed class ProfileFolderStoreTests : IDisposable
         Directory.GetFileSystemEntries(folder).Select(Path.GetFileName).Order(StringComparer.Ordinal)
             .ShouldBe([".credentials.json", "profile.json"]);
         JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(folder, "profile.json"), TestContext.Current.CancellationToken))!["emailAddress"]!.GetValue<string>().ShouldBe("b@example.com");
+    }
+
+    [Fact]
+    public async Task PruneLoginResidueKeepsTheSupersededRecordTheEscapeHatchWroteJustBeforeIt()
+    {
+        // The escape hatch writes the record and then logs in into this very
+        // folder, so the prune that follows the login is what would delete the
+        // one statement that the other side still holds a family of it.
+        string folder = Path.Combine(_profilesRoot, "b@example.com");
+        Directory.CreateDirectory(folder);
+        await SupersededFamilyFile.WriteAsync(
+            folder,
+            new HolderRecord(SideName.Wsl, CredentialFiles.Pair("refresh-b-on-wsl").Fingerprint, DateTimeOffset.UnixEpoch),
+            TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(folder, "settings.json"), "{}", TestContext.Current.CancellationToken);
+        await CredentialFiles.WriteAsync(folder, "refresh-b-fresh", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(folder, "profile.json"), AccountJson("b@example.com").ToJsonString(), TestContext.Current.CancellationToken);
+
+        await _store.PruneLoginResidueAsync(folder, TestContext.Current.CancellationToken);
+
+        (await SupersededFamilyFile.ReadAsync(folder, TestContext.Current.CancellationToken))!.Side.ShouldBe(SideName.Wsl);
+        File.Exists(Path.Combine(folder, "settings.json")).ShouldBeFalse();
     }
 
     [Fact]

@@ -43,7 +43,7 @@ public sealed class WslSwitchTests
         using WslSwitch coordinator = harness.Coordinator();
 
         Result<WslSwitchOutcome, SwitchRefusal> result =
-            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), Token);
+            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), quarantineForeignFamily: false, Token);
 
         result.IsSuccess.ShouldBeTrue(result.IsFailure ? result.Error.ToString() : string.Empty);
         result.Value.Now.ShouldBe(WslSwitchHarness.Email(Incoming));
@@ -79,7 +79,7 @@ public sealed class WslSwitchTests
         using WslSwitch coordinator = harness.Coordinator();
 
         Result<WslSwitchOutcome, SwitchRefusal> result =
-            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), Token);
+            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), quarantineForeignFamily: false, Token);
 
         result.IsSuccess.ShouldBeTrue(result.IsFailure ? result.Error.ToString() : string.Empty);
         result.Value.ParkedAs.ShouldBeNull();
@@ -109,7 +109,7 @@ public sealed class WslSwitchTests
         using WslSwitch coordinator = harness.Coordinator();
 
         Result<WslSwitchOutcome, SwitchRefusal> result =
-            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), Token);
+            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), quarantineForeignFamily: false, Token);
 
         result.IsSuccess.ShouldBeTrue(result.IsFailure ? result.Error.ToString() : string.Empty);
         harness.Side.Calls.ShouldNotContain("Commit");
@@ -130,7 +130,7 @@ public sealed class WslSwitchTests
         using WslSwitch coordinator = harness.Coordinator();
 
         Result<WslSwitchOutcome, SwitchRefusal> result =
-            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), Token);
+            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), quarantineForeignFamily: false, Token);
 
         result.Error.ShouldBe(SwitchRefusal.SideOffline);
         WslSwitchJournalEntry? open = await harness.Journal.ReadOpenAsync(Token);
@@ -172,7 +172,7 @@ public sealed class WslSwitchTests
         using WslSwitch coordinator = harness.Coordinator();
 
         Result<WslSwitchOutcome, SwitchRefusal> result =
-            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), Token);
+            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), quarantineForeignFamily: false, Token);
 
         result.Error.ShouldBe(SwitchRefusal.PeerDidNotImport);
         harness.Side.Calls.ShouldContain("Status");
@@ -207,7 +207,7 @@ public sealed class WslSwitchTests
         using WslSwitch coordinator = harness.Coordinator();
 
         Result<WslSwitchOutcome, SwitchRefusal> result =
-            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), Token);
+            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), quarantineForeignFamily: false, Token);
 
         await AssertGateRefusedAsync(harness, result, incoming);
     }
@@ -231,7 +231,7 @@ public sealed class WslSwitchTests
         using WslSwitch coordinator = harness.Coordinator();
 
         Result<WslSwitchOutcome, SwitchRefusal> result =
-            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), Token);
+            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), quarantineForeignFamily: false, Token);
 
         await AssertGateRefusedAsync(harness, result, incoming);
     }
@@ -366,7 +366,7 @@ public sealed class WslSwitchTests
         harness.Side.OnImport = static _ => Task.FromResult(Result<ImportAnswer, string>.Failure("the side went away after the claim"));
         using WslSwitch coordinator = harness.Coordinator();
 
-        await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), Token);
+        await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), quarantineForeignFamily: false, Token);
 
         WslSwitchJournalEntry? open = await harness.Journal.ReadOpenAsync(Token);
         open.ShouldNotBeNull();
@@ -400,7 +400,7 @@ public sealed class WslSwitchTests
         using WslSwitch coordinator = harness.Coordinator();
 
         Result<WslSwitchOutcome, SwitchRefusal> result =
-            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), Token);
+            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), quarantineForeignFamily: false, Token);
 
         result.Error.ShouldBe(SwitchRefusal.ExportNotVerified);
         harness.Side.Calls.ShouldNotContain("Commit");
@@ -430,7 +430,7 @@ public sealed class WslSwitchTests
         harness.Side.Status = new ImportStatus(false, ImportStep.Exported, null, null, "the hold is still open here");
         using WslSwitch coordinator = harness.Coordinator();
 
-        await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), Token);
+        await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), quarantineForeignFamily: false, Token);
 
         // The commit was retried from the ExportVerified journal rather than
         // unclaimed, and whatever the outcome, the fingerprint that survived
@@ -664,7 +664,7 @@ public sealed class WslSwitchTests
         using WslSwitch coordinator = harness.Coordinator();
 
         Result<WslSwitchOutcome, SwitchRefusal> result =
-            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), Token);
+            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), quarantineForeignFamily: false, Token);
 
         result.IsSuccess.ShouldBeTrue(result.IsFailure ? result.Error.ToString() : string.Empty);
         harness.Side.Calls.ShouldBe(["Dashboard", "Import", "Commit"]);
@@ -678,7 +678,7 @@ public sealed class WslSwitchTests
         using WslSwitch coordinator = harness.Coordinator(withPeer: false);
 
         Result<WslSwitchOutcome, SwitchRefusal> result =
-            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), Token);
+            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), quarantineForeignFamily: false, Token);
 
         result.Error.ShouldBe(SwitchRefusal.SideOffline);
         harness.Side.Calls.ShouldBeEmpty();
@@ -694,7 +694,7 @@ public sealed class WslSwitchTests
         using WslSwitch coordinator = harness.Coordinator();
 
         Result<WslSwitchOutcome, SwitchRefusal> result =
-            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), Token);
+            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), quarantineForeignFamily: false, Token);
 
         result.Error.ShouldBe(SwitchRefusal.SideOffline);
         harness.Side.Calls.ShouldBe(["Dashboard"]);
@@ -710,7 +710,7 @@ public sealed class WslSwitchTests
         using WslSwitch coordinator = harness.Coordinator();
 
         Result<WslSwitchOutcome, SwitchRefusal> result =
-            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), Token);
+            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), quarantineForeignFamily: false, Token);
 
         result.Error.ShouldBe(SwitchRefusal.SideOffline);
         harness.Side.Calls.ShouldBe(["Dashboard"]);
@@ -728,7 +728,7 @@ public sealed class WslSwitchTests
         using WslSwitch coordinator = harness.Coordinator();
 
         Result<WslSwitchOutcome, SwitchRefusal> result =
-            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), Token);
+            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), quarantineForeignFamily: false, Token);
 
         result.Error.ShouldBe(SwitchRefusal.AlreadyOnTarget);
         harness.MailboxFiles().ShouldBeEmpty();
@@ -749,7 +749,7 @@ public sealed class WslSwitchTests
         using WslSwitch coordinator = harness.Coordinator();
 
         Result<WslSwitchOutcome, SwitchRefusal> result =
-            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), Token);
+            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), quarantineForeignFamily: false, Token);
 
         result.Error.ShouldBe(SwitchRefusal.HeldByOtherSide);
         harness.MailboxFiles().ShouldBeEmpty();
@@ -765,7 +765,7 @@ public sealed class WslSwitchTests
         using WslSwitch coordinator = harness.Coordinator();
 
         Result<WslSwitchOutcome, SwitchRefusal> result =
-            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), Token);
+            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), quarantineForeignFamily: false, Token);
 
         result.Error.ShouldBe(SwitchRefusal.SlotInTransit);
         (await FingerprintAtAsync(harness.PairPath(Incoming))).ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
@@ -780,7 +780,7 @@ public sealed class WslSwitchTests
         using WslSwitch coordinator = harness.Coordinator();
 
         Result<WslSwitchOutcome, SwitchRefusal> result =
-            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), Token);
+            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), quarantineForeignFamily: false, Token);
 
         result.Error.ShouldBe(SwitchRefusal.TargetHasNoCredentials);
         harness.MailboxFiles().ShouldBeEmpty();

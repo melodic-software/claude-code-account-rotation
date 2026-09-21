@@ -14,6 +14,15 @@
 # clear rather than a duplicate to fail on, so those files are named and counted
 # and the exit code is left to the duplicate scan.
 #
+# A third `quarantine=N` line counts what the app has set aside and will never
+# use again, under the app data directory's `quarantine/`: a duplicate lineage
+# the startup sweep moved, and a superseded token family the escape hatch's
+# quarantine took in. Those files are fingerprinted with every other holder
+# rather than skipped, so a quarantined duplicate still reports as one; the
+# count is here so the invariant after a quarantine reads off one run, where
+# `duplicates=0 quarantine=1` is a store that took a second family in, kept it,
+# and still holds each refresh token exactly once.
+#
 # Two forms. The positional one below is the single-machine check and is
 # unchanged. The `--root <dir>` form, repeatable, sweeps whole trees instead and
 # is what a machine whose two sides share one store needs: the Windows live
@@ -203,5 +212,26 @@ for entry in "${recovery_files[@]}"; do
   echo "recovery file $(basename "$entry") in $(basename "$(dirname "$entry")")" >&2
 done
 echo "recovery=${#recovery_files[@]}"
+
+declare -a quarantine_roots=()
+if [[ ${#roots[@]} -gt 0 ]]; then
+  for root in "${roots[@]}"; do
+    quarantine_roots+=("$root/quarantine")
+  done
+else
+  quarantine_roots+=("$app_data/quarantine")
+fi
+
+declare -a quarantine_files=()
+for directory in "${quarantine_roots[@]}"; do
+  [[ -d "$directory" ]] || continue
+  while IFS= read -r -d '' entry; do
+    quarantine_files+=("$entry")
+  done < <(find "$directory" -type f -print0 | sort -z)
+done
+for entry in "${quarantine_files[@]}"; do
+  echo "quarantined $(basename "$(dirname "$entry")")/$(basename "$entry")" >&2
+done
+echo "quarantine=${#quarantine_files[@]}"
 
 [[ "$duplicates" -eq 0 && "$unreadable" -eq 0 ]]

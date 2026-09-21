@@ -12,7 +12,25 @@ internal sealed record SwitchOptions(
     TimeSpan MutationGateTimeout,
     string? Mailbox = null,
     string? FailAfterStep = null,
-    bool CorruptExportBeforeGate = false);
+    bool CorruptExportBeforeGate = false)
+{
+    /// <summary>
+    /// Where a credential nobody may promote and nobody may delete is kept. One
+    /// statement of the path, because two things write into it now.
+    /// </summary>
+    public string QuarantineDirectory => Path.Combine(Path.GetFullPath(AppDataDirectory), "quarantine");
+
+    /// <summary>
+    /// The escape hatch's own corner of it. Separate from the duplicate-lineage
+    /// quarantine beside it because the two mean different things: a duplicate
+    /// lineage is one refresh token in two files, which blocks every switch
+    /// until the operator resolves it, while a superseded family is a second,
+    /// <i>distinct</i> family the operator deliberately created and has already
+    /// been told about. It is kept, named and never cleared automatically, but
+    /// it does not stop the machine.
+    /// </summary>
+    public string SupersededQuarantineDirectory => Path.Combine(QuarantineDirectory, "superseded");
+}
 
 /// <summary>
 /// The crash-injection hook, bound from <c>CCAR_FAIL_AFTER_STEP</c> and never

@@ -1,3 +1,4 @@
+using System.Globalization;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.Core;
@@ -10,8 +11,14 @@ using Microsoft.Extensions.Logging;
 
 namespace ClaudeCodeAccountRotation.App.Switching;
 
-/// <summary>What a completed hand-off moved: the account now live on that side, and the one parked back.</summary>
-internal sealed record WslSwitchOutcome(SideName Side, AccountEmail Now, AccountEmail? ParkedAs, DateTimeOffset At);
+/// <summary>
+/// What a completed hand-off moved: the account now live on that side, and the
+/// one parked back. <c>QuarantinedAt</c> names the file instead when the pair
+/// that came back was a superseded family the store may not hold, which is the
+/// escape hatch's one sanctioned outcome; <c>ParkedAs</c> is then null, because
+/// nothing was parked.
+/// </summary>
+internal sealed record WslSwitchOutcome(SideName Side, AccountEmail Now, AccountEmail? ParkedAs, DateTimeOffset At, string? QuarantinedAt = null);
 
 /// <summary>
 /// What the leader's own crash table found and did at start, or on a poll.
@@ -74,6 +81,14 @@ internal sealed partial class WslSwitch : IDisposable
 {
     /// <summary>How long the leader waits for the follower's F1 to F4. Design 9.1's L3a bound.</summary>
     public static readonly TimeSpan ImportTimeout = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// When an in-transit hand-off stops being a state that is still settling
+    /// and starts being one the operator is asked to decide about. Design 9.4's
+    /// last row. It changes what the banner says and nothing else: no path
+    /// clears, retries differently, or gives up on a hand-off because of it.
+    /// </summary>
+    public static readonly TimeSpan StuckAfter = TimeSpan.FromHours(24);
 
     /// <summary>
     /// One hand-off at a time. The mutation gate is not enough on its own: it
@@ -146,8 +161,24 @@ internal sealed partial class WslSwitch : IDisposable
 
     public void Dispose() => _handOff.Dispose();
 
-    /// <summary>L1 to L4, with the gate taken for L1-L2, released across the hand-off, and taken again for L4.</summary>
-    public async Task<Result<WslSwitchOutcome, SwitchRefusal>> SwitchToAsync(SideName side, AccountEmail target, CancellationToken cancellationToken)
+    /// <summary>
+    /// L1 to L4, with the gate taken for L1-L2, released across the hand-off,
+    /// and taken again for L4.
+    /// <para>
+    /// <paramref name="quarantineForeignFamily"/> is the operator's second
+    /// click, and it overrides exactly one refusal: the
+    /// <see cref="SwitchRefusal.ForeignFamily"/> this side raises when the
+    /// account the other side is live on has a superseded family. It grants no
+    /// other permission, and it is deliberately not written into the journal —
+    /// L4 decides what to do with an export from the files, so a hand-off that
+    /// was started before the escape hatch ran still quarantines what it must.
+    /// </para>
+    /// </summary>
+    public async Task<Result<WslSwitchOutcome, SwitchRefusal>> SwitchToAsync(
+        SideName side,
+        AccountEmail target,
+        bool quarantineForeignFamily,
+        CancellationToken cancellationToken)
     {
         if (!await _handOff.WaitAsync(TimeSpan.Zero, cancellationToken))
         {
@@ -157,7 +188,7 @@ internal sealed partial class WslSwitch : IDisposable
 
         try
         {
-            return await SwitchUnderHandOffAsync(side, target, cancellationToken);
+            return await SwitchUnderHandOffAsync(side, target, quarantineForeignFamily, cancellationToken);
         }
         finally
         {
@@ -165,7 +196,11 @@ internal sealed partial class WslSwitch : IDisposable
         }
     }
 
-    private async Task<Result<WslSwitchOutcome, SwitchRefusal>> SwitchUnderHandOffAsync(SideName side, AccountEmail target, CancellationToken cancellationToken)
+    private async Task<Result<WslSwitchOutcome, SwitchRefusal>> SwitchUnderHandOffAsync(
+        SideName side,
+        AccountEmail target,
+        bool quarantineForeignFamily,
+        CancellationToken cancellationToken)
     {
         if (_peers.For(side) is not Peer peer)
         {
@@ -195,7 +230,7 @@ internal sealed partial class WslSwitch : IDisposable
             return Result<WslSwitchOutcome, SwitchRefusal>.Failure(SwitchRefusal.SideOffline);
         }
 
-        Result<WslSwitchJournalEntry, SwitchRefusal> claimed = await ClaimAsync(peer, dashboard.Value, target, cancellationToken);
+        Result<WslSwitchJournalEntry, SwitchRefusal> claimed = await ClaimAsync(peer, dashboard.Value, target, quarantineForeignFamily, cancellationToken);
         if (claimed.IsFailure)
         {
             LogRefused(side.Value, target.Value, claimed.Error);
@@ -272,14 +307,37 @@ internal sealed partial class WslSwitch : IDisposable
         }
 
         Result<WslSwitchOutcome, SwitchRefusal> resumed = await HandOffAsync(peer, entry, cancellationToken);
-        return resumed.Match(
-            done => new WslReconciliation(
-                "the hand-off of " + done.Now.Value + " to " + done.Side.Value + " was finished from " + entry.StepReached,
-                null),
-            refusal => refusal is SwitchRefusal.SideOffline
-                ? InTransitBanner(entry, "the side stopped answering mid-hand-off")
-                : new WslReconciliation("the hand-off of " + entry.Incoming.Value + " was unwound from " + entry.StepReached + ": " + refusal, null));
+        if (resumed.IsSuccess)
+        {
+            return new WslReconciliation(
+                "the hand-off of " + resumed.Value.Now.Value + " to " + resumed.Value.Side.Value + " was finished from " + entry.StepReached
+                    + (resumed.Value.QuarantinedAt is string file ? "; a superseded family was quarantined at " + file : string.Empty),
+                null);
+        }
+
+        // Whether this refusal unwound anything is the journal's answer, never
+        // the refusal's. Three of them leave the journal open with a pair still
+        // in a mailbox — an unreachable side, an export the gate could not
+        // verify for an account that side had already swapped past, and a park
+        // that could not run — and a reading that called any of those "unwound"
+        // would clear the one line telling the operator a credential is
+        // standing between two operating systems.
+        WslSwitchJournalEntry? standing = await _journal.ReadOpenAsync(cancellationToken);
+        return standing is null
+            ? new WslReconciliation("the hand-off of " + entry.Incoming.Value + " was unwound from " + entry.StepReached + ": " + resumed.Error, null)
+            : InTransitBanner(standing, Stalled(resumed.Error, standing));
     }
+
+    /// <summary>Why a refusal left the hand-off standing, in the words the banner needs.</summary>
+    private static string Stalled(SwitchRefusal refusal, WslSwitchJournalEntry entry) => refusal switch
+    {
+        SwitchRefusal.SideOffline => "the side stopped answering mid-hand-off",
+        SwitchRefusal.ExportNotVerified =>
+            "that side has already imported it and exported a pair for an account other than " + (entry.Outgoing?.Value ?? "none")
+                + ", so nothing here can name a slot for it; the exported pair is in the mailbox and no code path will park it",
+        SwitchRefusal.LiveIdentityUnverified => "the pair that came back could not be put anywhere; it is in the mailbox",
+        _ => "the hand-off was refused with " + refusal,
+    };
 
     /// <summary>
     /// Design 9.3's last leader row: <b>no journal, but a file under the
@@ -305,6 +363,7 @@ internal sealed partial class WslSwitch : IDisposable
     private async Task<WslReconciliation> ReconcileOrphansAsync(CancellationToken cancellationToken)
     {
         List<string> acted = [];
+        List<string> standing = [];
         foreach (Peer peer in _peers.All)
         {
             string mailbox = FileSystemCredentialPairStore.MailboxPath(_options.ProfilesRoot, peer.Side);
@@ -330,24 +389,41 @@ internal sealed partial class WslSwitch : IDisposable
                 }
 
                 string folder = Path.Combine(_options.ProfilesRoot, folderName);
-                acted.Add(isExport
+                (string said, bool resolved) = isExport
                     ? await ParkOrphanExportAsync(peer, folder, folderName, cancellationToken)
-                    : await UnclaimOrphanAsync(peer, folder, folderName, cancellationToken));
+                    : await UnclaimOrphanAsync(peer, folder, folderName, cancellationToken);
+                acted.Add(said);
+                if (!resolved)
+                {
+                    standing.Add(folderName);
+                }
             }
         }
 
-        return acted.Count == 0
-            ? new WslReconciliation("no hand-off in flight", null)
-            : new WslReconciliation(string.Join("; ", acted), null);
+        if (acted.Count == 0)
+        {
+            return new WslReconciliation("no hand-off in flight", null);
+        }
+
+        // A mailbox file this pass could not resolve is a credential sitting
+        // between two operating systems with no journal pointing at it, which is
+        // the state the operator has least other evidence of. It gets a line for
+        // the same reason the journaled one does.
+        return new WslReconciliation(
+            string.Join("; ", acted),
+            standing.Count == 0
+                ? null
+                : "A pair for " + string.Join(", ", standing) + " is in a mailbox under " + _options.ProfilesRoot
+                    + " with no hand-off recorded for it; nothing clears that by itself.");
     }
 
-    private async Task<string> ParkOrphanExportAsync(Peer peer, string folder, string folderName, CancellationToken cancellationToken)
+    private async Task<(string Said, bool Resolved)> ParkOrphanExportAsync(Peer peer, string folder, string folderName, CancellationToken cancellationToken)
     {
         Result<RefreshTokenFingerprint, string> exported = await _pairs.ReadExportedFingerprintAsync(folder, peer.Side, cancellationToken);
         if (exported.IsFailure)
         {
             LogParkRefused(folderName, exported.Error);
-            return "an export for " + folderName + " is in the mailbox and could not be read: " + exported.Error;
+            return ("an export for " + folderName + " is in the mailbox and could not be read: " + exported.Error, false);
         }
 
         using IDisposable permit = await _gate.AcquireAsync(_options.MutationGateTimeout, cancellationToken);
@@ -355,15 +431,15 @@ internal sealed partial class WslSwitch : IDisposable
         if (promoted.IsFailure)
         {
             LogParkRefused(folderName, promoted.Error);
-            return "an export for " + folderName + " could not be parked: " + promoted.Error;
+            return ("an export for " + folderName + " could not be parked: " + promoted.Error, false);
         }
 
         await _slots.ReleaseAsync(folder, cancellationToken);
         LogOrphanParked(folderName);
-        return "an export for " + folderName + " with no journal was parked back into its slot";
+        return ("an export for " + folderName + " with no journal was parked back into its slot", true);
     }
 
-    private async Task<string> UnclaimOrphanAsync(Peer peer, string folder, string folderName, CancellationToken cancellationToken)
+    private async Task<(string Said, bool Resolved)> UnclaimOrphanAsync(Peer peer, string folder, string folderName, CancellationToken cancellationToken)
     {
         Result<AccountEmail, string> email = AccountEmail.Parse(folderName);
         Result<ImportStatus, string> asked = email.IsSuccess
@@ -371,15 +447,91 @@ internal sealed partial class WslSwitch : IDisposable
             : Result<ImportStatus, string>.Failure("the mailbox file does not name an account");
         if (asked.IsFailure || asked.Value.Imported)
         {
-            return "a claim of " + folderName + " with no journal was left alone: "
-                + (asked.IsFailure ? asked.Error : "that side says it is imported, so its export is what settles this");
+            return ("a claim of " + folderName + " with no journal was left alone: "
+                + (asked.IsFailure ? asked.Error : "that side says it is imported, so its export is what settles this"), false);
         }
 
         using IDisposable permit = await _gate.AcquireAsync(_options.MutationGateTimeout, cancellationToken);
         await _pairs.UnclaimFromMailboxAsync(folder, peer.Side, cancellationToken);
         await _slots.ReleaseAsync(folder, cancellationToken);
         LogOrphanUnclaimed(folderName);
-        return "a claim of " + folderName + " with no journal was put back: " + asked.Value.Detail;
+        return ("a claim of " + folderName + " with no journal was put back: " + asked.Value.Detail, true);
+    }
+
+    /// <summary>
+    /// The operator's <c>Cancel</c> on a hand-off that is standing: takes the
+    /// claim back so the account is usable again.
+    /// <para>
+    /// It is never blind, and this is the whole of its safety. A claim is taken
+    /// back only after that side has answered a definite "not imported" about
+    /// this very account, decided from its files rather than from its journal
+    /// being clear. Every other answer refuses and changes nothing: a side that
+    /// does not answer at all, a side that says it has imported the pair, a side
+    /// still holding the two-call import open, and a hand-off already past the
+    /// commit, which finishes rather than cancels. A cancel granted on silence
+    /// would take back a slot whose pair is live on the other side and strand
+    /// the outgoing account's export.
+    /// </para>
+    /// </summary>
+    public async Task<Result<string, string>> CancelAsync(CancellationToken cancellationToken)
+    {
+        if (!await _handOff.WaitAsync(TimeSpan.Zero, cancellationToken))
+        {
+            return Result<string, string>.Failure("a hand-off is running right now; try again in a moment");
+        }
+
+        try
+        {
+            if (await _journal.ReadOpenAsync(cancellationToken) is not WslSwitchJournalEntry entry)
+            {
+                return Result<string, string>.Failure("no hand-off is in transit, so there is nothing to cancel");
+            }
+
+            if (_peers.For(entry.Side) is not Peer peer)
+            {
+                return Result<string, string>.Failure(
+                    "no peer is configured for " + entry.Side.Value + ", so it cannot be asked whether it imported " + entry.Incoming.Value);
+            }
+
+            if (entry.StepReached is not (WslSwitchStep.Claimed or WslSwitchStep.ExportVerified))
+            {
+                return Result<string, string>.Failure(
+                    "the " + entry.Side.Value + " side has already imported " + entry.Incoming.Value + "; the hand-off finishes rather than cancels");
+            }
+
+            Result<ImportStatus, string> asked = await peer.Instance.ImportStatusAsync(entry.Incoming, cancellationToken);
+            if (asked.IsFailure)
+            {
+                LogCancelRefused(entry.Side.Value, entry.Incoming.Value, asked.Error);
+                return Result<string, string>.Failure(
+                    "the " + entry.Side.Value + " side is not answering (" + asked.Error
+                        + "), so it has not said whether it imported " + entry.Incoming.Value + "; the claim stands");
+            }
+
+            if (asked.Value.Imported)
+            {
+                return Result<string, string>.Failure(
+                    "the " + entry.Side.Value + " side says " + entry.Incoming.Value + " is imported there; the hand-off finishes rather than cancels");
+            }
+
+            if (asked.Value.JournalStep == ImportStep.Exported)
+            {
+                return Result<string, string>.Failure(
+                    "the " + entry.Side.Value + " side still has the import of " + entry.Incoming.Value + " open; it has not answered whether it imported the pair");
+            }
+
+            // A definite "not imported", which is the only thing an unclaim is
+            // ever done on. That side holds no import for this account, so
+            // there is nothing to abort first.
+            _ = await UnclaimAsync(peer, entry, SwitchRefusal.PeerDidNotImport, CancellationToken.None);
+            LogCancelled(entry.Side.Value, entry.Incoming.Value, asked.Value.Detail);
+            return Result<string, string>.Success(
+                "the hand-off of " + entry.Incoming.Value + " to " + entry.Side.Value + " was cancelled and its pair is back in its slot");
+        }
+        finally
+        {
+            _handOff.Release();
+        }
     }
 
     /// <summary>The one line of side state the page shows. A side that does not answer is offline, not an error.</summary>
@@ -446,6 +598,7 @@ internal sealed partial class WslSwitch : IDisposable
         Peer peer,
         PeerDashboard remote,
         AccountEmail target,
+        bool quarantineForeignFamily,
         CancellationToken cancellationToken)
     {
         IDisposable? permit = null;
@@ -465,7 +618,7 @@ internal sealed partial class WslSwitch : IDisposable
                 return Refuse(SwitchRefusal.RefreshInProgress);
             }
 
-            Result<WslSwitchJournalEntry, SwitchRefusal> planned = await PlanAsync(peer, remote, target, cancellationToken);
+            Result<WslSwitchJournalEntry, SwitchRefusal> planned = await PlanAsync(peer, remote, target, quarantineForeignFamily, cancellationToken);
             if (planned.IsFailure)
             {
                 return planned;
@@ -500,6 +653,7 @@ internal sealed partial class WslSwitch : IDisposable
         Peer peer,
         PeerDashboard remote,
         AccountEmail target,
+        bool quarantineForeignFamily,
         CancellationToken cancellationToken)
     {
         if (!_slots.Enabled)
@@ -538,6 +692,10 @@ internal sealed partial class WslSwitch : IDisposable
             return Refuse(SwitchRefusal.TargetHasNoCredentials);
         }
 
+        // One reading of what this side holds, shared by every slot verdict in
+        // this plan: the target's, and the outgoing account's below.
+        WindowsHold hold = await WindowsHoldAsync(cancellationToken);
+
         // The target's slot, read the one way the design allows. A slot the
         // Windows side holds reads HeldHere from here, which for a switch of
         // the other side is exactly "in use by the other side".
@@ -545,7 +703,7 @@ internal sealed partial class WslSwitch : IDisposable
             target,
             incoming.FolderPath,
             incoming.HasCredentials,
-            await WindowsHoldAsync(cancellationToken),
+            hold,
             cancellationToken);
         Result<Unit, SwitchRefusal> usable = slot?.State switch
         {
@@ -598,7 +756,23 @@ internal sealed partial class WslSwitch : IDisposable
         if (remote.LiveAccount is AccountEmail outgoing)
         {
             outgoingFolder = _profiles.FolderPathFor(outgoing);
-            if (File.Exists(Path.Combine(outgoingFolder, FileSystemCredentialPairStore.FileName)))
+            bool outgoingSlotHoldsPair = File.Exists(Path.Combine(outgoingFolder, FileSystemCredentialPairStore.FileName));
+
+            // The foreign family. The pair that side is live on is not the one
+            // this store parked, because the escape hatch logged this account in
+            // again here while that side was unreachable; parking it back would
+            // put two families of one account in the store. Asked before the
+            // occupied-slot refusal below, because it is the explained case and
+            // the operator needs its sentence rather than "unverified".
+            bool foreign = await ForeignFamilyAsync(outgoing, outgoingFolder, outgoingSlotHoldsPair, hold, peer.Side, cancellationToken);
+            if (foreign && !quarantineForeignFamily)
+            {
+                return Refuse(SwitchRefusal.ForeignFamily);
+            }
+
+            // An occupied slot with nothing explaining it is the duplicate the
+            // whole design refuses, and no click overrides it.
+            if (outgoingSlotHoldsPair && !foreign)
             {
                 return Refuse(SwitchRefusal.LiveIdentityUnverified);
             }
@@ -858,6 +1032,18 @@ internal sealed partial class WslSwitch : IDisposable
         if (entry.Outgoing is AccountEmail outgoing && entry.OutgoingFolderPath is string folder && entry.OutgoingFingerprint is RefreshTokenFingerprint fingerprint)
         {
             await _profiles.EnsureFolderAsync(outgoing, cancellationToken);
+
+            // Decided from the files, never from what the request asked for: a
+            // hand-off claimed before the escape hatch ran, and resumed after
+            // it, carries no flag and must still quarantine rather than fail to
+            // park for ever. The superseded record is the consent, and it is on
+            // disk.
+            bool slotHoldsPair = File.Exists(Path.Combine(folder, FileSystemCredentialPairStore.FileName));
+            if (await ForeignFamilyAsync(outgoing, folder, slotHoldsPair, await WindowsHoldAsync(cancellationToken), peer.Side, cancellationToken))
+            {
+                return await QuarantineForeignFamilyAsync(peer, entry, outgoing, folder, cancellationToken);
+            }
+
             if (entry.OutgoingAccount is not null)
             {
                 await _profiles.WriteProfileAsync(folder, OAuthAccountBlock.FromJson(entry.OutgoingAccount), cancellationToken);
@@ -894,6 +1080,48 @@ internal sealed partial class WslSwitch : IDisposable
         await _journal.ClearAsync(cancellationToken);
         LogSwitched(peer.Side.Value, entry.Incoming.Value, entry.Outgoing?.Value ?? "none");
         return Result<WslSwitchOutcome, SwitchRefusal>.Success(Outcome(entry));
+    }
+
+    /// <summary>
+    /// L4 for a family the store may not take back: the export is moved out of
+    /// the mailbox into <c>quarantine/superseded/</c>, where it is neither
+    /// promoted nor deleted, and the superseded record that sanctioned it goes.
+    /// The switch itself completes — the incoming pair is live on that side and
+    /// nothing is served by refusing it afterwards — and the banner names the
+    /// file the operator has to decide about.
+    /// <para>
+    /// Three things this deliberately does not do. It does not release the
+    /// slot's holder record, which may be this side's own statement that it
+    /// holds the fresh family live. It does not write the outgoing account's
+    /// block over <c>profile.json</c>, which the fresh login wrote and which
+    /// describes the family that is actually in the slot. And it does not leave
+    /// the export in the mailbox, which would leave the account reading
+    /// <c>in-transit</c> for ever.
+    /// </para>
+    /// </summary>
+    private async Task<Result<WslSwitchOutcome, SwitchRefusal>> QuarantineForeignFamilyAsync(
+        Peer peer,
+        WslSwitchJournalEntry entry,
+        AccountEmail outgoing,
+        string folder,
+        CancellationToken cancellationToken)
+    {
+        string stamp = _timeProvider.GetUtcNow().ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture);
+        string destination = Path.Combine(_options.SupersededQuarantineDirectory, stamp + "-" + Path.GetFileName(Path.TrimEndingDirectorySeparator(folder)));
+        Result<string, string> quarantined = await _pairs.MoveExportToQuarantineAsync(folder, peer.Side, destination, cancellationToken);
+        if (quarantined.IsFailure)
+        {
+            // The export stays in the mailbox, which is recoverable, and the
+            // journal stays open so the next poll tries again.
+            LogParkRefused(outgoing.Value, quarantined.Error);
+            return Result<WslSwitchOutcome, SwitchRefusal>.Failure(SwitchRefusal.LiveIdentityUnverified);
+        }
+
+        await _slots.ClearSupersededAsync(folder, cancellationToken);
+        await JournalAsync(entry with { StepReached = WslSwitchStep.Parked }, cancellationToken);
+        await _journal.ClearAsync(cancellationToken);
+        LogFamilyQuarantined(peer.Side.Value, outgoing.Value, quarantined.Value);
+        return Result<WslSwitchOutcome, SwitchRefusal>.Success(Outcome(entry) with { ParkedAs = null, QuarantinedAt = quarantined.Value });
     }
 
     /// <summary>The gate's refusal: unwind the follower's import first, then take the claim back.</summary>
@@ -933,6 +1161,23 @@ internal sealed partial class WslSwitch : IDisposable
         return Result<WslSwitchOutcome, SwitchRefusal>.Failure(refusal);
     }
 
+    /// <summary>
+    /// Whether <paramref name="side"/> holds a second token family for this
+    /// account: the slot carries a superseded record naming that side, and the
+    /// files still bear it out. The single derivation, used by L1 to refuse and
+    /// by L4 to decide where the export goes, so the refusal and the quarantine
+    /// can never disagree about what is foreign.
+    /// </summary>
+    private async Task<bool> ForeignFamilyAsync(
+        AccountEmail account,
+        string folderPath,
+        bool slotHoldsPair,
+        WindowsHold hold,
+        SideName side,
+        CancellationToken cancellationToken) =>
+        await _slots.ReadSupersededAsync(account, folderPath, slotHoldsPair, hold, cancellationToken)
+            is { Stale: false } superseded && superseded.Record.Side == side;
+
     private async Task<WindowsHold> WindowsHoldAsync(CancellationToken cancellationToken)
     {
         CredentialPair? live = await _pairs.ReadLiveAsync(cancellationToken);
@@ -963,9 +1208,25 @@ internal sealed partial class WslSwitch : IDisposable
         CrashInjection.KillIfConfigured(_options.FailAfterStep, entry.StepReached, beforeJournal: false);
     }
 
-    private static WslReconciliation InTransitBanner(WslSwitchJournalEntry entry, string why) => new(
-        "the hand-off of " + entry.Incoming.Value + " to " + entry.Side.Value + " is at " + entry.StepReached + " and " + why,
-        entry.Incoming.Value + " is in transit to " + entry.Side.Value + " (" + why + "); it stays claimed until that side answers.");
+    /// <summary>
+    /// The line the page carries for a hand-off nothing could finish, and
+    /// design 9.4's last row: past <see cref="StuckAfter"/> it says how long,
+    /// because a state that has stood for a day is one the operator is being
+    /// asked to decide about rather than one that is still settling. Nothing
+    /// clears it on a timer; a later poll that resolves the hand-off writes
+    /// null over it, and until then it stands.
+    /// </summary>
+    private WslReconciliation InTransitBanner(WslSwitchJournalEntry entry, string why)
+    {
+        TimeSpan age = _timeProvider.GetUtcNow() - entry.StartedAt;
+        string stuck = age < StuckAfter
+            ? string.Empty
+            : " It has been in transit for " + ((int)age.TotalHours).ToString(CultureInfo.InvariantCulture)
+                + " hours: nothing clears an in-transit state by itself, so it stands until that side answers or you cancel it.";
+        return new WslReconciliation(
+            "the hand-off of " + entry.Incoming.Value + " to " + entry.Side.Value + " is at " + entry.StepReached + " and " + why,
+            entry.Incoming.Value + " is in transit to " + entry.Side.Value + " (" + why + "); it stays claimed until that side answers." + stuck);
+    }
 
     private WslSwitchOutcome Outcome(WslSwitchJournalEntry entry) =>
         new(entry.Side, entry.Incoming, entry.Outgoing, _timeProvider.GetUtcNow());
@@ -1026,4 +1287,13 @@ internal sealed partial class WslSwitch : IDisposable
 
     [LoggerMessage(Level = LogLevel.Information, Message = "switch of {Side} to {Target} refused: {Refusal}")]
     private partial void LogRefused(string side, string target, SwitchRefusal refusal);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "a superseded family of {Outgoing} came back from {Side} and was quarantined at {Destination}; it is never promoted and never deleted")]
+    private partial void LogFamilyQuarantined(string side, string outgoing, string destination);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "the hand-off of {Incoming} to {Side} was cancelled by the operator: {Detail}")]
+    private partial void LogCancelled(string side, string incoming, string detail);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "cancel refused for {Incoming}: the {Side} side did not answer ({Reason}); the claim stands")]
+    private partial void LogCancelRefused(string side, string incoming, string reason);
 }

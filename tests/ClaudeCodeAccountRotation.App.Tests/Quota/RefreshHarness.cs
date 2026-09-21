@@ -46,7 +46,7 @@ internal sealed class RefreshHarness : IDisposable
         _roster = new RosterFile(AppData);
         ClaudeStateFile stateFile = new(StateFilePath);
         Recovery = new RecoveryFiles(options, Store, Profiles, State, RecoveryLog, Clock);
-        Slots = new SharedStoreSlots(ProfilesRoot, sharedStore, Gate, NullLogger<SharedStoreSlots>.Instance);
+        Slots = new SharedStoreSlots(ProfilesRoot, sharedStore, Gate, Logins, NullLogger<SharedStoreSlots>.Instance);
         Executor = new LiveDirectorySwitch(
             Store,
             stateFile,

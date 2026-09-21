@@ -39,12 +39,18 @@ internal static class LoginEndpoints
 
         mutations.MapPost("/accounts/{email}/login", static async (
             string email,
+            // Nullable because a minimal-API `bool` bound from the query string
+            // is required, and every caller that predates this flag sends no
+            // query at all: absent is off, which is what the ordinary login is.
+            bool? supersede,
             RosterFile rosterFile,
             ProfileFolderStore profiles,
             ClaudeStateFile stateFile,
             ILoginSessionRunner runner,
             IBrowserLauncher browsers,
             SharedStoreSlots slots,
+            WslSwitch coordinator,
+            TimeProvider clock,
             CancellationToken cancellationToken) =>
         {
             Result<AccountEmail, string> parsed = AccountEmail.Parse(email);
@@ -80,10 +86,38 @@ internal static class LoginEndpoints
             // refusal is the escape hatch design section 11 describes; it is
             // phase 7's, and it needs a refusal here to override.
             AccountEmail? liveAccount = (await stateFile.ReadAccountBlockAsync(cancellationToken))?.Email;
-            if (await slots.ReadAsync(target, folder.FolderPath, folder.HasCredentials, new WindowsHold(liveAccount, null), cancellationToken)
-                is { State: SlotState.HeldElsewhere or SlotState.InTransit })
+            SlotSnapshot? slot = await slots.ReadAsync(target, folder.FolderPath, folder.HasCredentials, new WindowsHold(liveAccount, null), cancellationToken);
+            if (slot is { State: SlotState.InTransit })
             {
-                return Refused("HeldByOtherSide", "The other side of this machine holds that account, or a hand-off for it is in flight; switch it away there first.");
+                // No override, ever. A hand-off in flight means the pair is
+                // between two live directories, and a login into the slot it is
+                // heading for or coming back to would be a second family made
+                // against a state neither side can yet name.
+                return Refused("SlotInTransit", "A hand-off for that account is in flight; nothing may log it in again until that settles.");
+            }
+
+            if (slot is { State: SlotState.HeldElsewhere, Record: HolderRecord held })
+            {
+                if (supersede != true)
+                {
+                    return Refused("HeldByOtherSide", "The " + held.Side.Value + " side of this machine holds that account; switch it away there first, or log in again here to supersede the family it holds.");
+                }
+
+                // The escape hatch, and the one place in this design a second
+                // token family for an account is allowed to exist. It is worth
+                // an extra login only when the hand-off that costs none is
+                // unavailable, so a side that answers is told to do the hand-off
+                // instead of being superseded behind its back.
+                if ((await coordinator.ReadSideAsync(held.Side, cancellationToken)).Online)
+                {
+                    return Refused("SideIsOnline", "The " + held.Side.Value + " side is answering, so switch that account away there instead; superseding it would make a second token family for no reason.");
+                }
+
+                // Written before the login runs, so a login that never finishes
+                // still leaves the one statement that the family over there
+                // exists. Its own reconciliation drops it again if no family
+                // ever lands in this slot.
+                await slots.SupersedeAsync(folder.FolderPath, held with { Since = clock.GetUtcNow() }, cancellationToken);
             }
 
             Result<LoginSession, string> started = await runner.StartAsync(target, folder.FolderPath, cancellationToken);

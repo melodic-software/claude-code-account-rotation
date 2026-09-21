@@ -37,6 +37,7 @@ internal sealed partial class DashboardAssembler(
     RecoveryFiles recovery,
     SharedStoreSlots slots,
     WslSwitch coordinator,
+    SwitchOptions options,
     TimeProvider timeProvider,
     ILogger<DashboardAssembler> logger)
 {
@@ -71,6 +72,9 @@ internal sealed partial class DashboardAssembler(
         // rotation" once the CLI has rotated the live token past the record.
         WindowsHold hold = new(liveEmail, livePair?.Fingerprint);
 
+        // Filled as the slots are read, because a superseded family is a fact
+        // about one slot and the reading that notices it is the one below.
+        List<string> warnings = [];
         List<(AccountCardView Card, AccountStanding Standing)> built = [];
         if (liveEmail is AccountEmail live)
         {
@@ -88,7 +92,7 @@ internal sealed partial class DashboardAssembler(
                 capturedAt,
                 livePair?.LoginExpiresAt,
                 liveAccount?.ProfileFetchedAt,
-                await SlotAsync(live, liveFolder, ownFolder?.HasCredentials ?? false, hold, cancellationToken),
+                await SlotAsync(live, liveFolder, ownFolder?.HasCredentials ?? false, hold, warnings, cancellationToken),
                 sides));
         }
 
@@ -107,7 +111,7 @@ internal sealed partial class DashboardAssembler(
                 capturedAt,
                 await ReadLoginExpiryAsync(profile, cancellationToken),
                 profile.Account?.ProfileFetchedAt,
-                await SlotAsync(profile.Email, profile.FolderPath, profile.HasCredentials, hold, cancellationToken),
+                await SlotAsync(profile.Email, profile.FolderPath, profile.HasCredentials, hold, warnings, cancellationToken),
                 sides));
         }
 
@@ -122,7 +126,7 @@ internal sealed partial class DashboardAssembler(
                 entry.Email, isLive: false, hasCredentials: false, folder, observed: null, note: null, roster, capturedAt,
                 loginExpiresAt: null,
                 loggedInAt: null,
-                slot: await SlotAsync(entry.Email, folder, slotHoldsPair: false, hold, cancellationToken),
+                slot: await SlotAsync(entry.Email, folder, slotHoldsPair: false, hold, warnings, cancellationToken),
                 sides));
         }
 
@@ -147,7 +151,6 @@ internal sealed partial class DashboardAssembler(
                 NextResetAt = arranged.Key.NextResetAt,
             })];
 
-        List<string> warnings = [];
         if (liveEmail is null && livePair is not null)
         {
             warnings.Add("The live directory holds a credential pair but the state file names no account.");
@@ -162,6 +165,8 @@ internal sealed partial class DashboardAssembler(
         {
             warnings.Add(inTransit);
         }
+
+        warnings.AddRange(QuarantinedFamilies());
 
         // Every poll, for as long as they stand: a recovery file that could not be
         // applied is a credential the operator has to act on, and a warning drained
@@ -330,7 +335,13 @@ internal sealed partial class DashboardAssembler(
     /// next poll deals with it. Null when the store is not shared, and the card
     /// then carries neither a word nor a chip.
     /// </summary>
-    private async Task<SlotSnapshot?> SlotAsync(AccountEmail email, string folder, bool slotHoldsPair, WindowsHold hold, CancellationToken cancellationToken)
+    private async Task<SlotSnapshot?> SlotAsync(
+        AccountEmail email,
+        string folder,
+        bool slotHoldsPair,
+        WindowsHold hold,
+        List<string> warnings,
+        CancellationToken cancellationToken)
     {
         if (await slots.ReadAsync(email, folder, slotHoldsPair, hold, cancellationToken) is not SlotSnapshot slot)
         {
@@ -340,6 +351,25 @@ internal sealed partial class DashboardAssembler(
         if (slot.StaleRecord)
         {
             await slots.DropStaleRecordAsync(email, folder, slot, hold, cancellationToken);
+        }
+
+        // A second token family, the one thing in this design allowed to make
+        // one. Said on every poll for as long as the record stands, because the
+        // rule a second family is held to is that it is always shown and never
+        // silent; the only thing that ends the line is that family being
+        // quarantined when the other side hands it back.
+        if (await slots.ReadSupersededAsync(email, folder, slotHoldsPair, hold, cancellationToken) is SupersededFamily superseded)
+        {
+            if (superseded.Stale)
+            {
+                await slots.DropStaleSupersededAsync(email, folder, superseded, hold, cancellationToken);
+            }
+            else
+            {
+                warnings.Add(email.Value + " has a second token family on the " + superseded.Record.Side.Value
+                    + " side, superseded here on " + superseded.Record.Since.ToString("u", CultureInfo.InvariantCulture)
+                    + ". Switching that side away from the account quarantines that family; nothing else touches it.");
+            }
         }
 
         return slot;
@@ -381,6 +411,27 @@ internal sealed partial class DashboardAssembler(
             LogLoginExpiryUnreadable(FolderName(profile.FolderPath), exception.Message);
             return null;
         }
+    }
+
+    /// <summary>
+    /// One line per superseded family the store took in and may not use, read
+    /// off the quarantine directory itself rather than from anything held in
+    /// memory. That is what makes it survive a restart and outlive the switch
+    /// that put the file there: nothing clears this line but the operator
+    /// deciding what to do with the file it names.
+    /// </summary>
+    private IEnumerable<string> QuarantinedFamilies()
+    {
+        string root = options.SupersededQuarantineDirectory;
+        if (!Directory.Exists(root))
+        {
+            return [];
+        }
+
+        return Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+            .Order(StringComparer.Ordinal)
+            .Select(static path => "A superseded token family is quarantined at " + path
+                + ". It is never used and never deleted here; delete it yourself once that account has been logged out on the side that held it.");
     }
 
     private static string FolderName(string folderPath) =>
