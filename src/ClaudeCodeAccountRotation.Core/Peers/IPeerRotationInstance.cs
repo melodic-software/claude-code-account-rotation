@@ -6,18 +6,47 @@ using ClaudeCodeAccountRotation.Core.Switching;
 namespace ClaudeCodeAccountRotation.Core.Peers;
 
 /// <summary>
-/// What the leader asks the follower to take. No token crosses the wire:
-/// identity is the SHA-256 fingerprint and the pair itself is read from
-/// <see cref="ClaimedPath"/>, a file on the store's own volume that the leader
-/// renamed into the mailbox before asking. Both paths are spelled in the
-/// <b>peer's</b> namespace, which is what <c>storePathFromPeer</c> is for.
+/// What the leader asks the follower to take, and what it asks it to give up.
+/// No token crosses the wire: identity is the SHA-256 fingerprint and the pair
+/// itself is read from <see cref="ClaimedPath"/>, a file on the store's own
+/// volume that the leader renamed into the mailbox before asking. Both paths
+/// are spelled in the <b>peer's</b> namespace, which is what
+/// <c>storePathFromPeer</c> is for.
+/// <para>
+/// A <b>release</b> is this same request with its incoming half empty, and it
+/// is deliberately not a second contract: the follower's journal, its crash
+/// table, its two-call export gate, its commit budget and its refresh-lock
+/// heartbeat are the same machinery whichever way the pair is moving.
+/// </para>
 /// </summary>
+/// <param name="Email">
+/// The account this transaction is about, and the key <c>commit</c>,
+/// <c>abort</c> and <c>import-status</c> answer on. For an import it is the
+/// account arriving; for a release it is the one leaving, because that is the
+/// only account a release names.
+/// </param>
+/// <param name="Fingerprint">
+/// The pair this transaction is about, as the leader last read it. For an
+/// import it is what the stage must read back as; for a release it is the pair
+/// the leader expects that side to be live on, and a side that has rotated or
+/// switched since refuses rather than exporting a pair nobody planned to park.
+/// </param>
 public sealed record ImportRequest(
     AccountEmail Email,
-    string ClaimedPath,
+    string? ClaimedPath,
     RefreshTokenFingerprint Fingerprint,
-    JsonObject Account,
-    string ExportPath);
+    JsonObject? Account,
+    string ExportPath)
+{
+    /// <summary>
+    /// Whether nothing arrives on that side: the park-back of its live pair
+    /// into the store, with no incoming pair to put in its place. Read off the
+    /// absent <see cref="ClaimedPath"/>, which is the one thing an import
+    /// cannot be without — a release has no claimed file because the leader
+    /// claimed nothing.
+    /// </summary>
+    public bool IsRelease => ClaimedPath is null;
+}
 
 /// <summary>
 /// The answer to the first call: the import has run F1 to F4 and stopped.

@@ -8,6 +8,11 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- A card for an account whose hand-off is in flight says which way its own pair is going:
+  `in transit from wsl` for one coming back to the store, `in transit to wsl` for one going out,
+  read off the suffix of its file in the mailbox rather than off the holder record, which names the
+  same side either way. During a switch's export window one pair is moving each way and each card
+  now says its own direction.
 - The three states the shared store could only be talked out of by hand are controls (#72). A slot
   the other side holds can be logged in again here with `POST /api/accounts/{email}/login?supersede=true`
   while that side is unreachable, which is the one place an account is allowed a second token
@@ -71,6 +76,23 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- The other side can hand an account back to the store without taking another one
+  (`POST /api/sides/{side}/release`), and the side panel carries `Hand back` beside `Switch` for it.
+  Until now a pair only came back as the outgoing half of a switch to a different account, so a
+  fleet where WSL holds exactly one account had no way out: that side could not be emptied, and
+  Windows pulling the pair back is refused `HeldByOtherSide` by design. The release is the same
+  hand-off in the other direction and reuses all of it — the same journal, the same crash table, the
+  same export gate with its native read-back on the store's own volume, the same twenty-second
+  commit budget, the same refresh-lock heartbeat, the same park by rename — with the incoming half
+  of the request empty. Three things differ because there is no incoming pair, and only these
+  three: nothing is claimed, so a refused or cancelled release clears the journal and keeps the
+  slot's holder record, which is the store's only statement of where the pair is; the step that
+  ends it removes that side's live pair rather than replacing it, after the gate has verified the
+  export natively; and its state file is cleared, so that side reports holding nothing. A release
+  of a side that holds nothing is refused `NothingToRelease`, a superseded family comes back to
+  `quarantine/superseded/` on the same second click a switch uses, and nothing in the path clears an
+  in-transit state or deletes a parked, quarantined or superseded file. All of it is behind
+  `store.shared`.
 - Each card in `GET /api/dashboard` gains `loginExpiresAt` and `loggedInAt` (#49). The first is
   when the account's credential pair, live or parked, says its refresh token runs out; the second
   is the `profileFetchedAt` the CLI already stamped on the account block, read from the state file

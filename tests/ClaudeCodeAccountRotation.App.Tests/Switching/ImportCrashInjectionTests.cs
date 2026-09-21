@@ -13,6 +13,7 @@ namespace ClaudeCodeAccountRotation.App.Tests.Switching;
 /// process is killed for real; a second follower over the same roots
 /// reconciles, and the outcome is asserted on disk.
 /// </summary>
+[Collection(OutOfProcessFollowers.Name)]
 public sealed class ImportCrashInjectionTests
 {
     private const string OutgoingEmail = "a@example.com";

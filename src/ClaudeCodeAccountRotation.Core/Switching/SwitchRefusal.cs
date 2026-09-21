@@ -88,6 +88,16 @@ public enum SwitchRefusal
     /// </summary>
     PeerDidNotImport,
 
+    /// <summary>
+    /// <b>A release with nothing to release.</b> The other side is answering and
+    /// holds no live pair, so there is no hand-off to make: the store already
+    /// has every family it can have and that side is already where a release
+    /// would leave it. The page hides the control in this state; this refusal is
+    /// what answers when it is bypassed, and it is not
+    /// <see cref="AlreadyOnTarget"/> because a release names no target.
+    /// </summary>
+    NothingToRelease,
+
     MutationInProgress,
 
     /// <summary>

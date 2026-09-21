@@ -272,6 +272,34 @@
     });
   }
 
+  // The park-back, as one control beside Switch. It is asked for once: the
+  // account is named in the confirmation because the button cannot be, the side
+  // holding a different account by the time it is clicked being exactly what
+  // the server's own plan re-reads and refuses.
+  function releaseSide(side, holding) {
+    if (!window.confirm("Hand " + holding + " back to the store from the " + side + " side?\n\nThat side keeps no login afterwards; the account is parked here and either side can take it.")) {
+      return;
+    }
+    return mutate(sidePath(side, "/release"), "POST", null, function (result) {
+      if (!result.ok) {
+        // The one refusal a second click can override, in the shape the
+        // "Log in again" control already uses for the same decision.
+        if (result.body.refusal === "ForeignFamily"
+          && window.confirm(result.body.message + "\n\nHand it back into quarantine? The family that side holds is kept there and never used, and the one in the store stays as it is.")) {
+          mutate(sidePath(side, "/release") + "?quarantineForeignFamily=true", "POST", null, function (retry) {
+            showToast(retry.ok
+              ? "The " + retry.body.side + " side holds nothing; a superseded family was quarantined at " + retry.body.quarantinedAt
+              : refused(retry.body), retry.ok ? "warn" : "error");
+          });
+          return;
+        }
+        showToast(refused(result.body), "error");
+        return;
+      }
+      showToast("The " + result.body.side + " side holds nothing; " + (result.body.parkedAs || holding) + " is parked here", "ok");
+    });
+  }
+
   // One line per configured side, and on it that side's switch control: which
   // parked account it should take. A selection survives the poll's redraw, and a
   // redraw is skipped while the picker is in use, so the ten-second poll never
@@ -309,6 +337,7 @@
         row.mode = mode;
         row.control = element("span", "side-control");
         row.pick = null;
+        row.release = null;
         // With the picker goes what it was holding: a side that went offline and
         // came back while the parked accounts were unchanged would otherwise
         // match the old signature, leave the new picker empty, and keep Switch
@@ -319,6 +348,11 @@
           row.pick.name = side.side;
           row.control.appendChild(row.pick);
           row.button = actionButton("Switch " + side.side + " side", "switch", function () { switchSide(side.side, row.pick.value); });
+          // One control for the park-back, beside the switch and only on a side
+          // that is answering: it reads what that side holds at click time and
+          // the server re-reads it before anything moves.
+          row.release = actionButton("Hand back", "secondary", function () { releaseSide(side.side, row.holding); });
+          row.control.appendChild(row.release);
         } else if (mode === "start") {
           row.button = actionButton("Start " + side.side + " side", "secondary", function () { mutate(sidePath(side.side, "/start"), "POST", null, null); });
         } else {
@@ -346,6 +380,13 @@
       }
 
       if (row.button) { row.button.disabled = busy || (row.pick ? !row.pick.value : false); }
+      if (row.release) {
+        // A side holding nothing has nothing to hand back, which is the
+        // NothingToRelease the server answers when the control is bypassed.
+        row.holding = side.liveAccount;
+        row.release.hidden = !side.liveAccount;
+        row.release.disabled = busy;
+      }
     });
 
     Object.keys(sideRows).forEach(function (name) {

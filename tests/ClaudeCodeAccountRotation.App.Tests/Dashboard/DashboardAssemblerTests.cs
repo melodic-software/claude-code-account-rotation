@@ -758,6 +758,30 @@ public sealed class DashboardAssemblerTests
     }
 
     /// <summary>
+    /// The other direction, which the record cannot tell apart on its own: a
+    /// pair coming back to the store reads as an <i>export</i> in the mailbox,
+    /// and a card that read the record for this would tell an operator watching
+    /// a park-back that the pair was heading the other way.
+    /// </summary>
+    [Fact]
+    public async Task AnAccountBeingHandedBackSaysItIsComingFromThatSide()
+    {
+        FakePeerRotationInstance side = Side();
+        // The side stopped answering mid-hand-off, which is what leaves an
+        // export standing long enough for a poll to draw a card over it: a
+        // reachable side finishes the park-back on the same poll.
+        side.DashboardError = "the distribution is not running";
+        await using AppFactory factory = await SharedStoreAsync(side);
+        await ReturningAsync(factory, HeldEmail);
+
+        JsonElement card = await CardAsync(factory, HeldEmail);
+
+        card.GetProperty("chip").GetString().ShouldBe("in transit from wsl");
+        card.GetProperty("canSwitchHere").GetBoolean().ShouldBeFalse();
+        OfferedTo(card).ShouldBeEmpty();
+    }
+
+    /// <summary>
     /// Design 12: the leader never reads a held pair's usage, so the card's
     /// figures are the follower's own tee, carried on its dashboard, and the
     /// card says where they came from and when they were taken.
@@ -937,6 +961,36 @@ public sealed class DashboardAssemblerTests
         File.Move(
             Path.Combine(folder, FileSystemCredentialPairStore.FileName),
             Path.Combine(mailbox, FileSystemCredentialPairStore.ClaimedFileName(email)));
+    }
+
+    /// <summary>
+    /// What a release in flight leaves in the store: the slot's record still
+    /// names the side that holds the account, and its file in the mailbox is an
+    /// export rather than a claim.
+    /// </summary>
+    private static async Task ReturningAsync(AppFactory factory, string email)
+    {
+        CancellationToken token = TestContext.Current.CancellationToken;
+        string mailbox = FileSystemCredentialPairStore.MailboxPath(factory.ProfilesRoot, SideName.Wsl);
+        Directory.CreateDirectory(mailbox);
+        await File.WriteAllTextAsync(
+            Path.Combine(mailbox, FileSystemCredentialPairStore.ClaimedFileName(email) + FileSystemCredentialPairStore.IncomingSuffix),
+            CredentialFiles.Shape("refresh-held").ToJsonString(),
+            token);
+        // With a journal over it the orphan pass leaves it alone and the crash
+        // table owns it, which is what a release interrupted mid-flight is.
+        await new WslSwitchJournal(factory.AppData).WriteAsync(
+            new WslSwitchJournalEntry(
+                SideName.Wsl,
+                null,
+                null,
+                null,
+                AccountEmail.Parse(email).Value,
+                CredentialFiles.Pair("refresh-held").Fingerprint,
+                Path.Combine(factory.ProfilesRoot, email),
+                WslSwitchStep.ExportVerified,
+                _teeCapturedAt),
+            token);
     }
 
     /// <summary>Puts one on-demand read into the state the page reads, the way a pass does.</summary>

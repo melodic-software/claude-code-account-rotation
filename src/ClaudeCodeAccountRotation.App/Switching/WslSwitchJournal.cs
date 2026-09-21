@@ -29,17 +29,34 @@ namespace ClaudeCodeAccountRotation.App.Switching;
 /// account that has only ever lived on the other side.
 /// </para>
 /// </summary>
+/// <param name="Incoming">
+/// The account arriving on that side, or null for a <b>release</b>, which
+/// sends nothing: its incoming fingerprint and folder path are absent with it,
+/// because there is no slot this hand-off takes a pair out of. The only
+/// account a release names is the one coming back, which is the outgoing half.
+/// </param>
 internal sealed record WslSwitchJournalEntry(
     SideName Side,
-    AccountEmail Incoming,
-    RefreshTokenFingerprint IncomingFingerprint,
-    string IncomingFolderPath,
+    AccountEmail? Incoming,
+    RefreshTokenFingerprint? IncomingFingerprint,
+    string? IncomingFolderPath,
     AccountEmail? Outgoing,
     RefreshTokenFingerprint? OutgoingFingerprint,
     string? OutgoingFolderPath,
     WslSwitchStep StepReached,
     DateTimeOffset StartedAt,
-    JsonObject? OutgoingAccount = null);
+    JsonObject? OutgoingAccount = null)
+{
+    /// <summary>Whether this hand-off sends nothing and only takes a pair back.</summary>
+    public bool IsRelease => Incoming is null;
+
+    /// <summary>
+    /// The account the other side answers about: what the import request, the
+    /// commit, the abort and every status read are keyed on. A switch names the
+    /// arriving account; a release has none and names the one leaving.
+    /// </summary>
+    public AccountEmail Subject => (Incoming ?? Outgoing)!.Value;
+}
 
 /// <summary>
 /// <c>&lt;appdata&gt;/state/wsl-switch-journal.json</c>: present only while a
@@ -97,9 +114,9 @@ internal sealed class WslSwitchJournal
     /// <summary>The on-disk shape: primitives only, so the value types need no converters.</summary>
     private sealed record JournalDocument(
         string Side,
-        string Incoming,
-        string IncomingFingerprint,
-        string IncomingFolderPath,
+        string? Incoming,
+        string? IncomingFingerprint,
+        string? IncomingFolderPath,
         string? Outgoing,
         string? OutgoingFingerprint,
         string? OutgoingFolderPath,
@@ -109,8 +126,8 @@ internal sealed class WslSwitchJournal
     {
         public static JournalDocument From(WslSwitchJournalEntry entry) => new(
             entry.Side.Value,
-            entry.Incoming.Value,
-            entry.IncomingFingerprint.Sha256Hex,
+            entry.Incoming?.Value,
+            entry.IncomingFingerprint?.Sha256Hex,
             entry.IncomingFolderPath,
             entry.Outgoing?.Value,
             entry.OutgoingFingerprint?.Sha256Hex,
@@ -121,8 +138,8 @@ internal sealed class WslSwitchJournal
 
         public WslSwitchJournalEntry ToEntry() => new(
             new SideName(Side),
-            new AccountEmail(Incoming),
-            new RefreshTokenFingerprint(IncomingFingerprint),
+            Incoming is null ? null : new AccountEmail(Incoming),
+            IncomingFingerprint is null ? null : new RefreshTokenFingerprint(IncomingFingerprint),
             IncomingFolderPath,
             Outgoing is null ? null : new AccountEmail(Outgoing),
             OutgoingFingerprint is null ? null : new RefreshTokenFingerprint(OutgoingFingerprint),

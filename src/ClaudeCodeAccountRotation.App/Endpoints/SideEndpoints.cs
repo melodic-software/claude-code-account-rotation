@@ -49,10 +49,27 @@ internal static class SideEndpoints
 
             Result<WslSwitchOutcome, SwitchRefusal> outcome =
                 await coordinator.SwitchToAsync(new SideName(side), target.Value, quarantineForeignFamily == true, cancellationToken);
-            return outcome.Match(
-                static done => Results.Ok(new SideSwitchView(done.Side.Value, done.Now.Value, done.ParkedAs?.Value, done.At, done.QuarantinedAt)),
-                static refusal => Results.Json(SwitchRefusalView.Of(refusal), statusCode: StatusCodes.Status409Conflict));
+            return View(outcome);
         });
+
+        // The park-back. It names no account because it has no target: the side
+        // ends holding nothing and the pair it held is in the store, where
+        // either side may take it. A switch to a sentinel account would put a
+        // non-account in the segment `AccountEmail.Parse` owns and would have to
+        // suppress every refusal keyed on a target — `AlreadyOnTarget`,
+        // `TargetHasNoCredentials`, `TargetLoginExpired`,
+        // `TargetStrandedInRecovery`, `HeldByOtherSide` — none of which a
+        // release can raise. The vocabulary already has side verbs with no
+        // account in the path (`/start`, `/transit/cancel`); this is one more.
+        mutations.MapPost("/sides/{side}/release", static async (
+            string side,
+            // The same second click as the switch's, and the same one refusal it
+            // overrides: a family the store no longer owns comes back to the
+            // quarantine rather than over the fresh one.
+            bool? quarantineForeignFamily,
+            WslSwitch coordinator,
+            CancellationToken cancellationToken) =>
+                View(await coordinator.ReleaseAsync(new SideName(side), quarantineForeignFamily == true, cancellationToken)));
 
         // The operator's Cancel on a hand-off that is standing. A refusal is a
         // 409 with the reason, because every reason it has is a state on the
@@ -91,12 +108,18 @@ internal static class SideEndpoints
         });
     }
 
+    /// <summary>One answer for both directions: what moved, or the refusal's sentence.</summary>
+    private static IResult View(Result<WslSwitchOutcome, SwitchRefusal> outcome) => outcome.Match(
+        static done => Results.Ok(new SideSwitchView(done.Side.Value, done.Now?.Value, done.ParkedAs?.Value, done.At, done.QuarantinedAt)),
+        static refusal => Results.Json(SwitchRefusalView.Of(refusal), statusCode: StatusCodes.Status409Conflict));
+
     /// <summary>
-    /// What a hand-off moved. <c>QuarantinedAt</c> names a file instead of an
-    /// account when the pair that came back was a superseded family the store
-    /// may not hold, and <c>ParkedAs</c> is then null.
+    /// What a hand-off moved. <c>Now</c> is null after a release, which leaves
+    /// that side holding nothing. <c>QuarantinedAt</c> names a file instead of
+    /// an account when the pair that came back was a superseded family the
+    /// store may not hold, and <c>ParkedAs</c> is then null.
     /// </summary>
-    internal sealed record SideSwitchView(string Side, string Now, string? ParkedAs, DateTimeOffset At, string? QuarantinedAt = null);
+    internal sealed record SideSwitchView(string Side, string? Now, string? ParkedAs, DateTimeOffset At, string? QuarantinedAt = null);
 
     internal sealed record SideStateView(string Side, bool Online, string? LiveAccount, string Detail);
 

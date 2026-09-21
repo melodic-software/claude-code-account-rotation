@@ -80,6 +80,7 @@ internal sealed partial class SharedStoreSlots
             SlotState.Parked when record is not null => new SlotSnapshot(SlotState.Parked, StaleRecord: true, record),
             SlotState.HeldHere when !windowsHoldsIt => new SlotSnapshot(SlotState.NeverLoggedIn, StaleRecord: true, record),
             SlotState.NeverLoggedIn when windowsHoldsIt => new SlotSnapshot(SlotState.HeldHere, StaleRecord: false, record),
+            SlotState.InTransit => new SlotSnapshot(state, StaleRecord: false, record, HasReturningExport(folderPath)),
             _ => new SlotSnapshot(state, StaleRecord: false, record),
         };
     }
@@ -287,6 +288,25 @@ internal sealed partial class SharedStoreSlots
         return Directory.EnumerateFiles(transitRoot, claimed + "*", SearchOption.AllDirectories).Any();
     }
 
+    /// <summary>
+    /// Whether the mailbox file for this account is an <b>export</b>, which is
+    /// a pair on its way back into this store, rather than a claim on its way
+    /// out. The suffix is the only thing that says so, and it is the same fact
+    /// the coordinator's orphan pass reads off a mailbox file with no journal.
+    /// </summary>
+    public bool HasReturningExport(string folderPath)
+    {
+        string transitRoot = Path.Combine(_profilesRoot, FileSystemCredentialPairStore.TransitDirectoryName);
+        if (!Enabled || !Directory.Exists(transitRoot))
+        {
+            return false;
+        }
+
+        string export = FileSystemCredentialPairStore.ClaimedFileName(Path.GetFileName(Path.TrimEndingDirectorySeparator(folderPath)))
+            + FileSystemCredentialPairStore.IncomingSuffix;
+        return Directory.EnumerateFiles(transitRoot, export, SearchOption.AllDirectories).Any();
+    }
+
     [LoggerMessage(Level = LogLevel.Information, Message = "holder record dropped: slot holds a pair ({Account})")]
     private partial void LogRecordDroppedForPair(string account);
 
@@ -321,4 +341,13 @@ internal readonly record struct WindowsHold(AccountEmail? Account, RefreshTokenF
 /// dashboard read drops. <paramref name="Record"/> is the record that verdict
 /// was formed on, so the drop can tell it from one written since.
 /// </summary>
-internal sealed record SlotSnapshot(SlotState State, bool StaleRecord, HolderRecord? Record);
+/// <param name="Returning">
+/// Which way an <see cref="SlotState.InTransit"/> pair is going: true when the
+/// file in the mailbox is an <i>export</i>, which is a pair coming back to this
+/// store, and false when it is a <i>claim</i>, which is one going to the other
+/// side. The record alone cannot say — it names the side the claim was written
+/// for and is the same record either way — and a card that read the record for
+/// this would tell an operator watching a park-back that the pair was heading
+/// the other way. Meaningless for every other state and false there.
+/// </param>
+internal sealed record SlotSnapshot(SlotState State, bool StaleRecord, HolderRecord? Record, bool Returning = false);

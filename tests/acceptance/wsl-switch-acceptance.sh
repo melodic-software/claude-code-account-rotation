@@ -325,6 +325,14 @@ windows_switch() {
     "$leader_url/api/accounts/$1/switch" 2>/dev/null || echo "000"
 }
 
+wsl_release() {
+  local code query=""
+  [[ "${1:-}" == "quarantine" ]] && query="?quarantineForeignFamily=true"
+  code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 180 -X POST -H "$header" \
+    "$leader_url/api/sides/wsl/release$query" 2>/dev/null || echo "000")"
+  printf '%s' "${code: -3}"
+}
+
 side_online() {
   curl -fsS --max-time 5 "$leader_url/api/sides/wsl" 2>/dev/null \
     | sed -n 's/.*"online":\([a-z]*\).*/\1/p' | head -1
@@ -406,6 +414,30 @@ check_row() {
       "$([[ -f "$store_here/$incoming/.credentials.json" ]] && echo present || echo absent)"
   else
     fail "$label left the follower holding '$after', which is neither side of the hand-off"
+  fi
+}
+
+present_or_absent() { [[ -f "$1" ]] && echo present || echo absent; }
+
+# A release ends in one of exactly two places, and both are states the next
+# start finished or unwound: the pair came back, so the follower holds nothing
+# and the slot holds the pair, or it did not, so the follower still holds it and
+# the slot still carries the record that says so. What is never allowed is the
+# account in neither place, or in both, which the final sweep also checks.
+check_release_row() {
+  local label="$1" held="$2" after
+  after="$(follower_live_account)"
+  if [[ "$after" == "none" ]]; then
+    expect "  $label resolved forward; $held is parked in its slot" "present" \
+      "$(present_or_absent "$store_here/$held/.credentials.json")"
+    expect "  $label left no holder record over it" "absent" "$(present_or_absent "$store_here/$held/holder.json")"
+  elif [[ "$after" == "$held" ]]; then
+    expect "  $label unwound; $held is still with that side" "absent" \
+      "$(present_or_absent "$store_here/$held/.credentials.json")"
+    expect "  $label kept the holder record that says where it is" "present" \
+      "$(present_or_absent "$store_here/$held/holder.json")"
+  else
+    fail "$label left the follower holding '$after', which is neither side of the release"
   fi
 }
 
@@ -495,6 +527,95 @@ for step in Claimed ExportVerified Imported Parked; do
     fi
   done
 done
+
+# 3c. The park-back, which is the one hand-off a switch cannot express: the
+#     side hands its account back and takes nothing in its place, which is the
+#     only way out for a fleet where WSL holds exactly one account.
+say "the release rows"
+held="$(follower_live_account)"
+if [[ "$held" == "none" || "$held" == "unreachable" ]]; then
+  fail "the follower holds nothing, so the release rows have nothing to hand back"
+else
+  expect "a release returns 200" "200" "$(wsl_release)"
+  expect "the follower holds nothing afterwards" "none" "$(follower_live_account)"
+  expect "the released account is back in its slot" "present" "$(present_or_absent "$store_here/$held/.credentials.json")"
+  expect "the released account has no holder record" "absent" "$(present_or_absent "$store_here/$held/holder.json")"
+  expect "nothing was left in a mailbox" "0" "$(mailbox_file_count)"
+  journals_are_clear || fail "a journal was left open after the release"
+  # The refusal the page's own control is hidden behind, when it is bypassed.
+  expect "a second release with nothing to hand back is refused" "409" "$(wsl_release)"
+
+  # The export gate in the release direction. The leader is restarted with the
+  # injection that truncates the export between the follower's answer and the
+  # native read, which is a window no external script can hit.
+  say "the release export-gate corruption iteration"
+  incoming="$(next_parked none)"
+  expect "a switch back to $incoming returns 200" "200" "$(wsl_switch "$incoming")"
+  settle 90 || fail "the switch before the release gate iteration did not settle"
+  before_win_live="$(fingerprint_of "$win_live_here/.credentials.json")"
+  stop_leader
+  start_leader "" "1" || exit 1
+  expect "a corrupted release export is refused with 409" "409" "$(wsl_release)"
+  expect "the follower still holds its account" "$incoming" "$(follower_live_account)"
+  expect "the Windows live pair is unchanged" "$before_win_live" "$(fingerprint_of "$win_live_here/.credentials.json")"
+  expect "the refused account has no pair in its slot" "absent" "$(present_or_absent "$store_here/$incoming/.credentials.json")"
+  # The asymmetry: a refused release keeps the record, because that side still
+  # holds the pair and nothing else in the store says where it is.
+  expect "the refused release kept the holder record" "present" "$(present_or_absent "$store_here/$incoming/holder.json")"
+  expect "the mailbox is empty after the gate refused" "0" "$(mailbox_file_count)"
+  if grep -q "export gate refused" "$leader_log" 2>/dev/null; then
+    say "ok: the leader logged the release gate refusal"
+  else
+    fail "the leader log carries no gate refusal for the release"
+  fi
+  stop_leader
+  start_leader || exit 1
+
+  # The crash rows. The follower's torn F5 is the one that matters: the live
+  # pair is gone and the journal still reads Exported, and an unwind there
+  # would delete the export of a lineage that is live nowhere else.
+  say "the release crash rows"
+  for timing in Exported:before-journal Swapped:before-journal Patched; do
+    held="$(follower_live_account)"
+    if [[ "$held" == "none" ]]; then
+      if ! held="$(next_parked none)"; then
+        fail "no parked account left for the release row $timing"
+        break
+      fi
+      wsl_switch "$held" >/dev/null
+      settle 90 || fail "the switch before the release row $timing did not settle"
+    fi
+
+    stop_follower
+    start_follower "$timing" || { fail "the follower would not start for the release row $timing"; continue; }
+    say "  $timing: the release answered $(wsl_release) with the follower killed mid-release"
+    stop_follower
+    start_follower || { fail "the follower would not restart after the release row $timing"; continue; }
+    if settle 90; then
+      check_release_row "$timing" "$held"
+    else
+      fail "the release row $timing did not settle: a journal or the mailbox still holds something"
+    fi
+  done
+
+  # And the leader's own, which is the row where the commit landed and its
+  # journal write did not: it must resolve forward and never take a claim back.
+  say "the leader's release crash row"
+  held="$(follower_live_account)"
+  if [[ "$held" == "none" ]]; then
+    held="$(next_parked none)" && wsl_switch "$held" >/dev/null && { settle 90 || fail "the switch before the leader release row did not settle"; }
+  fi
+  stop_leader
+  start_leader "Imported:before-journal" || exit 1
+  say "  Imported:before-journal: the release answered $(wsl_release) with the leader killed mid-hand-off"
+  stop_leader
+  start_leader || exit 1
+  if settle 90; then
+    check_release_row "Imported:before-journal" "$held"
+  else
+    fail "the leader's release row did not settle"
+  fi
+fi
 
 # 4. The volume of switches the criterion asks for, on both sides.
 say "$switches WSL switches"
