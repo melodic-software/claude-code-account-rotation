@@ -6,6 +6,19 @@ namespace ClaudeCodeAccountRotation.Core.Ports;
 /// The credential store: the live pair and the parked pairs. Pairs are moved,
 /// never copied, so at most one holder of a refresh token exists at any moment.
 /// The file adapter serves Windows and Linux; a Keychain adapter is deferred.
+/// <para>
+/// Note 2026-09-21 (#70): every move on this port is still a rename on one
+/// volume, and the refusals below are what keep that true. The one hand-off
+/// that crosses a volume — an account handed to the other side of the machine —
+/// does not use this port at all: it is staged, verified by fingerprint through
+/// a fresh open, promoted and deleted by the follower's own staged store, under
+/// a journal that finishes or unwinds it after a crash and an export gate the
+/// leader holds. So the invariant here is exactly <b>at most one reachable copy
+/// at every instant</b> rather than the stronger "only ever one file"; a
+/// staging file is not reachable as a credential while it exists.
+/// <c>tests/acceptance/check-single-holder.sh</c> is the test of the invariant
+/// and sweeps the mailboxes and staging names too.
+/// </para>
 /// </summary>
 public interface ICredentialPairStore
 {
