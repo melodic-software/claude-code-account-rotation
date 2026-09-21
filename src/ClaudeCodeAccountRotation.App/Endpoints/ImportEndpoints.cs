@@ -1,9 +1,11 @@
 using System.Text.Json.Nodes;
+using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Security;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Peers;
+using ClaudeCodeAccountRotation.Core.Quota;
 using ClaudeCodeAccountRotation.Core.Switching;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -100,7 +102,10 @@ internal static class ImportEndpoints
         // this side is online and which account it holds. It is not the Windows
         // page's dashboard and carries none of its roster, quota or profile
         // facts, because a follower has no roster to report.
-        routes.MapGet("/api/dashboard", static async (FollowerImport import, CancellationToken cancellationToken) =>
+        routes.MapGet("/api/dashboard", static async (
+            FollowerImport import,
+            RateLimitGuardTeeFileReader tee,
+            CancellationToken cancellationToken) =>
         {
             // One snapshot from the status read, which runs reconciliation first
             // and then reads the live pair and the state file under the commit's
@@ -109,6 +114,11 @@ internal static class ImportEndpoints
             // or a commit in flight had not yet patched, beside the fingerprint of
             // the pair that replaced it.
             ImportStatus status = await import.StatusAsync(cancellationToken);
+            // The tee beside it: the leader reads no usage for a pair this side
+            // holds, so these are the only figures its card can carry. A session
+            // that has written nothing, or nothing it could attribute, is an
+            // absent block rather than an empty one.
+            StatuslineSnapshot? observed = await tee.ReadAsync(cancellationToken);
             return Results.Ok(new FollowerDashboardView(
                 "follower",
                 SideName.Wsl.Value,
@@ -116,7 +126,14 @@ internal static class ImportEndpoints
                 status.LiveFingerprint?.Sha256Hex,
                 status.JournalStep?.ToString(),
                 Hosting.AppComposition.Version,
-                status.LiveAccount?.Raw));
+                status.LiveAccount?.Raw,
+                observed is null ? null : new TeeView(
+                    observed.CapturedAt,
+                    observed.Account?.Value,
+                    observed.FiveHourPercent,
+                    observed.FiveHourResetsAt,
+                    observed.SevenDayPercent,
+                    observed.SevenDayResetsAt)));
         });
     }
 
@@ -169,5 +186,26 @@ internal static class ImportEndpoints
 
     internal sealed record ImportStatusView(bool Imported, string? JournalStep, string? LiveFingerprint, JsonObject? LiveAccountBlock, string Detail);
 
-    internal sealed record FollowerDashboardView(string Role, string Side, string? LiveAccount, string? LiveFingerprint, string? ImportJournalStep, string? Version, JsonObject? LiveAccountBlock);
+    internal sealed record FollowerDashboardView(
+        string Role,
+        string Side,
+        string? LiveAccount,
+        string? LiveFingerprint,
+        string? ImportJournalStep,
+        string? Version,
+        JsonObject? LiveAccountBlock,
+        TeeView? Tee = null);
+
+    /// <summary>
+    /// This side's rate-limit-guard observation in plain wire types: the account
+    /// is the e-mail the tee named, which the other side parses again rather
+    /// than trusting, and the two windows are the ones the tee carries.
+    /// </summary>
+    internal sealed record TeeView(
+        DateTimeOffset CapturedAt,
+        string? Account,
+        double? FiveHourPercent,
+        DateTimeOffset? FiveHourResetsAt,
+        double? SevenDayPercent,
+        DateTimeOffset? SevenDayResetsAt);
 }

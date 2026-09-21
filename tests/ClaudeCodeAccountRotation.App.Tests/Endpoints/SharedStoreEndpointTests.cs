@@ -168,6 +168,26 @@ public sealed class SharedStoreEndpointTests
         dashboard.ToJsonString().ShouldNotContain("refresh-");
     }
 
+    /// <summary>
+    /// The page reads the chip the server sends and the two switch verdicts
+    /// beside it, so the slot's plain wire word is not a thing it renders or
+    /// branches on. Asserted against the served script because that, not the
+    /// file in the tree, is what an operator's browser runs.
+    /// </summary>
+    [Fact]
+    public async Task ThePageRendersNoneOfTheSlotsPlainWords()
+    {
+        using AppFactory factory = new(sharedStore: true);
+        using HttpClient client = factory.CreateClient();
+
+        string script = await client.GetStringAsync(new Uri("/app.js", UriKind.Relative), TestContext.Current.CancellationToken);
+
+        foreach (string word in new[] { "held-here", "held-elsewhere", "in-transit", "never-logged-in" })
+        {
+            script.ShouldNotContain(word);
+        }
+    }
+
     [Fact]
     public async Task WithTheStoreNotSharedNoCardCarriesASlotWord()
     {

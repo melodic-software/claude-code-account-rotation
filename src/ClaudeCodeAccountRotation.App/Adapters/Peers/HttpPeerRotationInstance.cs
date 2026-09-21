@@ -6,6 +6,7 @@ using ClaudeCodeAccountRotation.App.Security;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Peers;
+using ClaudeCodeAccountRotation.Core.Quota;
 using ClaudeCodeAccountRotation.Core.Switching;
 
 namespace ClaudeCodeAccountRotation.App.Adapters.Peers;
@@ -60,8 +61,26 @@ internal sealed class HttpPeerRotationInstance : IPeerRotationInstance
                 Fingerprint(view.LiveFingerprint),
                 Step(view.ImportJournalStep),
                 view.Version,
-                view.LiveAccountBlock),
+                view.LiveAccountBlock,
+                Tee(view.Tee)),
             cancellationToken);
+
+    /// <summary>
+    /// The other side's tee observation. Its account is parsed here rather than
+    /// trusted, the way this side parses its own tee file: an address it cannot
+    /// read leaves the snapshot unattributed, and an unattributed snapshot is
+    /// shown on no card.
+    /// </summary>
+    private static StatuslineSnapshot? Tee(ImportEndpoints.TeeView? view) => view is null
+        ? null
+        : new StatuslineSnapshot(
+            view.CapturedAt,
+            SessionId: null,
+            Email(view.Account),
+            view.FiveHourPercent,
+            view.FiveHourResetsAt,
+            view.SevenDayPercent,
+            view.SevenDayResetsAt);
 
     public Task<Result<ImportAnswer, string>> ImportAsync(ImportRequest request, CancellationToken cancellationToken)
     {

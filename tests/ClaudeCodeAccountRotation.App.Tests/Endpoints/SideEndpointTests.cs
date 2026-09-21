@@ -5,6 +5,7 @@ using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Adapters.Peers;
 using ClaudeCodeAccountRotation.App.Security;
 using ClaudeCodeAccountRotation.App.Switching;
+using ClaudeCodeAccountRotation.App.Tests.Adapters;
 using ClaudeCodeAccountRotation.App.Tests.Switching;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Switching;
@@ -147,6 +148,39 @@ public sealed class SideEndpointTests
         Card(dashboard, Incoming)["slot"]!.GetValue<string>().ShouldBe("held-elsewhere");
         Card(dashboard, Outgoing)["slot"]!.GetValue<string>().ShouldBe("parked");
         dashboard.ToJsonString().ShouldNotContain("refresh-");
+    }
+
+    /// <summary>
+    /// Design 12 across the real wire: the leader reads no usage for a pair the
+    /// other side holds, so that card's figures are the follower's own
+    /// rate-limit-guard tee, carried on the follower's dashboard and merged
+    /// here with the age it was taken at.
+    /// </summary>
+    [Fact]
+    public async Task AHeldAccountsFiguresOnThePageComeFromTheFollowersOwnTee()
+    {
+        await using FollowerAppFactory follower = new();
+        PeerLink link = new();
+        await using AppFactory leader = LeaderOver(follower, link);
+        await follower.Roots.WriteLiveAsync(Outgoing, "refresh-a", Token);
+        await CredentialFiles.WriteAsync(leader.LiveDirectory, "refresh-w", Token);
+        await leader.WriteStateFileAsync("w@example.com", Token);
+        await leader.ParkedProfileAsync(Incoming, "refresh-b", Token);
+        using HttpClient client = leader.CreateMutatingClient();
+        (await client.PostAsync(SwitchUri(Incoming), content: null, Token)).StatusCode.ShouldBe(HttpStatusCode.OK);
+        // What a session inside the distribution wrote after it took the pair.
+        string tee = Path.Combine(follower.Roots.LiveDirectory, "rate-limit-guard", "rate-limits.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(tee)!);
+        await File.WriteAllTextAsync(tee, RateLimitGuardTeeFileReaderTests.Tee(Incoming), Token);
+
+        JsonObject card = Card((await client.GetFromJsonAsync<JsonObject>(_dashboard, Token))!, Incoming);
+
+        card["usage"]!["source"]!.GetValue<string>().ShouldBe("snapshot");
+        card["usage"]!["capturedAt"]!.GetValue<DateTimeOffset>()
+            .ShouldBe(DateTimeOffset.Parse("2026-09-07T15:33:52Z", System.Globalization.CultureInfo.InvariantCulture));
+        card["usage"]!["limits"]![0]!["percent"]!.GetValue<double>().ShouldBe(69);
+        card["usageNote"]!.GetValue<string>().ShouldBe("in use by wsl; figures come from wsl sessions");
+        card["chip"]!.GetValue<string>().ShouldBe("in use by wsl");
     }
 
     [Fact]

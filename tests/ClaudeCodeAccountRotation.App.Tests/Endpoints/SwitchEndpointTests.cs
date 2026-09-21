@@ -3,9 +3,11 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
+using ClaudeCodeAccountRotation.App.Dashboard;
 using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core.Configuration;
+using ClaudeCodeAccountRotation.Core.Switching;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Endpoints;
@@ -235,6 +237,26 @@ public sealed class SwitchEndpointTests
 
         allowed.StatusCode.ShouldBe(HttpStatusCode.OK);
         (await CredentialFiles.FingerprintAsync(factory.LiveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
+    }
+
+    /// <summary>
+    /// The 409 body's <c>refusal</c> field is the enum name, which is the
+    /// operator's stable handle on a refusal; its <c>message</c> is the
+    /// sentence beside it, and a member nobody wrote one for used to reach the
+    /// page as that same bare name. One fact over every member, so the gap is
+    /// found when the member is added rather than when an operator meets it.
+    /// </summary>
+    [Fact]
+    public void EveryRefusalCarriesASentenceAndNotItsEnumName()
+    {
+        foreach (SwitchRefusal refusal in Enum.GetValues<SwitchRefusal>())
+        {
+            var view = SwitchRefusalView.Of(refusal);
+
+            view.Refusal.ShouldBe(refusal.ToString());
+            view.Message.ShouldNotContain(refusal.ToString());
+            view.Message.ShouldEndWith(".");
+        }
     }
 
     [Fact]

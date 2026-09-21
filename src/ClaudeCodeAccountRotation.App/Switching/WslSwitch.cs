@@ -4,6 +4,7 @@ using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Peers;
 using ClaudeCodeAccountRotation.Core.Ports;
+using ClaudeCodeAccountRotation.Core.Quota;
 using ClaudeCodeAccountRotation.Core.Switching;
 using Microsoft.Extensions.Logging;
 
@@ -20,8 +21,23 @@ internal sealed record WslSwitchOutcome(SideName Side, AccountEmail Now, Account
 /// </summary>
 internal sealed record WslReconciliation(string Outcome, string? Banner, bool Decided = true);
 
-/// <summary>One line of side state for the page: is it up, and what does it hold.</summary>
-internal sealed record WslSideState(SideName Side, bool Online, AccountEmail? LiveAccount, string Detail);
+/// <summary>
+/// One line of side state for the page: is it up, what does it hold, whether
+/// this leader can start it, and the usage its own sessions last observed.
+/// <para>
+/// <see cref="Usage"/> is that side's rate-limit-guard tee, which is the only
+/// source of figures for an account it holds: the leader reads no usage for a
+/// pair it does not have (design 12). It is null when that side is offline or
+/// has no snapshot to give.
+/// </para>
+/// </summary>
+internal sealed record WslSideState(
+    SideName Side,
+    bool Online,
+    AccountEmail? LiveAccount,
+    string Detail,
+    bool CanStart = false,
+    StatuslineSnapshot? Usage = null);
 
 /// <summary>
 /// The leader's coordinator for a switch of the <b>other</b> side of this
@@ -359,19 +375,42 @@ internal sealed partial class WslSwitch : IDisposable
     }
 
     /// <summary>The one line of side state the page shows. A side that does not answer is offline, not an error.</summary>
-    public async Task<WslSideState> ReadSideAsync(SideName side, CancellationToken cancellationToken)
+    public async Task<WslSideState> ReadSideAsync(SideName side, CancellationToken cancellationToken) =>
+        _peers.For(side) is Peer peer
+            ? await ReadSideAsync(peer, cancellationToken)
+            : new WslSideState(side, Online: false, null, "not configured");
+
+    /// <summary>
+    /// Every configured side, in one pass: what the page's side lines and its
+    /// per-card chips are both built from. Empty when <c>peers[]</c> is, which
+    /// is the lane's rollback.
+    /// </summary>
+    public async Task<IReadOnlyList<WslSideState>> ReadSidesAsync(CancellationToken cancellationToken)
     {
-        if (_peers.For(side) is not Peer peer)
+        List<WslSideState> sides = [];
+        foreach (Peer peer in _peers.All)
         {
-            return new WslSideState(side, Online: false, null, "not configured");
+            sides.Add(await ReadSideAsync(peer, cancellationToken));
         }
 
+        return sides;
+    }
+
+    private static async Task<WslSideState> ReadSideAsync(Peer peer, CancellationToken cancellationToken)
+    {
+        bool canStart = peer.Host is not null;
         Result<PeerDashboard, string> dashboard = await peer.Instance.ReadDashboardAsync(cancellationToken);
         return dashboard.Match(
             live => Incompatible(live) is string mismatch
-                ? new WslSideState(side, Online: false, live.LiveAccount, "incompatible: " + mismatch)
-                : new WslSideState(side, Online: true, live.LiveAccount, live.LiveAccount is null ? "online, holding nothing" : "online"),
-            reason => new WslSideState(side, Online: false, null, "offline: " + reason));
+                ? new WslSideState(peer.Side, Online: false, live.LiveAccount, "incompatible: " + mismatch, canStart)
+                : new WslSideState(
+                    peer.Side,
+                    Online: true,
+                    live.LiveAccount,
+                    live.LiveAccount is null ? "online, holding nothing" : "online",
+                    canStart,
+                    live.Tee),
+            reason => new WslSideState(peer.Side, Online: false, null, "offline: " + reason, canStart));
     }
 
     /// <summary>Why this leader will not hand a pair to that follower, or null when it will.</summary>

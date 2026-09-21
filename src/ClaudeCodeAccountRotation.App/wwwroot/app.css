@@ -90,6 +90,9 @@ header h1 { margin: 0; font-size: 1.6rem; letter-spacing: 0.01em; }
 .badge.off-roster { color: var(--accent); }
 .badge.login-expired, .badge.error { color: var(--error); }
 .badge.ready { color: var(--ink); }
+/* The store axis: where this account's one pair is. One class whatever the
+   chip says, because the words carry spaces and parentheses. */
+.badge.store { color: var(--accent); }
 
 .card.paused { opacity: 0.75; }
 

@@ -258,6 +258,10 @@ internal static class AppComposition
     {
         services.AddSingleton(new ClaudeStateFile(configuration.StateFilePath));
         services.AddSingleton<CredentialMutationGate>();
+        // The follower reads its own tee and nothing else about usage: it makes
+        // no usage request of its own, and this file is what the leader's card
+        // for an account this side holds is built from (design 12).
+        services.AddSingleton(new RateLimitGuardTeeFileReader(configuration.StatuslineTeePath));
         services.AddSingleton(new ImportJournal(configuration.AppDataDirectory));
         services.AddSingleton(provider => new StagedImportCredentialPairStore(
             configuration.LiveConfigDirectory,
