@@ -28,7 +28,11 @@ internal static class DashboardEndpoints
             // not answered for. Kept rather than discarded: this is the recovery
             // state the operator has least other evidence of, and a poll that
             // resolved it clears the line by writing null here.
-            state.HandOffBanner = (await coordinator.ReconcileAsync(cancellationToken)).Banner;
+            if (await coordinator.ReconcileAsync(cancellationToken) is { Decided: true } pass)
+            {
+                state.HandOffBanner = pass.Banner;
+            }
+
             return Results.Ok(await assembler.AssembleAsync(cancellationToken));
         });
 

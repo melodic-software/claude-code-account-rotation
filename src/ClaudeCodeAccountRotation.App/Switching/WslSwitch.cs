@@ -12,8 +12,13 @@ namespace ClaudeCodeAccountRotation.App.Switching;
 /// <summary>What a completed hand-off moved: the account now live on that side, and the one parked back.</summary>
 internal sealed record WslSwitchOutcome(SideName Side, AccountEmail Now, AccountEmail? ParkedAs, DateTimeOffset At);
 
-/// <summary>What the leader's own crash table found and did at start, or on a poll.</summary>
-internal sealed record WslReconciliation(string Outcome, string? Banner);
+/// <summary>
+/// What the leader's own crash table found and did at start, or on a poll.
+/// <see cref="Decided"/> is
+/// false when the pass did not run at all because a hand-off held the gate, so
+/// its null <see cref="Banner"/> means "no answer", not "nothing standing".
+/// </summary>
+internal sealed record WslReconciliation(string Outcome, string? Banner, bool Decided = true);
 
 /// <summary>One line of side state for the page: is it up, and what does it hold.</summary>
 internal sealed record WslSideState(SideName Side, bool Online, AccountEmail? LiveAccount, string Detail);
@@ -185,7 +190,12 @@ internal sealed partial class WslSwitch : IDisposable
     {
         if (!await _handOff.WaitAsync(TimeSpan.Zero, cancellationToken))
         {
-            return new WslReconciliation("a hand-off is in flight; nothing to reconcile", null);
+            // A hand-off holds the gate, so this pass has decided nothing. It
+            // says so rather than answering "resolved": a caller that wrote a
+            // null banner from here would clear, from a second tab or an
+            // overlapping poll, the line a still-running pass had put up for a
+            // claim that is still stranded.
+            return new WslReconciliation("a hand-off is in flight; nothing to reconcile", null, Decided: false);
         }
 
         try

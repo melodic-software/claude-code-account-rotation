@@ -21,6 +21,9 @@
   // The accounts the last dashboard named, which is what a side's switch control
   // offers: the ones parked in the store, so there is a pair to hand over.
   var lastAccounts = [];
+  // The side rows on the page, by side name, kept across polls so an open
+  // picker is never rebuilt under whoever is using it.
+  var sideRows = {};
   var addForm = document.getElementById("add");
   var addEmail = document.getElementById("add-email");
   var toastTimer = null;
@@ -274,43 +277,77 @@
   // per-card chips are phase 6's. A selection survives the poll's redraw, and a
   // redraw is skipped while the picker is in use, so the ten-second poll never
   // changes the target under the operator.
+  // The accounts a side may be handed: parked here, and not the one it holds.
+  function offerable(side) {
+    return lastAccounts.filter(function (account) {
+      return account.slot === "parked" && account.email !== side.liveAccount;
+    });
+  }
+
+  // Updated in place rather than rebuilt, so nothing here is ever taken from
+  // under the pointer: the picker keeps its selection, its focus and its open
+  // menu across every poll, and no guard has to suppress a redraw to protect
+  // it. Its options are replaced only when the accounts on offer change, and
+  // the control is rebuilt only when the side goes on or offline.
   function renderSides(sides) {
-    // Only an open picker: a poll that skipped the redraw because a Start or
-    // Switch button held focus would freeze the side's liveness and the account
-    // it holds for as long as the focus stayed there, which is the opposite of
-    // what the line is for.
-    if (document.activeElement && document.activeElement.tagName === "SELECT" && sidesLine.contains(document.activeElement)) { return; }
-    var chosen = {};
-    Array.prototype.forEach.call(sidesLine.querySelectorAll("select"), function (pick) { chosen[pick.name] = pick.value; });
-    sidesLine.innerHTML = "";
     sidesLine.hidden = sides.length === 0;
+    var present = {};
     sides.forEach(function (side) {
-      var row = element("div", "side");
-      row.appendChild(element("span", "side-state", side.side + " side: " + side.detail + (side.liveAccount ? ", holding " + side.liveAccount : "")));
-      if (side.online) {
-        var pick = document.createElement("select");
-        pick.name = side.side;
-        lastAccounts
-          .filter(function (account) { return account.slot === "parked" && account.email !== side.liveAccount; })
-          .forEach(function (account) {
-            var option = element("option", null, (account.roster && account.roster.alias) || account.email);
-            option.value = account.email;
-            pick.appendChild(option);
-          });
-        if (chosen[side.side]) { pick.value = chosen[side.side]; }
-        var go = actionButton("Switch " + side.side + " side", "switch", function () { switchSide(side.side, pick.value); });
-        go.disabled = busy || !pick.value;
-        row.appendChild(pick);
-        row.appendChild(go);
-      } else if (side.canStart) {
-        var start = actionButton("Start " + side.side + " side", "secondary", function () {
-          mutate(sidePath(side.side, "/start"), "POST", null, null);
-        });
-        start.disabled = busy;
-        row.appendChild(start);
+      present[side.side] = true;
+      var row = sideRows[side.side];
+      if (!row) {
+        row = { node: element("div", "side"), state: element("span", "side-state"), mode: null };
+        row.node.appendChild(row.state);
+        sideRows[side.side] = row;
+        sidesLine.appendChild(row.node);
       }
 
-      sidesLine.appendChild(row);
+      row.state.textContent = side.side + " side: " + side.detail + (side.liveAccount ? ", holding " + side.liveAccount : "");
+      var mode = side.online ? "switch" : (side.canStart ? "start" : "none");
+      if (row.mode !== mode) {
+        if (row.control) { row.node.removeChild(row.control); }
+        row.mode = mode;
+        row.control = element("span", "side-control");
+        row.pick = null;
+        if (mode === "switch") {
+          row.pick = document.createElement("select");
+          row.pick.name = side.side;
+          row.control.appendChild(row.pick);
+          row.button = actionButton("Switch " + side.side + " side", "switch", function () { switchSide(side.side, row.pick.value); });
+        } else if (mode === "start") {
+          row.button = actionButton("Start " + side.side + " side", "secondary", function () { mutate(sidePath(side.side, "/start"), "POST", null, null); });
+        } else {
+          row.button = null;
+        }
+
+        if (row.button) { row.control.appendChild(row.button); }
+        row.node.appendChild(row.control);
+      }
+
+      if (row.pick) {
+        var offers = offerable(side);
+        var arriving = offers.map(function (account) { return account.email; }).join("\u0000");
+        if (row.offers !== arriving) {
+          row.offers = arriving;
+          var held = row.pick.value;
+          row.pick.innerHTML = "";
+          offers.forEach(function (account) {
+            var option = element("option", null, (account.roster && account.roster.alias) || account.email);
+            option.value = account.email;
+            row.pick.appendChild(option);
+          });
+          if (held && arriving.split("\u0000").indexOf(held) !== -1) { row.pick.value = held; }
+        }
+      }
+
+      if (row.button) { row.button.disabled = busy || (row.pick ? !row.pick.value : false); }
+    });
+
+    Object.keys(sideRows).forEach(function (name) {
+      if (!present[name]) {
+        sidesLine.removeChild(sideRows[name].node);
+        delete sideRows[name];
+      }
     });
   }
 
