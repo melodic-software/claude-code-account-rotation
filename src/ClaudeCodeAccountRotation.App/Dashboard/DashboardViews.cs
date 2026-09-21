@@ -34,7 +34,13 @@ internal sealed record LiveAccountView(string? Email, bool HasCredentials, strin
 /// cannot be read, and the page leaves that half of its line off.
 /// </para>
 /// <para>
-/// Every one of the four carries a default, so a route that hands back a card
+/// <c>Slot</c> is what this account's slot in the shared store holds, as one
+/// plain lower-case word, or null when the store is not shared. It says where
+/// the pair is, not how the page should dress that fact up: the chip
+/// vocabulary is not this phase's.
+/// </para>
+/// <para>
+/// Every one of the five carries a default, so a route that hands back a card
 /// for an account nothing has read constructs one unchanged.
 /// </para>
 /// </summary>
@@ -50,7 +56,8 @@ internal sealed record AccountCardView(
     string Standing = "unread",
     DateTimeOffset? NextResetAt = null,
     DateTimeOffset? LoginExpiresAt = null,
-    DateTimeOffset? LoggedInAt = null);
+    DateTimeOffset? LoggedInAt = null,
+    string? Slot = null);
 
 /// <summary>
 /// The roster entry behind a card, or null when the account is on the machine

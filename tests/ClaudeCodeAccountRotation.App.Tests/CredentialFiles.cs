@@ -30,9 +30,12 @@ internal static class CredentialFiles
         await File.WriteAllTextAsync(Path.Combine(directory, FileName), Shape(refreshToken).ToJsonString(), cancellationToken);
     }
 
-    public static async Task<RefreshTokenFingerprint?> FingerprintAsync(string directory, CancellationToken cancellationToken)
+    public static Task<RefreshTokenFingerprint?> FingerprintAsync(string directory, CancellationToken cancellationToken) =>
+        ReadFingerprintAsync(Path.Combine(directory, FileName), cancellationToken);
+
+    /// <summary>The fingerprint of a pair at an exact path, for the files the mailbox holds under names of its own.</summary>
+    public static async Task<RefreshTokenFingerprint?> ReadFingerprintAsync(string path, CancellationToken cancellationToken)
     {
-        string path = Path.Combine(directory, FileName);
         if (!File.Exists(path))
         {
             return null;

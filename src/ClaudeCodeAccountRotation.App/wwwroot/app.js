@@ -566,6 +566,9 @@
       if (account.loginExpiresAt) { line.title = new Date(account.loginExpiresAt).toLocaleString(); }
       section.appendChild(line);
     }
+    // The shared store's one plain word, present only while store.shared is on.
+    // Deliberately unstyled and unrenamed: the chip vocabulary is a later phase's.
+    if (account.slot) { section.appendChild(element("p", "muted", "slot: " + account.slot)); }
     return section;
   }
 
@@ -675,7 +678,11 @@
       // would leave one account holding two logins. A card with a login good for
       // longer than the warning window does not need the button on its face; an
       // expired login is inside that window, so the one test covers both.
-      var needsLogin = !account.hasCredentials || loginSoon(account, at);
+      // A slot the other side holds is empty for a reason, and logging into it
+      // would put a second token family on the machine. The route refuses it
+      // anyway; the button goes so the operator is not sent at a 409.
+      var heldAway = account.slot === "held-elsewhere" || account.slot === "in-transit";
+      var needsLogin = !heldAway && (!account.hasCredentials || loginSoon(account, at));
       if (roster && !account.isLive && needsLogin) {
         actions.appendChild(actionButton(
           account.hasCredentials ? "Log in again" : "Login",
@@ -689,7 +696,12 @@
       // group rather than a pointer's width from Switch.
       if (!account.isLive) {
         var danger = element("div", "actions danger-zone");
-        danger.appendChild(actionButton("Remove", "danger", function () { remove(account.email); }));
+        var removeButton = actionButton("Remove", "danger", function () { remove(account.email); });
+        // Removing a slot the other side holds would skip the logout it cannot
+        // reach and delete the record that says the pair exists at all. The
+        // route refuses it; the button goes with it.
+        removeButton.disabled = heldAway;
+        danger.appendChild(removeButton);
         card.appendChild(danger);
       }
 

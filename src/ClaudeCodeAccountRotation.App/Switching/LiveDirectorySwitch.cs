@@ -49,6 +49,7 @@ internal sealed partial class LiveDirectorySwitch
     private readonly ManagedLoginPolicyReader _policyReader;
     private readonly RecoveryFiles _recovery;
     private readonly QuotaState _quota;
+    private readonly SharedStoreSlots _slots;
     private readonly SwitchOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<LiveDirectorySwitch> _logger;
@@ -66,6 +67,7 @@ internal sealed partial class LiveDirectorySwitch
         ManagedLoginPolicyReader policyReader,
         RecoveryFiles recovery,
         QuotaState quota,
+        SharedStoreSlots slots,
         SwitchOptions options,
         TimeProvider timeProvider,
         ILogger<LiveDirectorySwitch> logger)
@@ -81,6 +83,7 @@ internal sealed partial class LiveDirectorySwitch
         _policyReader = policyReader;
         _recovery = recovery;
         _quota = quota;
+        _slots = slots;
         _options = options;
         _timeProvider = timeProvider;
         _logger = logger;
@@ -230,8 +233,21 @@ internal sealed partial class LiveDirectorySwitch
         // parked pair the restore compares against.
         bool targetStranded = _recovery.HasRecoveryFor(targetProfile.FolderPath);
 
+        // Read here with every other planning input, and only read: dropping a
+        // record the files contradict is the dashboard's reconciliation, and a
+        // switch that did it too would be a second writer of the same file for
+        // no gain. A store that is not shared answers null and the planner sees
+        // the defaulted Parked, which is what it saw before this phase.
+        SlotSnapshot? targetSlot = await _slots.ReadAsync(
+            target,
+            targetProfile.FolderPath,
+            targetProfile.HasCredentials,
+            new WindowsHold(live.Account?.Email, liveCredentials?.Fingerprint),
+            cancellationToken);
+
         Result<SwitchPlan, SwitchRefusal> planned = SwitchPlanner.Plan(new SwitchPlanningInput(
-            live, targetProfile, liveCredentials, targetCredentials, policy, journalOpen, liveOwner, _options.ProfilesRoot, now, targetStranded));
+            live, targetProfile, liveCredentials, targetCredentials, policy, journalOpen, liveOwner, _options.ProfilesRoot, now, targetStranded,
+            targetSlot?.State ?? SlotState.Parked));
         if (planned.IsFailure)
         {
             LogRefused(target.Value, planned.Error);
@@ -293,6 +309,14 @@ internal sealed partial class LiveDirectorySwitch
                 await _pairs.MoveLiveToParkedAsync(outgoingFolder, committed);
             }
 
+            // Before the unpark, not after: the reconciliation table only ever
+            // drops a record, so a crash between the two must leave a slot
+            // holding a pair AND a record (which the table drops) rather than a
+            // slot holding neither, which would read as never logged in for the
+            // account whose pair is live. Same reason the outgoing slot's record
+            // goes last, below.
+            await _slots.TakeAsync(plan.IncomingFolderPath, targetCredentials.Fingerprint, now, committed);
+
             // The unpark follows the park at once and the journal catches up afterwards, so
             // the window in which no live pair exists is two renames, not a flushed write.
             await _pairs.MoveParkedToLiveAsync(plan.IncomingFolderPath, committed);
@@ -305,6 +329,16 @@ internal sealed partial class LiveDirectorySwitch
             await _journal.WriteAsync(entry with { StepReached = SwitchStep.Patched }, committed);
 
             await WriteLiveOwnerAsync(targetCredentials.Fingerprint, plan.Incoming, committed);
+
+            // Last, because a record left on a slot that holds its pair again is
+            // the one disagreement the reconciliation table heals by itself,
+            // while a slot that lost its record early would have nothing saying
+            // who holds the pair if the switch then unwound.
+            if (plan.OutgoingFolderPath is string parkedInto)
+            {
+                await _slots.ReleaseAsync(parkedInto, committed);
+            }
+
             await _journal.ClearAsync(committed);
         }
 

@@ -16,7 +16,11 @@ internal sealed class ProfileFolderStore
     public const string ProfileFileName = "profile.json";
     private const string StateFileName = ".claude.json";
 
-    private static readonly string[] _keptOnPrune = [FileSystemCredentialPairStore.FileName, ProfileFileName];
+    // The holder record joins the two because a login into a held slot must not
+    // silently take away the one thing that says the other side has that
+    // account's pair. A record the slot's own file contradicts is dropped by
+    // reconciliation, with a log line, rather than by a sweep nobody reads.
+    private static readonly string[] _keptOnPrune = [FileSystemCredentialPairStore.FileName, ProfileFileName, HolderRecordFile.FileName];
 
     private readonly string _profilesRoot;
 

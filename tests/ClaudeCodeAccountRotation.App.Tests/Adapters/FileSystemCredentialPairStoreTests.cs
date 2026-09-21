@@ -1,6 +1,7 @@
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
+using ClaudeCodeAccountRotation.Core.Switching;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Adapters;
 
@@ -160,6 +161,103 @@ public sealed class FileSystemCredentialPairStoreTests : IDisposable
 
         await Should.ThrowAsync<ArgumentException>(() => _store.ReadParkedAsync(nested, TestContext.Current.CancellationToken));
         await Should.ThrowAsync<ArgumentException>(() => _store.ReadParkedAsync(Path.Combine(_root, "elsewhere"), TestContext.Current.CancellationToken));
+    }
+
+    private string Mailbox(string fileName) =>
+        Path.Combine(FileSystemCredentialPairStore.MailboxPath(_profilesRoot, SideName.Wsl), fileName);
+
+    [Fact]
+    public async Task AClaimMovesTheParkedPairIntoTheMailboxAndLeavesTheSlotEmpty()
+    {
+        await CredentialFiles.WriteAsync(Folder("a@example.com"), "refresh-a", TestContext.Current.CancellationToken);
+
+        string claimed = await _store.ClaimToMailboxAsync(Folder("a@example.com"), SideName.Wsl, TestContext.Current.CancellationToken);
+
+        claimed.ShouldBe(Mailbox("a@example.com" + FileSystemCredentialPairStore.FileName));
+        File.Exists(Path.Combine(Folder("a@example.com"), FileSystemCredentialPairStore.FileName)).ShouldBeFalse();
+        (await CredentialFiles.ReadFingerprintAsync(claimed, TestContext.Current.CancellationToken))
+            .ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
+    }
+
+    [Fact]
+    public async Task AClaimOfASlotWithNoPairFailsRatherThanCreatingAnEmptyMailboxFile()
+    {
+        Directory.CreateDirectory(Folder("a@example.com"));
+
+        await Should.ThrowAsync<FileNotFoundException>(() => _store.ClaimToMailboxAsync(Folder("a@example.com"), SideName.Wsl, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task ASecondClaimOverAnOccupiedMailboxIsRefusedRatherThanOverwriting()
+    {
+        await CredentialFiles.WriteAsync(Folder("a@example.com"), "refresh-a", TestContext.Current.CancellationToken);
+        await _store.ClaimToMailboxAsync(Folder("a@example.com"), SideName.Wsl, TestContext.Current.CancellationToken);
+        await CredentialFiles.WriteAsync(Folder("a@example.com"), "refresh-a-again", TestContext.Current.CancellationToken);
+
+        await Should.ThrowAsync<InvalidOperationException>(() => _store.ClaimToMailboxAsync(Folder("a@example.com"), SideName.Wsl, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task APromoteMovesTheExportIntoTheSlotWhenItsFingerprintIsTheVerifiedOne()
+    {
+        await WriteExportAsync("a@example.com", "refresh-a");
+
+        Result<Unit, string> promoted = await _store.PromoteFromMailboxAsync(
+            Folder("a@example.com"), SideName.Wsl, CredentialFiles.Pair("refresh-a").Fingerprint, TestContext.Current.CancellationToken);
+
+        promoted.IsSuccess.ShouldBeTrue(promoted.IsFailure ? promoted.Error : "");
+        (await CredentialFiles.FingerprintAsync(Folder("a@example.com"), TestContext.Current.CancellationToken))
+            .ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
+        File.Exists(Mailbox("a@example.com" + FileSystemCredentialPairStore.FileName + FileSystemCredentialPairStore.IncomingSuffix)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task APromoteOfAnExportWithTheWrongFingerprintMovesNothing()
+    {
+        await WriteExportAsync("a@example.com", "refresh-a");
+
+        Result<Unit, string> promoted = await _store.PromoteFromMailboxAsync(
+            Folder("a@example.com"), SideName.Wsl, CredentialFiles.Pair("refresh-b").Fingerprint, TestContext.Current.CancellationToken);
+
+        promoted.IsFailure.ShouldBeTrue();
+        File.Exists(Path.Combine(Folder("a@example.com"), FileSystemCredentialPairStore.FileName)).ShouldBeFalse();
+        File.Exists(Mailbox("a@example.com" + FileSystemCredentialPairStore.FileName + FileSystemCredentialPairStore.IncomingSuffix)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task APromoteWithNoExportToPromoteIsARefusalRatherThanAFault()
+    {
+        Result<Unit, string> promoted = await _store.PromoteFromMailboxAsync(
+            Folder("a@example.com"), SideName.Wsl, CredentialFiles.Pair("refresh-a").Fingerprint, TestContext.Current.CancellationToken);
+
+        promoted.IsFailure.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task APromoteOfATruncatedExportIsARefusalRatherThanAFault()
+    {
+        string mailbox = FileSystemCredentialPairStore.MailboxPath(_profilesRoot, SideName.Wsl);
+        Directory.CreateDirectory(mailbox);
+        await File.WriteAllTextAsync(
+            Mailbox("a@example.com" + FileSystemCredentialPairStore.FileName + FileSystemCredentialPairStore.IncomingSuffix),
+            "{ truncated",
+            TestContext.Current.CancellationToken);
+
+        Result<Unit, string> promoted = await _store.PromoteFromMailboxAsync(
+            Folder("a@example.com"), SideName.Wsl, CredentialFiles.Pair("refresh-a").Fingerprint, TestContext.Current.CancellationToken);
+
+        promoted.IsFailure.ShouldBeTrue();
+        File.Exists(Path.Combine(Folder("a@example.com"), FileSystemCredentialPairStore.FileName)).ShouldBeFalse();
+    }
+
+    private async Task WriteExportAsync(string folderName, string refreshToken)
+    {
+        string mailbox = FileSystemCredentialPairStore.MailboxPath(_profilesRoot, SideName.Wsl);
+        Directory.CreateDirectory(mailbox);
+        await File.WriteAllTextAsync(
+            Mailbox(folderName + FileSystemCredentialPairStore.FileName + FileSystemCredentialPairStore.IncomingSuffix),
+            CredentialFiles.Shape(refreshToken).ToJsonString(),
+            TestContext.Current.CancellationToken);
     }
 
     public void Dispose()

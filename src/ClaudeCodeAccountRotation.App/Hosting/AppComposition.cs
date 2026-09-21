@@ -97,6 +97,11 @@ internal static class AppComposition
         AddOutboundClients(services, AnthropicEndpoints.UserAgent(configuration.UserAgentProductToken, Version));
         services.AddSingleton(new SwitchJournal(configuration.AppDataDirectory));
         services.AddSingleton<CredentialMutationGate>();
+        services.AddSingleton(provider => new SharedStoreSlots(
+            configuration.ProfilesRoot,
+            configuration.SharedStore,
+            provider.GetRequiredService<CredentialMutationGate>(),
+            provider.GetRequiredService<ILogger<SharedStoreSlots>>()));
         services.AddSingleton(ManagedLoginPolicyReader.ForCurrentMachine());
         Result<ClaudeExecutable, string> cli = ClaudeExecutableLocator.Locate(
             configuration.ClaudeExecutable,

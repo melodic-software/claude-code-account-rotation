@@ -23,7 +23,12 @@ namespace ClaudeCodeAccountRotation.App.Tests;
 /// </summary>
 internal sealed class AppFactory : WebApplicationFactory<Program>
 {
-    public AppFactory()
+    /// <param name="sharedStore">
+    /// <c>store.shared</c>, off by default exactly as production is, so every
+    /// test written before this key existed still exercises the behavior the
+    /// operator's own build has.
+    /// </param>
+    public AppFactory(bool sharedStore = false)
     {
         Root = Path.Combine(Path.GetTempPath(), "claude-code-account-rotation-tests", Guid.NewGuid().ToString("N"));
         LiveDirectory = Path.Combine(Root, "live");
@@ -42,6 +47,7 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
             ["appDataDirectory"] = AppData,
             ["refreshLockWaitSeconds"] = 0.3,
             ["claudeExecutable"] = null,
+            ["store"] = new JsonObject { ["shared"] = sharedStore },
         };
         File.WriteAllText(ConfigPath, configuration.ToJsonString());
     }

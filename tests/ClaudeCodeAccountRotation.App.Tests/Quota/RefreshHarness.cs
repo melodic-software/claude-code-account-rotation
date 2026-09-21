@@ -24,7 +24,7 @@ namespace ClaudeCodeAccountRotation.App.Tests.Quota;
 /// </summary>
 internal sealed class RefreshHarness : IDisposable
 {
-    public RefreshHarness()
+    public RefreshHarness(bool sharedStore = false)
     {
         Root = Path.Combine(Path.GetTempPath(), "claude-code-account-rotation-tests", Guid.NewGuid().ToString("N"));
         LiveDirectory = Path.Combine(Root, "live");
@@ -46,6 +46,7 @@ internal sealed class RefreshHarness : IDisposable
         _roster = new RosterFile(AppData);
         ClaudeStateFile stateFile = new(StateFilePath);
         Recovery = new RecoveryFiles(options, Store, Profiles, State, RecoveryLog, Clock);
+        Slots = new SharedStoreSlots(ProfilesRoot, sharedStore, Gate, NullLogger<SharedStoreSlots>.Instance);
         Executor = new LiveDirectorySwitch(
             Store,
             stateFile,
@@ -57,6 +58,7 @@ internal sealed class RefreshHarness : IDisposable
             new ManagedLoginPolicyReader(Path.Combine(Root, "managed-settings.json"), static () => null, static () => null),
             Recovery,
             State,
+            Slots,
             options,
             Clock,
             NullLogger<LiveDirectorySwitch>.Instance);
@@ -76,6 +78,7 @@ internal sealed class RefreshHarness : IDisposable
             Gate,
             Logins,
             Recovery,
+            Slots,
             Clock,
             Waits.Record,
             RefreshLog,
@@ -97,6 +100,9 @@ internal sealed class RefreshHarness : IDisposable
     public string ProfilesRoot { get; }
 
     public string AppData { get; }
+
+    /// <summary>The shared store's slot reader, off unless the harness was built with it on.</summary>
+    public SharedStoreSlots Slots { get; }
 
     public TestClock Clock { get; } = new(new DateTimeOffset(2026, 9, 7, 12, 0, 0, TimeSpan.Zero));
 
