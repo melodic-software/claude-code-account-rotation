@@ -229,24 +229,35 @@ internal static class ConfigurationValidator
     /// <summary>
     /// The normalized path with every symbolic link along it followed, so a
     /// directory is judged by where its files really land. A link is followed
-    /// whether or not its target exists, and a cycle stops at 40 hops.
-    /// ponytail: a link target's own inner components are not walked again;
-    /// walk the resolved path from its root if a layout ever nests links.
+    /// whether or not its target exists. Each link found restarts the walk from
+    /// the root of the path it produced, so a link inside a link's target is
+    /// followed too, and a cycle stops at 40 links in all.
     /// </summary>
     private static string Resolved(string path)
     {
-        string full = Normalize(path);
-        string current = Path.GetPathRoot(full)!;
-        foreach (string part in full[current.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        string pending = Normalize(path);
+        for (int hop = 0; hop < 40; hop++)
         {
-            current = Path.Combine(current, part);
-            for (int hop = 0; hop < 40 && new FileInfo(current).LinkTarget is string target; hop++)
+            string current = Path.GetPathRoot(pending)!;
+            string[] parts = pending[current.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+            int index = 0;
+            for (; index < parts.Length; index++)
             {
-                current = Normalize(Path.Combine(Path.GetDirectoryName(current)!, target));
+                current = Path.Combine(current, parts[index]);
+                if (new FileInfo(current).LinkTarget is string target)
+                {
+                    pending = Normalize(Path.Combine(Path.GetDirectoryName(current)!, target, string.Join(Path.DirectorySeparatorChar, parts[(index + 1)..])));
+                    break;
+                }
+            }
+
+            if (index == parts.Length)
+            {
+                return current;
             }
         }
 
-        return current;
+        return pending;
     }
 
     private static StringComparison Comparison => OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;

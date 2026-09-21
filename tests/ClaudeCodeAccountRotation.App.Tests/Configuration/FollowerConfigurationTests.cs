@@ -101,6 +101,21 @@ public sealed class FollowerConfigurationTests : IDisposable
         verdict.Error.ShouldContain("/mnt/");
     }
 
+    /// <summary>The outer link's target is itself reached through a link onto the mount.</summary>
+    [Fact(SkipUnless = nameof(OnUnix), Skip = "Symbolic links onto /mnt/ are a WSL layout")]
+    public void AFollowerLiveDirectoryReachedThroughALinkInsideALinkTargetIsRefused()
+    {
+        string inner = Path.Combine(_root, "inner");
+        string outer = Path.Combine(_root, "outer");
+        Directory.CreateSymbolicLink(inner, "/mnt");
+        Directory.CreateSymbolicLink(outer, Path.Combine(inner, "c"));
+
+        Result<Unit, string> verdict = Validate(Follower(liveDirectory: Path.Combine(outer, "claude-live")));
+
+        verdict.IsFailure.ShouldBeTrue();
+        verdict.Error.ShouldContain("/mnt/");
+    }
+
     [Fact]
     public void AFollowerWhoseMailboxDoesNotExistIsRefusedWithANamedReason()
     {
