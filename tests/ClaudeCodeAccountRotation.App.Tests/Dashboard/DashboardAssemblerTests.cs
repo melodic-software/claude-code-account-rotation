@@ -3,11 +3,16 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Quota;
+using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.App.Tests.Adapters;
+using ClaudeCodeAccountRotation.App.Tests.Switching;
 using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Identity;
+using ClaudeCodeAccountRotation.Core.Peers;
 using ClaudeCodeAccountRotation.Core.Quota;
+using ClaudeCodeAccountRotation.Core.Switching;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Dashboard;
 
@@ -654,6 +659,284 @@ public sealed class DashboardAssemblerTests
         Usage(card).GetProperty("limits").EnumerateArray()
             .Select(static limit => limit.GetProperty("label").GetString())
             .ShouldBe(["5-hour", "7-day", "scoped"]);
+    }
+
+    [Fact]
+    public async Task TheLiveAccountsChipSaysItIsLiveHereAndNoSideIsOfferedIt()
+    {
+        await using AppFactory factory = await SharedStoreAsync(Side());
+
+        JsonElement card = await CardAsync(factory, LiveEmail);
+
+        card.GetProperty("chip").GetString().ShouldBe("live here");
+        card.GetProperty("canSwitchHere").GetBoolean().ShouldBeFalse();
+        OfferedTo(card).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task AParkedAccountsChipSaysParkedAndBothSwitchesOfferIt()
+    {
+        await using AppFactory factory = await SharedStoreAsync(Side());
+
+        JsonElement card = await CardAsync(factory, ParkedEmail);
+
+        card.GetProperty("chip").GetString().ShouldBe("parked");
+        card.GetProperty("canSwitchHere").GetBoolean().ShouldBeTrue();
+        OfferedTo(card).ShouldBe(["wsl"]);
+    }
+
+    /// <summary>
+    /// A parked pair whose login has run out is no more switchable by the other
+    /// side than by this one — its planner refuses it with
+    /// <c>TargetLoginExpired</c> — so the picker does not offer it either.
+    /// </summary>
+    [Fact]
+    public async Task AParkedAccountWhoseLoginHasExpiredIsOfferedToNoSide()
+    {
+        await using AppFactory factory = await SharedStoreAsync(Side());
+        _ = await factory.ParkedProfileAsync(
+            ExpiredEmail,
+            "refresh-expired",
+            TestContext.Current.CancellationToken,
+            loginExpiresAt: factory.Clock.GetUtcNow().AddDays(-1));
+
+        JsonElement card = await CardAsync(factory, ExpiredEmail);
+
+        card.GetProperty("chip").GetString().ShouldBe("parked");
+        card.GetProperty("canSwitchHere").GetBoolean().ShouldBeFalse();
+        OfferedTo(card).ShouldBeEmpty();
+    }
+
+    /// <summary>
+    /// The card R6 is about: the pair is in the other side's live directory, so
+    /// neither this side's Switch nor that side's may take it until that side
+    /// parks it back.
+    /// </summary>
+    [Fact]
+    public async Task AnAccountTheWslSideHoldsSaysSoAndNeitherSwitchOffersIt()
+    {
+        await using AppFactory factory = await SharedStoreAsync(Side());
+
+        JsonElement card = await CardAsync(factory, HeldEmail);
+
+        card.GetProperty("chip").GetString().ShouldBe("in use by wsl");
+        card.GetProperty("canSwitchHere").GetBoolean().ShouldBeFalse();
+        OfferedTo(card).ShouldBeEmpty();
+        // The slot is empty by design, not by a missing login, and this is the
+        // flag the page reads before it says anything about the credential.
+        card.GetProperty("heldAway").GetBoolean().ShouldBeTrue();
+        card.GetProperty("hasCredentials").GetBoolean().ShouldBeFalse();
+    }
+
+    /// <summary>Design 11's "distro off" row: the pair is still there, and the chip says why nothing can reach it.</summary>
+    [Fact]
+    public async Task AnAccountTheWslSideHoldsWhileThatSideIsOfflineSaysOffline()
+    {
+        FakePeerRotationInstance side = Side();
+        side.DashboardError = "the distribution is not running";
+        await using AppFactory factory = await SharedStoreAsync(side);
+
+        JsonElement card = await CardAsync(factory, HeldEmail);
+
+        card.GetProperty("chip").GetString().ShouldBe("in use by wsl (offline)");
+        card.GetProperty("canSwitchHere").GetBoolean().ShouldBeFalse();
+        OfferedTo(card).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task AnAccountWhoseHandOffIsInFlightSaysWhereItIsGoing()
+    {
+        FakePeerRotationInstance side = Side();
+        await using AppFactory factory = await SharedStoreAsync(side);
+        await InTransitAsync(factory, side, ParkedEmail);
+
+        JsonElement card = await CardAsync(factory, ParkedEmail);
+
+        card.GetProperty("chip").GetString().ShouldBe("in transit to wsl");
+        card.GetProperty("canSwitchHere").GetBoolean().ShouldBeFalse();
+        OfferedTo(card).ShouldBeEmpty();
+    }
+
+    /// <summary>
+    /// Design 12: the leader never reads a held pair's usage, so the card's
+    /// figures are the follower's own tee, carried on its dashboard, and the
+    /// card says where they came from and when they were taken.
+    /// </summary>
+    [Fact]
+    public async Task AWslHeldAccountsFiguresComeFromThatSidesTeeWithItsCaptureAge()
+    {
+        FakePeerRotationInstance side = Side();
+        side.Tee = new StatuslineSnapshot(
+            _teeCapturedAt,
+            SessionId: null,
+            AccountEmail.Parse(HeldEmail).Value,
+            FiveHourPercent: 31,
+            FiveHourResetsAt: _teeCapturedAt.AddHours(5),
+            SevenDayPercent: 12,
+            SevenDayResetsAt: _teeCapturedAt.AddDays(4));
+        await using AppFactory factory = await SharedStoreAsync(side);
+
+        JsonElement card = await CardAsync(factory, HeldEmail);
+
+        Usage(card).GetProperty("source").GetString().ShouldBe("snapshot");
+        Usage(card).GetProperty("capturedAt").GetDateTimeOffset().ShouldBe(_teeCapturedAt);
+        Limit(card, 0).GetProperty("percent").GetDouble().ShouldBe(31);
+        Limit(card, 1).GetProperty("percent").GetDouble().ShouldBe(12);
+        card.GetProperty("usageNote").GetString().ShouldBe("in use by wsl; figures come from wsl sessions");
+    }
+
+    /// <summary>
+    /// No session has run on that side since this account's windows last reset,
+    /// so its tee names some other account (or nothing at all) and the card has
+    /// no figures for this one. Every row admits it rather than showing what
+    /// Windows last read before the pair left.
+    /// </summary>
+    [Fact]
+    public async Task AWslHeldAccountWithNoSessionSinceItsResetReadsUnknownRatherThanAStalePercentage()
+    {
+        FakePeerRotationInstance side = Side();
+        side.Tee = new StatuslineSnapshot(
+            _teeCapturedAt,
+            SessionId: null,
+            AccountEmail.Parse(ParkedEmail).Value,
+            FiveHourPercent: 88,
+            FiveHourResetsAt: _teeCapturedAt.AddHours(5),
+            SevenDayPercent: 77,
+            SevenDayResetsAt: _teeCapturedAt.AddDays(4));
+        await using AppFactory factory = await SharedStoreAsync(side);
+        // What Windows read while it still held the pair, which is exactly the
+        // stale percentage this card must not show.
+        Record(factory, HeldEmail, _teeCapturedAt.AddDays(-1), Weekly(64, _teeCapturedAt.AddDays(6)));
+
+        JsonElement card = await CardAsync(factory, HeldEmail);
+
+        ShouldBeAllUnknown(card);
+        Usage(card).GetProperty("source").ValueKind.ShouldBe(JsonValueKind.Null);
+        card.GetProperty("usageNote").GetString().ShouldBe("in use by wsl; figures come from wsl sessions");
+    }
+
+    /// <summary>
+    /// The number the month is planned around. One family per account means one
+    /// login expiry, and for an account the other side holds there is no local
+    /// file left to read it from — the 28-day window is fixed and a refresh does
+    /// not move it, so a card that silently dropped this would hide the one
+    /// re-login the operator has to schedule.
+    /// </summary>
+    [Fact]
+    public async Task AWslHeldAccountsLoginExpiryComesFromTheSideThatHoldsIt()
+    {
+        FakePeerRotationInstance side = Side();
+        side.OutgoingEmail = HeldEmail;
+        side.LoginExpiresAt = _teeCapturedAt.AddDays(3);
+        await using AppFactory factory = await SharedStoreAsync(side);
+
+        JsonElement card = await CardAsync(factory, HeldEmail);
+
+        card.GetProperty("loginExpiresAt").GetDateTimeOffset().ShouldBe(_teeCapturedAt.AddDays(3));
+    }
+
+    /// <summary>
+    /// With the distribution off there is no one to ask, and the slot holds no
+    /// file: the card says nothing about the expiry rather than something from
+    /// before the hand-off.
+    /// </summary>
+    [Fact]
+    public async Task AWslHeldAccountsLoginExpiryIsAbsentWhileThatSideIsOffline()
+    {
+        FakePeerRotationInstance side = Side();
+        side.OutgoingEmail = HeldEmail;
+        side.LoginExpiresAt = _teeCapturedAt.AddDays(3);
+        side.DashboardError = "the distribution is not running";
+        await using AppFactory factory = await SharedStoreAsync(side);
+
+        JsonElement card = await CardAsync(factory, HeldEmail);
+
+        card.GetProperty("loginExpiresAt").ValueKind.ShouldBe(JsonValueKind.Null);
+        card.GetProperty("chip").GetString().ShouldBe("in use by wsl (offline)");
+    }
+
+    /// <summary>A tee whose windows have moved on keeps its age and loses its figures.</summary>
+    [Fact]
+    public async Task AWslHeldAccountsFiguresGoWhenTheirWindowHasResetSinceTheyWereTaken()
+    {
+        FakePeerRotationInstance side = Side();
+        side.Tee = new StatuslineSnapshot(
+            _teeCapturedAt,
+            SessionId: null,
+            AccountEmail.Parse(HeldEmail).Value,
+            FiveHourPercent: 31,
+            FiveHourResetsAt: _teeCapturedAt.AddMinutes(1),
+            SevenDayPercent: 12,
+            SevenDayResetsAt: _teeCapturedAt.AddMinutes(1));
+        await using AppFactory factory = await SharedStoreAsync(side);
+
+        JsonElement card = await CardAsync(factory, HeldEmail);
+
+        Limit(card, 0).GetProperty("percent").ValueKind.ShouldBe(JsonValueKind.Null);
+        Limit(card, 0).GetProperty("windowReset").GetBoolean().ShouldBeTrue();
+        Limit(card, 1).GetProperty("percent").ValueKind.ShouldBe(JsonValueKind.Null);
+    }
+
+    /// <summary>The instant the fake side's tee is taken at, three hours before the factory's own clock.</summary>
+    private static readonly DateTimeOffset _teeCapturedAt = new(2026, 9, 7, 9, 0, 0, TimeSpan.Zero);
+
+    private const string ParkedEmail = "parked@example.com";
+
+    private const string HeldEmail = "held@example.com";
+
+    private const string ExpiredEmail = "expired@example.com";
+
+    /// <summary>A side that answers, holds nothing, and reports this build's own version.</summary>
+    private static FakePeerRotationInstance Side() => new(mailbox: Path.GetTempPath()) { OutgoingEmail = null, OutgoingRefreshToken = null };
+
+    private static IReadOnlyList<string?> OfferedTo(JsonElement card) =>
+        [.. card.GetProperty("offeredTo").EnumerateArray().Select(static side => side.GetString())];
+
+    /// <summary>
+    /// A shared store holding the three slots every chip fact reads: the live
+    /// one, a parked one, and one the WSL side has taken, with
+    /// <paramref name="side"/> standing in for the distribution's own process.
+    /// </summary>
+    private static async Task<AppFactory> SharedStoreAsync(FakePeerRotationInstance side)
+    {
+        AppFactory factory = new(sharedStore: true);
+        factory.Overrides = services => services.Replace(ServiceDescriptor.Singleton(
+            new PeerRegistry([new Peer(side, null, factory.ProfilesRoot)])));
+        await CredentialFiles.WriteAsync(factory.LiveDirectory, "refresh-live", TestContext.Current.CancellationToken);
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        _ = await factory.ParkedProfileAsync(ParkedEmail, "refresh-parked", TestContext.Current.CancellationToken);
+        string held = Path.Combine(factory.ProfilesRoot, HeldEmail);
+        Directory.CreateDirectory(held);
+        await File.WriteAllTextAsync(
+            Path.Combine(held, "profile.json"),
+            AppFactory.AccountJson(HeldEmail).ToJsonString(),
+            TestContext.Current.CancellationToken);
+        await HolderRecordFile.WriteAsync(
+            held,
+            new HolderRecord(SideName.Wsl, CredentialFiles.Pair("refresh-held").Fingerprint, _teeCapturedAt),
+            TestContext.Current.CancellationToken);
+        return factory;
+    }
+
+    /// <summary>
+    /// A claim in flight, as the coordinator's L2 leaves one: the record goes in
+    /// first, then the pair leaves the slot for that side's mailbox. The side is
+    /// told to answer "imported", because a claim with no journal whose side
+    /// says it never imported is one reconciliation puts straight back.
+    /// </summary>
+    private static async Task InTransitAsync(AppFactory factory, FakePeerRotationInstance side, string email)
+    {
+        side.Status = new ImportStatus(Imported: true, JournalStep: null, LiveFingerprint: null, LiveAccount: null, "imported already");
+        string folder = Path.Combine(factory.ProfilesRoot, email);
+        await HolderRecordFile.WriteAsync(
+            folder,
+            new HolderRecord(SideName.Wsl, CredentialFiles.Pair("refresh-parked").Fingerprint, _teeCapturedAt),
+            TestContext.Current.CancellationToken);
+        string mailbox = FileSystemCredentialPairStore.MailboxPath(factory.ProfilesRoot, SideName.Wsl);
+        Directory.CreateDirectory(mailbox);
+        File.Move(
+            Path.Combine(folder, FileSystemCredentialPairStore.FileName),
+            Path.Combine(mailbox, FileSystemCredentialPairStore.ClaimedFileName(email)));
     }
 
     /// <summary>Puts one on-demand read into the state the page reads, the way a pass does.</summary>

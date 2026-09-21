@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.Core.Identity;
+using ClaudeCodeAccountRotation.Core.Quota;
 using ClaudeCodeAccountRotation.Core.Switching;
 
 namespace ClaudeCodeAccountRotation.Core.Peers;
@@ -44,12 +45,20 @@ public sealed record ImportResult(
 /// snapshot as <see cref="LiveFingerprint"/>, so the two never name different
 /// accounts.
 /// </summary>
+/// <param name="LoginExpiresAt">
+/// When the login behind that side's live pair runs out, read in the same
+/// snapshot as the fingerprint beside it. One family per account means one
+/// expiry per card, and for an account this side holds there is no local file
+/// to read it from, so this is the only source (design 12). Null when that side
+/// holds nothing or its pair carries no such instant.
+/// </param>
 public sealed record ImportStatus(
     bool Imported,
     ImportStep? JournalStep,
     RefreshTokenFingerprint? LiveFingerprint,
     OAuthAccountBlock? LiveAccount,
-    string Detail);
+    string Detail,
+    DateTimeOffset? LoginExpiresAt = null);
 
 /// <summary>
 /// What the follower's dashboard tells the leader's L1 about that side.
@@ -67,13 +76,22 @@ public sealed record ImportStatus(
 /// and would park the outgoing pair into a folder with no identity — a slot
 /// the roster skips and a later switch refuses. No token is in it.
 /// </remarks>
+/// <param name="Tee">
+/// That side's own rate-limit-guard observation, the free tier of the refresh
+/// contract as its live sessions wrote it. The leader reads no usage for a pair
+/// it does not hold — design 12 — so this is where a held account's figures on
+/// the Windows page come from, and it is null when that side has no snapshot or
+/// none it could attribute.
+/// </param>
 public sealed record PeerDashboard(
     SideName Side,
     AccountEmail? LiveAccount,
     RefreshTokenFingerprint? LiveFingerprint,
     ImportStep? ImportJournalStep,
     string? Version,
-    JsonObject? LiveAccountBlock = null);
+    JsonObject? LiveAccountBlock = null,
+    StatuslineSnapshot? Tee = null,
+    DateTimeOffset? LoginExpiresAt = null);
 
 /// <summary>
 /// The other side of this machine, as the leader's coordinator talks to it:

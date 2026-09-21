@@ -1,5 +1,6 @@
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core.Quota;
+using ClaudeCodeAccountRotation.Core.Switching;
 
 namespace ClaudeCodeAccountRotation.App.Dashboard;
 
@@ -36,11 +37,26 @@ internal sealed record LiveAccountView(string? Email, bool HasCredentials, strin
 /// <para>
 /// <c>Slot</c> is what this account's slot in the shared store holds, as one
 /// plain lower-case word, or null when the store is not shared. It says where
-/// the pair is, not how the page should dress that fact up: the chip
-/// vocabulary is not this phase's.
+/// the pair is; <c>Chip</c> is how the page says it, in the vocabulary design
+/// 12 fixes: <c>live here</c>, <c>parked</c>, <c>in use by wsl</c> (with
+/// <c>(offline)</c> when that side is not answering) and
+/// <c>in transit to wsl</c>. A slot nothing has ever been parked in carries no
+/// chip, because the card's own credential word already says "needs login".
 /// </para>
 /// <para>
-/// Every one of the five carries a default, so a route that hands back a card
+/// <c>CanSwitchHere</c> and <c>OfferedTo</c> are the two switch controls'
+/// enabled state, decided here rather than in the browser: this side's Switch
+/// button, and the sides whose picker may offer this account. Both are false
+/// or empty for a pair another side holds or one in transit, which is R6's
+/// "the page disables the button"; the planner refuses it anyway when the
+/// button is bypassed.
+/// </para>
+/// <para>
+/// <c>HeldAway</c> is the one fact the page still branches on: a slot whose
+/// pair is on the other side has no login to renew and nothing to remove here.
+/// </para>
+/// <para>
+/// Every optional member carries a default, so a route that hands back a card
 /// for an account nothing has read constructs one unchanged.
 /// </para>
 /// </summary>
@@ -57,7 +73,11 @@ internal sealed record AccountCardView(
     DateTimeOffset? NextResetAt = null,
     DateTimeOffset? LoginExpiresAt = null,
     DateTimeOffset? LoggedInAt = null,
-    string? Slot = null);
+    string? Slot = null,
+    string? Chip = null,
+    bool CanSwitchHere = false,
+    bool HeldAway = false,
+    IReadOnlyList<string>? OfferedTo = null);
 
 /// <summary>
 /// The roster entry behind a card, or null when the account is on the machine
@@ -211,7 +231,49 @@ internal sealed record SwitchOutcomeView(
     bool IdentityMismatchWarning,
     DateTimeOffset At);
 
-internal sealed record SwitchRefusalView(string Refusal, string Message);
+/// <summary>
+/// A refused switch as the page reads it: the enum name, which is the stable
+/// handle an operator can search for, and one sentence saying what happened.
+/// <para>
+/// Every route that refuses a switch answers in this vocabulary, so the same
+/// refusal reads the same whether it came from this side's switch or the other
+/// side's. Every member is named and the default throws, following
+/// <see cref="DashboardAssembler"/>'s own rule for the wire: a member added
+/// later would otherwise reach the page as its bare enum name, which is the
+/// thing this type exists to stop.
+/// </para>
+/// </summary>
+internal sealed record SwitchRefusalView(string Refusal, string Message)
+{
+    public static SwitchRefusalView Of(SwitchRefusal refusal) => new(refusal.ToString(), Describe(refusal));
+
+    private static string Describe(SwitchRefusal refusal) => refusal switch
+    {
+        SwitchRefusal.TargetIsLiveDirectory => "The target folder is the live config directory.",
+        SwitchRefusal.TargetHasNoCredentials => "That account has no parked credentials; log in first.",
+        SwitchRefusal.TargetHasNoAccountBlock => "That profile folder carries no account identity.",
+        SwitchRefusal.AlreadyOnTarget => "That account is already live.",
+        SwitchRefusal.SharesLiveRefreshToken => "That parked pair is the live pair's own lineage; a second holder is never created.",
+        SwitchRefusal.RefreshLockPresent => "A session is refreshing its token right now; try again in a moment.",
+        SwitchRefusal.TargetStrandedInRecovery => "This account's credentials are stranded in recovery after a failed refresh; a restart or a per-card refresh restores them.",
+        SwitchRefusal.TargetLoginExpired => "That account's login has expired; log in again.",
+        SwitchRefusal.SwitchingBlockedByManagedPolicy => "A device-managed login policy pins this machine to one organization.",
+        SwitchRefusal.ManagedPolicyUnreadable => "A device-managed login policy exists but could not be read; switching stays off until it can be.",
+        SwitchRefusal.LiveIdentityUnverified => "The live identity could not be verified; see the banner.",
+        SwitchRefusal.HeldByOtherSide => "The other side of this machine has that account's pair in its own live directory. Switch that side off it first: one account holds one pair per machine, and it is moved rather than copied.",
+        // Raised for a mailbox file naming the target and for one naming the
+        // account this side would park, which is the planner's
+        // OutgoingSlotInTransit flag rather than a refusal of its own.
+        SwitchRefusal.SlotInTransit => "A hand-off is in flight for that account or for the one this side would park, so neither pair may move until it finishes or is cancelled.",
+        SwitchRefusal.SideOffline => "That side is not answering, or is not a build this one will hand a pair to; the side's own line says which. Start it and try again.",
+        SwitchRefusal.ExportNotVerified => "The pair that side exported did not read back on this volume as the pair it named, so the switch was refused and nothing was swapped.",
+        SwitchRefusal.PeerDidNotImport => "That side did not complete the import, so the account has been put back in its slot.",
+        SwitchRefusal.MutationInProgress => "Another credential change is in progress.",
+        SwitchRefusal.RefreshInProgress => "A usage refresh is reading this machine's accounts right now; switch again when it finishes.",
+        SwitchRefusal.LoginInProgress => "A login is running against one of those folders; finish it or let it expire first.",
+        _ => throw new ArgumentOutOfRangeException(nameof(refusal)),
+    };
+}
 
 /// <summary>
 /// A login in flight, as the page sees it. The sign-in URL is an authorize URL

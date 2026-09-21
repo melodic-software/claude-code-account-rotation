@@ -272,15 +272,15 @@
     });
   }
 
-  // One line per configured side, and on it the one switch control this phase
-  // ships: which parked account that side should take. The panel and the
-  // per-card chips are phase 6's. A selection survives the poll's redraw, and a
+  // One line per configured side, and on it that side's switch control: which
+  // parked account it should take. A selection survives the poll's redraw, and a
   // redraw is skipped while the picker is in use, so the ten-second poll never
   // changes the target under the operator.
-  // The accounts a side may be handed: parked here, and not the one it holds.
+  // Which accounts a side may be handed is the server's verdict, per card, and
+  // the same one the card's own chip is drawn from.
   function offerable(side) {
     return lastAccounts.filter(function (account) {
-      return account.slot === "parked" && account.email !== side.liveAccount;
+      return (account.offeredTo || []).indexOf(side.side) !== -1;
     });
   }
 
@@ -562,6 +562,11 @@
   function stateChip(account, at) {
     if (account.isLive) { return "live"; }
     if (account.roster && account.roster.paused) { return "paused"; }
+    // A slot the other side holds is empty on purpose, so its emptiness is not
+    // a missing login and must not be read as one: the store chip beside this
+    // one says where that account's pair actually is, and the Login button is
+    // already withheld for the same reason.
+    if (account.heldAway) { return null; }
     if (!account.hasCredentials) { return "needs login"; }
     if (loginExpired(account, at)) { return "login expired"; }
     if (account.refresh.state === "stranded") { return "error"; }
@@ -673,9 +678,6 @@
       if (account.loginExpiresAt) { line.title = new Date(account.loginExpiresAt).toLocaleString(); }
       section.appendChild(line);
     }
-    // The shared store's one plain word, present only while store.shared is on.
-    // Deliberately unstyled and unrenamed: the chip vocabulary is a later phase's.
-    if (account.slot) { section.appendChild(element("p", "muted", "slot: " + account.slot)); }
     return section;
   }
 
@@ -751,7 +753,16 @@
       if (alias) { card.appendChild(element("p", "address", account.email)); }
 
       var badges = element("div", "badges");
-      badges.appendChild(element("span", "badge " + chip.replace(/ /g, "-"), chip));
+      // Two axes, and a card shows the second only when it adds something: the
+      // store chip says where this account's one pair is, and the credential
+      // chip says whether this side can switch to it. "live here" and "parked"
+      // already carry "live" and "ready", so those two are not said twice. The
+      // class is fixed rather than derived from the text, since a chip can
+      // carry "(offline)".
+      if (account.chip) { badges.appendChild(element("span", "badge store", account.chip)); }
+      if (chip && (!account.chip || (chip !== "live" && chip !== "ready"))) {
+        badges.appendChild(element("span", "badge " + chip.replace(/ /g, "-"), chip));
+      }
       if (!roster) { badges.appendChild(element("span", "badge off-roster", "not on roster")); }
       card.appendChild(badges);
 
@@ -763,13 +774,13 @@
 
       var actions = element("div", "actions");
       var switchButton = actionButton(account.isLive ? "Live now" : "Switch", "switch", function () { switchTo(account.email); });
-      // A paused account is out of the ranked queue, not off the page: the operator
-      // can still switch to it by hand. A stranded folder is the exception: its
-      // credential file is the dead lineage, and switching would move it live
-      // where no restore can reach it. An expired refresh token is the same dead
-      // end from the other direction, and the planner refuses it anyway.
-      switchButton.disabled = account.isLive || !account.hasCredentials || busy || !!dashboard.banner
-        || dashboard.refresh.inProgress || account.refresh.state === "stranded" || loginExpired(account, at);
+      // Whether this account can come live on this side is the server's verdict,
+      // which is where the slot, the strand and the expiry are all known: a
+      // paused account can still be switched to by hand, a stranded or expired
+      // one cannot, and neither can one whose pair the other side is holding.
+      // What is added here is only what the browser knows: a request in flight,
+      // a banner, and a refresh pass.
+      switchButton.disabled = !account.canSwitchHere || busy || !!dashboard.banner || dashboard.refresh.inProgress;
       actions.appendChild(switchButton);
 
       var refreshButton = actionButton("Refresh", "secondary", function () { refreshAccount(account.email); });
@@ -789,8 +800,7 @@
       // A slot the other side holds is empty for a reason, and logging into it
       // would put a second token family on the machine. The route refuses it
       // anyway; the button goes so the operator is not sent at a 409.
-      var heldAway = account.slot === "held-elsewhere" || account.slot === "in-transit";
-      var needsLogin = !heldAway && (!account.hasCredentials || loginSoon(account, at));
+      var needsLogin = !account.heldAway && (!account.hasCredentials || loginSoon(account, at));
       if (roster && !account.isLive && needsLogin) {
         actions.appendChild(actionButton(
           account.hasCredentials ? "Log in again" : "Login",
@@ -808,7 +818,7 @@
         // Removing a slot the other side holds would skip the logout it cannot
         // reach and delete the record that says the pair exists at all. The
         // route refuses it; the button goes with it.
-        removeButton.disabled = heldAway;
+        removeButton.disabled = account.heldAway;
         danger.appendChild(removeButton);
         card.appendChild(danger);
       }

@@ -7,6 +7,7 @@ using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Peers;
 using ClaudeCodeAccountRotation.Core.Ports;
+using ClaudeCodeAccountRotation.Core.Quota;
 using ClaudeCodeAccountRotation.Core.Switching;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -197,6 +198,12 @@ internal sealed class FakePeerRotationInstance(string mailbox) : IPeerRotationIn
 
     public string? DashboardError { get; set; }
 
+    /// <summary>What this side's own rate-limit-guard tee holds, which its dashboard carries.</summary>
+    public StatuslineSnapshot? Tee { get; set; }
+
+    /// <summary>When the login behind this side's live pair runs out, as its dashboard reports it.</summary>
+    public DateTimeOffset? LoginExpiresAt { get; set; }
+
     public Func<ImportRequest, Task<Result<ImportAnswer, string>>>? OnImport { get; set; }
 
     public Func<Task<Result<ImportResult, string>>>? OnCommit { get; set; }
@@ -219,7 +226,9 @@ internal sealed class FakePeerRotationInstance(string mailbox) : IPeerRotationIn
                 OutgoingFingerprint,
                 null,
                 Version,
-                OutgoingEmail is null ? null : WslSwitchHarness.AccountJson(OutgoingEmail))));
+                OutgoingEmail is null ? null : WslSwitchHarness.AccountJson(OutgoingEmail),
+                Tee,
+                LoginExpiresAt)));
     }
 
     public async Task<Result<ImportAnswer, string>> ImportAsync(ImportRequest request, CancellationToken cancellationToken)

@@ -276,7 +276,7 @@ internal sealed partial class FollowerImport : IDisposable
             // would close A on B's evidence.
             if (about is AccountEmail named && journal.Incoming != named)
             {
-                return new ImportStatus(false, journal.StepReached, live?.Fingerprint, liveAccount, "not imported: the import in flight here is of " + journal.Incoming.Value);
+                return new ImportStatus(false, journal.StepReached, live?.Fingerprint, liveAccount, "not imported: the import in flight here is of " + journal.Incoming.Value, live?.LoginExpiresAt);
             }
 
             // A journal past the swap, read while F6 to F8 are still running or
@@ -291,18 +291,19 @@ internal sealed partial class FollowerImport : IDisposable
                 liveAccount,
                 swapped
                     ? "the swap has run and the import is finishing from " + journal.StepReached
-                    : "an import is in flight at " + journal.StepReached + ", before the swap");
+                    : "an import is in flight at " + journal.StepReached + ", before the swap",
+                live?.LoginExpiresAt);
         }
 
         LastImportEntry? last = await _journal.ReadLastImportAsync(cancellationToken);
         if (last is null)
         {
-            return new ImportStatus(false, null, live?.Fingerprint, liveAccount, _atStart?.Outcome ?? "no import in flight and none recorded");
+            return new ImportStatus(false, null, live?.Fingerprint, liveAccount, _atStart?.Outcome ?? "no import in flight and none recorded", live?.LoginExpiresAt);
         }
 
         return about is AccountEmail asked && last.Incoming != asked
-            ? new ImportStatus(false, null, live?.Fingerprint, liveAccount, "not imported: the last import here was of " + last.Incoming.Value)
-            : new ImportStatus(true, null, live?.Fingerprint, liveAccount, "the last import of " + last.Incoming.Value + " completed");
+            ? new ImportStatus(false, null, live?.Fingerprint, liveAccount, "not imported: the last import here was of " + last.Incoming.Value, live?.LoginExpiresAt)
+            : new ImportStatus(true, null, live?.Fingerprint, liveAccount, "the last import of " + last.Incoming.Value + " completed", live?.LoginExpiresAt);
     }
 
     /// <summary>

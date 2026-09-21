@@ -36,6 +36,7 @@ internal sealed partial class DashboardAssembler(
     QuotaState quota,
     RecoveryFiles recovery,
     SharedStoreSlots slots,
+    WslSwitch coordinator,
     TimeProvider timeProvider,
     ILogger<DashboardAssembler> logger)
 {
@@ -60,6 +61,10 @@ internal sealed partial class DashboardAssembler(
         Roster roster = await rosterFile.ReadAsync(cancellationToken);
         AccountEmail? liveEmail = liveAccount?.Email;
         DateTimeOffset capturedAt = timeProvider.GetUtcNow();
+        // One read of the other sides per poll, shared by every card: the chip
+        // for a held account needs to know whether that side is answering, and
+        // its figures can only come from that side's own tee.
+        IReadOnlyList<WslSideState> sides = await coordinator.ReadSidesAsync(cancellationToken);
 
         // The one reading of what this side holds, shared by every slot verdict
         // below: the account the state file names settles the design's "or its
@@ -83,7 +88,8 @@ internal sealed partial class DashboardAssembler(
                 capturedAt,
                 livePair?.LoginExpiresAt,
                 liveAccount?.ProfileFetchedAt,
-                await SlotWordAsync(live, liveFolder, ownFolder?.HasCredentials ?? false, hold, cancellationToken)));
+                await SlotAsync(live, liveFolder, ownFolder?.HasCredentials ?? false, hold, cancellationToken),
+                sides));
         }
 
         // A read per parked folder rather than a projection, because the expiry
@@ -101,7 +107,8 @@ internal sealed partial class DashboardAssembler(
                 capturedAt,
                 await ReadLoginExpiryAsync(profile, cancellationToken),
                 profile.Account?.ProfileFetchedAt,
-                await SlotWordAsync(profile.Email, profile.FolderPath, profile.HasCredentials, hold, cancellationToken)));
+                await SlotAsync(profile.Email, profile.FolderPath, profile.HasCredentials, hold, cancellationToken),
+                sides));
         }
 
         // A roster entry the operator added but has not logged in yet owns no
@@ -115,7 +122,8 @@ internal sealed partial class DashboardAssembler(
                 entry.Email, isLive: false, hasCredentials: false, folder, observed: null, note: null, roster, capturedAt,
                 loginExpiresAt: null,
                 loggedInAt: null,
-                slot: await SlotWordAsync(entry.Email, folder, slotHoldsPair: false, hold, cancellationToken)));
+                slot: await SlotAsync(entry.Email, folder, slotHoldsPair: false, hold, cancellationToken),
+                sides));
         }
 
         // One arrangement for the whole payload, and the cards go out in the
@@ -187,21 +195,58 @@ internal sealed partial class DashboardAssembler(
         DateTimeOffset capturedAt,
         DateTimeOffset? loginExpiresAt,
         DateTimeOffset? loggedInAt,
-        string? slot)
+        SlotSnapshot? slot,
+        IReadOnlyList<WslSideState> sides)
     {
+        WslSideState? holder = Holder(slot, sides);
+        bool heldAway = slot?.State is SlotState.HeldElsewhere or SlotState.InTransit;
         List<UsageSnapshot> sources = [];
-        if (observed is not null)
+        if (slot?.State == SlotState.HeldElsewhere)
         {
-            sources.Add(observed);
-        }
+            // Design 12: the leader reads no usage for a pair it does not hold,
+            // so this card carries that side's tee and nothing else. What this
+            // side read while it still held the pair is from before the hand-off
+            // and would be a figure the account has since moved past.
+            if (holder?.Usage is StatuslineSnapshot tee && tee.Account == email)
+            {
+                sources.Add(UsageSnapshot.FromStatusline(tee, email));
+            }
 
-        if (quota.LatestFor(email) is UsageSnapshot read)
+            string side = Named(slot, holder);
+            note = "in use by " + side + "; figures come from " + side + " sessions";
+            // One family per account, so the expiry of a pair this side does not
+            // hold can only come from the side that does, and only while that
+            // side says this is the account it holds. Nothing to say beats a
+            // number from before the hand-off: the 28-day window is fixed, and a
+            // stale one would have the operator schedule the wrong re-login.
+            loginExpiresAt = holder is { Online: true } && holder.LiveAccount == email
+                ? holder.LoginExpiresAt
+                : null;
+        }
+        else
         {
-            sources.Add(read);
+            if (observed is not null)
+            {
+                sources.Add(observed);
+            }
+
+            if (quota.LatestFor(email) is UsageSnapshot read)
+            {
+                sources.Add(read);
+            }
         }
 
         MergedUsage? merged = UsageMerge.Merge(sources);
         RosterEntry? entry = roster.Find(email);
+        RefreshStateView refresh = Refresh(email, folder);
+        // Whether this pair can be made live at all, on either side: the planner
+        // both sides go through refuses a stranded folder and an expired login
+        // whichever side asked, so the two controls below share one verdict
+        // rather than the page offering a side an account its own switch would
+        // then refuse.
+        bool usable = hasCredentials
+            && refresh.State != Kebab(RefreshOutcomeKind.Stranded)
+            && !(loginExpiresAt <= capturedAt);
         return (
             new AccountCardView(
                 email.Value,
@@ -210,24 +255,82 @@ internal sealed partial class DashboardAssembler(
                 folder,
                 Usage(merged, capturedAt),
                 note,
-                Refresh(email, folder),
+                refresh,
                 View(entry),
                 LoginExpiresAt: loginExpiresAt,
                 LoggedInAt: loggedInAt,
-                Slot: slot),
+                Slot: Word(slot),
+                Chip: Chip(slot, holder),
+                CanSwitchHere: usable && !isLive && !heldAway,
+                HeldAway: heldAway,
+                OfferedTo: [.. sides
+                    .Where(side => usable && side.Online && slot?.State == SlotState.Parked && side.LiveAccount != email)
+                    .Select(static side => side.Side.Value)]),
             new AccountStanding(email, isLive, entry?.Paused ?? false, hasCredentials, merged?.Merged, loginExpiresAt));
     }
 
     /// <summary>
-    /// One account's slot as a plain word, and the design's reconciliation on
-    /// the way past: a record the files contradict is dropped here, on the read
-    /// that noticed it, because the page is the only thing that looks at every
-    /// slot on a schedule. The drop takes the mutation gate with a zero wait, so
-    /// a poll that lands inside a switch leaves that switch's record alone and
-    /// the next poll deals with it. Null when the store is not shared, and the
-    /// card then carries no word at all.
+    /// The side a slot's pair has gone to, as that side last answered, or null
+    /// when the slot names none or none is configured. A record names the side
+    /// for both the held and the in-transit states, because the claim writes it
+    /// before the pair leaves.
     /// </summary>
-    private async Task<string?> SlotWordAsync(AccountEmail email, string folder, bool slotHoldsPair, WindowsHold hold, CancellationToken cancellationToken)
+    private static WslSideState? Holder(SlotSnapshot? slot, IReadOnlyList<WslSideState> sides) =>
+        slot?.Record is HolderRecord record
+            ? sides.FirstOrDefault(side => side.Side == record.Side)
+            : sides.Count == 1 ? sides[0] : null;
+
+    /// <summary>
+    /// The side a slot's pair is with, named: the record's own word first,
+    /// because it is the store's statement of who took the pair, then the one
+    /// configured side, and only then the default. A card never says "the other
+    /// side" when a file on disk names it.
+    /// </summary>
+    private static string Named(SlotSnapshot? slot, WslSideState? holder) =>
+        slot?.Record?.Side.Value ?? holder?.Side.Value ?? SideName.Wsl.Value;
+
+    /// <summary>
+    /// One account's chip, in design 12's vocabulary, or null when there is
+    /// nothing for it to add: an unshared store, or a slot nothing has ever
+    /// been parked in, whose card already says it needs a login.
+    /// </summary>
+    private static string? Chip(SlotSnapshot? slot, WslSideState? holder)
+    {
+        string side = Named(slot, holder);
+        return slot?.State switch
+        {
+            SlotState.HeldHere => "live here",
+            SlotState.Parked => "parked",
+            // ponytail: during the export window a hand-off is carrying one pair
+            // each way, and this says only where the incoming one is going. The
+            // in-transit banner #72 owns is where the other half belongs.
+            SlotState.InTransit => "in transit to " + side,
+            SlotState.HeldElsewhere => "in use by " + side + (holder is null or { Online: false } ? " (offline)" : string.Empty),
+            _ => null,
+        };
+    }
+
+    /// <summary>One account's slot as the plain word the wire has carried since the store was shared.</summary>
+    private static string? Word(SlotSnapshot? slot) => slot?.State switch
+    {
+        null => null,
+        SlotState.Parked => "parked",
+        SlotState.HeldHere => "held-here",
+        SlotState.HeldElsewhere => "held-elsewhere",
+        SlotState.InTransit => "in-transit",
+        _ => "never-logged-in",
+    };
+
+    /// <summary>
+    /// One account's slot, and the design's reconciliation on the way past: a
+    /// record the files contradict is dropped here, on the read that noticed
+    /// it, because the page is the only thing that looks at every slot on a
+    /// schedule. The drop takes the mutation gate with a zero wait, so a poll
+    /// that lands inside a switch leaves that switch's record alone and the
+    /// next poll deals with it. Null when the store is not shared, and the card
+    /// then carries neither a word nor a chip.
+    /// </summary>
+    private async Task<SlotSnapshot?> SlotAsync(AccountEmail email, string folder, bool slotHoldsPair, WindowsHold hold, CancellationToken cancellationToken)
     {
         if (await slots.ReadAsync(email, folder, slotHoldsPair, hold, cancellationToken) is not SlotSnapshot slot)
         {
@@ -239,14 +342,7 @@ internal sealed partial class DashboardAssembler(
             await slots.DropStaleRecordAsync(email, folder, slot, hold, cancellationToken);
         }
 
-        return slot.State switch
-        {
-            SlotState.Parked => "parked",
-            SlotState.HeldHere => "held-here",
-            SlotState.HeldElsewhere => "held-elsewhere",
-            SlotState.InTransit => "in-transit",
-            _ => "never-logged-in",
-        };
+        return slot;
     }
 
     /// <summary>

@@ -6,6 +6,7 @@ using ClaudeCodeAccountRotation.App.Security;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Peers;
+using ClaudeCodeAccountRotation.Core.Quota;
 using ClaudeCodeAccountRotation.Core.Switching;
 
 namespace ClaudeCodeAccountRotation.App.Adapters.Peers;
@@ -60,8 +61,27 @@ internal sealed class HttpPeerRotationInstance : IPeerRotationInstance
                 Fingerprint(view.LiveFingerprint),
                 Step(view.ImportJournalStep),
                 view.Version,
-                view.LiveAccountBlock),
+                view.LiveAccountBlock,
+                Tee(view.Tee),
+                view.LoginExpiresAt),
             cancellationToken);
+
+    /// <summary>
+    /// The other side's tee observation. Its account is parsed here rather than
+    /// trusted, the way this side parses its own tee file: an address it cannot
+    /// read leaves the snapshot unattributed, and an unattributed snapshot is
+    /// shown on no card.
+    /// </summary>
+    private static StatuslineSnapshot? Tee(ImportEndpoints.TeeView? view) => view is null
+        ? null
+        : new StatuslineSnapshot(
+            view.CapturedAt,
+            SessionId: null,
+            Email(view.Account),
+            view.FiveHourPercent,
+            view.FiveHourResetsAt,
+            view.SevenDayPercent,
+            view.SevenDayResetsAt);
 
     public Task<Result<ImportAnswer, string>> ImportAsync(ImportRequest request, CancellationToken cancellationToken)
     {
@@ -99,7 +119,13 @@ internal sealed class HttpPeerRotationInstance : IPeerRotationInstance
     public Task<Result<ImportStatus, string>> ImportStatusAsync(AccountEmail email, CancellationToken cancellationToken) =>
         GetAsync<ImportEndpoints.ImportStatusView, ImportStatus>(
             "/api/import-status?email=" + Uri.EscapeDataString(email.Value),
-            static view => new ImportStatus(view.Imported, Step(view.JournalStep), Fingerprint(view.LiveFingerprint), Account(view.LiveAccountBlock), view.Detail),
+            static view => new ImportStatus(
+                view.Imported,
+                Step(view.JournalStep),
+                Fingerprint(view.LiveFingerprint),
+                Account(view.LiveAccountBlock),
+                view.Detail,
+                view.LoginExpiresAt),
             cancellationToken);
 
     private async Task<Result<TOut, string>> GetAsync<TView, TOut>(string route, Func<TView, TOut> project, CancellationToken cancellationToken)
