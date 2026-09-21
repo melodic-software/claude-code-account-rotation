@@ -171,7 +171,7 @@ Work items, in order.
    `DashboardAssembler.Row` calls it in Phase 2 instead of open-coding the comparison, and the
    ordering key calls it before testing exhaustion.
 2. `src/ClaudeCodeAccountRotation.Core/Quota/UsageMerge.cs` (new): lift the assembler's private
-   per-bucket merge into Core, unchanged in behaviour.
+   per-bucket merge into Core, unchanged in behavior.
    - `public sealed record MergedLimit(UsageLimit Limit, UsageSnapshot Source);`
    - `public sealed record MergedUsage(UsageSnapshot Merged, UsageSnapshot Card, IReadOnlyList<MergedLimit> Rows);`
    - `public static MergedUsage? Merge(IReadOnlyList<UsageSnapshot> sources)` — null when `sources`
@@ -282,7 +282,7 @@ Work items, in order.
    | `j` | 0 | 38, resets 2026-09-17T23:59Z | none |
 
    The fact asserts the exact sequence `h, a, c, b, d, f, i, j, e, g`, and separately that `c` is
-   live and is not first. It is the one check that reads as a judgement rather than as a rule: the
+   live and is not first. It is the one check that reads as a judgment rather than as a rule: the
    operator judges this sequence at plan approval, and if the sequence is wrong the key is wrong,
    whatever the per-rule facts say.
 8. `docs/topics/order-by-next-reset/design/design-resolution.md` already records the type sketch and
@@ -329,7 +329,7 @@ Sanity Check bullet below held on re-run; a fresh-context verifier passed all te
 It also found that matching the arranged cards back by e-mail would fault the endpoint on a
 hand-copied profile folder naming an account twice, where the page used to show two cards; the
 fix-up matches by the `AccountStanding` instance the arrangement was handed and pins the two-card
-behaviour with `TwoProfileFoldersNamingTheSameAccountBothShowACard`. Test total 457 against 454
+behavior with `TwoProfileFoldersNamingTheSameAccountBothShowACard`. Test total 457 against 454
 at the end of Phase 1.
 
 1. `src/ClaudeCodeAccountRotation.App/Dashboard/DashboardViews.cs`: two trailing parameters on
@@ -510,7 +510,7 @@ writes above both guards beside the header ones, since neither lives inside `#ca
 
 | Alternative | Why rejected | Switch condition |
 |---|---|---|
-| Key off `QuotaState.LatestFor` alone, leaving the merge in the assembler | The live card's key would be computed from the on-demand read while its rows show tee figures; the two can disagree, and 3.2 would inherit an `AccountStanding.Latest` that is not what the card shows | If lifting the merge forces a behaviour change in any existing assembler fact, keep the merge in the App for this issue and record the live-card discrepancy as a residual for 3.2 |
+| Key off `QuotaState.LatestFor` alone, leaving the merge in the assembler | The live card's key would be computed from the on-demand read while its rows show tee figures; the two can disagree, and 3.2 would inherit an `AccountStanding.Latest` that is not what the card shows | If lifting the merge forces a behavior change in any existing assembler fact, keep the merge in the App for this issue and record the live-card discrepancy as a residual for 3.2 |
 | Sort in `app.js` instead of the server | Two orderings, one of them untestable in this repo (no JavaScript harness exists) and neither reusable by 3.2 | Never for ordering; only if a future issue needs a per-viewer order the server cannot know |
 | One blanket exhaustion threshold instead of two parameters | 3.1 binds two distinct numbers (90 and 100); one number now means a signature change later, which is the thing this issue exists to avoid | If the operator reports the two-number rule reads confusingly on the card before 3.1 lands |
 | Include the scoped (Fable) bucket in the key | An account can hold several scoped windows, keyed by raw kind plus display name, so "the" scoped reset is not a single instant; parent 3.1 and 3.2 name only the two windows. Rejected pending Decisions row 6, which the operator has not yet confirmed | If the operator overrides row 6, or reports scoped exhaustion driving real switches; it then arrives as a policy flag, not a change to the key's shape |
@@ -549,7 +549,7 @@ writes above both guards beside the header ones, since neither lives inside `#ca
   regression guard for the unread group.
 - Not tested by design: the page, including the hovered-or-focused render guard. No JavaScript
   harness exists in this repository; `app.js` is verified by reading and by the payload the App test
-  asserts, the posture the prior chain recorded. The guard is therefore a judgement call the
+  asserts, the posture the prior chain recorded. The guard is therefore a judgment call the
   operator confirms on the live page, not an assertion.
 
 ## Risks
@@ -569,11 +569,11 @@ writes above both guards beside the header ones, since neither lives inside `#ca
 
 ## Blast radius
 
-**LOW–MEDIUM.** About eleven files; the behaviour change is the sequence of cards on the operator's
+**LOW–MEDIUM.** About eleven files; the behavior change is the sequence of cards on the operator's
 local dashboard plus one line of copy per card. Nothing is persisted, no token is touched, no
 credential file is written, no outbound request is made, and the refresh engine and `RefreshOrder`
 are untouched. The one non-trivial edit is lifting the per-bucket merge into Core, which is a
-behaviour-preserving move guarded by the existing assembler suite; `git revert` undoes the whole
+behavior-preserving move guarded by the existing assembler suite; `git revert` undoes the whole
 change cleanly. It sits above LOW because the merge lift touches the code path that renders every
 card, on the operator's live tool.
 

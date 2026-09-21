@@ -62,7 +62,7 @@ All notable changes to this project are documented in this file. The format foll
   (Profile 4)`) when the discovered catalog can resolve the pair, and shows the bare directory as
   before when it cannot.
 - The read-only `GET /api/login-sessions/{id}` route records in code why it sits outside the
-  same-origin mutation filter, beside the other reads (#43). No behaviour change.
+  same-origin mutation filter, beside the other reads (#43). No behavior change.
 - `GET /healthz` is served by the framework's own health-check middleware rather than a hand-rolled
   route, with no checks registered: it is a liveness probe and nothing more. The body is now the
   status word `Healthy` as `text/plain` instead of a small JSON object, and the response carries the
@@ -99,7 +99,7 @@ All notable changes to this project are documented in this file. The format foll
   for the live account or from a parked account's own `profile.json`. Either is null when the
   account has no login yet, its source carries no such instant, or that source cannot be read. The
   usage block gains a `login-expiry` line at its foot, `logged in N d ago · login expires in N d`,
-  in the warn colour inside seven days of expiry and reading `login expired` once past. A parked
+  in the warn color inside seven days of expiry and reading `login expired` once past. A parked
   credential file that is torn or unreadable blanks that one card's expiry and logs a warning
   instead of failing the whole payload.
 - The dashboard lists the accounts in the order they free up, and every card says what its place in
@@ -254,7 +254,7 @@ All notable changes to this project are documented in this file. The format foll
   counted as `unreadable` and fails the run instead of being silently skipped (#20). The state-temp
   scan follows `CLAUDE_CONFIG_DIR` the same way the app does, so a stale temp left at the home root
   by an old default-root install no longer fails a clean run under a custom config root.
-- Two accounts can no longer normalise onto one profile folder. `a<b@x.com` and `a>b@x.com` both
+- Two accounts can no longer normalize onto one profile folder. `a<b@x.com` and `a>b@x.com` both
   became `a_b@x.com`, and `user@example.com.` was trimmed onto `user@example.com`, so the second
   account's login overwrote the first account's pair and removing either revoked the other's token.
   The e-mail rule refuses every character that collapsed, and a dot at either end.
@@ -283,7 +283,7 @@ All notable changes to this project are documented in this file. The format foll
   trailing whitespace, or more than 255 characters) with a 400 and store nothing, and the browser
   launcher holds the same rule for a name the roster file already carries, refusing the launch with
   the reason instead of emitting the switch (#43). The value becomes `--profile-directory=<value>`
-  verbatim, which the browser appends to its own user-data directory without normalising it, so a
+  verbatim, which the browser appends to its own user-data directory without normalizing it, so a
   dot-segment walks elsewhere and a trailing dot or an NTFS stream suffix aliases a sibling profile on
   Windows.
 - A Team or Enterprise seat could reach the rotation through the login. The tier was judged only when
@@ -297,7 +297,7 @@ All notable changes to this project are documented in this file. The format foll
   under that folder, the pair it wrote is deleted (a switch admits any folder holding one, whatever
   its token is worth), and the session's message names the subscription the CLI reported and says the
   credentials were revoked. The roster entry stays, so the account can be logged in again and the Max
-  account picked instead. A revocation that fails still deletes the pair and says so. The judgement
+  account picked instead. A revocation that fails still deletes the pair and says so. The judgment
   takes no identity the folder records, because a folder logged in before carries the earlier
   login's `profile.json` and a login whose tidy-up could not run leaves its state file behind, so
   nothing on disk proves which login wrote a block naming a Max tier. And the guard discards only a
@@ -310,7 +310,7 @@ All notable changes to this project are documented in this file. The format foll
 - Command injection through the `cmd.exe` shim used for an npm-installed CLI. Arguments were joined
   with a space and no quoting, so an account e-mail carrying `&` was read as a command separator and
   the rest of it ran as a second command. Every argument is now one quoted operand at the shared
-  construction point, and the two characters quoting cannot neutralise, a quote and a percent sign,
+  construction point, and the two characters quoting cannot neutralize, a quote and a percent sign,
   are refused there. The account e-mail rule is an allowlist rather than a blocklist as well:
   letters, digits, and `. _ - + @`, with no dot at either end.
 - The same-origin check on every mutating route compares the `Origin` header against this instance's

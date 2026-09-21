@@ -279,7 +279,7 @@ one flag that is off by default.
 
 Work items, in order.
 
-1. `App/Configuration/`: add `store.shared`, **default `false`**. Every behaviour in this phase is
+1. `App/Configuration/`: add `store.shared`, **default `false`**. Every behavior in this phase is
    gated on it, which is what makes the flag the rollback.
 2. `App/Adapters/FileSystem/HolderRecordFile.cs` (new): read, write, delete `holder.json` through the
    existing `AtomicJsonFile`, owner-only ACL on Windows as the credential writes already do.
@@ -302,7 +302,7 @@ Work items, in order.
    one and that a crash between them leaves a state section 9.4 rewrites; an API fact that a
    hand-placed `holder.json {"side":"wsl"}` on a temp-root slot returns 409 `HeldByOtherSide`; a
    refresh-pass fact that a held slot yields `HeldElsewhere` with zero requests recorded; a fact that
-   with `store.shared: false` none of these behaviours occur.
+   with `store.shared: false` none of these behaviors occur.
 
 **Sanity Check:**
 
@@ -594,7 +594,7 @@ at a time from the page, on the laptop. Phases 6 to 8 are quality of life and br
    real store — after installing the leader over ten already-parked accounts, the live one's card
    read `held-here` with no `holder.json` anywhere. A record is written by a *switch*
    (`LiveDirectorySwitch` calls `SharedStoreSlots.TakeAsync` on the incoming slot, which is phase
-   2's designed behaviour) and by a hand-off to the other side; so a store reads correctly both
+   2's designed behavior) and by a hand-off to the other side; so a store reads correctly both
    before any record exists and after one does, which is the property that matters.
 3. **R2's checkable half names a log the product does not produce.** The follower is leader-spawned
    through `wsl.exe` and its stdout is a discarded pty, so there is no follower log to grep. The

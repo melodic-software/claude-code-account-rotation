@@ -24,8 +24,8 @@ Phase 2 item 2.6 (card text) and Phase 3 item 3.2 (the ranking filter). Design:
 
 Issue #46: alias as the heading, address secondary, a clear state chip (live / ready / needs login /
 paused / error), the quota block, the browser mapping as small print, then actions with the
-destructive one separated and de-emphasised; consistent card height; no `Log in again` as a primary
-action on a healthy card. Colour and typography are #50.
+destructive one separated and de-emphasized; consistent card height; no `Log in again` as a primary
+action on a healthy card. Color and typography are #50.
 
 Issue #49: a line per card stating when the account will next need a browser login, a visible warning as
 it approaches, an expired refresh token presented plainly rather than as switchable, and the
@@ -137,7 +137,7 @@ nullable fields on the existing card record.
 ### Out-of-scope, stated
 
 - Any Core change; `Rank` itself (parent 3.2), which this chain only leaves a scope-change note for.
-- Colour, typography, the visual language, a paused-group separation (#50); editable alias (#48);
+- Color, typography, the visual language, a paused-group separation (#50); editable alias (#48);
   error mapping for a torn live read (#9); the login-renewal pass.
 - Anything that stops, restarts, reinstalls, or writes the operator's live dashboard.
 

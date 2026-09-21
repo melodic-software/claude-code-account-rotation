@@ -7,7 +7,7 @@ namespace ClaudeCodeAccountRotation.App.Adapters.Process;
 /// <summary>
 /// The running <c>claude auth login</c> process, seen only as "text comes out,
 /// a code goes in, it can be killed". The login runner talks to this and never
-/// to <see cref="System.Diagnostics.Process"/>, so its own behaviour is tested
+/// to <see cref="System.Diagnostics.Process"/>, so its own behavior is tested
 /// against a scripted child rather than a real CLI.
 /// </summary>
 internal interface ILoginChild : IDisposable

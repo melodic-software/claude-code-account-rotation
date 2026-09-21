@@ -4,7 +4,7 @@ namespace ClaudeCodeAccountRotation.Core.Accounts;
 /// The one rule for a browser-profile directory name, shared by the roster
 /// endpoints that accept one and the launcher that emits one. The value
 /// becomes <c>--profile-directory=&lt;value&gt;</c>, which the browser appends
-/// to its own user-data directory without normalising it, so anything that is
+/// to its own user-data directory without normalizing it, so anything that is
 /// not exactly one plain directory name can select a profile the roster never
 /// named: a separator or a dot-segment walks elsewhere, a trailing dot or an
 /// NTFS stream suffix aliases a sibling on Windows, a control character

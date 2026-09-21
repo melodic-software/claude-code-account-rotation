@@ -512,7 +512,7 @@ public sealed class QuotaRefreshTests
     public async Task APausedPairWithWeeksOfLoginLeftIsLeftAlone()
     {
         // The other side of the renewal window, and the fact that keeps it a
-        // window rather than a licence: a paused account with three weeks of login
+        // window rather than a license: a paused account with three weeks of login
         // left costs the token endpoint nothing at all. The scripted endpoint
         // records an unscripted call and the harness fails on it either way, but
         // the count is what says it outright.

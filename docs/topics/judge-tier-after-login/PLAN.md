@@ -18,7 +18,7 @@ both confirmed by the PR's own stopping comment. Parent topic:
 ### Goal
 
 A login that ends can only ever discard a credential pair that the login itself is proven to have
-written, and the tier judgement on that pair takes no recorded identity at all, since nothing in
+written, and the tier judgment on that pair takes no recorded identity at all, since nothing in
 the folder proves which login wrote one. The guard PR #45 adds then closes the gap it was opened
 for without being able to destroy a working login.
 
@@ -56,7 +56,7 @@ for without being able to destroy a working login.
   its pair left in place, the message says the tier could not be checked and the account must be
   removed from the roster before any switch.
 - A re-login that completes as Max over an existing pair still ends `Completed` with the new pair
-  in place (characterisation, expected green before the change); the four refusal tests PR #45 added
+  in place (characterization, expected green before the change); the four refusal tests PR #45 added
   still pass.
 - `dotnet test -c Release` green with no test lost against the rebased baseline; `dotnet build -c
   Release` 0 warnings; `dotnet format whitespace --verify-no-changes`, `typos .`, markdownlint, and
@@ -95,7 +95,7 @@ Standards grounding: no standards index exists at `docs/standards/` and no `.cla
 the repo's only rule file is the ambient `pr-body-contract.md`. Scale is Small (three source files,
 two test files, changelog), so ecosystem defaults apply and nothing further was pulled.
 
-### Phase 1: The credential-file digest and the identity-free judgement [DONE]
+### Phase 1: The credential-file digest and the identity-free judgment [DONE]
 
 Work items, in order:
 
@@ -131,7 +131,7 @@ Work items, in order:
      pair with `CredentialFiles.WriteAsync(folder, "refresh-new")` and exits; `Cli.ReadError` set.
      Expect `Failed`, no logout, the file present with the new bytes, the message saying the tier
      could not be checked and to remove the account before switching. Red today: deleted.
-   - `AReLoginThatCompletesAsMaxReplacesTheOldPair` (characterisation, green today): seed a pair,
+   - `AReLoginThatCompletesAsMaxReplacesTheOldPair` (characterization, green today): seed a pair,
      `OnCode = CompleteLoginAsync`. Expect `Completed`, no logout, the pair holding the new token.
 3. Green, in `ClaudeCliLoginSessionRunner.cs`:
    - `StartAsync` records, inside the gate and before the child spawns, the SHA-256 hex of
@@ -156,8 +156,8 @@ Work items, in order:
      comment says why the recorded identity is never consulted here.
    - `ParkedFolderAdmission`: `JudgeFreshLoginAsync(folder, cli, ct)` beside the roster's
      `JudgeAsync`; the class doc names both askers and why the login-time one takes no identity.
-4. `CHANGELOG.md`: extend the PR's Unreleased Security bullet with the two behaviours (the guard
-   discards only a pair the login is proven to have written; the tier judgement after a login
+4. `CHANGELOG.md`: extend the PR's Unreleased Security bullet with the two behaviors (the guard
+   discards only a pair the login is proven to have written; the tier judgment after a login
    takes no recorded identity); no Fixed entry, since nothing here was released.
 5. Gates: `dotnet build -c Release` (0 warnings), `dotnet test -c Release`, `dotnet format
    whitespace --verify-no-changes`, `typos .`, markdownlint on the changed markdown, `bash
@@ -176,10 +176,10 @@ Work items, in order:
 - `git diff main -- src/ClaudeCodeAccountRotation.Core/Accounts/MaxTierAdmission.cs` is empty.
 - `gh api graphql` on PR #45 `reviewThreads` shows `isResolved: true` for both thread ids; `gh pr view 45 --json state` prints `MERGED`.
 
-**Done:** the two fixes and six tests landed in `5be58d3` (five red first, one characterisation);
+**Done:** the two fixes and six tests landed in `5be58d3` (five red first, one characterization);
 `dotnet test -c Release` went from 333 on the rebased baseline to 339. A fresh-context phase
 verifier confirmed every due criterion; the code and security lanes found no blocker and five small
-follow-ups, folded in as `c6f3b34` with four more tests (three red first, one pin): the judgement
+follow-ups, folded in as `c6f3b34` with four more tests (three red first, one pin): the judgment
 runs before adoption and a kept-but-unjudged folder is left whole, the finish takes the gate without
 a pre-gate existence check, a fault while finishing settles the session with a fixed message, the
 finish hook throws on an unknown id and a session is published with its pump, and the expiry message
@@ -202,13 +202,13 @@ was checked against the runner, the store, and the tests before it changed the p
 
 - Confirmed and applied: `adopted == true` proves only that a state file with an account block
   existed, not that this login wrote it (a residue-kept login leaves one behind), so "identity only
-  when adopted" was replaced by "no identity in the post-login judgement", with a second P1 test for
+  when adopted" was replaced by "no identity in the post-login judgment", with a second P1 test for
   the state-file case. The expiry test was vacuous as first written because `EnforceExpiry` settles
   in the request and the pump finishes later; the internal `FinishedAsync` hook is the named
   boundary. The finish-time digest read moved under the gate with its own catch. The pending-only
   message is keyed on the finish state. The pre-existing-pair plus `Unknown` case is decided as
   keep-and-tell, pinned by a test. `PairFingerprint` was renamed to say what it hashes. The
-  characterisation test is labelled as such and the PR will not claim it as red.
+  characterization test is labeled as such and the PR will not claim it as red.
 - Confirmed and recorded, not fixed: the real-CLI re-login spike (needs a real pair in a throwaway
   folder, a second holder), the write-back drift rule, and the expired-but-unfinished ownership
   window are Captured assumptions or Out-of-scope with their reasons.
@@ -238,7 +238,7 @@ Single phase, all main-session; no parallelism axis.
 
 ### Execution shape ([EXEC-SHAPE] tagged)
 
-- `[EXEC-SHAPE]` The post-login judgement takes no recorded identity at all (the Codex thread's
+- `[EXEC-SHAPE]` The post-login judgment takes no recorded identity at all (the Codex thread's
   first option) rather than a `profileFetchedAt` stamp check: it removes the vector instead of
   trusting a CLI stamp, and the PR already fails closed on a tierless status.
 - `[EXEC-SHAPE]` The digest is a SHA-256 of the file bytes rather than of the parsed refresh token:

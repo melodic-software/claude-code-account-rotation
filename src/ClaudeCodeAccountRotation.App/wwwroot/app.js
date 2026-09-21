@@ -57,7 +57,7 @@
 
   // One row per field: a visible label wrapping its own control, so no id is
   // needed and the Add form's rows cannot collide with a card's Edit rows.
-  function labelled(container, text, field) {
+  function labeled(container, text, field) {
     var row = element("label", "field");
     row.appendChild(element("span", null, text));
     row.appendChild(field);
@@ -118,7 +118,7 @@
     alias.type = "text";
     alias.placeholder = "optional, e.g. weekly";
     alias.value = values.alias || "";
-    labelled(container, "Alias", alias);
+    labeled(container, "Alias", alias);
 
     var browser = element("select");
     BROWSERS.forEach(function (name) {
@@ -127,15 +127,15 @@
       browser.appendChild(option);
     });
     browser.value = values.browser || "";
-    labelled(container, "Browser", browser);
+    labeled(container, "Browser", browser);
 
     var profile = profileSelect();
-    labelled(container, "Browser profile", profile);
+    labeled(container, "Browser profile", profile);
 
     var typed = element("input");
     typed.type = "text";
     typed.placeholder = "e.g. Profile 3";
-    var typedRow = labelled(container, "Profile directory", typed);
+    var typedRow = labeled(container, "Profile directory", typed);
 
     // An entry already mapped to a profile the enumeration found selects it; one
     // mapped to anything else falls through to the typed field, which is the only

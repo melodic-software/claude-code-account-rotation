@@ -15,7 +15,7 @@ key, `Arrange`, and the wire fields `standing` and `nextResetAt`. This work **fi
 parent already declared, adds two trailing wire fields, and reshapes the page**. No parent thread
 is re-opened, and none of #47's three threads is re-opened.
 
-Colour, typography and the visual language stay with #50. This record decides what each card
+Color, typography and the visual language stay with #50. This record decides what each card
 carries, in what order, and which facts cross the wire.
 
 ## What the code has that the issues do not know
@@ -30,7 +30,7 @@ Both issues were filed before #55, #56 and #47 landed. Re-read against `2b65a31`
 - The quota block is filled (#56), and the standing line under it says `usable now` / `usable in …`
   / `no usage read yet` / `paused` (#47). Those stay as the quota facts; the chip this record adds
   is the credential fact, which is a different axis.
-- `Remove` sits in `div.actions` beside `Switch` with class `danger`; the class colours it but does
+- `Remove` sits in `div.actions` beside `Switch` with class `danger`; the class colors it but does
   not separate it.
 - `Log in again` is offered on every rostered, non-live card that holds credentials.
 - The credential expiry is already read from disk: `FileSystemCredentialPairStore` parses
@@ -42,7 +42,7 @@ Both issues were filed before #55, #56 and #47 landed. Re-read against `2b65a31`
   `OAuthAccountBlock.ProfileFetchedAt`, and `ParkedProfile.Account` carries it into the assembler.
 - The render guard (#47) skips a non-forced render only when the arriving order differs from the
   rendered one and the pointer or focus is inside `#cards`. Card height does not enter it.
-- No JS test framework exists; page behaviour is pinned by grep sanity checks and the App tests
+- No JS test framework exists; page behavior is pinned by grep sanity checks and the App tests
   that assert the payload.
 
 ## Type sketch
@@ -170,11 +170,11 @@ wire fields: a parked pair with `refreshTokenExpiresAt` yields `loginExpiresAt` 
 profile with `profileFetchedAt` yields `loggedInAt`, a roster-only account yields null for both,
 and the live card takes its instants from the live pair and state file. `RosterEndpointTests` proves
 the two other construction sites still return null for both. The page has no test framework; its
-behaviour is pinned by the plan's grep sanity checks (chip vocabulary, `innerHTML` count stays 2,
+behavior is pinned by the plan's grep sanity checks (chip vocabulary, `innerHTML` count stays 2,
 no `accounts.sort`) and a fresh-context verifier reading the diff.
 
 ## Not re-opened
 
 No Core change, no new route, no persistence, no change to `Arrange`, `KeyFor`, the comparer, or
-the refresh engine; no colour or typography (#50); no alias editing beyond what the Edit panel
+the refresh engine; no color or typography (#50); no alias editing beyond what the Edit panel
 already does (#48). The parent's 3.2 note is additive.

@@ -503,7 +503,7 @@ public sealed class LoginEndpointTests
         await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
         string folder = FolderOf(factory, ParkedEmail);
         await SeedPairAsync(folder, "refresh-old", TestContext.Current.CancellationToken);
-        // The judgement faults rather than answering either way. A fault escaping the
+        // The judgment faults rather than answering either way. A fault escaping the
         // pump would leave a finished login reading "still waiting" until its expiry,
         // and the fault's own text, which can name a path, may not reach the page.
         factory.Cli.ReadFault = new InvalidOperationException("the adapter threw");

@@ -18,7 +18,7 @@ public sealed class UsageLimitTests
     // build has never heard of: both still render, under the endpoint's own word.
     [InlineData("weekly_scoped", LimitKind.WeeklyScoped, null, "scoped")]
     [InlineData("monthly_something", LimitKind.Unknown, null, "monthly_something")]
-    public void ALimitIsLabelledByItsKind(string rawKind, LimitKind kind, string? scopeDisplayName, string expected)
+    public void ALimitIsLabeledByItsKind(string rawKind, LimitKind kind, string? scopeDisplayName, string expected)
     {
         UsageLimit limit = new(rawKind, kind, Group: null, Percent: 12, Severity: null, ResetsAt: null, scopeDisplayName, IsActive: true);
 

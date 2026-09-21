@@ -89,7 +89,7 @@ public static class UsageMerge
 
     /// <summary>
     /// Whether two limits measure the same window. The two named buckets are
-    /// identified by kind alone; a scoped or unrecognised one needs its raw kind
+    /// identified by kind alone; a scoped or unrecognized one needs its raw kind
     /// and its display name too, because an account can hold several of either
     /// and merging them would let one model's figure overwrite another's.
     /// </summary>
