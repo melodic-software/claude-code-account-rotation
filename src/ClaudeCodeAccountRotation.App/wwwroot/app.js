@@ -309,6 +309,11 @@
         row.mode = mode;
         row.control = element("span", "side-control");
         row.pick = null;
+        // With the picker goes what it was holding: a side that went offline and
+        // came back while the parked accounts were unchanged would otherwise
+        // match the old signature, leave the new picker empty, and keep Switch
+        // disabled until the account list happened to change.
+        row.offers = null;
         if (mode === "switch") {
           row.pick = document.createElement("select");
           row.pick.name = side.side;
