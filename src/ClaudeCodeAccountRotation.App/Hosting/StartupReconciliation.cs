@@ -34,6 +34,7 @@ internal sealed partial class StartupReconciliation(
         // is finished or left in transit by its own rules, not by a Windows
         // switch's, which know nothing about mailboxes.
         WslReconciliation handOff = await coordinator.ReconcileAsync(cancellationToken);
+        state.HandOffBanner = handOff.Banner;
         LogHandOffReconciled(handOff.Outcome);
         await RestoreStrandedPairsAsync(cancellationToken);
         await LoadCachedUsageAsync(cancellationToken);

@@ -13,14 +13,22 @@ internal static class DashboardEndpoints
     public static void Map(IEndpointRouteBuilder routes)
     {
         ArgumentNullException.ThrowIfNull(routes);
-        routes.MapGet("/api/dashboard", static async (DashboardAssembler assembler, WslSwitch coordinator, CancellationToken cancellationToken) =>
+        routes.MapGet("/api/dashboard", static async (
+            DashboardAssembler assembler,
+            WslSwitch coordinator,
+            DashboardState state,
+            CancellationToken cancellationToken) =>
         {
             // The leader's own crash table, on every poll. Startup is not enough:
             // the case the acceptance exercises most is a follower killed while
             // this process stays up, and nothing else would notice until a
             // restart. It costs one File.Exists when no hand-off is in flight,
             // and it steps aside when one is.
-            _ = await coordinator.ReconcileAsync(cancellationToken);
+            // Its banner is what the page says about a claim the other side has
+            // not answered for. Kept rather than discarded: this is the recovery
+            // state the operator has least other evidence of, and a poll that
+            // resolved it clears the line by writing null here.
+            state.HandOffBanner = (await coordinator.ReconcileAsync(cancellationToken)).Banner;
             return Results.Ok(await assembler.AssembleAsync(cancellationToken));
         });
 

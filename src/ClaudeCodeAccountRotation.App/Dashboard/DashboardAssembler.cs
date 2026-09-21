@@ -150,6 +150,11 @@ internal sealed partial class DashboardAssembler(
             warnings.Add(blocked.JournalOutcome);
         }
 
+        if (state.HandOffBanner is string inTransit)
+        {
+            warnings.Add(inTransit);
+        }
+
         // Every poll, for as long as they stand: a recovery file that could not be
         // applied is a credential the operator has to act on, and a warning drained
         // by the first page that saw it would be a warning nobody sees.

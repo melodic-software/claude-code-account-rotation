@@ -275,7 +275,11 @@
   // redraw is skipped while the picker is in use, so the ten-second poll never
   // changes the target under the operator.
   function renderSides(sides) {
-    if (sidesLine.contains(document.activeElement)) { return; }
+    // Only an open picker: a poll that skipped the redraw because a Start or
+    // Switch button held focus would freeze the side's liveness and the account
+    // it holds for as long as the focus stayed there, which is the opposite of
+    // what the line is for.
+    if (document.activeElement && document.activeElement.tagName === "SELECT" && sidesLine.contains(document.activeElement)) { return; }
     var chosen = {};
     Array.prototype.forEach.call(sidesLine.querySelectorAll("select"), function (pick) { chosen[pick.name] = pick.value; });
     sidesLine.innerHTML = "";

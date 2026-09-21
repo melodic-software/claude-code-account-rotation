@@ -233,6 +233,16 @@ internal sealed class DashboardState
     public ReconciliationReport? LastReconciliation { get; set; }
 
     /// <summary>
+    /// What the last hand-off reconciliation left standing, or null when it left
+    /// nothing: a claim the other side has not answered for is a pair the
+    /// operator can see nowhere else, since the slot is claimed and neither
+    /// side holds it yet. It is a warning rather than the banner because it
+    /// blocks nothing on this side; the account's own card already says
+    /// <c>in-transit</c>.
+    /// </summary>
+    public string? HandOffBanner { get; set; }
+
+    /// <summary>
     /// The windows the tee held immediately before the last switch this tool
     /// performed. A session that was mid-turn at switch time bills its response
     /// to the outgoing account and then writes those windows under the incoming

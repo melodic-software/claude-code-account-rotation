@@ -42,11 +42,19 @@ public sealed class SideEndpointTests
     {
         public bool Offline { get; set; }
 
+        /// <summary>The route whose request, and every one after it, the link refuses to carry.</summary>
+        public string? OfflineFrom { get; set; }
+
         public List<(string Route, HttpStatusCode Status, bool SentOrigin, bool SentHeader)> Sent { get; } = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(request);
+            if (OfflineFrom is string route && request.RequestUri!.AbsolutePath == route)
+            {
+                Offline = true;
+            }
+
             if (Offline)
             {
                 throw new HttpRequestException("the distribution is not running");
@@ -219,6 +227,40 @@ public sealed class SideEndpointTests
         script.ShouldContain("/api/sides");
         script.ShouldContain("/switch");
         script.ShouldContain("/start");
+    }
+
+    [Fact]
+    public async Task AHandOffLeftInTransitByAnOfflineSideIsOnThePageUntilItResolves()
+    {
+        // The recovery state with the least other evidence: the slot is claimed,
+        // neither side holds the pair, and until that side answers nothing moves.
+        // The page has to say so rather than show a claimed slot and no reason.
+        await using FollowerAppFactory follower = new();
+        PeerLink link = new();
+        await using AppFactory leader = LeaderOver(follower, link);
+        await follower.Roots.WriteLiveAsync(Outgoing, "refresh-a", Token);
+        await CredentialFiles.WriteAsync(leader.LiveDirectory, "refresh-w", Token);
+        await leader.WriteStateFileAsync("w@example.com", Token);
+        await leader.ParkedProfileAsync(Incoming, "refresh-b", Token);
+        using HttpClient client = leader.CreateMutatingClient();
+        // The side stops answering after the claim: the leader's journal is open
+        // at Claimed with the pair in the mailbox, and nothing may be unclaimed
+        // until that side says whether it swapped.
+        link.OfflineFrom = "/api/import";
+        (await client.PostAsync(SwitchUri(Incoming), content: null, Token)).StatusCode.ShouldBe(HttpStatusCode.Conflict);
+
+        JsonObject stranded = (await client.GetFromJsonAsync<JsonObject>(_dashboard, Token))!;
+
+        string[] warnings = [.. stranded["warnings"]!.AsArray().Select(warning => warning!.GetValue<string>())];
+        warnings.ShouldContain(warning => warning.Contains(Incoming, StringComparison.Ordinal) && warning.Contains("in transit", StringComparison.Ordinal));
+        Card(stranded, Incoming)["slot"]!.GetValue<string>().ShouldBe("in-transit");
+
+        // And the line goes when the side comes back and the hand-off resolves.
+        link.OfflineFrom = null;
+        link.Offline = false;
+        JsonObject resolved = (await client.GetFromJsonAsync<JsonObject>(_dashboard, Token))!;
+
+        resolved["warnings"]!.AsArray().ShouldNotContain(warning => warning!.GetValue<string>().Contains("in transit", StringComparison.Ordinal));
     }
 
     [Fact]
