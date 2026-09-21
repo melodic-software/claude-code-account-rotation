@@ -227,9 +227,10 @@ public sealed class FollowerImportTests : IDisposable
         await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
 
         Directory.Exists(_roots.RefreshLockDirectory).ShouldBeTrue();
-        // Creation stamped the directory from the OS clock; the heartbeat re-stamps
-        // from the test clock. Anchor the baseline to the test clock so both sides of
-        // the comparison sit on one timeline, whatever the wall clock reads.
+        // The acquire stamps the directory from the lock's own clock, and the
+        // heartbeat re-stamps from it. Anchoring the baseline to the test clock
+        // here as well keeps this fact about the heartbeat alone: it holds
+        // whatever the wall clock reads, even if the acquire's stamp regressed.
         Directory.SetLastWriteTimeUtc(_roots.RefreshLockDirectory, _roots.Clock.GetUtcNow().UtcDateTime);
         DateTime before = Directory.GetLastWriteTimeUtc(_roots.RefreshLockDirectory);
         _roots.Clock.Advance(TimeSpan.FromSeconds(19));

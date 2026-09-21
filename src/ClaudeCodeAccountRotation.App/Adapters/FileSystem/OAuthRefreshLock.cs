@@ -69,11 +69,6 @@ internal sealed partial class OAuthRefreshLock
     }
 
     /// <summary>
-    /// Removes the directory only if it is still stale at the moment of the delete:
-    /// the mtime is re-read right before the call, so a directory another process
-    /// re-created between the two reads is left alone. Returns whether it removed.
-    /// </summary>
-    /// <summary>
     /// Puts the directory's mtime on this lock's own clock, right after the
     /// create. Staleness is decided by comparing that mtime against
     /// <see cref="TimeProvider.GetUtcNow"/>, and the create leaves it on the
@@ -97,6 +92,11 @@ internal sealed partial class OAuthRefreshLock
         }
     }
 
+    /// <summary>
+    /// Removes the directory only if it is still stale at the moment of the delete:
+    /// the mtime is re-read right before the call, so a directory another process
+    /// re-created between the two reads is left alone. Returns whether it removed.
+    /// </summary>
     private bool TryRemoveIfStale()
     {
         if (!IsStale())
