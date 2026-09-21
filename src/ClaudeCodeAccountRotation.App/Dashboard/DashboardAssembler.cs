@@ -306,10 +306,11 @@ internal sealed partial class DashboardAssembler(
         {
             SlotState.HeldHere => "live here",
             SlotState.Parked => "parked",
-            // ponytail: during the export window a hand-off is carrying one pair
-            // each way, and this says only where the incoming one is going. The
-            // in-transit banner #72 owns is where the other half belongs.
-            SlotState.InTransit => "in transit to " + side,
+            // Which way this account's own pair is going, read off the suffix of
+            // its file in the mailbox: an export is coming back to the store, a
+            // claim is going to that side. During a switch's export window one
+            // pair is moving each way and each card says its own direction.
+            SlotState.InTransit => (slot.Returning ? "in transit from " : "in transit to ") + side,
             SlotState.HeldElsewhere => "in use by " + side + (holder is null or { Online: false } ? " (offline)" : string.Empty),
             _ => null,
         };

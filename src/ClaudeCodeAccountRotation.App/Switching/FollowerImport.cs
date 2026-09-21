@@ -10,7 +10,18 @@ using Microsoft.Extensions.Logging;
 namespace ClaudeCodeAccountRotation.App.Switching;
 
 /// <summary>
-/// The follower's staged import, held across two calls.
+/// The follower's staged import, held across two calls, and the release that
+/// is the same transaction with its incoming half empty.
+/// <para>
+/// A <b>release</b> is not a second protocol and deliberately not a second
+/// route. The leader asks for one by sending an <see cref="ImportRequest"/>
+/// with no <c>claimedPath</c>: nothing is staged, F4 exports this side's live
+/// pair exactly as it always does, the leader reads that export natively and
+/// gates the commit exactly as it always does, and F5 removes the live pair
+/// rather than renaming a staged one over it. One journal, one crash table,
+/// one commit budget, one heartbeat, one idle self-abort. The only thing that
+/// changes is which half of the entry is null.
+/// </para>
 /// <para>
 /// <c>POST /api/import</c> runs F1 to F4 and <b>stops</b>: the incoming pair is
 /// staged and the outgoing pair is exported, but the live file is untouched and
@@ -117,9 +128,15 @@ internal sealed partial class FollowerImport : IDisposable
             // hold: the leader restarted, not the request changed.
             if (_hold is Hold open)
             {
-                return open.Request.Email == request.Email && open.Request.Fingerprint == request.Fingerprint
+                // The direction is part of the match, not decoration: a release
+                // of X and a switch of X back name the same account, and a hold
+                // opened for one must never answer the other from its own state.
+                return open.Request.Email == request.Email
+                    && open.Request.Fingerprint == request.Fingerprint
+                    && open.Request.IsRelease == request.IsRelease
                     ? Result<ImportAnswer, string>.Success(new ImportAnswer(open.OutgoingFingerprint, open.Outgoing, false, null))
-                    : Result<ImportAnswer, string>.Failure("an import of " + open.Request.Email.Value + " is already in flight");
+                    : Result<ImportAnswer, string>.Failure(
+                        (open.Request.IsRelease ? "a release" : "an import") + " of " + open.Request.Email.Value + " is already in flight");
             }
 
             if (await AlreadyImportedAsync(request, cancellationToken) is ImportResult done)
@@ -133,7 +150,9 @@ internal sealed partial class FollowerImport : IDisposable
                 return Result<ImportAnswer, string>.Failure(reachable.Error);
             }
 
-            return AccountBlockRefusal(request) is string refusal
+            // A release carries no incoming block, because nothing arrives: F7
+            // clears the state file rather than patching a name into it.
+            return !request.IsRelease && AccountBlockRefusal(request) is string refusal
                 ? Result<ImportAnswer, string>.Failure(refusal)
                 : await StageAndExportAsync(request, cancellationToken);
         }
@@ -156,7 +175,7 @@ internal sealed partial class FollowerImport : IDisposable
                 // never reached the export, or the idle window unwound it. All three
                 // are "not imported" to a leader that has not been told otherwise.
                 LastImportEntry? last = await _journal.ReadLastImportAsync(cancellationToken);
-                return last is not null && last.Incoming == email
+                return last is not null && last.Subject == email
                     ? Result<ImportResult, string>.Success(new ImportResult(last.Outgoing, last.OutgoingFingerprint, last.OutgoingAccount, AlreadyImported: true))
                     : Result<ImportResult, string>.Failure("not imported: no export of " + email.Value + " is waiting for a commit");
             }
@@ -274,9 +293,9 @@ internal sealed partial class FollowerImport : IDisposable
             // this route is the leader's reconciliation signal for one named
             // transaction: reporting B's completed swap to a leader asking after A
             // would close A on B's evidence.
-            if (about is AccountEmail named && journal.Incoming != named)
+            if (about is AccountEmail named && journal.Subject != named)
             {
-                return new ImportStatus(false, journal.StepReached, live?.Fingerprint, liveAccount, "not imported: the import in flight here is of " + journal.Incoming.Value, live?.LoginExpiresAt);
+                return new ImportStatus(false, journal.StepReached, live?.Fingerprint, liveAccount, "not imported: the " + (journal.IsRelease ? "release" : "import") + " in flight here is of " + journal.Subject.Value, live?.LoginExpiresAt);
             }
 
             // A journal past the swap, read while F6 to F8 are still running or
@@ -301,9 +320,9 @@ internal sealed partial class FollowerImport : IDisposable
             return new ImportStatus(false, null, live?.Fingerprint, liveAccount, _atStart?.Outcome ?? "no import in flight and none recorded", live?.LoginExpiresAt);
         }
 
-        return about is AccountEmail asked && last.Incoming != asked
-            ? new ImportStatus(false, null, live?.Fingerprint, liveAccount, "not imported: the last import here was of " + last.Incoming.Value, live?.LoginExpiresAt)
-            : new ImportStatus(true, null, live?.Fingerprint, liveAccount, "the last import of " + last.Incoming.Value + " completed", live?.LoginExpiresAt);
+        return about is AccountEmail asked && last.Subject != asked
+            ? new ImportStatus(false, null, live?.Fingerprint, liveAccount, "not imported: the last hand-off here was of " + last.Subject.Value, live?.LoginExpiresAt)
+            : new ImportStatus(true, null, live?.Fingerprint, liveAccount, "the last " + (last.IsRelease ? "release" : "import") + " of " + last.Subject.Value + " completed", live?.LoginExpiresAt);
     }
 
     /// <summary>
@@ -355,9 +374,10 @@ internal sealed partial class FollowerImport : IDisposable
         // One file cannot be both. F4 would write the export over the claimed
         // file it had just staged from, and F6 would then delete what is by that
         // point the outgoing pair's only copy — a request that passed every
-        // fingerprint check and still lost a credential.
-        if (string.Equals(
-            Path.GetFullPath(request.ClaimedPath),
+        // fingerprint check and still lost a credential. A release names no
+        // claimed file, so it cannot reach that shape at all.
+        if (request.ClaimedPath is string claimed && string.Equals(
+            Path.GetFullPath(claimed),
             Path.GetFullPath(request.ExportPath),
             OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
         {
@@ -365,7 +385,10 @@ internal sealed partial class FollowerImport : IDisposable
         }
 
         string mailbox = Path.TrimEndingDirectorySeparator(Path.GetFullPath(_options.Mailbox));
-        foreach ((string label, string path) in new[] { ("claimedPath", request.ClaimedPath), ("exportPath", request.ExportPath) })
+        (string, string)[] paths = request.ClaimedPath is string claimedPath
+            ? [("claimedPath", claimedPath), ("exportPath", request.ExportPath)]
+            : [("exportPath", request.ExportPath)];
+        foreach ((string label, string path) in paths)
         {
             string full = Path.GetFullPath(path);
             if (Path.GetDirectoryName(full) is not string parent
@@ -391,7 +414,7 @@ internal sealed partial class FollowerImport : IDisposable
         AccountEmail? named;
         try
         {
-            named = OAuthAccountBlock.FromJson(request.Account).Email;
+            named = OAuthAccountBlock.FromJson(request.Account ?? []).Email;
         }
         catch (InvalidOperationException)
         {
@@ -404,18 +427,52 @@ internal sealed partial class FollowerImport : IDisposable
     }
 
     /// <summary>
-    /// F1's second half: the import is already done when the record says so.
-    /// That record is what answers a leader whose own journal was lost.
+    /// Whether this side may give up the pair a release names, or why not.
+    /// Three refusals, all cheaper than a hand-off that moves the wrong pair:
+    /// this side holds nothing, it holds a pair the state file cannot name, or
+    /// it holds some pair other than the one the leader planned to park.
+    /// </summary>
+    private static string? Releasable(ImportRequest request, CredentialPair? live, OAuthAccountBlock? account) => live switch
+    {
+        null => "not released: this side holds no live pair, so there is nothing to hand back",
+        _ when account?.Email is null =>
+            "not released: the live pair is here but the state file names no account for it, so nothing can say what would be leaving",
+        _ when account.Email != request.Email =>
+            "not released: this side is live on " + account.Email.Value + ", not " + request.Email.Value,
+        _ when live.Fingerprint != request.Fingerprint =>
+            "not released: the live pair reads " + live.Fingerprint.Sha256Hex[..12] + ", not the " + request.Fingerprint.Sha256Hex[..12]
+                + " the release named; a session rotated it, so nothing was exported",
+        _ => null,
+    };
+
+    /// <summary>
+    /// F1's second half: the transaction is already done when the record says
+    /// so. That record is what answers a leader whose own journal was lost.
+    /// <para>
+    /// The direction is matched as strictly as the account and the fingerprint.
+    /// A release of X leaves a record keyed on X; a later switch of X back to
+    /// this side names X too, and answering it from that record would hand the
+    /// leader an <c>AlreadyImported</c> whose outgoing account its own journal
+    /// never planned to park — which its L3b then refuses, leaving the claim in
+    /// the mailbox and the journal open. The same aliasing runs the other way.
+    /// </para>
     /// </summary>
     private async Task<ImportResult?> AlreadyImportedAsync(ImportRequest request, CancellationToken cancellationToken)
     {
         LastImportEntry? last = await _journal.ReadLastImportAsync(cancellationToken);
-        if (last is null || last.Incoming != request.Email || last.IncomingFingerprint != request.Fingerprint)
+        if (last is null || last.Subject != request.Email || last.IsRelease != request.IsRelease)
         {
             return null;
         }
 
-        return new ImportResult(last.Outgoing, last.OutgoingFingerprint, last.OutgoingAccount, AlreadyImported: true);
+        // For an import the fingerprint identifies the pair that arrived; for a
+        // release it identifies the pair that left. Either way it is the one
+        // the request named, so a re-issue for a different pair of the same
+        // account is a new transaction rather than an answered one.
+        RefreshTokenFingerprint? recorded = last.IsRelease ? last.OutgoingFingerprint : last.IncomingFingerprint;
+        return recorded == request.Fingerprint
+            ? new ImportResult(last.Outgoing, last.OutgoingFingerprint, last.OutgoingAccount, AlreadyImported: true)
+            : null;
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "The gate permit and the refresh lock are the hold: ownership transfers to the Hold, which releases both however the import ends, and to Dispose for a shutdown between the two calls.")]
@@ -458,13 +515,24 @@ internal sealed partial class FollowerImport : IDisposable
                     "not imported: the live pair is here but the state file names no account for it, so nothing can say what would be leaving");
             }
 
+            // A release names the pair it expects to take, and refuses rather
+            // than exporting one nobody planned to park: this side may have
+            // rotated its live pair, or been switched onto another account,
+            // between the leader's plan and this call. The import path does the
+            // same comparison after the export, at F5; a release can do it
+            // before, because the pair it is naming is the one already here.
+            if (request.IsRelease && Releasable(request, live, outgoingAccount) is string unreleasable)
+            {
+                return Result<ImportAnswer, string>.Failure(unreleasable);
+            }
+
             hold.Outgoing = outgoingAccount?.Email;
             hold.OutgoingFingerprint = live?.Fingerprint;
             hold.OutgoingAccount = outgoingAccount?.Raw;
 
             ImportJournalEntry entry = new(
-                request.Email,
-                request.Fingerprint,
+                request.IsRelease ? null : request.Email,
+                request.IsRelease ? null : request.Fingerprint,
                 request.ClaimedPath,
                 request.ExportPath,
                 hold.Outgoing,
@@ -473,15 +541,35 @@ internal sealed partial class FollowerImport : IDisposable
                 hold.OutgoingAccount,
                 ImportStep.Planned,
                 hold.StartedAt);
+            // The completed-transaction record goes before the new one is
+            // written. F1 has already decided this is not a replay — the
+            // account, the direction and the fingerprint all had to match for
+            // that — so from here the old row describes work that is no longer
+            // what a commit or a status read naming this account means. Left
+            // standing, it answers the next commit "already imported" out of
+            // the previous transaction, and the leader clears its journal over
+            // a claim still sitting in the mailbox: the account is then in
+            // transit for good.
+            if (await _journal.ReadLastImportAsync(cancellationToken) is LastImportEntry stale && stale.Subject == request.Email)
+            {
+                await _journal.ClearLastImportAsync(cancellationToken);
+            }
+
             CrashInjection.KillIfConfigured(_options.FailAfterStep, ImportStep.Planned, beforeJournal: true);
             await _journal.WriteAsync(entry, cancellationToken);
             CrashInjection.KillIfConfigured(_options.FailAfterStep, ImportStep.Planned, beforeJournal: false);
 
-            // F3: stage the incoming pair on the live volume and prove it landed.
-            Result<Unit, string> staged = await _pairs.StageAsync(request.ClaimedPath, request.Fingerprint, cancellationToken);
-            if (staged.IsFailure)
+            // F3: stage the incoming pair on the live volume and prove it
+            // landed. A release has no incoming pair, so the step is the
+            // journal write alone — kept rather than skipped so one crash
+            // table, and one crash-injection case list, covers both directions.
+            if (request.ClaimedPath is string claimedPath)
             {
-                return Result<ImportAnswer, string>.Failure(staged.Error);
+                Result<Unit, string> staged = await _pairs.StageAsync(claimedPath, request.Fingerprint, cancellationToken);
+                if (staged.IsFailure)
+                {
+                    return Result<ImportAnswer, string>.Failure(staged.Error);
+                }
             }
 
             CrashInjection.KillIfConfigured(_options.FailAfterStep, ImportStep.Staged, beforeJournal: true);
@@ -552,7 +640,10 @@ internal sealed partial class FollowerImport : IDisposable
                 + "); a session rotated it, so nothing was swapped");
         }
 
-        Result<Unit, string> swapped = _pairs.Swap();
+        // F5. A release has nothing to put in the live pair's place, so it is
+        // removed rather than replaced: the same act, the same gate in front of
+        // it, and the leader's natively-read export is the copy that survives.
+        Result<Unit, string> swapped = entry.IsRelease ? _pairs.RemoveLive() : _pairs.Swap();
         if (swapped.IsFailure)
         {
             await UnwindAsync(hold);
@@ -571,7 +662,7 @@ internal sealed partial class FollowerImport : IDisposable
 
         ImportResult result = await FinishAsync(entry, _journal, _stateFile, _pairs, _liveOwnerPath, _options.FailAfterStep, _timeProvider, ImportStep.Swapped, CancellationToken.None);
         Release(hold);
-        LogImported(entry.Incoming.Value, entry.Outgoing?.Value ?? "none");
+        LogImported(entry.Subject.Value, entry.Outgoing?.Value ?? "none");
         return Result<ImportResult, string>.Success(result);
     }
 
@@ -600,8 +691,14 @@ internal sealed partial class FollowerImport : IDisposable
 
         if (from <= ImportStep.Swapped)
         {
-            // F6: the claimed file goes only now, after the same lineage is live here.
-            StagedImportCredentialPairStore.Release(entry.ClaimedPath);
+            // F6: the claimed file goes only now, after the same lineage is
+            // live here. A release claimed nothing, so the step is its journal
+            // write alone.
+            if (entry.ClaimedPath is string claimedPath)
+            {
+                StagedImportCredentialPairStore.Release(claimedPath);
+            }
+
             CrashInjection.KillIfConfigured(failAfterStep, ImportStep.Released, beforeJournal: true);
             await journal.WriteAsync(entry with { StepReached = ImportStep.Released }, cancellationToken);
             CrashInjection.KillIfConfigured(failAfterStep, ImportStep.Released, beforeJournal: false);
@@ -609,9 +706,24 @@ internal sealed partial class FollowerImport : IDisposable
 
         if (from <= ImportStep.Released)
         {
-            // F7: the state file and the owner record now name the incoming account.
-            await stateFile.PatchAccountBlockAsync(OAuthAccountBlock.FromJson(entry.IncomingAccount), cancellationToken);
-            await WriteLiveOwnerAsync(liveOwnerPath, entry.IncomingFingerprint, entry.Incoming, timeProvider, cancellationToken);
+            // F7: the state file and the owner record now name the incoming
+            // account — or name no one at all after a release, which is what
+            // this side's own dashboard reads to answer "holding nothing". A
+            // state file still naming the account whose pair has left would
+            // have the leader's next L1 refuse with LiveIdentityUnverified, an
+            // account named beside no fingerprint.
+            await stateFile.PatchAccountBlockAsync(
+                OAuthAccountBlock.FromJson(entry.IncomingAccount ?? []),
+                cancellationToken);
+            if (entry.Incoming is AccountEmail incoming && entry.IncomingFingerprint is RefreshTokenFingerprint arriving)
+            {
+                await WriteLiveOwnerAsync(liveOwnerPath, arriving, incoming, timeProvider, cancellationToken);
+            }
+            else
+            {
+                StagedImportCredentialPairStore.DeleteIfPresent(liveOwnerPath);
+            }
+
             CrashInjection.KillIfConfigured(failAfterStep, ImportStep.Patched, beforeJournal: true);
             await journal.WriteAsync(entry with { StepReached = ImportStep.Patched }, cancellationToken);
             CrashInjection.KillIfConfigured(failAfterStep, ImportStep.Patched, beforeJournal: false);

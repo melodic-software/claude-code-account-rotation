@@ -163,21 +163,31 @@ internal static class ImportEndpoints
             return Result<ImportRequest, string>.Failure(email.Error);
         }
 
-        if (string.IsNullOrWhiteSpace(body.ClaimedPath) || string.IsNullOrWhiteSpace(body.ExportPath))
+        if (string.IsNullOrWhiteSpace(body.ExportPath))
         {
-            return Result<ImportRequest, string>.Failure("an import request needs both a claimedPath and an exportPath");
+            return Result<ImportRequest, string>.Failure("a hand-off request needs an exportPath");
         }
 
         if (string.IsNullOrWhiteSpace(body.Fingerprint))
         {
-            return Result<ImportRequest, string>.Failure("an import request needs the incoming pair's fingerprint");
+            return Result<ImportRequest, string>.Failure(
+                "a hand-off request needs a fingerprint: the incoming pair's for an import, and for a release the pair this side is expected to be live on");
+        }
+
+        // An absent claimedPath is a release, and it is the only thing that
+        // says so. An account block with it would be the caller asking for two
+        // different things at once, since a release installs no identity.
+        bool release = string.IsNullOrWhiteSpace(body.ClaimedPath);
+        if (release && body.Account is not null)
+        {
+            return Result<ImportRequest, string>.Failure("a release names no claimedPath and carries no account block; nothing arrives on this side");
         }
 
         return Result<ImportRequest, string>.Success(new ImportRequest(
             email.Value,
-            body.ClaimedPath,
+            release ? null : body.ClaimedPath,
             new RefreshTokenFingerprint(body.Fingerprint),
-            body.Account ?? [],
+            release ? null : body.Account ?? [],
             body.ExportPath));
     }
 

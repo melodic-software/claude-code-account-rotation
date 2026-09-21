@@ -91,6 +91,14 @@ internal sealed class FileSystemCredentialPairStore : ICredentialPairStore
     }
 
     /// <summary>
+    /// The mailbox exists before the other side is asked to write into it. A
+    /// claim creates it on the way past, and a release makes no claim: without
+    /// this, the first park-back after a fresh install would have the follower
+    /// export into a directory that is not there.
+    /// </summary>
+    public void EnsureMailbox(SideName side) => Directory.CreateDirectory(MailboxFor(side));
+
+    /// <summary>
     /// The claim reversed: renames a claimed file back out of the mailbox into
     /// the slot it came from. This is the unclaim of design 9.1, and it runs
     /// only once the other side has answered a definite "not imported": a

@@ -10,24 +10,41 @@ namespace ClaudeCodeAccountRotation.Core.Switching;
 /// decides every row of design 9.3 by reading the live, staging, claimed and
 /// export files rather than by trusting this value.
 /// </para>
+/// <para>
+/// A <b>release</b> walks the same six steps. Its incoming half is empty, so
+/// <see cref="Staged"/> and <see cref="Released"/> have no file to move and are
+/// journal writes alone, and <see cref="Swapped"/> removes the live pair rather
+/// than renaming a staged one over it. Keeping the steps rather than skipping
+/// them is what lets one crash table, one reconciler and one status route serve
+/// both directions.
+/// </para>
 /// </summary>
 public enum ImportStep
 {
     /// <summary>F2: the refresh lock is held and the outgoing pair has been read. Nothing has moved.</summary>
     Planned,
 
-    /// <summary>F3: the incoming pair is staged beside the live file and verified by fingerprint.</summary>
+    /// <summary>F3: the incoming pair is staged beside the live file and verified by fingerprint. Nothing is staged by a release.</summary>
     Staged,
 
     /// <summary>F4: the outgoing pair is copied to the mailbox and verified. The follower stops here until a commit arrives.</summary>
     Exported,
 
-    /// <summary>F5: the staging file has replaced the live file. The outgoing pair's last local copy is gone.</summary>
+    /// <summary>
+    /// F5: the staging file has replaced the live file, or — for a release —
+    /// the live file is gone with nothing put in its place. Either way the
+    /// outgoing pair's last local copy is gone and the gate-verified export in
+    /// the mailbox is the only one left.
+    /// </summary>
     Swapped,
 
-    /// <summary>F6: the claimed file in the mailbox has been deleted.</summary>
+    /// <summary>F6: the claimed file in the mailbox has been deleted. A release claimed none.</summary>
     Released,
 
-    /// <summary>F7: the state file's account block and the live owner record name the incoming account.</summary>
+    /// <summary>
+    /// F7: the state file's account block and the live owner record name the
+    /// incoming account, or name no one at all after a release, which is what
+    /// this side's own dashboard reads to say it holds nothing.
+    /// </summary>
     Patched,
 }

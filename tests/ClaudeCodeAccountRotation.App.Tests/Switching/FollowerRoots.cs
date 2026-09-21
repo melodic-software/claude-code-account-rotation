@@ -147,6 +147,18 @@ internal sealed class FollowerRoots : IDisposable
         AccountJson(email),
         ExportPath(outgoingEmail));
 
+    /// <summary>
+    /// The request as the leader's release sends it: no claimed path, no
+    /// account block, and a fingerprint naming the pair this side is expected
+    /// to be live on rather than one arriving.
+    /// </summary>
+    public ImportRequest ReleaseRequest(string email, RefreshTokenFingerprint fingerprint) => new(
+        new AccountEmail(email),
+        null,
+        fingerprint,
+        null,
+        ExportPath(email));
+
     public static async Task<RefreshTokenFingerprint?> FingerprintOfAsync(string path, CancellationToken cancellationToken)
     {
         CredentialPair? pair = await StagedImportCredentialPairStore.ReadFreshAsync(path, cancellationToken);

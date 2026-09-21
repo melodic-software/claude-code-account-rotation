@@ -81,6 +81,23 @@ internal sealed partial class ImportReconciler
             return true;
         }
 
+        // A release leaves the live directory holding nothing, and **only an
+        // absent live file** says its F5 ran. A different fingerprint says the
+        // opposite of what it says in the import direction: the follower that
+        // died at Exported stopped re-stamping the refresh lock, and past the
+        // 60 s stale threshold a session in the distro can take that lock and
+        // rotate the pair that is still there. Reading that rotation as a
+        // removal would finish the release over a live credential — the state
+        // file cleared, the owner record deleted, and the leader parking the
+        // pre-rotation export while the rotated pair stays live and untracked,
+        // which is two families of one account. An absent file cannot be
+        // manufactured that way: nothing writes a credential into a follower's
+        // live directory but F5's own rename, and this side never logs in.
+        if (entry.IsRelease)
+        {
+            return await pairs.ReadLiveAsync(cancellationToken) is null;
+        }
+
         // The torn F5, and the only row this file has to infer rather than read.
         // Two facts together, because neither alone is enough. The staging file is
         // gone, since F5 is a rename and nothing else moves it — but an unwind
@@ -126,7 +143,7 @@ internal sealed partial class ImportReconciler
             _timeProvider,
             from,
             cancellationToken);
-        LogContinued(entry.Incoming.Value, entry.StepReached);
+        LogContinued(entry.Subject.Value, entry.StepReached);
         return new ImportReconciliation(true, entry.Outgoing, "the swap had already happened at " + entry.StepReached + "; F6 to F8 were finished");
     }
 
@@ -148,8 +165,8 @@ internal sealed partial class ImportReconciler
         StagedImportCredentialPairStore.DeleteIfPresent(entry.ExportPath);
         await _journal.ClearAsync(CancellationToken.None);
         _pairs.DeleteStaging();
-        LogUnwound(entry.Incoming.Value, entry.StepReached);
-        return new ImportReconciliation(false, null, "the import of " + entry.Incoming.Value + " stopped at " + entry.StepReached + " before the swap and was unwound");
+        LogUnwound(entry.Subject.Value, entry.StepReached);
+        return new ImportReconciliation(false, null, (entry.IsRelease ? "the release of " : "the import of ") + entry.Subject.Value + " stopped at " + entry.StepReached + " before the swap and was unwound");
     }
 
     [LoggerMessage(Level = LogLevel.Information, Message = "the import of {Incoming} had passed the swap at {Step}; finishing it")]

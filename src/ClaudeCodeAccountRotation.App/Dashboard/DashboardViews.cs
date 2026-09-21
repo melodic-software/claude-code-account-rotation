@@ -269,6 +269,7 @@ internal sealed record SwitchRefusalView(string Refusal, string Message)
         SwitchRefusal.ExportNotVerified => "The pair that side exported did not read back on this volume as the pair it named, so the switch was refused and nothing was swapped.",
         SwitchRefusal.PeerDidNotImport => "That side did not complete the import, so the account has been put back in its slot.",
         SwitchRefusal.ForeignFamily => "That side is signed in to that account with a second token family, made when it was logged in again here while that side was unreachable. Switching that side away would hand the family back, and the store keeps one family per account. Switch again with quarantine to move that family into quarantine instead, where it is kept and never used.",
+        SwitchRefusal.NothingToRelease => "That side is answering and holds no account, so there is nothing to hand back.",
         SwitchRefusal.MutationInProgress => "Another credential change is in progress.",
         SwitchRefusal.RefreshInProgress => "A usage refresh is reading this machine's accounts right now; switch again when it finishes.",
         SwitchRefusal.LoginInProgress => "A login is running against one of those folders; finish it or let it expire first.",

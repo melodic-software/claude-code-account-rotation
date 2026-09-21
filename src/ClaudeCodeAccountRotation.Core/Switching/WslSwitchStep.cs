@@ -14,7 +14,13 @@ namespace ClaudeCodeAccountRotation.Core.Switching;
 /// </summary>
 public enum WslSwitchStep
 {
-    /// <summary>L2: the target's pair is renamed into the other side's mailbox and the slot carries its record.</summary>
+    /// <summary>
+    /// L2: the target's pair is renamed into the other side's mailbox and the
+    /// slot carries its record. A <b>release</b> claims nothing — the account
+    /// coming back is already that side's and its slot already carries the
+    /// record that says so — so for one this step names only the intent
+    /// written before the other side is asked for anything.
+    /// </summary>
     Claimed,
 
     /// <summary>

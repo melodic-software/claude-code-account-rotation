@@ -90,6 +90,29 @@ internal sealed class StagedImportCredentialPairStore
         return Result<Unit, string>.Success(Unit.Value);
     }
 
+    /// <summary>
+    /// F5 for a release: the live pair goes, and the export the leader has
+    /// already read natively on the store's own volume is what is left.
+    /// <para>
+    /// It is the same act as <see cref="Swap"/> — the step that destroys the
+    /// outgoing account's last local copy — with no incoming pair to put in its
+    /// place, so it is reached only from a commit and only after the gate. The
+    /// one file this product ever deletes on purpose is the redundant copy of a
+    /// lineage that is verified somewhere else; there is no rename to make it
+    /// out of, because a release leaves this directory holding nothing.
+    /// </para>
+    /// </summary>
+    public Result<Unit, string> RemoveLive()
+    {
+        if (!File.Exists(LivePath))
+        {
+            return Result<Unit, string>.Failure("there is no live pair at " + LivePath + "; a release has nothing to give up");
+        }
+
+        File.Delete(LivePath);
+        return Result<Unit, string>.Success(Unit.Value);
+    }
+
     /// <summary>F6, release: drop the leader's claimed file, now that the same lineage is live here.</summary>
     public static void Release(string claimedPath)
     {

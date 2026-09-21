@@ -34,6 +34,8 @@ public sealed class SideEndpointTests
     private static Uri SwitchUri(string email) =>
         new("/api/sides/wsl/accounts/" + Uri.EscapeDataString(email) + "/switch", UriKind.Relative);
 
+    private static readonly Uri _release = new("/api/sides/wsl/release", UriKind.Relative);
+
     /// <summary>
     /// The link between the two hosts, standing in for the loopback socket: it
     /// records what crossed it, and can refuse to carry anything, which is what
@@ -125,6 +127,75 @@ public sealed class SideEndpointTests
         Directory.GetFiles(follower.Roots.Mailbox).ShouldBeEmpty();
         // And the leader's own live pair never took part in the hand-off.
         (await CredentialFiles.FingerprintAsync(leader.LiveDirectory, Token)).ShouldBe(CredentialFiles.Pair("refresh-w").Fingerprint);
+    }
+
+    /// <summary>
+    /// The park-back over the real wire, and the state the whole route exists
+    /// for: WSL holds exactly one account, and the operator wants it back
+    /// without shuffling that side onto another one.
+    /// </summary>
+    [Fact]
+    public async Task AReleaseOfTheWslSideThroughTheRouteMovesOnePairBackAndLeavesThatSideEmpty()
+    {
+        await using FollowerAppFactory follower = new();
+        PeerLink link = new();
+        await using AppFactory leader = LeaderOver(follower, link);
+        RefreshTokenFingerprint held = await follower.Roots.WriteLiveAsync(Outgoing, "refresh-a", Token);
+        await CredentialFiles.WriteAsync(leader.LiveDirectory, "refresh-w", Token);
+        await leader.WriteStateFileAsync("w@example.com", Token);
+        // The slot the account left: an identity, no pair, and the record that
+        // says which side has it.
+        string slot = Path.Combine(follower.Roots.Store, Outgoing);
+        Directory.CreateDirectory(slot);
+        await File.WriteAllTextAsync(
+            Path.Combine(slot, ProfileFolderStore.ProfileFileName),
+            new JsonObject { ["accountUuid"] = "uuid", ["emailAddress"] = Outgoing }.ToJsonString(),
+            Token);
+        await HolderRecordFile.WriteAsync(slot, new HolderRecord(SideName.Wsl, held, DateTimeOffset.UtcNow), Token);
+        using HttpClient client = leader.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(_release, content: null, Token);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(Token))!;
+        body["now"].ShouldBeNull();
+        body["parkedAs"]!.GetValue<string>().ShouldBe(Outgoing);
+
+        // The WSL side holds nothing, and says so: no pair, and a state file
+        // naming no account, which is what its dashboard answers the leader's
+        // next L1 with.
+        File.Exists(follower.Roots.LivePath).ShouldBeFalse();
+        File.Exists(follower.Roots.StagingPath).ShouldBeFalse();
+        JsonNode state = JsonNode.Parse(await File.ReadAllTextAsync(follower.Roots.StateFilePath, Token))!;
+        state["oauthAccount"]!["emailAddress"].ShouldBeNull();
+        // The store holds the pair again, with no record left over it.
+        (await CredentialFiles.FingerprintAsync(slot, Token)).ShouldBe(held);
+        File.Exists(HolderRecordFile.PathIn(slot)).ShouldBeFalse();
+        Directory.GetFiles(follower.Roots.Mailbox).ShouldBeEmpty();
+        (await CredentialFiles.FingerprintAsync(leader.LiveDirectory, Token)).ShouldBe(CredentialFiles.Pair("refresh-w").Fingerprint);
+        // And the page can offer it to either side again on the next poll.
+        JsonObject dashboard = (await client.GetFromJsonAsync<JsonObject>(_dashboard, Token))!;
+        Card(dashboard, Outgoing)["slot"]!.GetValue<string>().ShouldBe("parked");
+        Card(dashboard, Outgoing)["chip"]!.GetValue<string>().ShouldBe("parked");
+        dashboard.ToJsonString().ShouldNotContain("refresh-a");
+    }
+
+    [Fact]
+    public async Task AReleaseOfASideHoldingNothingIsRefusedWithItsOwnSentence()
+    {
+        await using FollowerAppFactory follower = new();
+        PeerLink link = new();
+        await using AppFactory leader = LeaderOver(follower, link);
+        await CredentialFiles.WriteAsync(leader.LiveDirectory, "refresh-w", Token);
+        await leader.WriteStateFileAsync("w@example.com", Token);
+        using HttpClient client = leader.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(_release, content: null, Token);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(Token))!;
+        body["refusal"]!.GetValue<string>().ShouldBe(nameof(SwitchRefusal.NothingToRelease));
+        body["message"]!.GetValue<string>().ShouldContain("nothing to hand back");
     }
 
     [Fact]
