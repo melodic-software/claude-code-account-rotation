@@ -588,10 +588,14 @@ at a time from the page, on the laptop. Phases 6 to 8 are quality of life and br
    because the script makes the mailbox itself. Fixed in this phase's commit; #82's `EnsureMailbox`
    does not cover it, sitting inside `WslSwitch.ImportAsync`, which has the same prerequisite.
 2. **Work item 1 is wrong about the holder record.** It says the live account resolves `HeldHere`
-   "with its record written by the section 9.4 reconciliation". No record is written, and that is
-   correct: `SharedStoreSlots.ReadAsync` *derives* `HeldHere` from possession, which is what keeps a
-   store that predates the flag from reading as never logged in until its next switch. A
-   `holder.json` appears only on a slot whose pair is checked out to the other side.
+   "with its record written by the section 9.4 reconciliation". The reconciliation writes no record:
+   `SharedStoreSlots.ReadAsync` *derives* `HeldHere` from possession, which is what keeps a store
+   that predates the flag from reading as never logged in until its next switch. Observed on the
+   real store — after installing the leader over ten already-parked accounts, the live one's card
+   read `held-here` with no `holder.json` anywhere. A record is written by a *switch*
+   (`LiveDirectorySwitch` calls `SharedStoreSlots.TakeAsync` on the incoming slot, which is phase
+   2's designed behaviour) and by a hand-off to the other side; so a store reads correctly both
+   before any record exists and after one does, which is the property that matters.
 3. **R2's checkable half names a log the product does not produce.** The follower is leader-spawned
    through `wsl.exe` and its stdout is a discarded pty, so there is no follower log to grep. The
    criterion is restated as the stronger fact: the pair in the distro fingerprints equal to the pair
