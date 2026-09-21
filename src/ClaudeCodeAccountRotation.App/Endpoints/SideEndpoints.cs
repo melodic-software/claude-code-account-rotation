@@ -52,6 +52,21 @@ internal static class SideEndpoints
                 static reason => Results.Json(new { error = reason }, statusCode: StatusCodes.Status409Conflict));
         });
 
+        // What the page draws its one line per side from. Empty when peers[] is,
+        // which is the lane's rollback: no side, no line, no control.
+        routes.MapGet("/api/sides", static async (PeerRegistry peers, WslSwitch coordinator, CancellationToken cancellationToken) =>
+        {
+            _ = await coordinator.ReconcileAsync(cancellationToken);
+            List<SideLineView> lines = [];
+            foreach (Peer peer in peers.All)
+            {
+                WslSideState state = await coordinator.ReadSideAsync(peer.Side, cancellationToken);
+                lines.Add(new SideLineView(state.Side.Value, state.Online, state.LiveAccount?.Value, state.Detail, CanStart: peer.Host is not null));
+            }
+
+            return Results.Ok(lines);
+        });
+
         routes.MapGet("/api/sides/{side}", static async (string side, WslSwitch coordinator, CancellationToken cancellationToken) =>
         {
             _ = await coordinator.ReconcileAsync(cancellationToken);
@@ -76,4 +91,6 @@ internal static class SideEndpoints
     internal sealed record SideSwitchView(string Side, string Now, string? ParkedAs, DateTimeOffset At);
 
     internal sealed record SideStateView(string Side, bool Online, string? LiveAccount, string Detail);
+
+    internal sealed record SideLineView(string Side, bool Online, string? LiveAccount, string Detail, bool CanStart);
 }

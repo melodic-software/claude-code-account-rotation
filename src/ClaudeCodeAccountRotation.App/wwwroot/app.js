@@ -17,6 +17,10 @@
   var refreshAllButton = document.getElementById("refresh-all");
   var refreshStateLine = document.getElementById("refresh-state");
   var toast = document.getElementById("toast");
+  var sidesLine = document.getElementById("sides");
+  // The accounts the last dashboard named, which is what a side's switch control
+  // offers: the ones parked in the store, so there is a pair to hand over.
+  var lastAccounts = [];
   var addForm = document.getElementById("add");
   var addEmail = document.getElementById("add-email");
   var toastTimer = null;
@@ -246,6 +250,63 @@
       if (result.body.parkedAs) { text += "; parked " + result.body.parkedAs; }
       if (result.body.identityMismatchWarning) { text += ". The CLI reports " + result.body.cliEmail + "; check /status."; }
       showToast(text, result.body.identityMismatchWarning ? "warn" : "ok");
+    });
+  }
+
+  function sidePath(side, suffix) {
+    return "/api/sides/" + encodeURIComponent(side) + suffix;
+  }
+
+  function switchSide(side, email) {
+    return mutate(sidePath(side, "/accounts/" + encodeURIComponent(email) + "/switch"), "POST", null, function (result) {
+      if (!result.ok) {
+        showToast(refused(result.body), "error");
+        return;
+      }
+      var text = "The " + result.body.side + " side now holds " + result.body.now;
+      if (result.body.parkedAs) { text += "; parked " + result.body.parkedAs; }
+      showToast(text, "ok");
+    });
+  }
+
+  // One line per configured side, and on it the one switch control this phase
+  // ships: which parked account that side should take. The panel and the
+  // per-card chips are phase 6's. A selection survives the poll's redraw, and a
+  // redraw is skipped while the picker is in use, so the ten-second poll never
+  // changes the target under the operator.
+  function renderSides(sides) {
+    if (sidesLine.contains(document.activeElement)) { return; }
+    var chosen = {};
+    Array.prototype.forEach.call(sidesLine.querySelectorAll("select"), function (pick) { chosen[pick.name] = pick.value; });
+    sidesLine.innerHTML = "";
+    sidesLine.hidden = sides.length === 0;
+    sides.forEach(function (side) {
+      var row = element("div", "side");
+      row.appendChild(element("span", "side-state", side.side + " side: " + side.detail + (side.liveAccount ? ", holding " + side.liveAccount : "")));
+      if (side.online) {
+        var pick = document.createElement("select");
+        pick.name = side.side;
+        lastAccounts
+          .filter(function (account) { return account.slot === "parked" && account.email !== side.liveAccount; })
+          .forEach(function (account) {
+            var option = element("option", null, (account.roster && account.roster.alias) || account.email);
+            option.value = account.email;
+            pick.appendChild(option);
+          });
+        if (chosen[side.side]) { pick.value = chosen[side.side]; }
+        var go = actionButton("Switch " + side.side + " side", "switch", function () { switchSide(side.side, pick.value); });
+        go.disabled = busy || !pick.value;
+        row.appendChild(pick);
+        row.appendChild(go);
+      } else if (side.canStart) {
+        var start = actionButton("Start " + side.side + " side", "secondary", function () {
+          mutate(sidePath(side.side, "/start"), "POST", null, null);
+        });
+        start.disabled = busy;
+        row.appendChild(start);
+      }
+
+      sidesLine.appendChild(row);
     });
   }
 
@@ -604,6 +665,7 @@
     // Edit panel open would otherwise watch the page's own timestamp, the pass's
     // progress, the Refresh all button, and a banner that has since been cleared
     // freeze at whatever they said when the panel opened.
+    lastAccounts = dashboard.accounts;
     captured.textContent = "as of " + new Date(dashboard.capturedAt).toLocaleTimeString();
     refreshStateLine.textContent = passState(dashboard);
     refreshAllButton.disabled = busy || dashboard.refresh.inProgress;
@@ -715,6 +777,9 @@
     return fetch("/api/dashboard", { headers: { "Accept": "application/json" } })
       .then(function (response) { return response.json(); })
       .then(function (dashboard) { render(dashboard, force); })
+      .then(function () { return fetch("/api/sides", { headers: { "Accept": "application/json" } }); })
+      .then(function (response) { return response.ok ? response.json() : []; })
+      .then(function (sides) { renderSides(Array.isArray(sides) ? sides : []); })
       .catch(function (error) { showToast("Dashboard unavailable: " + error, "error"); });
   }
 

@@ -92,6 +92,7 @@ internal static class ImportEndpoints
                 status.Imported,
                 status.JournalStep?.ToString(),
                 status.LiveFingerprint?.Sha256Hex,
+                status.LiveAccount?.Raw,
                 status.Detail));
         });
 
@@ -166,7 +167,7 @@ internal static class ImportEndpoints
 
     internal sealed record ImportResultView(string? Outgoing, string? OutgoingFingerprint, JsonObject? OutgoingAccount, bool AlreadyImported);
 
-    internal sealed record ImportStatusView(bool Imported, string? JournalStep, string? LiveFingerprint, string Detail);
+    internal sealed record ImportStatusView(bool Imported, string? JournalStep, string? LiveFingerprint, JsonObject? LiveAccountBlock, string Detail);
 
     internal sealed record FollowerDashboardView(string Role, string Side, string? LiveAccount, string? LiveFingerprint, string? ImportJournalStep, string? Version, JsonObject? LiveAccountBlock);
 }

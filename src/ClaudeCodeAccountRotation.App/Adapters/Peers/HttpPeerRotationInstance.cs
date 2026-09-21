@@ -99,7 +99,7 @@ internal sealed class HttpPeerRotationInstance : IPeerRotationInstance
     public Task<Result<ImportStatus, string>> ImportStatusAsync(AccountEmail email, CancellationToken cancellationToken) =>
         GetAsync<ImportEndpoints.ImportStatusView, ImportStatus>(
             "/api/import-status?email=" + Uri.EscapeDataString(email.Value),
-            static view => new ImportStatus(view.Imported, Step(view.JournalStep), Fingerprint(view.LiveFingerprint), LiveAccount: null, view.Detail),
+            static view => new ImportStatus(view.Imported, Step(view.JournalStep), Fingerprint(view.LiveFingerprint), Account(view.LiveAccountBlock), view.Detail),
             cancellationToken);
 
     private async Task<Result<TOut, string>> GetAsync<TView, TOut>(string route, Func<TView, TOut> project, CancellationToken cancellationToken)
@@ -182,6 +182,28 @@ internal sealed class HttpPeerRotationInstance : IPeerRotationInstance
 
     private static RefreshTokenFingerprint? Fingerprint(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : new RefreshTokenFingerprint(value);
+
+    /// <summary>
+    /// The other side's account block, or null when it sent none or one this
+    /// side cannot read: a peer's malformed block is a missing fact, never an
+    /// exception out of a port that promises failures instead.
+    /// </summary>
+    private static OAuthAccountBlock? Account(JsonObject? block)
+    {
+        if (block is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return OAuthAccountBlock.FromJson(block);
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
 
     private static ImportStep? Step(string? value) =>
         Enum.TryParse(value, ignoreCase: true, out ImportStep step) ? step : null;

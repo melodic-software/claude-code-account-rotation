@@ -193,6 +193,49 @@ public sealed class SideEndpointTests
     }
 
     [Fact]
+    public async Task ThePageListsEachConfiguredSideAndNoneWhenPeersIsEmpty()
+    {
+        await using FollowerAppFactory follower = new();
+        PeerLink link = new();
+        await using AppFactory leader = LeaderOver(follower, link);
+        await follower.Roots.WriteLiveAsync(Outgoing, "refresh-a", Token);
+        await CredentialFiles.WriteAsync(leader.LiveDirectory, "refresh-w", Token);
+        await leader.WriteStateFileAsync("w@example.com", Token);
+        using HttpClient client = leader.CreateClient();
+        using AppFactory alone = new();
+        using HttpClient aloneClient = alone.CreateClient();
+
+        JsonArray sides = (await client.GetFromJsonAsync<JsonArray>(new Uri("/api/sides", UriKind.Relative), Token))!;
+        JsonArray none = (await aloneClient.GetFromJsonAsync<JsonArray>(new Uri("/api/sides", UriKind.Relative), Token))!;
+        string script = await client.GetStringAsync(new Uri("/app.js", UriKind.Relative), Token);
+
+        JsonObject wsl = sides.ShouldHaveSingleItem()!.AsObject();
+        wsl["side"]!.GetValue<string>().ShouldBe("wsl");
+        wsl["online"]!.GetValue<bool>().ShouldBeTrue();
+        wsl["liveAccount"]!.GetValue<string>().ShouldBe(Outgoing);
+        wsl["canStart"]!.GetValue<bool>().ShouldBeFalse();
+        none.ShouldBeEmpty();
+        // The page draws its side line and its one switch control from these routes.
+        script.ShouldContain("/api/sides");
+        script.ShouldContain("/switch");
+        script.ShouldContain("/start");
+    }
+
+    [Fact]
+    public async Task AnImportStatusReadOverTheWireCarriesTheOtherSidesLiveAccount()
+    {
+        await using FollowerAppFactory follower = new();
+        await follower.Roots.WriteLiveAsync(Outgoing, "refresh-a", Token);
+        HttpPeerRotationInstance peer = new(SideName.Wsl, follower.CreateDefaultClient());
+
+        Core.Result<Core.Peers.ImportStatus, string> status = await peer.ImportStatusAsync(new AccountEmail(Incoming), Token);
+
+        status.IsSuccess.ShouldBeTrue(status.IsFailure ? status.Error : null);
+        status.Value.LiveFingerprint.ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
+        status.Value.LiveAccount?.Email?.Value.ShouldBe(Outgoing);
+    }
+
+    [Fact]
     public async Task NoLineTheOtherSideLoggedNamesTheCliLoginCommand()
     {
         // R1's rule, asserted where it can actually be broken: the follower runs
