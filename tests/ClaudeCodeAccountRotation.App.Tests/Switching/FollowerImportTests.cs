@@ -462,6 +462,102 @@ public sealed class FollowerImportTests : IDisposable
     }
 
     [Fact]
+    public async Task ACommitRetriedAfterAFirstOneThrewPartWayThroughTheBookkeepingFinishesIt()
+    {
+        // The first commit swapped, released the claimed file, and then threw at
+        // F7, leaving the hold open and the journal at Released. The retry must
+        // finish the import and answer imported, not "the journal reads
+        // Released" until the idle timer happens to get there.
+        (RefreshTokenFingerprint fa, RefreshTokenFingerprint fb) = await SeedAsync();
+        bool failOnce = true;
+        ClaudeStateFile flaky = new(_roots.StateFilePath, _ =>
+        {
+            if (failOnce)
+            {
+                failOnce = false;
+                throw new IOException("the state file is locked");
+            }
+
+            return Task.CompletedTask;
+        });
+        using FollowerImport follower = _roots.Follower(stateFile: flaky);
+        await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
+
+        await Should.ThrowAsync<IOException>(() => follower.CommitAsync(new AccountEmail(IncomingEmail), Token));
+        (await _roots.Journal().ReadOpenAsync(Token))!.StepReached.ShouldBe(ImportStep.Released);
+
+        Result<ImportResult, string> retried = await follower.CommitAsync(new AccountEmail(IncomingEmail), Token);
+
+        retried.IsSuccess.ShouldBeTrue(retried.IsFailure ? retried.Error : null);
+        retried.Value.Outgoing?.Value.ShouldBe(OutgoingEmail);
+        retried.Value.OutgoingFingerprint.ShouldBe(fa);
+        (await FollowerRoots.FingerprintOfAsync(_roots.LivePath, Token)).ShouldBe(fb);
+        (await FollowerRoots.FingerprintOfAsync(_roots.ExportPath(OutgoingEmail), Token)).ShouldBe(fa);
+        (await _roots.StateFile().ReadAccountBlockAsync(Token))!.Email?.Value.ShouldBe(IncomingEmail);
+        (await _roots.Journal().ReadOpenAsync(Token)).ShouldBeNull();
+        Directory.Exists(_roots.RefreshLockDirectory).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task AnAccountBlockThatDoesNotNameTheIncomingAccountIsRefusedBeforeStaging()
+    {
+        // F7 installs this block after the swap. An empty one would leave the
+        // state file naming no one and refuse every later import; a non-string
+        // email would throw after the swap on every reconciliation pass.
+        (RefreshTokenFingerprint fa, RefreshTokenFingerprint fb) = await SeedAsync();
+        using FollowerImport follower = _roots.Follower();
+        ImportRequest request = _roots.Request(IncomingEmail, fb);
+
+        foreach (System.Text.Json.Nodes.JsonObject block in new System.Text.Json.Nodes.JsonObject[]
+        {
+            [],
+            FollowerRoots.AccountJson("c@example.com"),
+            new() { ["emailAddress"] = 42 },
+        })
+        {
+            Result<ImportAnswer, string> answer = await follower.ImportAsync(request with { Account = block }, Token);
+
+            answer.IsFailure.ShouldBeTrue();
+            answer.Error.ShouldContain("account block");
+        }
+
+        (await FollowerRoots.FingerprintOfAsync(_roots.LivePath, Token)).ShouldBe(fa);
+        File.Exists(_roots.ClaimedPath(IncomingEmail)).ShouldBeTrue();
+        File.Exists(_roots.StagingPath).ShouldBeFalse();
+        (await _roots.Journal().ReadOpenAsync(Token)).ShouldBeNull();
+        Directory.Exists(_roots.RefreshLockDirectory).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task AStatusReadTakenWhileACommitIsPatchingWaitsForItAndNeverPairsOneAccountWithTheOthersFingerprint()
+    {
+        // The read is issued from inside F7, after the swap and before the state
+        // file names the incoming account: the one window where reading the two
+        // files independently answers B's fingerprint beside A's name. It is given
+        // time to finish there; serialized with the commit, it cannot.
+        (RefreshTokenFingerprint fa, RefreshTokenFingerprint fb) = await SeedAsync();
+        FollowerImport? follower = null;
+        Task<ImportStatus>? during = null;
+        ClaudeStateFile patching = new(_roots.StateFilePath, async _ =>
+        {
+            during ??= follower!.StatusAsync(Token);
+            await Task.WhenAny(during, Task.Delay(200, Token));
+        });
+        using FollowerImport created = _roots.Follower(stateFile: patching);
+        follower = created;
+        await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
+
+        ImportStatus held = await follower.StatusAsync(Token);
+        await follower.CommitAsync(new AccountEmail(IncomingEmail), Token);
+        ImportStatus snapshot = await during!;
+
+        held.LiveFingerprint.ShouldBe(fa);
+        held.LiveAccount?.Value.ShouldBe(OutgoingEmail);
+        snapshot.LiveFingerprint.ShouldBe(fb);
+        snapshot.LiveAccount?.Value.ShouldBe(IncomingEmail);
+    }
+
+    [Fact]
     public async Task ARequestWhoseClaimedAndExportPathsAreTheSameFileIsRefused()
     {
         // F4 would write the export over the claimed file it had just staged

@@ -47,6 +47,7 @@ internal sealed record ImportStatus(
     bool Imported,
     ImportStep? JournalStep,
     RefreshTokenFingerprint? LiveFingerprint,
+    AccountEmail? LiveAccount,
     string Detail);
 
 /// <summary>
@@ -168,8 +169,13 @@ internal sealed partial class FollowerImport : IDisposable
             }
 
             Result<Unit, string> reachable = InTheMailbox(request);
-            return reachable.IsFailure
-                ? Result<ImportAnswer, string>.Failure(reachable.Error)
+            if (reachable.IsFailure)
+            {
+                return Result<ImportAnswer, string>.Failure(reachable.Error);
+            }
+
+            return AccountBlockRefusal(request) is string refusal
+                ? Result<ImportAnswer, string>.Failure(refusal)
                 : await StageAndExportAsync(request, cancellationToken);
         }
         finally
@@ -202,6 +208,16 @@ internal sealed partial class FollowerImport : IDisposable
             }
 
             ImportJournalEntry? journal = await _journal.ReadOpenAsync(cancellationToken);
+
+            // A first commit that swapped and then threw part way through F6 to F8
+            // left the hold open and the journal past Exported. The import has
+            // happened, and this retry finishes it and says so rather than
+            // answering "not imported" until the idle timer gets there.
+            if (journal?.StepReached > ImportStep.Exported && await UnwindAsync(hold) is ImportResult finished)
+            {
+                return Result<ImportResult, string>.Success(finished);
+            }
+
             if (journal?.StepReached != ImportStep.Exported)
             {
                 return Result<ImportResult, string>.Failure(
@@ -268,8 +284,31 @@ internal sealed partial class FollowerImport : IDisposable
     public async Task<ImportStatus> StatusAsync(CancellationToken cancellationToken, AccountEmail? about = null)
     {
         await ReconcileOnceAsync(cancellationToken);
-        ImportJournalEntry? journal = await _journal.ReadOpenAsync(cancellationToken);
-        CredentialPair? live = await _pairs.ReadLiveAsync(cancellationToken);
+
+        // Under the same lock as a commit, so F5 to F7 cannot land between the
+        // reads: the live pair and the account named beside it are one snapshot,
+        // never the incoming fingerprint beside the outgoing name.
+        await _sync.WaitAsync(cancellationToken);
+        try
+        {
+            ImportJournalEntry? journal = await _journal.ReadOpenAsync(cancellationToken);
+            CredentialPair? live = await _pairs.ReadLiveAsync(cancellationToken);
+            AccountEmail? liveAccount = (await _stateFile.ReadAccountBlockAsync(cancellationToken))?.Email;
+            return await StatusOfAsync(journal, live, liveAccount, about, cancellationToken);
+        }
+        finally
+        {
+            _sync.Release();
+        }
+    }
+
+    private async Task<ImportStatus> StatusOfAsync(
+        ImportJournalEntry? journal,
+        CredentialPair? live,
+        AccountEmail? liveAccount,
+        AccountEmail? about,
+        CancellationToken cancellationToken)
+    {
         if (journal is not null)
         {
             // An open journal for another account says nothing about this one, and
@@ -278,7 +317,7 @@ internal sealed partial class FollowerImport : IDisposable
             // would close A on B's evidence.
             if (about is AccountEmail named && journal.Incoming != named)
             {
-                return new ImportStatus(false, journal.StepReached, live?.Fingerprint, "not imported: the import in flight here is of " + journal.Incoming.Value);
+                return new ImportStatus(false, journal.StepReached, live?.Fingerprint, liveAccount, "not imported: the import in flight here is of " + journal.Incoming.Value);
             }
 
             // A journal past the swap, read while F6 to F8 are still running or
@@ -290,6 +329,7 @@ internal sealed partial class FollowerImport : IDisposable
                 swapped,
                 journal.StepReached,
                 live?.Fingerprint,
+                liveAccount,
                 swapped
                     ? "the swap has run and the import is finishing from " + journal.StepReached
                     : "an import is in flight at " + journal.StepReached + ", before the swap");
@@ -298,12 +338,12 @@ internal sealed partial class FollowerImport : IDisposable
         LastImportEntry? last = await _journal.ReadLastImportAsync(cancellationToken);
         if (last is null)
         {
-            return new ImportStatus(false, null, live?.Fingerprint, _atStart?.Outcome ?? "no import in flight and none recorded");
+            return new ImportStatus(false, null, live?.Fingerprint, liveAccount, _atStart?.Outcome ?? "no import in flight and none recorded");
         }
 
         return about is AccountEmail asked && last.Incoming != asked
-            ? new ImportStatus(false, null, live?.Fingerprint, "not imported: the last import here was of " + last.Incoming.Value)
-            : new ImportStatus(true, null, live?.Fingerprint, "the last import of " + last.Incoming.Value + " completed");
+            ? new ImportStatus(false, null, live?.Fingerprint, liveAccount, "not imported: the last import here was of " + last.Incoming.Value)
+            : new ImportStatus(true, null, live?.Fingerprint, liveAccount, "the last import of " + last.Incoming.Value + " completed");
     }
 
     /// <summary>
@@ -338,11 +378,6 @@ internal sealed partial class FollowerImport : IDisposable
         }
     }
 
-    /// <summary>
-    /// F1's second half: the import is already done when the record says so, or
-    /// when the live pair is the incoming one and the owner record agrees. The
-    /// live check is what answers a leader whose own journal was lost.
-    /// </summary>
     /// <summary>
     /// The two paths a request names are the caller's, and this is a loopback
     /// route a local process can reach. The mailbox is the one directory the
@@ -383,6 +418,35 @@ internal sealed partial class FollowerImport : IDisposable
         return Result<Unit, string>.Success(Unit.Value);
     }
 
+    /// <summary>
+    /// The incoming account block is what F7 installs, after the swap, and what
+    /// the next import reads to name the pair that leaves. So it is parsed here
+    /// by the same function F7 uses, before anything is staged: an absent block
+    /// would install an empty <c>oauthAccount</c> and refuse every later import,
+    /// and one that makes the parser throw would throw after the swap, on every
+    /// reconciliation pass.
+    /// </summary>
+    private static string? AccountBlockRefusal(ImportRequest request)
+    {
+        AccountEmail? named;
+        try
+        {
+            named = OAuthAccountBlock.FromJson(request.Account).Email;
+        }
+        catch (InvalidOperationException)
+        {
+            named = null;
+        }
+
+        return named == request.Email
+            ? null
+            : "the account block does not name " + request.Email.Value + " as its emailAddress; the state file would name no one, or someone else, for the pair";
+    }
+
+    /// <summary>
+    /// F1's second half: the import is already done when the record says so.
+    /// That record is what answers a leader whose own journal was lost.
+    /// </summary>
     private async Task<ImportResult?> AlreadyImportedAsync(ImportRequest request, CancellationToken cancellationToken)
     {
         LastImportEntry? last = await _journal.ReadLastImportAsync(cancellationToken);

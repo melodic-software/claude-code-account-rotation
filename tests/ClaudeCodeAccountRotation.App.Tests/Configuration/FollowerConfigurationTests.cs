@@ -15,6 +15,8 @@ public sealed class FollowerConfigurationTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "claude-code-account-rotation-tests", Guid.NewGuid().ToString("N"));
 
+    public static bool OnUnix => !OperatingSystem.IsWindows();
+
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     public FollowerConfigurationTests()
@@ -67,6 +69,20 @@ public sealed class FollowerConfigurationTests : IDisposable
         verdict.IsFailure.ShouldBeTrue();
         verdict.Error.ShouldContain("/mnt/");
         verdict.Error.ShouldContain("live config directory");
+    }
+
+    /// <summary>
+    /// Spelled so the raw prefix check misses it and normalization lands it on
+    /// the mount. Unix only: on Windows the same spelling normalizes to a
+    /// drive-rooted path, which is not a WSL view of anything.
+    /// </summary>
+    [Fact(SkipUnless = nameof(OnUnix), Skip = "Resolving .. onto /mnt/ is a Unix path behavior")]
+    public void AFollowerLiveDirectoryThatOnlyNormalizesOntoTheWindowsMountIsRefused()
+    {
+        Result<Unit, string> verdict = Validate(Follower(liveDirectory: "/tmp/../mnt/c/claude-live"));
+
+        verdict.IsFailure.ShouldBeTrue();
+        verdict.Error.ShouldContain("/mnt/");
     }
 
     [Fact]

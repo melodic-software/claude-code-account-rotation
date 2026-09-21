@@ -108,8 +108,9 @@ internal static class ConfigurationValidator
     {
         // The configured spelling, not the normalized one: Path.GetFullPath turns
         // "/mnt/c/..." into a drive-rooted path on Windows, where this check would
-        // then pass for exactly the configuration it exists to refuse.
-        if (UnderWindowsMount(configuration.LiveConfigDirectory))
+        // then pass for exactly the configuration it exists to refuse. And the
+        // normalized one too, so "/tmp/../mnt/c/..." cannot spell its way past.
+        if (UnderWindowsMount(configuration.LiveConfigDirectory) || UnderWindowsMount(Normalize(configuration.LiveConfigDirectory)))
         {
             return Failure("the follower's live config directory " + configuration.LiveConfigDirectory + " sits under /mnt/; a follower's live pair must be on its own file system, never on the Windows volume through DrvFs");
         }

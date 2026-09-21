@@ -1,5 +1,4 @@
 using System.Text.Json.Nodes;
-using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Security;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core;
@@ -99,25 +98,20 @@ internal static class ImportEndpoints
         // this side is online and which account it holds. It is not the Windows
         // page's dashboard and carries none of its roster, quota or profile
         // facts, because a follower has no roster to report.
-        routes.MapGet("/api/dashboard", static async (
-            StagedImportCredentialPairStore pairs,
-            ClaudeStateFile stateFile,
-            FollowerImport import,
-            CancellationToken cancellationToken) =>
+        routes.MapGet("/api/dashboard", static async (FollowerImport import, CancellationToken cancellationToken) =>
         {
-            // The status read first, because it is what runs reconciliation, and
-            // reconciliation is what makes the live pair and the state file agree.
-            // Reading them before it would answer the leader's L1 with the account
-            // a crash between F5 and F7 left behind, beside the fingerprint of the
-            // pair that replaced it.
+            // One snapshot from the status read, which runs reconciliation first
+            // and then reads the live pair and the state file under the commit's
+            // own lock. Reading either file here, outside it, could answer the
+            // leader's L1 with the account a crash between F5 and F7 left behind,
+            // or a commit in flight had not yet patched, beside the fingerprint of
+            // the pair that replaced it.
             ImportStatus status = await import.StatusAsync(cancellationToken);
-            CredentialPair? live = await pairs.ReadLiveAsync(cancellationToken);
-            OAuthAccountBlock? account = await stateFile.ReadAccountBlockAsync(cancellationToken);
             return Results.Ok(new FollowerDashboardView(
                 "follower",
                 SideName.Wsl.Value,
-                account?.Email?.Value,
-                live?.Fingerprint.Sha256Hex,
+                status.LiveAccount?.Value,
+                status.LiveFingerprint?.Sha256Hex,
                 status.JournalStep?.ToString()));
         });
     }

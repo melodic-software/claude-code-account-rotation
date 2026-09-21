@@ -91,7 +91,8 @@ internal sealed class FollowerRoots : IDisposable
         TimeSpan? commitBudget = null,
         TimeSpan? idleTimeout = null,
         TimeSpan? heartbeatInterval = null,
-        CredentialMutationGate? gate = null)
+        CredentialMutationGate? gate = null,
+        ClaudeStateFile? stateFile = null)
     {
         SwitchOptions resolved = options ?? Options();
         return new FollowerImport(
@@ -99,7 +100,7 @@ internal sealed class FollowerRoots : IDisposable
             Pairs(),
             Journal(),
             Reconciler(resolved),
-            StateFile(),
+            stateFile ?? StateFile(),
             gate ?? Gate,
             Clock,
             NullLogger<FollowerImport>.Instance)
