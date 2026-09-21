@@ -64,6 +64,54 @@ public sealed class ConfigurationTests : IDisposable
         Defaults().SharedStore.ShouldBeFalse();
     }
 
+    /// <summary>
+    /// A side names a directory under the store's <c>.transit/</c> and one in
+    /// the peer's own namespace, so a hand-edited value that is not a single
+    /// path segment would reach <c>Path.Combine</c>, where a traversal escapes
+    /// the store entirely. Dropped at the parser, which is the one place every
+    /// consumer of a side goes through.
+    /// </summary>
+    [Theory]
+    [InlineData("../evil")]
+    [InlineData("a/b")]
+    [InlineData("a\\b")]
+    [InlineData("..")]
+    [InlineData(".")]
+    [InlineData("c:evil")]
+    [InlineData(" wsl")]
+    [InlineData("  ")]
+    public async Task APeerWhoseSideIsNotASinglePathSegmentIsDropped(string side)
+    {
+        ArgumentNullException.ThrowIfNull(side);
+        string path = Path.Combine(_root, "appdata", "config.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(
+            path,
+            """{"peers": [{"side": "@SIDE@", "baseAddress": "http://127.0.0.1:48212", "storePathFromPeer": "/mnt/c/store"}]}"""
+                .Replace("@SIDE@", side.Replace("\\", "\\\\", StringComparison.Ordinal), StringComparison.Ordinal),
+            TestContext.Current.CancellationToken);
+
+        Result<ClaudeCodeAccountRotationConfiguration, string> loaded = await ConfigurationFile.LoadOrCreateAsync(path, Defaults(), TestContext.Current.CancellationToken);
+
+        loaded.IsSuccess.ShouldBeTrue(loaded.IsFailure ? loaded.Error : "");
+        loaded.Value.Peers.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task APeerWhoseSideIsASinglePathSegmentIsKept()
+    {
+        string path = Path.Combine(_root, "appdata", "config.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(
+            path,
+            """{"peers": [{"side": "wsl", "baseAddress": "http://127.0.0.1:48212", "storePathFromPeer": "/mnt/c/store"}]}""",
+            TestContext.Current.CancellationToken);
+
+        Result<ClaudeCodeAccountRotationConfiguration, string> loaded = await ConfigurationFile.LoadOrCreateAsync(path, Defaults(), TestContext.Current.CancellationToken);
+
+        loaded.Value.Peers.ShouldHaveSingleItem().Side.Value.ShouldBe("wsl");
+    }
+
     [Fact]
     public async Task StoreSharedTurnsTheSharedStoreOnAndNothingElseDoes()
     {

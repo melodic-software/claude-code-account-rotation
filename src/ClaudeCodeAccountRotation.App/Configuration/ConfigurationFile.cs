@@ -146,6 +146,7 @@ internal static class ConfigurationFile
         {
             if (node is not JsonObject peer
                 || Text(peer, "side") is not string side
+                || !IsUsableAsPathSegment(side)
                 || Text(peer, "baseAddress") is not string address
                 || !Uri.TryCreate(address, UriKind.Absolute, out Uri? baseAddress)
                 || Text(peer, "storePathFromPeer") is not string storePath)
@@ -158,6 +159,24 @@ internal static class ConfigurationFile
 
         return peers;
     }
+
+    /// <summary>
+    /// A side names a directory under the store's <c>.transit/</c> and a
+    /// directory in the peer's own namespace, so a hand-edited one has to be a
+    /// single path segment before anything joins it to a root. A value with a
+    /// separator, a rooted path, a traversal, or a character the file system
+    /// refuses would otherwise reach <c>Path.Combine</c> — where <c>../</c>
+    /// escapes the store and an invalid character throws — and both
+    /// <c>MailboxPath</c> and <c>Peer.InPeerNamespace</c> would carry it.
+    /// Dropped like every other malformed key here rather than failing the
+    /// file: the side simply does not appear on the page.
+    /// </summary>
+    private static bool IsUsableAsPathSegment(string side) =>
+        !string.IsNullOrWhiteSpace(side)
+        && side == side.Trim()
+        && side is not ("." or "..")
+        && side.AsSpan().IndexOfAny('/', '\\', ':') < 0
+        && side.IndexOfAny(Path.GetInvalidFileNameChars()) < 0;
 
     private static PeerLaunch? Launch(JsonObject peer) =>
         peer["launch"] is JsonObject launch
