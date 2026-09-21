@@ -22,7 +22,6 @@ namespace ClaudeCodeAccountRotation.App.Switching;
 /// </summary>
 internal sealed partial class LiveDirectorySwitch
 {
-    private const string QuarantineDirectoryName = "quarantine";
     private const string LiveOwnerFileName = "live-owner.json";
     private static readonly TimeSpan _secondaryLockGuardAge = TimeSpan.FromSeconds(60);
 
@@ -87,7 +86,7 @@ internal sealed partial class LiveDirectorySwitch
         _options = options;
         _timeProvider = timeProvider;
         _logger = logger;
-        _quarantineDirectory = Path.Combine(options.AppDataDirectory, QuarantineDirectoryName);
+        _quarantineDirectory = options.QuarantineDirectory;
         _liveOwnerPath = Path.Combine(options.AppDataDirectory, "state", LiveOwnerFileName);
     }
 
@@ -681,8 +680,22 @@ internal sealed partial class LiveDirectorySwitch
     private string? StrandedCredentialTemporary() =>
         TemporaryFiles().FirstOrDefault(IsCredentialTemporary);
 
+    /// <summary>
+    /// Whether the quarantine holds a file that has to be resolved before any
+    /// switch may run, which is what a duplicate lineage is: one refresh token
+    /// in two places, and no way to tell which copy a session is using.
+    /// <para>
+    /// The superseded subtree is the one thing under here that is not that. A
+    /// superseded family is a second, distinct family the operator deliberately
+    /// made with the escape hatch and has already been told about on every poll
+    /// since; it violates no invariant this class enforces, so it is kept and
+    /// named but it does not stop the machine switching.
+    /// </para>
+    /// </summary>
     private bool QuarantineHoldsFiles() =>
-        Directory.Exists(_quarantineDirectory) && Directory.EnumerateFiles(_quarantineDirectory, "*", SearchOption.AllDirectories).Any();
+        Directory.Exists(_quarantineDirectory)
+        && Directory.EnumerateFiles(_quarantineDirectory, "*", SearchOption.AllDirectories)
+            .Any(path => !path.StartsWith(_options.SupersededQuarantineDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// The account the live pair was unparked for, from the owner record. The CLI

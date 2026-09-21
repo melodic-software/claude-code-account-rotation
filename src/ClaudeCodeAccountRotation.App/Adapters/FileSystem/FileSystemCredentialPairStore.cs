@@ -189,6 +189,40 @@ internal sealed class FileSystemCredentialPairStore : ICredentialPairStore
         return Result<Unit, string>.Success(Unit.Value);
     }
 
+    /// <summary>
+    /// The one thing that is done with an export nothing may park: it is moved,
+    /// by the same guarded rename every other credential move uses, out of the
+    /// mailbox and into quarantine, where it is neither promoted nor deleted.
+    /// The destination is answered so the banner can name the file the operator
+    /// has to decide about.
+    /// </summary>
+    public Task<Result<string, string>> MoveExportToQuarantineAsync(
+        string folderPath,
+        SideName side,
+        string destinationDirectory,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ArgumentException.ThrowIfNullOrWhiteSpace(destinationDirectory);
+        string folder = ProfileFolder(folderPath);
+        string destination = Path.Combine(Path.GetFullPath(destinationDirectory), FileName);
+        try
+        {
+            Directory.CreateDirectory(Path.GetFullPath(destinationDirectory));
+            Rename(ExportPathFor(folderPath, side), destination);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException)
+        {
+            // A quarantine that cannot happen leaves the export in the mailbox,
+            // which is recoverable, and says why. Throwing would carry it out of
+            // a dashboard poll as a 500 and strand it just the same.
+            return Task.FromResult(Result<string, string>.Failure(
+                "the exported pair for " + Path.GetFileName(folder) + " could not be quarantined: " + exception.Message));
+        }
+
+        return Task.FromResult(Result<string, string>.Success(destination));
+    }
+
     public Task MoveParkedToQuarantineAsync(string folderPath, string destinationDirectory, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

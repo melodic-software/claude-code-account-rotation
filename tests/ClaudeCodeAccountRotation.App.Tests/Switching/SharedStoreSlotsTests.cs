@@ -1,6 +1,8 @@
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Switching;
+using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
+using ClaudeCodeAccountRotation.Core.Ports;
 using ClaudeCodeAccountRotation.Core.Switching;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -25,8 +27,8 @@ public sealed class SharedStoreSlotsTests : IDisposable
 
     private static AccountEmail Email(string value) => AccountEmail.Parse(value).Value;
 
-    private SharedStoreSlots Slots(bool enabled = true) =>
-        new(_profilesRoot, enabled, _gate, NullLogger<SharedStoreSlots>.Instance);
+    private SharedStoreSlots Slots(bool enabled = true, ILoginSessionRunner? logins = null) =>
+        new(_profilesRoot, enabled, _gate, logins ?? new NoLoginsRunning(), NullLogger<SharedStoreSlots>.Instance);
 
     private string Folder(string email)
     {
@@ -52,6 +54,73 @@ public sealed class SharedStoreSlotsTests : IDisposable
         string path = Path.Combine(mailbox, FileSystemCredentialPairStore.ClaimedFileName(email) + suffix);
         File.WriteAllText(path, string.Empty);
         return path;
+    }
+
+    [Fact]
+    public async Task ASupersededRecordStandsWhileTheSlotHoldsTheFamilyThatReplacedIt()
+    {
+        string folder = Folder("a@example.com");
+        await CredentialFiles.WriteAsync(folder, "refresh-a-fresh", TestContext.Current.CancellationToken);
+        await SupersededFamilyFile.WriteAsync(
+            folder,
+            new HolderRecord(SideName.Wsl, CredentialFiles.Pair("refresh-a").Fingerprint, DateTimeOffset.UnixEpoch),
+            TestContext.Current.CancellationToken);
+
+        SupersededFamily? read = await Slots().ReadSupersededAsync(
+            Email("a@example.com"), folder, slotHoldsPair: true, default, TestContext.Current.CancellationToken);
+
+        read!.Stale.ShouldBeFalse();
+        read.Record.Side.ShouldBe(SideName.Wsl);
+    }
+
+    [Fact]
+    public async Task ASupersededRecordWithNothingToShowForItIsStaleAndDropped()
+    {
+        // The login it was written for never put a family in the slot, so the
+        // family the other side holds is still the store's and the record is a
+        // refusal waiting to happen.
+        string folder = Folder("a@example.com");
+        await SupersededFamilyFile.WriteAsync(
+            folder,
+            new HolderRecord(SideName.Wsl, CredentialFiles.Pair("refresh-a").Fingerprint, DateTimeOffset.UnixEpoch),
+            TestContext.Current.CancellationToken);
+        SharedStoreSlots slots = Slots();
+
+        SupersededFamily read = (await slots.ReadSupersededAsync(
+            Email("a@example.com"), folder, slotHoldsPair: false, default, TestContext.Current.CancellationToken))!;
+        await slots.DropStaleSupersededAsync(Email("a@example.com"), folder, read, default, TestContext.Current.CancellationToken);
+
+        read.Stale.ShouldBeTrue();
+        File.Exists(SupersededFamilyFile.PathIn(folder)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task ASupersededRecordIsNotStaleWhileTheLoginItWasWrittenForIsStillRunning()
+    {
+        string folder = Folder("a@example.com");
+        await SupersededFamilyFile.WriteAsync(
+            folder,
+            new HolderRecord(SideName.Wsl, CredentialFiles.Pair("refresh-a").Fingerprint, DateTimeOffset.UnixEpoch),
+            TestContext.Current.CancellationToken);
+
+        SupersededFamily? read = await Slots(logins: new LoginRunningAgainst(folder)).ReadSupersededAsync(
+            Email("a@example.com"), folder, slotHoldsPair: false, default, TestContext.Current.CancellationToken);
+
+        read!.Stale.ShouldBeFalse();
+    }
+
+    /// <summary>A runner that owns one folder, which is all the staleness rule asks it.</summary>
+    private sealed class LoginRunningAgainst(string folderPath) : ILoginSessionRunner
+    {
+        public Task<Result<LoginSession, string>> StartAsync(AccountEmail email, string folder, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<Result<LoginSession, string>> SubmitCodeAsync(LoginSessionId id, string code, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public LoginSession? Status(LoginSessionId id) => null;
+
+        public bool IsRunningAgainst(string folder) => string.Equals(folder, folderPath, StringComparison.Ordinal);
     }
 
     [Fact]

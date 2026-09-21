@@ -69,6 +69,18 @@ public enum SwitchRefusal
     ExportNotVerified,
 
     /// <summary>
+    /// <b>The other side holds a second token family for the account it is live
+    /// on.</b> That account's slot carries a <c>superseded.json</c> naming that
+    /// side, which only one control writes: <c>Log in again on Windows</c> while
+    /// that side was unreachable. The family over there is no longer the store's,
+    /// so parking it back would put two families of one account in the store, and
+    /// every hand-off that would move it is refused until the operator says what
+    /// to do with it. Nothing else is blocked: a Windows switch, a refresh, and a
+    /// hand-off of any other account all run as before.
+    /// </summary>
+    ForeignFamily,
+
+    /// <summary>
     /// The other side answered a definite "not imported" for this account: its
     /// own crash table unwound the import, or it never reached one. The claim
     /// has been taken back and the slot holds its pair again. This is never

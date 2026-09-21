@@ -1,5 +1,6 @@
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.Core.Identity;
+using ClaudeCodeAccountRotation.Core.Ports;
 using ClaudeCodeAccountRotation.Core.Switching;
 using Microsoft.Extensions.Logging;
 
@@ -19,14 +20,21 @@ internal sealed partial class SharedStoreSlots
 {
     private readonly string _profilesRoot;
     private readonly CredentialMutationGate _gate;
+    private readonly ILoginSessionRunner _logins;
     private readonly ILogger<SharedStoreSlots> _logger;
 
-    public SharedStoreSlots(string profilesRoot, bool enabled, CredentialMutationGate gate, ILogger<SharedStoreSlots> logger)
+    public SharedStoreSlots(
+        string profilesRoot,
+        bool enabled,
+        CredentialMutationGate gate,
+        ILoginSessionRunner logins,
+        ILogger<SharedStoreSlots> logger)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(profilesRoot);
         _profilesRoot = Path.GetFullPath(profilesRoot);
         Enabled = enabled;
         _gate = gate;
+        _logins = logins;
         _logger = logger;
     }
 
@@ -153,6 +161,108 @@ internal sealed partial class SharedStoreSlots
             ? HolderRecordFile.WriteAsync(folderPath, new HolderRecord(side, fingerprint, since), cancellationToken)
             : Task.CompletedTask;
 
+    /// <summary>
+    /// The second token family another side still holds for this account, and
+    /// whether the files have since contradicted it. Null when the store is not
+    /// shared or no control ever wrote one.
+    /// <para>
+    /// The record is read the way <c>holder.json</c> is: the files decide. It
+    /// claims that a family was left on another side when this slot was logged
+    /// in again, so it is only true while this side has something to show for
+    /// that login — a pair in the slot, or the account live here. A record with
+    /// neither is one whose login never finished, and believing it would refuse
+    /// a legitimate hand-off and then quarantine the account's only family: the
+    /// family the other side holds is still the store's until a replacement for
+    /// it exists here.
+    /// </para>
+    /// <para>
+    /// The one moment neither has happened yet and the record is still true is
+    /// while the login it was written for is running, which is why the record
+    /// goes in before that login starts and why a login in flight counts as
+    /// evidence for it.
+    /// </para>
+    /// </summary>
+    public async Task<SupersededFamily?> ReadSupersededAsync(
+        AccountEmail account,
+        string folderPath,
+        bool slotHoldsPair,
+        WindowsHold live,
+        CancellationToken cancellationToken)
+    {
+        if (!Enabled || await SupersededFamilyFile.ReadAsync(folderPath, cancellationToken) is not HolderRecord record)
+        {
+            return null;
+        }
+
+        return new SupersededFamily(
+            record,
+            Stale: !slotHoldsPair && live.Account != account && !_logins.IsRunningAgainst(folderPath));
+    }
+
+    /// <summary>
+    /// Records that a family of this account was left on <paramref name="record"/>'s
+    /// side when the slot was logged in again. Written before the login runs, so
+    /// a login that dies half way still leaves the fact behind.
+    /// </summary>
+    public Task SupersedeAsync(string folderPath, HolderRecord record, CancellationToken cancellationToken) =>
+        Enabled ? SupersededFamilyFile.WriteAsync(folderPath, record, cancellationToken) : Task.CompletedTask;
+
+    /// <summary>
+    /// The superseded family is accounted for: quarantined, or contradicted by
+    /// the files. Called under the gate by the quarantine, and with a zero wait
+    /// by the dashboard's reconciliation.
+    /// </summary>
+    public Task ClearSupersededAsync(string folderPath, CancellationToken cancellationToken) =>
+        Enabled ? SupersededFamilyFile.DeleteAsync(folderPath, cancellationToken) : Task.CompletedTask;
+
+    /// <summary>
+    /// Drops a superseded record the files contradict, under the mutation gate
+    /// with a zero wait and only while the verdict still stands. The same shape
+    /// as <see cref="DropStaleRecordAsync"/>, and for the same reason: a switch
+    /// that finished between the read and this acquisition has changed what the
+    /// files say.
+    /// </summary>
+    public async Task DropStaleSupersededAsync(
+        AccountEmail account,
+        string folderPath,
+        SupersededFamily observed,
+        WindowsHold live,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(observed);
+        if (!Enabled)
+        {
+            return;
+        }
+
+        IDisposable? permit = null;
+        try
+        {
+            try
+            {
+                permit = await _gate.AcquireAsync(TimeSpan.Zero, cancellationToken);
+            }
+            catch (TimeoutException)
+            {
+                return;
+            }
+
+            bool holdsPair = File.Exists(Path.Combine(folderPath, FileSystemCredentialPairStore.FileName));
+            if (await ReadSupersededAsync(account, folderPath, holdsPair, live, cancellationToken) is not { Stale: true } current
+                || current.Record != observed.Record)
+            {
+                return;
+            }
+
+            await SupersededFamilyFile.DeleteAsync(folderPath, cancellationToken);
+            LogSupersededDropped(account.Value);
+        }
+        finally
+        {
+            permit?.Dispose();
+        }
+    }
+
     /// <summary>Records that the slot holds its pair again: the record goes.</summary>
     public Task ReleaseAsync(string folderPath, CancellationToken cancellationToken) =>
         Enabled ? HolderRecordFile.DeleteAsync(folderPath, cancellationToken) : Task.CompletedTask;
@@ -182,7 +292,19 @@ internal sealed partial class SharedStoreSlots
 
     [LoggerMessage(Level = LogLevel.Information, Message = "holder record dropped: this side does not hold that pair ({Account})")]
     private partial void LogRecordDroppedForFingerprint(string account);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "superseded record dropped: this side holds no family for that account ({Account})")]
+    private partial void LogSupersededDropped(string account);
 }
+
+/// <summary>
+/// A second token family another side holds for one account, as this side reads
+/// it. <paramref name="Stale"/> is the files disagreeing with the record, which
+/// the next dashboard read drops; <paramref name="Record"/> names the side that
+/// holds the family, the fingerprint it had when the slot was superseded, and
+/// when that happened.
+/// </summary>
+internal sealed record SupersededFamily(HolderRecord Record, bool Stale);
 
 /// <summary>
 /// What the Windows side's live directory holds right now: the account its

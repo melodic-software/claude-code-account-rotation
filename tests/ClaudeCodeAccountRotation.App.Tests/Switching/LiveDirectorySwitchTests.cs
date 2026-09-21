@@ -74,7 +74,7 @@ public sealed class LiveDirectorySwitchTests : IDisposable
             new ManagedLoginPolicyReader(Path.Combine(_root, "managed-settings.json"), static () => null, static () => null),
             new RecoveryFiles(options, store, folders, _quota, NullLogger<RecoveryFiles>.Instance),
             _quota,
-            new SharedStoreSlots(_profilesRoot, sharedStore, _gate, NullLogger<SharedStoreSlots>.Instance),
+            new SharedStoreSlots(_profilesRoot, sharedStore, _gate, logins ?? new NoLoginRunning(), NullLogger<SharedStoreSlots>.Instance),
             options,
             TimeProvider.System,
             NullLogger<LiveDirectorySwitch>.Instance);
@@ -242,6 +242,29 @@ public sealed class LiveDirectorySwitchTests : IDisposable
         Directory.Delete(Path.Combine(_appData, "quarantine"), recursive: true);
         _cli.Email = "b@example.com";
         (await Switch().SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken)).IsSuccess.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task ASupersededFamilyInQuarantineIsKeptAndBlocksNoSwitch()
+    {
+        // The escape hatch's own quarantine is not a duplicate lineage: it is a
+        // second, distinct family the operator deliberately made and has been
+        // told about on every poll since. It is kept and never deleted here,
+        // and the machine goes on switching.
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        await ParkedProfileAsync("b@example.com", "refresh-b");
+        string quarantined = Path.Combine(_appData, "quarantine", "superseded", "20260920T090000Z-c@example.com");
+        await CredentialFiles.WriteAsync(quarantined, "refresh-c-on-wsl", TestContext.Current.CancellationToken);
+        _cli.Email = "b@example.com";
+
+        ReconciliationReport report = await Switch().ReconcileAsync(TestContext.Current.CancellationToken);
+        Result<SwitchOutcome, SwitchRefusal> allowed = await Switch().SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken);
+
+        report.SwitchingBlocked.ShouldBeFalse();
+        allowed.IsSuccess.ShouldBeTrue(allowed.IsFailure ? allowed.Error.ToString() : string.Empty);
+        (await CredentialFiles.FingerprintAsync(quarantined, TestContext.Current.CancellationToken))
+            .ShouldBe(CredentialFiles.Pair("refresh-c-on-wsl").Fingerprint);
     }
 
     [Fact]
@@ -887,7 +910,7 @@ public sealed class LiveDirectorySwitchTests : IDisposable
         string folder = Path.Combine(_profilesRoot, "b@example.com");
         File.Exists(Path.Combine(folder, FileSystemCredentialPairStore.FileName)).ShouldBeTrue();
         (await ReadRecordAsync("b@example.com")).ShouldNotBeNull();
-        SharedStoreSlots slots = new(_profilesRoot, enabled: true, _gate, NullLogger<SharedStoreSlots>.Instance);
+        SharedStoreSlots slots = new(_profilesRoot, enabled: true, _gate, new NoLoginRunning(), NullLogger<SharedStoreSlots>.Instance);
         SlotSnapshot? reconciled = await slots.ReadAsync(Email("b@example.com"), folder, slotHoldsPair: true, default, TestContext.Current.CancellationToken);
         reconciled!.State.ShouldBe(SlotState.Parked);
         reconciled.StaleRecord.ShouldBeTrue();

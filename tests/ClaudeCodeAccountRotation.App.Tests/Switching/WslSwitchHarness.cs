@@ -98,7 +98,7 @@ internal sealed class WslSwitchHarness : IDisposable
             pairs,
             profiles,
             new ClaudeStateFile(StateFilePath),
-            new SharedStoreSlots(Store, sharedStore, Gate, NullLogger<SharedStoreSlots>.Instance),
+            new SharedStoreSlots(Store, sharedStore, Gate, new NoLoginsRunning(), NullLogger<SharedStoreSlots>.Instance),
             new WslSwitchJournal(AppData),
             new SwitchJournal(AppData),
             new NoLoginsRunning(),
@@ -212,6 +212,9 @@ internal sealed class FakePeerRotationInstance(string mailbox) : IPeerRotationIn
 
     public ImportStatus Status { get; set; } = new(false, null, null, null, "not imported: no record of it here");
 
+    /// <summary>What the status route answers with instead, for a side that is not answering at all.</summary>
+    public string? StatusError { get; set; }
+
     public RefreshTokenFingerprint? OutgoingFingerprint =>
         OutgoingRefreshToken is string token ? CredentialFiles.Pair(token).Fingerprint : null;
 
@@ -288,7 +291,9 @@ internal sealed class FakePeerRotationInstance(string mailbox) : IPeerRotationIn
     public Task<Result<ImportStatus, string>> ImportStatusAsync(AccountEmail email, CancellationToken cancellationToken)
     {
         Calls.Add("Status");
-        return Task.FromResult(Result<ImportStatus, string>.Success(Status));
+        return Task.FromResult(StatusError is string error
+            ? Result<ImportStatus, string>.Failure(error)
+            : Result<ImportStatus, string>.Success(Status));
     }
 
     /// <summary>The commit's answer: which account left this side, and the block the leader's park needs.</summary>

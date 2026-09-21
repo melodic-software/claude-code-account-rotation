@@ -8,6 +8,17 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- The three states the shared store could only be talked out of by hand are controls (#72). A slot
+  the other side holds can be logged in again here with `POST /api/accounts/{email}/login?supersede=true`
+  while that side is unreachable, which is the one place an account is allowed a second token
+  family: the slot records the family left behind in `superseded.json`, and every dashboard poll
+  says so until it is dealt with. A hand-off that would give that family back is refused
+  `ForeignFamily`, and `?quarantineForeignFamily=true` runs it anyway and moves the returning pair
+  into `<appdata>/quarantine/superseded/`, where it is never used and never deleted. A hand-off
+  nobody can finish now carries a banner whenever its journal is still open, says how long once it
+  passes twenty-four hours, and can be given up with `POST /api/sides/transit/cancel`, which takes
+  a claim back only after that side answers a definite "not imported". Nothing clears an in-transit
+  state on a timer. All of it is behind `store.shared`.
 - Each dashboard card leads with the roster alias as its heading, the address on its own line
   beneath (#46). One state chip, `live`, `paused`, `needs login`, `login expired`, `error`, or
   `ready`, first match wins, now says whether the operator can switch to the card at all, in place

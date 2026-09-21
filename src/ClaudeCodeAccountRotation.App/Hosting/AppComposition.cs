@@ -122,6 +122,7 @@ internal static class AppComposition
             configuration.ProfilesRoot,
             configuration.SharedStore,
             provider.GetRequiredService<CredentialMutationGate>(),
+            provider.GetRequiredService<ILoginSessionRunner>(),
             provider.GetRequiredService<ILogger<SharedStoreSlots>>()));
         services.AddSingleton(ManagedLoginPolicyReader.ForCurrentMachine());
         Result<ClaudeExecutable, string> cli = ClaudeExecutableLocator.Locate(

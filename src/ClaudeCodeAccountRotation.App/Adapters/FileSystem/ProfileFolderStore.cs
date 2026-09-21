@@ -20,7 +20,12 @@ internal sealed class ProfileFolderStore
     // silently take away the one thing that says the other side has that
     // account's pair. A record the slot's own file contradicts is dropped by
     // reconciliation, with a log line, rather than by a sweep nobody reads.
-    private static readonly string[] _keptOnPrune = [FileSystemCredentialPairStore.FileName, ProfileFileName, HolderRecordFile.FileName];
+    // The superseded record is kept for the reason the login that writes it
+    // exists: it is written just before a login into this very folder, and the
+    // prune that follows that login would otherwise delete the only statement
+    // that the other side still holds a family of this account.
+    private static readonly string[] _keptOnPrune =
+        [FileSystemCredentialPairStore.FileName, ProfileFileName, HolderRecordFile.FileName, SupersededFamilyFile.FileName];
 
     private readonly string _profilesRoot;
 
