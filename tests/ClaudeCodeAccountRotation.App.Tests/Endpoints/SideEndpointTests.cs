@@ -181,6 +181,10 @@ public sealed class SideEndpointTests
         card["usage"]!["limits"]![0]!["percent"]!.GetValue<double>().ShouldBe(69);
         card["usageNote"]!.GetValue<string>().ShouldBe("in use by wsl; figures come from wsl sessions");
         card["chip"]!.GetValue<string>().ShouldBe("in use by wsl");
+        // The pair moved with its login: the slot it left holds no file to read
+        // an expiry from, so this instant can only have come off the follower.
+        card["loginExpiresAt"]!.GetValue<DateTimeOffset>()
+            .ShouldBe((await FollowerRoots.LoginExpiryOfAsync(follower.Roots.LivePath, Token))!.Value);
     }
 
     [Fact]

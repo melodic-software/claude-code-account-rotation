@@ -153,6 +153,10 @@ internal sealed class FollowerRoots : IDisposable
         return pair?.Fingerprint;
     }
 
+    /// <summary>When the login behind the pair at <paramref name="path"/> runs out.</summary>
+    public static async Task<DateTimeOffset?> LoginExpiryOfAsync(string path, CancellationToken cancellationToken) =>
+        (await StagedImportCredentialPairStore.ReadFreshAsync(path, cancellationToken))?.LoginExpiresAt;
+
     /// <summary>
     /// Every file under both roots that parses as a credential pair with this
     /// fingerprint, staging files excluded. The staging name is the one place

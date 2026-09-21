@@ -201,6 +201,9 @@ internal sealed class FakePeerRotationInstance(string mailbox) : IPeerRotationIn
     /// <summary>What this side's own rate-limit-guard tee holds, which its dashboard carries.</summary>
     public StatuslineSnapshot? Tee { get; set; }
 
+    /// <summary>When the login behind this side's live pair runs out, as its dashboard reports it.</summary>
+    public DateTimeOffset? LoginExpiresAt { get; set; }
+
     public Func<ImportRequest, Task<Result<ImportAnswer, string>>>? OnImport { get; set; }
 
     public Func<Task<Result<ImportResult, string>>>? OnCommit { get; set; }
@@ -224,7 +227,8 @@ internal sealed class FakePeerRotationInstance(string mailbox) : IPeerRotationIn
                 null,
                 Version,
                 OutgoingEmail is null ? null : WslSwitchHarness.AccountJson(OutgoingEmail),
-                Tee)));
+                Tee,
+                LoginExpiresAt)));
     }
 
     public async Task<Result<ImportAnswer, string>> ImportAsync(ImportRequest request, CancellationToken cancellationToken)

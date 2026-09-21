@@ -62,7 +62,8 @@ internal sealed class HttpPeerRotationInstance : IPeerRotationInstance
                 Step(view.ImportJournalStep),
                 view.Version,
                 view.LiveAccountBlock,
-                Tee(view.Tee)),
+                Tee(view.Tee),
+                view.LoginExpiresAt),
             cancellationToken);
 
     /// <summary>
@@ -118,7 +119,13 @@ internal sealed class HttpPeerRotationInstance : IPeerRotationInstance
     public Task<Result<ImportStatus, string>> ImportStatusAsync(AccountEmail email, CancellationToken cancellationToken) =>
         GetAsync<ImportEndpoints.ImportStatusView, ImportStatus>(
             "/api/import-status?email=" + Uri.EscapeDataString(email.Value),
-            static view => new ImportStatus(view.Imported, Step(view.JournalStep), Fingerprint(view.LiveFingerprint), Account(view.LiveAccountBlock), view.Detail),
+            static view => new ImportStatus(
+                view.Imported,
+                Step(view.JournalStep),
+                Fingerprint(view.LiveFingerprint),
+                Account(view.LiveAccountBlock),
+                view.Detail,
+                view.LoginExpiresAt),
             cancellationToken);
 
     private async Task<Result<TOut, string>> GetAsync<TView, TOut>(string route, Func<TView, TOut> project, CancellationToken cancellationToken)

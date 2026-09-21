@@ -45,12 +45,20 @@ public sealed record ImportResult(
 /// snapshot as <see cref="LiveFingerprint"/>, so the two never name different
 /// accounts.
 /// </summary>
+/// <param name="LoginExpiresAt">
+/// When the login behind that side's live pair runs out, read in the same
+/// snapshot as the fingerprint beside it. One family per account means one
+/// expiry per card, and for an account this side holds there is no local file
+/// to read it from, so this is the only source (design 12). Null when that side
+/// holds nothing or its pair carries no such instant.
+/// </param>
 public sealed record ImportStatus(
     bool Imported,
     ImportStep? JournalStep,
     RefreshTokenFingerprint? LiveFingerprint,
     OAuthAccountBlock? LiveAccount,
-    string Detail);
+    string Detail,
+    DateTimeOffset? LoginExpiresAt = null);
 
 /// <summary>
 /// What the follower's dashboard tells the leader's L1 about that side.
@@ -82,7 +90,8 @@ public sealed record PeerDashboard(
     ImportStep? ImportJournalStep,
     string? Version,
     JsonObject? LiveAccountBlock = null,
-    StatuslineSnapshot? Tee = null);
+    StatuslineSnapshot? Tee = null,
+    DateTimeOffset? LoginExpiresAt = null);
 
 /// <summary>
 /// The other side of this machine, as the leader's coordinator talks to it:

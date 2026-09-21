@@ -214,6 +214,14 @@ internal sealed partial class DashboardAssembler(
 
             string side = Named(slot, holder);
             note = "in use by " + side + "; figures come from " + side + " sessions";
+            // One family per account, so the expiry of a pair this side does not
+            // hold can only come from the side that does, and only while that
+            // side says this is the account it holds. Nothing to say beats a
+            // number from before the hand-off: the 28-day window is fixed, and a
+            // stale one would have the operator schedule the wrong re-login.
+            loginExpiresAt = holder is { Online: true } && holder.LiveAccount == email
+                ? holder.LoginExpiresAt
+                : null;
         }
         else
         {

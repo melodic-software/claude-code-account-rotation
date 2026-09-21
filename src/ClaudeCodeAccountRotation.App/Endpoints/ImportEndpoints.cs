@@ -95,7 +95,8 @@ internal static class ImportEndpoints
                 status.JournalStep?.ToString(),
                 status.LiveFingerprint?.Sha256Hex,
                 status.LiveAccount?.Raw,
-                status.Detail));
+                status.Detail,
+                status.LoginExpiresAt));
         });
 
         // The follower's dashboard is what the leader's L1 reads to learn that
@@ -133,7 +134,11 @@ internal static class ImportEndpoints
                     observed.FiveHourPercent,
                     observed.FiveHourResetsAt,
                     observed.SevenDayPercent,
-                    observed.SevenDayResetsAt)));
+                    observed.SevenDayResetsAt),
+                // Read in the status snapshot above, under the commit's own
+                // lock: one family per account, so the card for an account this
+                // side holds has no local file to read its expiry from.
+                status.LoginExpiresAt));
         });
     }
 
@@ -184,7 +189,13 @@ internal static class ImportEndpoints
 
     internal sealed record ImportResultView(string? Outgoing, string? OutgoingFingerprint, JsonObject? OutgoingAccount, bool AlreadyImported);
 
-    internal sealed record ImportStatusView(bool Imported, string? JournalStep, string? LiveFingerprint, JsonObject? LiveAccountBlock, string Detail);
+    internal sealed record ImportStatusView(
+        bool Imported,
+        string? JournalStep,
+        string? LiveFingerprint,
+        JsonObject? LiveAccountBlock,
+        string Detail,
+        DateTimeOffset? LoginExpiresAt = null);
 
     internal sealed record FollowerDashboardView(
         string Role,
@@ -194,7 +205,8 @@ internal static class ImportEndpoints
         string? ImportJournalStep,
         string? Version,
         JsonObject? LiveAccountBlock,
-        TeeView? Tee = null);
+        TeeView? Tee = null,
+        DateTimeOffset? LoginExpiresAt = null);
 
     /// <summary>
     /// This side's rate-limit-guard observation in plain wire types: the account

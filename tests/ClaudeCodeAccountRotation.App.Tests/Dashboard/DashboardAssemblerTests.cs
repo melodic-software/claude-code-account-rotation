@@ -815,6 +815,46 @@ public sealed class DashboardAssemblerTests
         card.GetProperty("usageNote").GetString().ShouldBe("in use by wsl; figures come from wsl sessions");
     }
 
+    /// <summary>
+    /// The number the month is planned around. One family per account means one
+    /// login expiry, and for an account the other side holds there is no local
+    /// file left to read it from — the 28-day window is fixed and a refresh does
+    /// not move it, so a card that silently dropped this would hide the one
+    /// re-login the operator has to schedule.
+    /// </summary>
+    [Fact]
+    public async Task AWslHeldAccountsLoginExpiryComesFromTheSideThatHoldsIt()
+    {
+        FakePeerRotationInstance side = Side();
+        side.OutgoingEmail = HeldEmail;
+        side.LoginExpiresAt = _teeCapturedAt.AddDays(3);
+        await using AppFactory factory = await SharedStoreAsync(side);
+
+        JsonElement card = await CardAsync(factory, HeldEmail);
+
+        card.GetProperty("loginExpiresAt").GetDateTimeOffset().ShouldBe(_teeCapturedAt.AddDays(3));
+    }
+
+    /// <summary>
+    /// With the distribution off there is no one to ask, and the slot holds no
+    /// file: the card says nothing about the expiry rather than something from
+    /// before the hand-off.
+    /// </summary>
+    [Fact]
+    public async Task AWslHeldAccountsLoginExpiryIsAbsentWhileThatSideIsOffline()
+    {
+        FakePeerRotationInstance side = Side();
+        side.OutgoingEmail = HeldEmail;
+        side.LoginExpiresAt = _teeCapturedAt.AddDays(3);
+        side.DashboardError = "the distribution is not running";
+        await using AppFactory factory = await SharedStoreAsync(side);
+
+        JsonElement card = await CardAsync(factory, HeldEmail);
+
+        card.GetProperty("loginExpiresAt").ValueKind.ShouldBe(JsonValueKind.Null);
+        card.GetProperty("chip").GetString().ShouldBe("in use by wsl (offline)");
+    }
+
     /// <summary>A tee whose windows have moved on keeps its age and loses its figures.</summary>
     [Fact]
     public async Task AWslHeldAccountsFiguresGoWhenTheirWindowHasResetSinceTheyWereTaken()

@@ -30,6 +30,13 @@ internal sealed record WslReconciliation(string Outcome, string? Banner, bool De
 /// pair it does not have (design 12). It is null when that side is offline or
 /// has no snapshot to give.
 /// </para>
+/// <para>
+/// <see cref="LoginExpiresAt"/> is when the login behind that side's live pair
+/// runs out, and is the only source for the one number the operator plans the
+/// month around: the 28-day window is fixed, a refresh does not move it, and an
+/// account this side holds has no local file left to read it from. Null on the
+/// same terms as the tee.
+/// </para>
 /// </summary>
 internal sealed record WslSideState(
     SideName Side,
@@ -37,7 +44,8 @@ internal sealed record WslSideState(
     AccountEmail? LiveAccount,
     string Detail,
     bool CanStart = false,
-    StatuslineSnapshot? Usage = null);
+    StatuslineSnapshot? Usage = null,
+    DateTimeOffset? LoginExpiresAt = null);
 
 /// <summary>
 /// The leader's coordinator for a switch of the <b>other</b> side of this
@@ -409,7 +417,8 @@ internal sealed partial class WslSwitch : IDisposable
                     live.LiveAccount,
                     live.LiveAccount is null ? "online, holding nothing" : "online",
                     canStart,
-                    live.Tee),
+                    live.Tee,
+                    live.LoginExpiresAt),
             reason => new WslSideState(peer.Side, Online: false, null, "offline: " + reason, canStart));
     }
 
