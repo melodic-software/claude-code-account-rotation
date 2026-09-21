@@ -517,7 +517,7 @@ the acceptance script are three agent lanes once `WslSwitch` compiles. **Waits:*
 itself is roughly an hour of wall clock, unattended. **Human gate:** the merge, and a look at the
 acceptance output before phase 5 starts. **Estimate:** 1 to 1.5 days of agent work plus the run.
 
-### Phase 5: the live slice on the laptop, one designated account [TODO] (#70)
+### Phase 5: the live slice on the laptop, one designated account [DONE] (#70)
 
 Review: close-out. **Operator present; the first phase that touches a real credential root, and the
 phase that makes WSL usable.**
@@ -577,6 +577,46 @@ commit. **Estimate:** 1 to 2 h with the operator present.
 
 **After phase 5 the operator can use WSL with rotation working**, on the accounts they hand over one
 at a time from the page, on the laptop. Phases 6 to 8 are quality of life and breadth.
+
+**Run note 2026-09-21 (#70): the phase ran and passed.** The record is the last row of
+`tests/acceptance/README.md`. Six things this section or #70 got wrong, all found by running it:
+
+1. **Nothing created the follower's mailbox.** `ConfigurationValidator` refuses to start a follower
+   whose mailbox is absent, saying "the leader creates it in the store under `.transit/`", but the
+   only creator was inside the claim — which cannot run until a follower is already answering. A
+   fresh install could never start its follower at all. The temp-root acceptance never saw it
+   because the script makes the mailbox itself. Fixed in this phase's commit; #82's `EnsureMailbox`
+   does not cover it, sitting inside `WslSwitch.ImportAsync`, which has the same prerequisite.
+2. **Work item 1 is wrong about the holder record.** It says the live account resolves `HeldHere`
+   "with its record written by the section 9.4 reconciliation". The reconciliation writes no record:
+   `SharedStoreSlots.ReadAsync` *derives* `HeldHere` from possession, which is what keeps a store
+   that predates the flag from reading as never logged in until its next switch. Observed on the
+   real store — after installing the leader over ten already-parked accounts, the live one's card
+   read `held-here` with no `holder.json` anywhere. A record is written by a *switch*
+   (`LiveDirectorySwitch` calls `SharedStoreSlots.TakeAsync` on the incoming slot, which is phase
+   2's designed behaviour) and by a hand-off to the other side; so a store reads correctly both
+   before any record exists and after one does, which is the property that matters.
+3. **R2's checkable half names a log the product does not produce.** The follower is leader-spawned
+   through `wsl.exe` and its stdout is a discarded pty, so there is no follower log to grep. The
+   criterion is restated as the stronger fact: the pair in the distro fingerprints equal to the pair
+   that left the store, so it was handed over rather than logged in, beside the 404 on the login
+   route and a container with no login runner. A real follower log belongs in phase 8's install, as
+   a wrapper or a unit file, not as a restart during the slice.
+4. **"Ten switches on each side" could not be done with one account** when this was written: nothing
+   parked a held account back except a switch of that side to a *different* one, and R6 forbids
+   Windows pulling it back. #82's release route landed mid-phase and made the round trip real, so
+   the criterion is met rather than waived. Without it the honest form would have been ten Windows
+   switches and one hand-off.
+5. **An upgrade needs an external process kill**, because the app maps no shutdown route. Worth
+   pricing into phase 8's autostart work.
+6. **The product's own credential moves are indistinguishable from exfiltration to a policy
+   classifier.** An agent driving this phase was refused at the hand-off itself (`Secret-Store
+   Writes`), at ad-hoc credential fingerprint reads (`Credential Materialization`, though
+   `check-single-holder.sh` runs fine because the hashing happens inside the sanctioned script), and
+   at every process stop (`Interfere With Workloads`). The operator drove the five mutations from
+   the page while the agent verified around each. **Any future agent-driven live slice needs the
+   operator at the page**; phase 8's desktop rollout should be planned that way rather than
+   discovering it again.
 
 ### Phase 6: breadth on the page [TODO] (#71)
 

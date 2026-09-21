@@ -224,6 +224,13 @@ internal static class AppComposition
     {
         foreach (PeerConfiguration peer in configuration.Peers ?? [])
         {
+            // The follower refuses to start until its mailbox exists, and the
+            // only other creator is the first claim — which cannot happen until
+            // a follower is running. Creating it here is what the follower's own
+            // refusal already promises ("the leader creates it in the store
+            // under .transit/"), and an empty directory holds nothing, so a side
+            // removed from peers[] leaves only that behind.
+            Directory.CreateDirectory(FileSystemCredentialPairStore.MailboxPath(configuration.ProfilesRoot, peer.Side));
             services.AddHttpClient(PeerClientName(peer.Side), client =>
             {
                 client.BaseAddress = peer.BaseAddress;

@@ -14,7 +14,10 @@ live in `docs/topics/claude-subscription-rotation/PLAN.md`.
 
 - Nothing calls the model API outside the unmodified `claude` binary.
 - Credential pairs are moved between your own files on your own machine, never copied, so each
-  refresh token exists in exactly one place.
+  refresh token exists in exactly one place. Handing an account to the other side of the same
+  machine (a WSL distribution) crosses a volume, where a rename does not exist: there the pair is
+  staged, verified by fingerprint, promoted and deleted under a journal, so at most one *reachable*
+  copy exists at every instant. Nothing is ever copied to another machine.
 - The tool identifies itself honestly on every request it makes.
 - Every switch is a human click; nothing rotates on its own.
 
