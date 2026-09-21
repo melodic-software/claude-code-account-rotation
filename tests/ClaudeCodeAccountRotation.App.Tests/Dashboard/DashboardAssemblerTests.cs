@@ -686,6 +686,28 @@ public sealed class DashboardAssemblerTests
     }
 
     /// <summary>
+    /// A parked pair whose login has run out is no more switchable by the other
+    /// side than by this one — its planner refuses it with
+    /// <c>TargetLoginExpired</c> — so the picker does not offer it either.
+    /// </summary>
+    [Fact]
+    public async Task AParkedAccountWhoseLoginHasExpiredIsOfferedToNoSide()
+    {
+        await using AppFactory factory = await SharedStoreAsync(Side());
+        _ = await factory.ParkedProfileAsync(
+            ExpiredEmail,
+            "refresh-expired",
+            TestContext.Current.CancellationToken,
+            loginExpiresAt: factory.Clock.GetUtcNow().AddDays(-1));
+
+        JsonElement card = await CardAsync(factory, ExpiredEmail);
+
+        card.GetProperty("chip").GetString().ShouldBe("parked");
+        card.GetProperty("canSwitchHere").GetBoolean().ShouldBeFalse();
+        OfferedTo(card).ShouldBeEmpty();
+    }
+
+    /// <summary>
     /// The card R6 is about: the pair is in the other side's live directory, so
     /// neither this side's Switch nor that side's may take it until that side
     /// parks it back.
@@ -700,6 +722,10 @@ public sealed class DashboardAssemblerTests
         card.GetProperty("chip").GetString().ShouldBe("in use by wsl");
         card.GetProperty("canSwitchHere").GetBoolean().ShouldBeFalse();
         OfferedTo(card).ShouldBeEmpty();
+        // The slot is empty by design, not by a missing login, and this is the
+        // flag the page reads before it says anything about the credential.
+        card.GetProperty("heldAway").GetBoolean().ShouldBeTrue();
+        card.GetProperty("hasCredentials").GetBoolean().ShouldBeFalse();
     }
 
     /// <summary>Design 11's "distro off" row: the pair is still there, and the chip says why nothing can reach it.</summary>
@@ -817,6 +843,8 @@ public sealed class DashboardAssemblerTests
     private const string ParkedEmail = "parked@example.com";
 
     private const string HeldEmail = "held@example.com";
+
+    private const string ExpiredEmail = "expired@example.com";
 
     /// <summary>A side that answers, holds nothing, and reports this build's own version.</summary>
     private static FakePeerRotationInstance Side() => new(mailbox: Path.GetTempPath()) { OutgoingEmail = null, OutgoingRefreshToken = null };

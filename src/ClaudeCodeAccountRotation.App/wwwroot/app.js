@@ -562,6 +562,11 @@
   function stateChip(account, at) {
     if (account.isLive) { return "live"; }
     if (account.roster && account.roster.paused) { return "paused"; }
+    // A slot the other side holds is empty on purpose, so its emptiness is not
+    // a missing login and must not be read as one: the store chip beside this
+    // one says where that account's pair actually is, and the Login button is
+    // already withheld for the same reason.
+    if (account.heldAway) { return null; }
     if (!account.hasCredentials) { return "needs login"; }
     if (loginExpired(account, at)) { return "login expired"; }
     if (account.refresh.state === "stranded") { return "error"; }
@@ -755,7 +760,7 @@
       // class is fixed rather than derived from the text, since a chip can
       // carry "(offline)".
       if (account.chip) { badges.appendChild(element("span", "badge store", account.chip)); }
-      if (!account.chip || (chip !== "live" && chip !== "ready")) {
+      if (chip && (!account.chip || (chip !== "live" && chip !== "ready"))) {
         badges.appendChild(element("span", "badge " + chip.replace(/ /g, "-"), chip));
       }
       if (!roster) { badges.appendChild(element("span", "badge off-roster", "not on roster")); }

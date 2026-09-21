@@ -231,6 +231,14 @@ internal sealed partial class DashboardAssembler(
         MergedUsage? merged = UsageMerge.Merge(sources);
         RosterEntry? entry = roster.Find(email);
         RefreshStateView refresh = Refresh(email, folder);
+        // Whether this pair can be made live at all, on either side: the planner
+        // both sides go through refuses a stranded folder and an expired login
+        // whichever side asked, so the two controls below share one verdict
+        // rather than the page offering a side an account its own switch would
+        // then refuse.
+        bool usable = hasCredentials
+            && refresh.State != Kebab(RefreshOutcomeKind.Stranded)
+            && !(loginExpiresAt <= capturedAt);
         return (
             new AccountCardView(
                 email.Value,
@@ -245,14 +253,10 @@ internal sealed partial class DashboardAssembler(
                 LoggedInAt: loggedInAt,
                 Slot: Word(slot),
                 Chip: Chip(slot, holder),
-                CanSwitchHere: !isLive
-                    && hasCredentials
-                    && !heldAway
-                    && refresh.State != Kebab(RefreshOutcomeKind.Stranded)
-                    && !(loginExpiresAt <= capturedAt),
+                CanSwitchHere: usable && !isLive && !heldAway,
                 HeldAway: heldAway,
                 OfferedTo: [.. sides
-                    .Where(side => side.Online && slot?.State == SlotState.Parked && hasCredentials && side.LiveAccount != email)
+                    .Where(side => usable && side.Online && slot?.State == SlotState.Parked && side.LiveAccount != email)
                     .Select(static side => side.Side.Value)]),
             new AccountStanding(email, isLive, entry?.Paused ?? false, hasCredentials, merged?.Merged, loginExpiresAt));
     }
