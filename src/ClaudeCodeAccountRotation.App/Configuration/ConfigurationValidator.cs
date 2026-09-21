@@ -109,14 +109,15 @@ internal static class ConfigurationValidator
         // The configured spelling, not the normalized one: Path.GetFullPath turns
         // "/mnt/c/..." into a drive-rooted path on Windows, where this check would
         // then pass for exactly the configuration it exists to refuse. And the
-        // normalized one too, so "/tmp/../mnt/c/..." cannot spell its way past.
-        if (UnderWindowsMount(configuration.LiveConfigDirectory) || UnderWindowsMount(Normalize(configuration.LiveConfigDirectory)))
+        // resolved one too, so neither "/tmp/../mnt/c/..." nor a link under the
+        // home directory that points onto the mount can spell its way past.
+        string live = Resolved(configuration.LiveConfigDirectory);
+        string appData = Resolved(configuration.AppDataDirectory);
+        if (UnderWindowsMount(configuration.LiveConfigDirectory) || UnderWindowsMount(live))
         {
             return Failure("the follower's live config directory " + configuration.LiveConfigDirectory + " sits under /mnt/; a follower's live pair must be on its own file system, never on the Windows volume through DrvFs");
         }
 
-        string live = Normalize(configuration.LiveConfigDirectory);
-        string appData = Normalize(configuration.AppDataDirectory);
         string? liveVolume = volumeOf(live);
         string? appDataVolume = volumeOf(appData);
         if (!string.Equals(liveVolume, appDataVolume, StringComparison.OrdinalIgnoreCase))
@@ -224,6 +225,29 @@ internal static class ConfigurationValidator
     }
 
     private static string Normalize(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+
+    /// <summary>
+    /// The normalized path with every symbolic link along it followed, so a
+    /// directory is judged by where its files really land. A link is followed
+    /// whether or not its target exists, and a cycle stops at 40 hops.
+    /// ponytail: a link target's own inner components are not walked again;
+    /// walk the resolved path from its root if a layout ever nests links.
+    /// </summary>
+    private static string Resolved(string path)
+    {
+        string full = Normalize(path);
+        string current = Path.GetPathRoot(full)!;
+        foreach (string part in full[current.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, part);
+            for (int hop = 0; hop < 40 && new FileInfo(current).LinkTarget is string target; hop++)
+            {
+                current = Normalize(Path.Combine(Path.GetDirectoryName(current)!, target));
+            }
+        }
+
+        return current;
+    }
 
     private static StringComparison Comparison => OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 

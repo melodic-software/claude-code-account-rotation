@@ -462,7 +462,20 @@ internal sealed partial class FollowerImport : IDisposable
     private async Task<Result<ImportAnswer, string>> StageAndExportAsync(ImportRequest request, CancellationToken cancellationToken)
     {
         IDisposable permit = await _gate.AcquireAsync(_options.MutationGateTimeout, cancellationToken);
-        Result<IAsyncDisposable, string> locked = await _refreshLock.AcquireAsync(_options.RefreshLockWaitBound, cancellationToken);
+        Result<IAsyncDisposable, string> locked;
+        try
+        {
+            locked = await _refreshLock.AcquireAsync(_options.RefreshLockWaitBound, cancellationToken);
+        }
+        catch
+        {
+            // A client that hangs up while the lock is being waited for: the permit
+            // is not yet part of a hold, and would otherwise be kept for the life
+            // of the process, refusing every later import.
+            permit.Dispose();
+            throw;
+        }
+
         if (locked.IsFailure)
         {
             permit.Dispose();

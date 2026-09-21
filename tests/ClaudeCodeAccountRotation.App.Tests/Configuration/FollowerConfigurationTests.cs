@@ -85,6 +85,22 @@ public sealed class FollowerConfigurationTests : IDisposable
         verdict.Error.ShouldContain("/mnt/");
     }
 
+    /// <summary>
+    /// Spelled under the temp root, so both the raw and the normalized checks
+    /// miss it, while a link along the way puts the live pair on the mount.
+    /// </summary>
+    [Fact(SkipUnless = nameof(OnUnix), Skip = "Symbolic links onto /mnt/ are a WSL layout")]
+    public void AFollowerLiveDirectoryReachedThroughALinkOntoTheWindowsMountIsRefused()
+    {
+        string link = Path.Combine(_root, "linked");
+        Directory.CreateSymbolicLink(link, "/mnt");
+
+        Result<Unit, string> verdict = Validate(Follower(liveDirectory: Path.Combine(link, "c", "claude-live")));
+
+        verdict.IsFailure.ShouldBeTrue();
+        verdict.Error.ShouldContain("/mnt/");
+    }
+
     [Fact]
     public void AFollowerWhoseMailboxDoesNotExistIsRefusedWithANamedReason()
     {

@@ -679,6 +679,28 @@ public sealed class FollowerImportTests : IDisposable
         next.Value.ExportedFingerprint.ShouldBe(fa);
     }
 
+    [Fact]
+    public async Task AnImportCancelledWhileWaitingForTheRefreshLockGivesTheGateBack()
+    {
+        // The lock is held by someone else, so the import waits for it with the
+        // gate permit already taken and no hold yet built to give it back.
+        (RefreshTokenFingerprint fa, RefreshTokenFingerprint fb) = await SeedAsync();
+        using FollowerImport follower = _roots.Follower();
+        await follower.StatusAsync(Token);
+        Directory.CreateDirectory(_roots.RefreshLockDirectory);
+        Directory.SetLastWriteTimeUtc(_roots.RefreshLockDirectory, _roots.Clock.GetUtcNow().UtcDateTime);
+        using var hangUp = CancellationTokenSource.CreateLinkedTokenSource(Token);
+        hangUp.CancelAfter(TimeSpan.FromMilliseconds(200));
+
+        await Should.ThrowAsync<OperationCanceledException>(
+            () => follower.ImportAsync(_roots.Request(IncomingEmail, fb), hangUp.Token));
+
+        Directory.Delete(_roots.RefreshLockDirectory);
+        Result<ImportAnswer, string> next = await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
+        next.IsSuccess.ShouldBeTrue(next.IsFailure ? next.Error : null);
+        next.Value.ExportedFingerprint.ShouldBe(fa);
+    }
+
     public static bool OnUnix => !OperatingSystem.IsWindows();
 
     /// <summary>
