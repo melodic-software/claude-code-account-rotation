@@ -1,0 +1,57 @@
+name: release
+
+# Publishes the two executables a machine installs: the Windows leader and the
+# linux-x64 follower the WSL side runs (#73 installs the follower from this
+# asset, so a machine never hand-stages a binary). Tag-driven: the assets are
+# built from the tag's own tree and nothing publishes from a branch.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Publish and upload
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+      # Both runtime identifiers are published from the one runner: the
+      # single-file bundler is cross-platform, so a Linux runner produces the
+      # Windows executable byte-for-byte the same as a Windows one would.
+      - name: Publish
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          for rid in linux-x64 win-x64; do
+            dotnet publish src/ClaudeCodeAccountRotation.App \
+              -c Release -r "$rid" --self-contained true \
+              -p:PublishSingleFile=true \
+              -p:IncludeNativeLibrariesForSelfExtract=true \
+              -p:Version="$version" \
+              -o "publish/$rid"
+          done
+          mkdir dist
+          cp publish/linux-x64/claude-code-account-rotation dist/claude-code-account-rotation-linux-x64
+          cp publish/win-x64/claude-code-account-rotation.exe dist/claude-code-account-rotation-win-x64.exe
+      # The installer verifies the asset it downloads against this file, so a
+      # truncated or substituted download is refused rather than run.
+      - name: Checksums
+        run: cd dist && sha256sum ./* > SHA256SUMS
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes dist/*
