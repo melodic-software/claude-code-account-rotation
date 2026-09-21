@@ -10,6 +10,39 @@ is the form a machine whose two sides share one store needs: it counts a mailbox
 `.transit/` and a `*.incoming` staging name as holders like any other file, so a hand-off in flight
 is checked rather than passed over.
 
+## The temp-root WSL acceptance (`wsl-switch-acceptance.sh`, issue #69)
+
+The one script here that touches no real root at all, and the only one that can run unattended. It
+drives a real leader on Windows and a real follower inside the distro over the real 9P mount, on
+temp roots and fake pairs, with a `claudeExecutable` that does not exist so no CLI is ever started.
+Roughly forty minutes.
+
+```sh
+dotnet publish src/ClaudeCodeAccountRotation.App -c Release -r win-x64 --self-contained false -o <win>
+dotnet publish src/ClaudeCodeAccountRotation.App -c Release -r linux-x64 --self-contained true -o <linux>
+# copy <linux> into the distro, off the mount, and chmod +x it
+bash tests/acceptance/wsl-switch-acceptance.sh --leader <win> --follower <linux inside the distro>
+```
+
+It runs on the **Windows** side and reaches into the distro with `wsl.exe`. That is forced, not
+preferred: the leader binds loopback only and under WSL's default NAT networking a process inside
+the distro cannot reach the Windows loopback at all. The sweep that needs all four roots at once
+still runs inside the distro, where they are all readable.
+
+The follower build is self-contained because the distro's runtime need not match the SDK the leader
+was built with; the framework-dependent `linux-x64` leg is what `eng/smoke-linux-publish.sh` and CI
+cover. Both binaries must be published from the same commit: the leader refuses a side whose
+reported version is not its own.
+
+Two environment variables drive the injections, both read only from the environment and never from
+the configuration file: `CCAR_FAIL_AFTER_STEP` names one `ImportStep` or `WslSwitchStep` and kills
+the process at it (`<step>:before-journal` for the torn case), and
+`CCAR_CORRUPT_EXPORT_BEFORE_GATE` truncates the exported pair between the follower's `Exported`
+answer and the leader's native read, which is the one window no external script can hit
+deterministically.
+
+`--keep` leaves the temp roots and every process log behind, which is what a failed run is for.
+
 ## The state-file patch probe (plan item 1.5a, run 2026-09-06)
 
 Run once, before the first real switch, with the patch disabled: three sessions open, one switch to a

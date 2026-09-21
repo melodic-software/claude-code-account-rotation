@@ -3,52 +3,11 @@ using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
+using ClaudeCodeAccountRotation.Core.Peers;
+using ClaudeCodeAccountRotation.Core.Switching;
 using Microsoft.Extensions.Logging;
 
 namespace ClaudeCodeAccountRotation.App.Switching;
-
-/// <summary>
-/// What the leader asks the follower to take. No token crosses the wire:
-/// identity is the SHA-256 fingerprint and the pair itself is read from
-/// <see cref="ClaimedPath"/>, a file on the store's own volume that the leader
-/// renamed into its mailbox before asking.
-/// </summary>
-internal sealed record ImportRequest(
-    AccountEmail Email,
-    string ClaimedPath,
-    RefreshTokenFingerprint Fingerprint,
-    JsonObject Account,
-    string ExportPath);
-
-/// <summary>
-/// The answer to <c>POST /api/import</c>: the import has run F1 to F4 and
-/// stopped. <see cref="ExportedFingerprint"/> is the outgoing pair the leader
-/// must now read natively and verify before it may commit, or null when this
-/// side held nothing and there is nothing to verify.
-/// </summary>
-internal sealed record ImportAnswer(
-    RefreshTokenFingerprint? ExportedFingerprint,
-    AccountEmail? Outgoing,
-    bool AlreadyImported,
-    ImportResult? Result);
-
-/// <summary>What the commit hands back: which account left this side, and its block for the leader's park.</summary>
-internal sealed record ImportResult(
-    AccountEmail? Outgoing,
-    RefreshTokenFingerprint? OutgoingFingerprint,
-    JsonObject? OutgoingAccount,
-    bool AlreadyImported);
-
-/// <summary>
-/// <c>GET /api/import-status</c>: what the follower believes about the import
-/// the leader is asking after, decided from the files and not only the journal.
-/// </summary>
-internal sealed record ImportStatus(
-    bool Imported,
-    ImportStep? JournalStep,
-    RefreshTokenFingerprint? LiveFingerprint,
-    AccountEmail? LiveAccount,
-    string Detail);
 
 /// <summary>
 /// The follower's staged import, held across two calls.
@@ -293,7 +252,7 @@ internal sealed partial class FollowerImport : IDisposable
         {
             ImportJournalEntry? journal = await _journal.ReadOpenAsync(cancellationToken);
             CredentialPair? live = await _pairs.ReadLiveAsync(cancellationToken);
-            AccountEmail? liveAccount = (await _stateFile.ReadAccountBlockAsync(cancellationToken))?.Email;
+            OAuthAccountBlock? liveAccount = await _stateFile.ReadAccountBlockAsync(cancellationToken);
             return await StatusOfAsync(journal, live, liveAccount, about, cancellationToken);
         }
         finally
@@ -305,7 +264,7 @@ internal sealed partial class FollowerImport : IDisposable
     private async Task<ImportStatus> StatusOfAsync(
         ImportJournalEntry? journal,
         CredentialPair? live,
-        AccountEmail? liveAccount,
+        OAuthAccountBlock? liveAccount,
         AccountEmail? about,
         CancellationToken cancellationToken)
     {
@@ -801,6 +760,17 @@ internal sealed partial class FollowerImport : IDisposable
                 UnwindAsync(hold).GetAwaiter().GetResult();
             }
         }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException or System.Text.Json.JsonException)
+        {
+            // This runs on a timer thread, where an escaping exception is not a
+            // failed request but a faulted process: nothing is awaiting this
+            // call, so the unhandled exception would take the follower down and
+            // with it the import it was trying to tidy up. A self-abort that
+            // cannot finish leaves the hold open for the next request or the
+            // next tick, which is strictly better than no process at all.
+            // Phase 3 flagged this and left it; this is the fix.
+            LogSelfAbortFailed(exception.Message);
+        }
         finally
         {
             try
@@ -825,6 +795,9 @@ internal sealed partial class FollowerImport : IDisposable
 
     [LoggerMessage(Level = LogLevel.Information, Message = "the import of {Incoming} was unwound; the live pair was not touched")]
     private partial void LogUnwound(string incoming);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the idle self-abort could not finish ({Reason}); the hold stays open for the next request")]
+    private partial void LogSelfAbortFailed(string reason);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "the import of {Incoming} was asked to unwind after the swap had already run; it was finished instead, because the outgoing pair exists only as the export")]
     private partial void LogFinishedInsteadOfUnwound(string incoming);

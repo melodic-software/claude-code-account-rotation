@@ -3,6 +3,7 @@ using ClaudeCodeAccountRotation.App.Security;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
+using ClaudeCodeAccountRotation.Core.Peers;
 using ClaudeCodeAccountRotation.Core.Switching;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -91,6 +92,7 @@ internal static class ImportEndpoints
                 status.Imported,
                 status.JournalStep?.ToString(),
                 status.LiveFingerprint?.Sha256Hex,
+                status.LiveAccount?.Raw,
                 status.Detail));
         });
 
@@ -110,9 +112,11 @@ internal static class ImportEndpoints
             return Results.Ok(new FollowerDashboardView(
                 "follower",
                 SideName.Wsl.Value,
-                status.LiveAccount?.Value,
+                status.LiveAccount?.Email?.Value,
                 status.LiveFingerprint?.Sha256Hex,
-                status.JournalStep?.ToString()));
+                status.JournalStep?.ToString(),
+                Hosting.AppComposition.Version,
+                status.LiveAccount?.Raw));
         });
     }
 
@@ -163,7 +167,7 @@ internal static class ImportEndpoints
 
     internal sealed record ImportResultView(string? Outgoing, string? OutgoingFingerprint, JsonObject? OutgoingAccount, bool AlreadyImported);
 
-    internal sealed record ImportStatusView(bool Imported, string? JournalStep, string? LiveFingerprint, string Detail);
+    internal sealed record ImportStatusView(bool Imported, string? JournalStep, string? LiveFingerprint, JsonObject? LiveAccountBlock, string Detail);
 
-    internal sealed record FollowerDashboardView(string Role, string Side, string? LiveAccount, string? LiveFingerprint, string? ImportJournalStep);
+    internal sealed record FollowerDashboardView(string Role, string Side, string? LiveAccount, string? LiveFingerprint, string? ImportJournalStep, string? Version, JsonObject? LiveAccountBlock);
 }

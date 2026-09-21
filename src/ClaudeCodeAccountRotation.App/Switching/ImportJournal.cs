@@ -3,39 +3,9 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.Core.Identity;
+using ClaudeCodeAccountRotation.Core.Switching;
 
 namespace ClaudeCodeAccountRotation.App.Switching;
-
-/// <summary>
-/// How far a follower's staged import got before the journal was last written.
-/// <para>
-/// The journal is a hint and the fingerprints on disk are the evidence. A
-/// crash between a disk mutation and the journal write leaves the journal one
-/// step behind what the files say, which is why
-/// <see cref="ImportReconciler"/> decides every row by reading the live,
-/// staging, claimed and export files rather than by trusting this value.
-/// </para>
-/// </summary>
-internal enum ImportStep
-{
-    /// <summary>F2: the refresh lock is held and the outgoing pair has been read. Nothing has moved.</summary>
-    Planned,
-
-    /// <summary>F3: the incoming pair is staged beside the live file and verified by fingerprint.</summary>
-    Staged,
-
-    /// <summary>F4: the outgoing pair is copied to the mailbox and verified. The follower stops here until a commit arrives.</summary>
-    Exported,
-
-    /// <summary>F5: the staging file has replaced the live file. The outgoing pair's last local copy is gone.</summary>
-    Swapped,
-
-    /// <summary>F6: the claimed file in the mailbox has been deleted.</summary>
-    Released,
-
-    /// <summary>F7: the state file's account block and the live owner record name the incoming account.</summary>
-    Patched,
-}
 
 /// <summary>
 /// The intent written before the first move: which pair is arriving, which is

@@ -31,6 +31,24 @@ public sealed class OAuthRefreshLockTests : IDisposable
     }
 
     [Fact]
+    public async Task AFreshlyTakenLockIsStampedOnTheClockItsStalenessIsJudgedBy()
+    {
+        // Staleness is the directory's mtime against the provider's now, but a
+        // create leaves that mtime on the file system's clock. Where the two
+        // are not the same clock the lock was born stale or born in the future
+        // — and it showed up as a heartbeat test that passed only before
+        // 09:00 UTC, because that is when the fixed test clock happened to sit.
+        TestClock clock = new(new DateTimeOffset(2020, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        OAuthRefreshLock refreshLock = new(_liveDirectory, clock);
+
+        Result<IAsyncDisposable, string> held = await refreshLock.AcquireAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+
+        held.IsSuccess.ShouldBeTrue();
+        Directory.GetLastWriteTimeUtc(_lockDirectory).ShouldBe(clock.GetUtcNow().UtcDateTime, TimeSpan.FromSeconds(1));
+        await held.Value.DisposeAsync();
+    }
+
+    [Fact]
     public async Task WaitsForTheBoundThenRefusesWhileAFreshLockIsHeld()
     {
         Directory.CreateDirectory(_lockDirectory);

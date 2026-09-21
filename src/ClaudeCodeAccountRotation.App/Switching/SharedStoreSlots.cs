@@ -138,12 +138,19 @@ internal sealed partial class SharedStoreSlots
     }
 
     /// <summary>
-    /// Records that the Windows side has taken this slot's pair. Called by the
-    /// switch, under the gate it already holds, so it takes none of its own.
+    /// Records that a side has taken this slot's pair. Called by the switch,
+    /// under the gate it already holds, so it takes none of its own. The side
+    /// is a parameter because the leader writes this record for both of them:
+    /// its own on a Windows switch, and the other side's on the claim that
+    /// starts a hand-off.
     /// </summary>
     public Task TakeAsync(string folderPath, RefreshTokenFingerprint fingerprint, DateTimeOffset since, CancellationToken cancellationToken) =>
+        TakeAsync(folderPath, fingerprint, since, SideName.Windows, cancellationToken);
+
+    /// <inheritdoc cref="TakeAsync(string, RefreshTokenFingerprint, DateTimeOffset, CancellationToken)"/>
+    public Task TakeAsync(string folderPath, RefreshTokenFingerprint fingerprint, DateTimeOffset since, SideName side, CancellationToken cancellationToken) =>
         Enabled
-            ? HolderRecordFile.WriteAsync(folderPath, new HolderRecord(SideName.Windows, fingerprint, since), cancellationToken)
+            ? HolderRecordFile.WriteAsync(folderPath, new HolderRecord(side, fingerprint, since), cancellationToken)
             : Task.CompletedTask;
 
     /// <summary>Records that the slot holds its pair again: the record goes.</summary>

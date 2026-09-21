@@ -22,7 +22,20 @@ if (parsed.Value.ShowVersion)
     return 0;
 }
 
-WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
+// The content root is pinned to the binary's own directory rather than left as
+// the working directory the launcher happened to have. The host watches the
+// content root for a reloadable appsettings.json, and this tool is started by
+// other things: a logon shortcut whose working directory is the system folder,
+// and a leader that spawns the follower through wsl.exe, which inherits the
+// caller's. Started from a home directory on a 9P mount that watch took the
+// whole startup with it, in uninterruptible I/O, before a line was logged.
+// Nothing here reads appsettings.json; the configuration is the JSON file
+// --config names, and the page's assets are embedded in the assembly.
+WebApplicationBuilder builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{
+    Args = args,
+    ContentRootPath = AppContext.BaseDirectory,
+});
 Result<Unit, string> composed = await AppComposition.ComposeAsync(builder, parsed.Value, CancellationToken.None);
 if (composed.IsFailure)
 {

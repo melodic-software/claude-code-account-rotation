@@ -2,6 +2,8 @@ using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
+using ClaudeCodeAccountRotation.Core.Peers;
+using ClaudeCodeAccountRotation.Core.Switching;
 using Shouldly;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Switching;
@@ -225,9 +227,10 @@ public sealed class FollowerImportTests : IDisposable
         await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
 
         Directory.Exists(_roots.RefreshLockDirectory).ShouldBeTrue();
-        // Creation stamped the directory from the OS clock; the heartbeat re-stamps
-        // from the test clock. Anchor the baseline to the test clock so both sides of
-        // the comparison sit on one timeline, whatever the wall clock reads.
+        // The acquire stamps the directory from the lock's own clock, and the
+        // heartbeat re-stamps from it. Anchoring the baseline to the test clock
+        // here as well keeps this fact about the heartbeat alone: it holds
+        // whatever the wall clock reads, even if the acquire's stamp regressed.
         Directory.SetLastWriteTimeUtc(_roots.RefreshLockDirectory, _roots.Clock.GetUtcNow().UtcDateTime);
         DateTime before = Directory.GetLastWriteTimeUtc(_roots.RefreshLockDirectory);
         _roots.Clock.Advance(TimeSpan.FromSeconds(19));
@@ -236,6 +239,32 @@ public sealed class FollowerImportTests : IDisposable
 
         Directory.GetLastWriteTimeUtc(_roots.RefreshLockDirectory).ShouldBeGreaterThan(before);
         await follower.AbortAsync(new AccountEmail(IncomingEmail), Token);
+    }
+
+    [Fact]
+    public async Task ASelfAbortThatCannotFinishLeavesTheFollowerServingRatherThanFaultingIt()
+    {
+        // The idle self-abort runs on a timer thread, where nothing is awaiting
+        // it: an escaping exception is not a failed request but a faulted
+        // process, and it would take the follower down along with the import it
+        // was tidying up. Phase 3 flagged this and left it. A directory where
+        // the export should be is the cheapest way to make the delete throw.
+        (_, RefreshTokenFingerprint fb) = await SeedAsync();
+        using FollowerImport follower = _roots.Follower(
+            idleTimeout: TimeSpan.FromSeconds(1),
+            heartbeatInterval: TimeSpan.FromMilliseconds(30));
+        await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
+        File.Delete(_roots.ExportPath(OutgoingEmail));
+        Directory.CreateDirectory(_roots.ExportPath(OutgoingEmail));
+
+        _roots.Clock.Advance(TimeSpan.FromSeconds(30));
+        await Task.Delay(200, Token);
+
+        // Still answering, and still holding the import it could not unwind.
+        ImportStatus status = await follower.StatusAsync(Token, new AccountEmail(IncomingEmail));
+        status.Imported.ShouldBeFalse();
+        (await FollowerRoots.FingerprintOfAsync(_roots.LivePath, Token)).ShouldNotBeNull();
+        Directory.Delete(_roots.ExportPath(OutgoingEmail));
     }
 
     [Fact]
@@ -552,9 +581,9 @@ public sealed class FollowerImportTests : IDisposable
         ImportStatus snapshot = await during!;
 
         held.LiveFingerprint.ShouldBe(fa);
-        held.LiveAccount?.Value.ShouldBe(OutgoingEmail);
+        held.LiveAccount?.Email?.Value.ShouldBe(OutgoingEmail);
         snapshot.LiveFingerprint.ShouldBe(fb);
-        snapshot.LiveAccount?.Value.ShouldBe(IncomingEmail);
+        snapshot.LiveAccount?.Email?.Value.ShouldBe(IncomingEmail);
     }
 
     [Fact]

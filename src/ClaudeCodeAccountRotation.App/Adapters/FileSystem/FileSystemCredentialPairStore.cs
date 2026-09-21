@@ -91,6 +91,62 @@ internal sealed class FileSystemCredentialPairStore : ICredentialPairStore
     }
 
     /// <summary>
+    /// The claim reversed: renames a claimed file back out of the mailbox into
+    /// the slot it came from. This is the unclaim of design 9.1, and it runs
+    /// only once the other side has answered a definite "not imported": a
+    /// claimed file the follower may already have staged from is never taken
+    /// back blind.
+    /// </summary>
+    public Task UnclaimFromMailboxAsync(string folderPath, SideName side, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        string folder = ProfileFolder(folderPath);
+        Directory.CreateDirectory(folder);
+        Rename(ClaimedPathFor(folderPath, side), Path.Combine(folder, FileName));
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// <b>L3b, the export gate.</b> Reads the file the other side exported,
+    /// <b>natively</b>, on the store's own volume, through a fresh open, and
+    /// answers its fingerprint. An absent file, a short or torn read, and an
+    /// one that will not parse are all failures with a reason, never an exception: the
+    /// gate exists so that a bad crossing costs a refused switch, and a
+    /// refusal is how it says so.
+    /// <para>
+    /// This read is the only check in the design that does not go through the
+    /// layer under suspicion. Section 3 measured <c>fsync</c> over DrvFs
+    /// returning 0 without measuring durability, and the follower's own F4
+    /// read-back is a 9P read that the mount cache can serve; reading here, on
+    /// the volume that owns the bytes, is what turns that assumption into a
+    /// per-switch verification.
+    /// </para>
+    /// </summary>
+    public async Task<Result<RefreshTokenFingerprint, string>> ReadExportedFingerprintAsync(
+        string folderPath,
+        SideName side,
+        CancellationToken cancellationToken)
+    {
+        string folder = ProfileFolder(folderPath);
+        string export = ExportPathFor(folderPath, side);
+        CredentialPair? exported;
+        try
+        {
+            exported = await ReadPairAsync(export, cancellationToken);
+        }
+        catch (Exception exception) when (exception is InvalidDataException or JsonException)
+        {
+            // An export the other side truncated is a refusal, not a fault: the
+            // whole point of the gate is that a bad crossing costs a switch.
+            return Result<RefreshTokenFingerprint, string>.Failure("the exported pair for " + Path.GetFileName(folder) + " could not be read");
+        }
+
+        return exported is null
+            ? Result<RefreshTokenFingerprint, string>.Failure("no exported pair for " + Path.GetFileName(folder))
+            : Result<RefreshTokenFingerprint, string>.Success(exported.Fingerprint);
+    }
+
+    /// <summary>
     /// The promote: renames the pair the other side exported into this slot,
     /// but only once its fingerprint is the one the caller expected. A
     /// mismatch, a short read, or an absent export is a refusal and moves
@@ -104,31 +160,32 @@ internal sealed class FileSystemCredentialPairStore : ICredentialPairStore
         CancellationToken cancellationToken)
     {
         string folder = ProfileFolder(folderPath);
-        string export = Path.Combine(MailboxFor(side), ClaimedName(folder) + IncomingSuffix);
-        CredentialPair? exported;
-        try
+        Result<RefreshTokenFingerprint, string> exported = await ReadExportedFingerprintAsync(folderPath, side, cancellationToken);
+        if (exported.IsFailure)
         {
-            exported = await ReadPairAsync(export, cancellationToken);
-        }
-        catch (Exception exception) when (exception is InvalidDataException or JsonException)
-        {
-            // An export the other side truncated is a refusal, not a fault: the
-            // whole point of the gate is that a bad crossing costs a switch.
-            return Result<Unit, string>.Failure("the exported pair for " + Path.GetFileName(folder) + " could not be read");
+            return Result<Unit, string>.Failure(exported.Error);
         }
 
-        if (exported is null)
+        if (exported.Value != expected)
         {
-            return Result<Unit, string>.Failure("no exported pair to promote for " + Path.GetFileName(folder));
-        }
-
-        if (exported.Fingerprint != expected)
-        {
-            return Result<Unit, string>.Failure("the exported pair for " + Path.GetFileName(folder) + " is not the one that was verified (fingerprint " + exported.Fingerprint.Sha256Hex[..12] + " vs expected " + expected.Sha256Hex[..12] + ")");
+            return Result<Unit, string>.Failure("the exported pair for " + Path.GetFileName(folder) + " is not the one that was verified (fingerprint " + exported.Value.Sha256Hex[..12] + " vs expected " + expected.Sha256Hex[..12] + ")");
         }
 
         Directory.CreateDirectory(folder);
-        Rename(export, Path.Combine(folder, FileName));
+        try
+        {
+            Rename(ExportPathFor(folderPath, side), Path.Combine(folder, FileName));
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException)
+        {
+            // Every other way this method declines is a failure it returns, and
+            // so is this one: a slot that already holds a pair, or an export
+            // that went away between the read and the move, is a disagreement
+            // for the caller to report and leave alone. Throwing would carry it
+            // out of a dashboard poll as a 500 and strand the export anyway.
+            return Result<Unit, string>.Failure("the exported pair for " + Path.GetFileName(folder) + " could not be moved into its slot: " + exception.Message);
+        }
+
         return Result<Unit, string>.Success(Unit.Value);
     }
 
@@ -203,6 +260,14 @@ internal sealed class FileSystemCredentialPairStore : ICredentialPairStore
     /// account and the name says which account it belongs to.
     /// </summary>
     public static string ClaimedFileName(string folderName) => folderName + FileName;
+
+    /// <summary>Where this slot's pair sits while the named side holds the claim.</summary>
+    public string ClaimedPathFor(string folderPath, SideName side) =>
+        Path.Combine(MailboxFor(side), ClaimedName(ProfileFolder(folderPath)));
+
+    /// <summary>Where the named side puts this slot's pair when it exports it back.</summary>
+    public string ExportPathFor(string folderPath, SideName side) =>
+        ClaimedPathFor(folderPath, side) + IncomingSuffix;
 
     private string MailboxFor(SideName side) => MailboxPath(_profilesRoot, side);
 

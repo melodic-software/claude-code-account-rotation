@@ -1,3 +1,5 @@
+using ClaudeCodeAccountRotation.Core.Switching;
+
 namespace ClaudeCodeAccountRotation.App.Switching;
 
 /// <summary>The paths and bounds a switch runs under; bound from the configuration.</summary>
@@ -9,7 +11,8 @@ internal sealed record SwitchOptions(
     TimeSpan RefreshLockWaitBound,
     TimeSpan MutationGateTimeout,
     string? Mailbox = null,
-    string? FailAfterStep = null);
+    string? FailAfterStep = null,
+    bool CorruptExportBeforeGate = false);
 
 /// <summary>
 /// The crash-injection hook, bound from <c>CCAR_FAIL_AFTER_STEP</c> and never
@@ -33,15 +36,50 @@ internal static class CrashInjection
 {
     public const string EnvironmentVariableName = "CCAR_FAIL_AFTER_STEP";
 
-    /// <summary>Kills this process when <paramref name="configured"/> names this step and timing.</summary>
-    public static void KillIfConfigured(string? configured, ImportStep step, bool beforeJournal)
+    /// <summary>
+    /// The export-gate injection, bound from <c>CCAR_CORRUPT_EXPORT_BEFORE_GATE</c>
+    /// and, like the step hook, never from the configuration file.
+    /// <para>
+    /// It overwrites the exported file between the follower's <c>Exported</c>
+    /// answer and the leader's native read, which is the one window the gate
+    /// exists to cover and the one window no external script can hit
+    /// deterministically: the two events are a single round trip apart. The
+    /// acceptance needs a corruption that lands there every time, not
+    /// sometimes, so the hook lives where the window is.
+    /// </para>
+    /// </summary>
+    public const string CorruptExportEnvironmentVariableName = "CCAR_CORRUPT_EXPORT_BEFORE_GATE";
+
+    /// <summary>Truncates the export so the leader's native read cannot make a pair of it.</summary>
+    public static void CorruptIfConfigured(bool configured, string exportPath)
+    {
+        if (configured && File.Exists(exportPath))
+        {
+            File.WriteAllText(exportPath, "{\"claudeAiOauth\":{\"refre");
+        }
+    }
+
+    /// <summary>Kills this process when <paramref name="configured"/> names this follower step and timing.</summary>
+    public static void KillIfConfigured(string? configured, ImportStep step, bool beforeJournal) =>
+        KillIfConfigured(configured, step.ToString(), beforeJournal);
+
+    /// <summary>
+    /// The same hook for the leader's coordinator. One environment variable
+    /// serves both processes because the two step vocabularies share no name
+    /// and the leader and the follower are separate launches with separate
+    /// environments; the acceptance sets it on whichever one it means to kill.
+    /// </summary>
+    public static void KillIfConfigured(string? configured, WslSwitchStep step, bool beforeJournal) =>
+        KillIfConfigured(configured, step.ToString(), beforeJournal);
+
+    private static void KillIfConfigured(string? configured, string step, bool beforeJournal)
     {
         if (string.IsNullOrWhiteSpace(configured))
         {
             return;
         }
 
-        string wanted = step.ToString() + (beforeJournal ? ":before-journal" : string.Empty);
+        string wanted = step + (beforeJournal ? ":before-journal" : string.Empty);
         if (!string.Equals(configured.Trim(), wanted, StringComparison.OrdinalIgnoreCase))
         {
             return;
