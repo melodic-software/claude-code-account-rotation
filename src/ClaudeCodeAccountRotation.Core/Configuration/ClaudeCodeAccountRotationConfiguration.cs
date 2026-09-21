@@ -12,6 +12,12 @@ namespace ClaudeCodeAccountRotation.Core.Configuration;
 /// it off is the whole rollback. It trails the record with a default so the
 /// construction sites that predate it compile unchanged.
 /// </para>
+/// <para>
+/// <paramref name="Role"/> and <paramref name="Mailbox"/> are the follower's
+/// two keys. A follower owns no store and no profiles root; it imports into
+/// its own live directory from files under <paramref name="Mailbox"/>, the
+/// one path in the product allowed to sit on the other volume.
+/// </para>
 /// </summary>
 public sealed record ClaudeCodeAccountRotationConfiguration(
     string LiveConfigDirectory,
@@ -24,4 +30,6 @@ public sealed record ClaudeCodeAccountRotationConfiguration(
     string? ClaudeExecutable,
     string UserAgentProductToken,
     IReadOnlyDictionary<string, string> BrowserExecutables,
-    bool SharedStore = false);
+    bool SharedStore = false,
+    RotationRole Role = RotationRole.Leader,
+    string? Mailbox = null);
