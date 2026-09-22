@@ -34,6 +34,40 @@ internal static class AtomicBytesFile
     }
 
     /// <summary>
+    /// Writes <paramref name="content"/> so the finished file is readable and
+    /// writable by this user alone, including when <paramref name="path"/>
+    /// already exists and is wider. The bytes land in a temp file created with
+    /// <see cref="CreateOwnerOnly"/>, then <see cref="MoveIntoPlace(string, string, Action{string, string, bool})"/>
+    /// puts that file on the target. The move keeps the temp file's owner-only
+    /// mode or access list.
+    /// </summary>
+    internal static void WriteOwnerOnly(string path, ReadOnlyMemory<byte> content)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        string fullPath = Path.GetFullPath(path);
+        string directory = Path.GetDirectoryName(fullPath)
+            ?? throw new ArgumentException("The path has no parent directory.", nameof(path));
+        string temporaryPath = Path.Combine(directory, "." + Path.GetFileName(fullPath) + "." + Guid.NewGuid().ToString("N") + ".tmp");
+        try
+        {
+            using (FileStream stream = CreateOwnerOnly(temporaryPath))
+            {
+                stream.Write(content.Span);
+                stream.Flush(flushToDisk: true);
+            }
+
+            MoveIntoPlace(temporaryPath, fullPath);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+            {
+                File.Delete(temporaryPath);
+            }
+        }
+    }
+
+    /// <summary>
     /// The staging half of <see cref="WriteAsync"/>: writes and flushes the content
     /// into a temp file beside <paramref name="path"/> and returns its path, for a
     /// caller that must check something between the staging and the rename. The

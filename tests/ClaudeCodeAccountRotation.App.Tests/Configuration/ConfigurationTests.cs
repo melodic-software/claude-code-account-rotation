@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Configuration;
@@ -7,6 +8,7 @@ using ClaudeCodeAccountRotation.App.Security;
 using ClaudeCodeAccountRotation.App.Tests.Switching;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Configuration;
+using ClaudeCodeAccountRotation.Core.Switching;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Configuration;
 
@@ -194,6 +196,153 @@ public sealed class ConfigurationTests : IDisposable
         Result<ClaudeCodeAccountRotationConfiguration, string> loaded = await ConfigurationFile.LoadOrCreateAsync(path, Defaults(), TestContext.Current.CancellationToken);
 
         loaded.Value.Peers.ShouldHaveSingleItem().Side.Value.ShouldBe("wsl");
+    }
+
+    [Fact]
+    public async Task APeerWithoutLaunchLoadsDistributionUserAndConfigPathAndLaunchWins()
+    {
+        string path = Path.Combine(_root, "appdata", "peers.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        JsonArray peers =
+        [
+            new JsonObject
+            {
+                ["side"] = "manual",
+                ["baseAddress"] = "http://127.0.0.1:48212",
+                ["storePathFromPeer"] = "/mnt/c/store",
+                ["distribution"] = "Manual-Distro",
+                ["user"] = "manual-user",
+                ["configPath"] = "/var/lib/manual/config.json",
+            },
+            new JsonObject
+            {
+                ["side"] = "both",
+                ["baseAddress"] = "http://127.0.0.1:48213",
+                ["storePathFromPeer"] = "/mnt/c/store",
+                ["distribution"] = "Peer-Distro",
+                ["user"] = "peer-user",
+                ["configPath"] = "/var/lib/peer/config.json",
+                ["launch"] = new JsonObject
+                {
+                    ["distribution"] = "Launch-Distro",
+                    ["user"] = "launch-user",
+                    ["executablePath"] = "/opt/rotation/claude-code-account-rotation",
+                    ["port"] = 48213,
+                    ["configPath"] = "/var/lib/launch/config.json",
+                },
+            },
+            new JsonObject
+            {
+                ["side"] = "launch-path",
+                ["baseAddress"] = "http://127.0.0.1:48216",
+                ["storePathFromPeer"] = "/mnt/c/store",
+                ["distribution"] = "Peer-Distro",
+                ["user"] = "peer-user",
+                ["configPath"] = "/var/lib/peer/config.json",
+                ["launch"] = new JsonObject
+                {
+                    ["distribution"] = "Launch-Distro",
+                    ["user"] = "launch-user",
+                    ["executablePath"] = "/opt/rotation/claude-code-account-rotation",
+                    ["port"] = 48216,
+                },
+            },
+            new JsonObject
+            {
+                ["side"] = "distro-only",
+                ["baseAddress"] = "http://127.0.0.1:48214",
+                ["storePathFromPeer"] = "/mnt/c/store",
+                ["distribution"] = "Only-Distro",
+                ["configPath"] = "/var/lib/half/config.json",
+            },
+            new JsonObject
+            {
+                ["side"] = "user-only",
+                ["baseAddress"] = "http://127.0.0.1:48215",
+                ["storePathFromPeer"] = "/mnt/c/store",
+                ["user"] = "only-user",
+            },
+        ];
+        await File.WriteAllTextAsync(path, new JsonObject { ["peers"] = peers }.ToJsonString(), TestContext.Current.CancellationToken);
+
+        Result<ClaudeCodeAccountRotationConfiguration, string> loaded = await ConfigurationFile.LoadOrCreateAsync(path, Defaults(), TestContext.Current.CancellationToken);
+
+        loaded.IsSuccess.ShouldBeTrue(loaded.IsFailure ? loaded.Error : "");
+        IReadOnlyList<PeerConfiguration> loadedPeers = loaded.Value.Peers.ShouldNotBeNull();
+        loadedPeers.Count.ShouldBe(5);
+
+        PeerConfiguration manual = loadedPeers[0];
+        manual.Launch.ShouldBeNull();
+        manual.Distribution.ShouldBe("Manual-Distro");
+        manual.User.ShouldBe("manual-user");
+        manual.ConfigPath.ShouldBe("/var/lib/manual/config.json");
+        manual.FollowerIdentity.ShouldBe(new PeerFollowerIdentity("Manual-Distro", "manual-user", "/var/lib/manual/config.json"));
+
+        PeerConfiguration both = loadedPeers[1];
+        both.Distribution.ShouldBe("Peer-Distro");
+        both.User.ShouldBe("peer-user");
+        both.ConfigPath.ShouldBe("/var/lib/peer/config.json");
+        both.Launch.ShouldNotBeNull();
+        both.FollowerIdentity.ShouldBe(new PeerFollowerIdentity("Launch-Distro", "launch-user", "/var/lib/launch/config.json"));
+
+        loadedPeers[2].FollowerIdentity.ShouldBe(new PeerFollowerIdentity("Launch-Distro", "launch-user", null));
+
+        PeerConfiguration distributionOnly = loadedPeers[3];
+        distributionOnly.Side.Value.ShouldBe("distro-only");
+        distributionOnly.Distribution.ShouldBeNull();
+        distributionOnly.User.ShouldBeNull();
+        distributionOnly.ConfigPath.ShouldBe("/var/lib/half/config.json");
+        distributionOnly.FollowerIdentity.ShouldBeNull();
+
+        PeerConfiguration userOnly = loadedPeers[4];
+        userOnly.Side.Value.ShouldBe("user-only");
+        userOnly.Distribution.ShouldBeNull();
+        userOnly.User.ShouldBeNull();
+        userOnly.FollowerIdentity.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task PeerLevelIdentityIsWrittenBesideLaunch()
+    {
+        string path = Path.Combine(_root, "written-peers", "config.json");
+        PeerConfiguration manual = new(
+            new SideName("manual"),
+            new Uri("http://127.0.0.1:48212"),
+            "/mnt/c/store",
+            Distribution: "Manual-Distro",
+            User: "manual-user",
+            ConfigPath: "/var/lib/manual/config.json");
+        PeerConfiguration launched = new(
+            new SideName("launched"),
+            new Uri("http://127.0.0.1:48213"),
+            "/mnt/c/store",
+            new PeerLaunch("Launch-Distro", "launch-user", "/opt/rotation/claude-code-account-rotation", 48213, "/var/lib/launch/config.json"),
+            "Peer-Distro",
+            "peer-user",
+            "/var/lib/peer/config.json");
+
+        Result<ClaudeCodeAccountRotationConfiguration, string> created = await ConfigurationFile.LoadOrCreateAsync(
+            path,
+            Defaults() with { Peers = [manual, launched] },
+            TestContext.Current.CancellationToken);
+        created.IsSuccess.ShouldBeTrue(created.IsFailure ? created.Error : "");
+
+        JsonArray written = JsonNode.Parse(await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken))!["peers"]!.AsArray();
+        written[0]!["distribution"]!.GetValue<string>().ShouldBe("Manual-Distro");
+        written[0]!["user"]!.GetValue<string>().ShouldBe("manual-user");
+        written[0]!["configPath"]!.GetValue<string>().ShouldBe("/var/lib/manual/config.json");
+        written[0]!["launch"].ShouldBeNull();
+        written[1]!["distribution"]!.GetValue<string>().ShouldBe("Peer-Distro");
+        written[1]!["user"]!.GetValue<string>().ShouldBe("peer-user");
+        written[1]!["configPath"]!.GetValue<string>().ShouldBe("/var/lib/peer/config.json");
+        written[1]!["launch"]!["distribution"]!.GetValue<string>().ShouldBe("Launch-Distro");
+        written[1]!["launch"]!["user"]!.GetValue<string>().ShouldBe("launch-user");
+        written[1]!["launch"]!["configPath"]!.GetValue<string>().ShouldBe("/var/lib/launch/config.json");
+
+        Result<ClaudeCodeAccountRotationConfiguration, string> loaded = await ConfigurationFile.LoadOrCreateAsync(path, Defaults(), TestContext.Current.CancellationToken);
+        IReadOnlyList<PeerConfiguration> loadedPeers = loaded.Value.Peers.ShouldNotBeNull();
+        loadedPeers[0].FollowerIdentity.ShouldBe(new PeerFollowerIdentity("Manual-Distro", "manual-user", "/var/lib/manual/config.json"));
+        loadedPeers[1].FollowerIdentity.ShouldBe(new PeerFollowerIdentity("Launch-Distro", "launch-user", "/var/lib/launch/config.json"));
     }
 
     [Fact]
@@ -627,13 +776,16 @@ public sealed class ConfigurationTests : IDisposable
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         Task stdout = ReadLinesAsync(process.StandardOutput, output, dashboard, cancellationToken);
         Task stderr = ReadLinesAsync(process.StandardError, output, dashboard, cancellationToken);
+        string? token = null;
         try
         {
             string? url = await WaitForDashboardAsync(process, dashboard, cancellationToken);
             url.ShouldNotBeNull(output.ToString());
             url.ShouldStartWith("http://127.0.0.1:");
+            token = (await File.ReadAllLinesAsync(Path.Combine(appData, "instance.url"), cancellationToken))[1].Trim();
 
             using HttpClient client = new() { Timeout = TimeSpan.FromSeconds(20) };
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
             using HttpResponseMessage response = await client.GetAsync(new Uri(url + "/api/dashboard"), cancellationToken);
             ((int)response.StatusCode).ShouldBe(200, output.ToString());
 
@@ -666,6 +818,10 @@ public sealed class ConfigurationTests : IDisposable
 
             await stdout;
             await stderr;
+            if (token is not null)
+            {
+                output.ToString().ShouldNotContain(token);
+            }
         }
     }
 

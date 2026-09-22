@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -23,11 +24,13 @@ namespace ClaudeCodeAccountRotation.App.Tests.Switching;
 internal sealed class FollowerProcess : IAsyncDisposable
 {
     private readonly Process _process;
+    private readonly string _configPath;
     private readonly StringBuilder _output = new();
 
-    private FollowerProcess(Process process, int port)
+    private FollowerProcess(Process process, int port, string configPath)
     {
         _process = process;
+        _configPath = configPath;
         Port = port;
     }
 
@@ -72,7 +75,7 @@ internal sealed class FollowerProcess : IAsyncDisposable
         start.Environment["CLAUDE_CONFIG_DIR"] = Path.GetDirectoryName(configPath)!;
 
         Process process = Process.Start(start) ?? throw new InvalidOperationException("the follower did not start");
-        FollowerProcess follower = new(process, port);
+        FollowerProcess follower = new(process, port, configPath);
         process.OutputDataReceived += follower.Collect;
         process.ErrorDataReceived += follower.Collect;
         process.BeginOutputReadLine();
@@ -95,7 +98,27 @@ internal sealed class FollowerProcess : IAsyncDisposable
     {
         HttpClient client = new() { BaseAddress = new Uri("http://127.0.0.1:" + Port.ToString(System.Globalization.CultureInfo.InvariantCulture)), Timeout = TimeSpan.FromSeconds(20) };
         client.DefaultRequestHeaders.Add(SameOriginMutationFilter.HeaderName, "1");
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", ReadInstanceToken());
         return client;
+    }
+
+    /// <summary>Line 2 of this follower's instance file. The health probe does not use it.</summary>
+    private string ReadInstanceToken()
+    {
+        var node = JsonNode.Parse(File.ReadAllText(_configPath));
+        string? appData = node?["appDataDirectory"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(appData))
+        {
+            throw new InvalidOperationException("the follower configuration has no app data directory");
+        }
+
+        string[] lines = File.ReadAllLines(Path.Combine(appData, InstanceLock.UrlFileName));
+        if (lines.Length < 2 || string.IsNullOrWhiteSpace(lines[1]))
+        {
+            throw new InvalidOperationException("the follower instance file has no token line");
+        }
+
+        return lines[1].Trim();
     }
 
     /// <summary>

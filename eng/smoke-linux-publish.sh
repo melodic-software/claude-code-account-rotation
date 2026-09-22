@@ -52,7 +52,10 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 
-status="$(curl -s -o "$work/dashboard.json" -w '%{http_code}' "http://127.0.0.1:$port/api/dashboard")"
+# Line 2 is the instance token. It is sent on curl's stdin and is not printed,
+# including when this curl fails. /healthz above stays without it.
+token="$(sed -n '2p' "$work/appdata/instance.url" | tr -d '\r\n')"
+status="$(printf 'header = "Authorization: Bearer %s"\n' "$token" | curl --config - -s -o "$work/dashboard.json" -w '%{http_code}' "http://127.0.0.1:$port/api/dashboard")"
 if [[ "$status" != "200" ]]; then
   echo "smoke-linux-publish: /api/dashboard answered $status" >&2
   cat "$work/follower.log" >&2

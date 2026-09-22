@@ -191,6 +191,8 @@ button.danger { background: transparent; border-color: var(--error); color: var(
 .card details.login { margin-top: 0.75rem; }
 .card details.login a { color: var(--accent); }
 
+.instance-token { margin-top: 0; margin-bottom: 1.5rem; }
+
 .roster-form {
   display: flex;
   flex-direction: column;

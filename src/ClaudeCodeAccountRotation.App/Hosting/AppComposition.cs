@@ -251,9 +251,13 @@ internal static class AppComposition
                 app.Services.GetRequiredService<LoopbackOrigins>().UseBoundPort(bound.Port);
             }
 
-            app.Services.GetRequiredService<InstanceLock>().PublishListenUrl(url);
+            InstanceLock instanceLock = app.Services.GetRequiredService<InstanceLock>();
+            instanceLock.PublishListenUrl(url);
             // Printed and not opened. The operator chooses when to visit the page.
+            // The instance file's path is printed so the operator can read its
+            // second line. The token itself is not printed.
             Console.Out.WriteLine("Dashboard: " + url);
+            Console.Out.WriteLine("Instance file: " + instanceLock.UrlFilePath);
         });
     }
 
@@ -262,6 +266,7 @@ internal static class AppComposition
         ArgumentNullException.ThrowIfNull(app);
         app.UseMiddleware<SecurityHeadersMiddleware>();
         app.UseMiddleware<LoopbackHostMiddleware>();
+        app.UseMiddleware<LoopbackTokenMiddleware>();
 
         // The framework's liveness probe with no checks registered: the body is the
         // status word and the middleware writes the no-store cache headers itself.
@@ -283,7 +288,8 @@ internal static class AppComposition
         {
             FileProvider = new EmbeddedFileProvider(typeof(AppComposition).Assembly, "ClaudeCodeAccountRotation.App.wwwroot"),
         });
-        app.MapGet("/", static () => Results.Content(EmbeddedPage.IndexHtml, "text/html; charset=utf-8"));
+        // GET / is written by LoopbackTokenMiddleware, which embeds or withholds
+        // the instance token. The static files are the script and the stylesheet.
         DashboardEndpoints.Map(app);
         SwitchEndpoints.Map(app);
         SideEndpoints.Map(app);
@@ -355,7 +361,9 @@ internal static class AppComposition
                 // that fires is the one whose failure the crash table is
                 // written for rather than the client's generic one.
                 client.Timeout = WslSwitch.ImportTimeout + TimeSpan.FromSeconds(30);
-            });
+            }).AddHttpMessageHandler(provider => new FollowerLoopbackTokenHandler(
+                new WslFollowerInstanceTokenSource(peer),
+                provider.GetRequiredService<ILogger<FollowerLoopbackTokenHandler>>()));
         }
 
         services.AddSingleton(provider => new PeerRegistry(

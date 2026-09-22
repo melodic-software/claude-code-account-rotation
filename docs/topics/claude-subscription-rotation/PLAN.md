@@ -339,7 +339,8 @@ Behavioral reference: `spike-04-swap.py` (memory slice), guard for guard.
   refresh lock like every other credential move and reports a block, moving nothing, while a session
   holds it; the instance lock opens `instance.lock` with `FileShare.None` and publishes the URL in a
   sibling `instance.url`, delete-on-close on Windows only, because .NET on Unix unlinks the path at
-  open and a second instance was starting on the Ubuntu lane.) `LiveDirectorySwitch` under the `CredentialMutationGate` (one `SemaphoreSlim(1, 1)`
+  open and a second instance was starting on the Ubuntu lane. The second line of that file is the
+  per-process loopback token (#7); a refused launch prints the first line only.) `LiveDirectorySwitch` under the `CredentialMutationGate` (one `SemaphoreSlim(1, 1)`
   every credential-touching operation acquires with a timeout and releases in `finally`; a second
   concurrent switch gets 409) and the `InstanceLock` (an owner-only lock file under app data; a
   second instance refuses to start and prints the running instance's URL): snapshot live state →

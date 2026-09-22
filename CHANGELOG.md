@@ -281,6 +281,10 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- The loopback API requires the per-process token on the second line of `instance.url` (#7).
+  A request without it is refused with 401, including shutdown. `GET /healthz`, `GET /app.js`,
+  and `GET /app.css` stay open. The dashboard page still loads so the token can be pasted
+  there; the token is not part of the address and the process does not print it.
 - Containment and volume checks follow junctions and symbolic links before comparing
   paths. A profiles root, a profile folder, or the app data directory that is itself a
   link is refused, and a link whose target is missing is refused, so a credential pair

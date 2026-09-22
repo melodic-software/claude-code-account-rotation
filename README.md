@@ -92,9 +92,10 @@ The app does not call the GitHub API, and the dashboard has no "update available
    repository does not name that task.
 2. The page must show no blocking banner, so no switch or import is in flight. Look while the
    tool is still running.
-3. Stop the leader and the follower with `POST /api/shutdown`, carrying the same mutation
-   header as the other dashboard writes. A 409 means a switch or import is still in flight,
-   so the process was left running.
+3. Stop the leader and the follower with `POST /api/shutdown`. Send
+   `Authorization: Bearer` with the token on the second line of that side's `instance.url`,
+   and the same `X-Claude-Code-Account-Rotation: 1` header as the other dashboard writes.
+   A 409 means a switch or import is still in flight, so the process was left running.
 4. Download `claude-code-account-rotation-win-x64.exe`,
    `claude-code-account-rotation-linux-x64`, `claude-code-account-rotation-follower-log`,
    and `SHA256SUMS`. Check each binary and the wrapper against the digest that
@@ -120,9 +121,10 @@ hand, in this order.
    working lineage: the token endpoint has already invalidated the refresh token in the profile
    folder. Restart that side, or refresh the card, so the file is restored. Do not continue while
    such a file remains, even when no card says `credentials stranded in recovery`.
-5. Stop the leader and the follower with `POST /api/shutdown`, carrying the same mutation
-   header as the other dashboard writes. A 409 means a switch or import is still in flight,
-   so the process was left running.
+5. Stop the leader and the follower with `POST /api/shutdown`. Send
+   `Authorization: Bearer` with the token on the second line of that side's `instance.url`,
+   and the same `X-Claude-Code-Account-Rotation: 1` header as the other dashboard writes.
+   A 409 means a switch or import is still in flight, so the process was left running.
 6. Read `appDataDirectory`, `profilesRoot`, `liveConfigDirectory`, and `stateFilePath` from
    `config.json`. Read the leader's file, and the follower's when `peers[].launch.configPath`
    names one, and take each side's `appDataDirectory` from its own file.
