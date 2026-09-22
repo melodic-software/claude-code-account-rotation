@@ -281,6 +281,14 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- A fresh distro that received a hand-off opened Claude Code's first-run login wizard
+  even though its credentials and `oauthAccount` block were already valid (#119). The
+  follower now sets `hasCompletedOnboarding` to true when it applies an incoming account
+  and that flag is absent or not already true. The write shares the state-file splice
+  with the account block, so other keys stay as they are and a concurrent rewrite is
+  retried the same way. A flag that is already true is left untouched,
+  `lastOnboardingVersion` is not written, and a release does not add the flag. A switch
+  on the leader still patches only the account block.
 - The loopback API requires the per-process token on the second line of `instance.url` (#7).
   A request without it is refused with 401, including shutdown. `GET /healthz`, `GET /app.js`,
   and `GET /app.css` stay open. The dashboard page still loads so the token can be pasted

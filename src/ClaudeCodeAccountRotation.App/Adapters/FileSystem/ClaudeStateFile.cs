@@ -7,14 +7,18 @@ namespace ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 
 /// <summary>
 /// Claude Code's state file (<c>~/.claude.json</c>, or <c>&lt;CLAUDE_CONFIG_DIR&gt;/.claude.json</c>
-/// when that variable is set). Only the <c>oauthAccount</c> value is ever
-/// rewritten; every other byte of the file, including per-project trust and
-/// MCP state, is preserved by splicing the new value into the original bytes.
+/// when that variable is set). <c>oauthAccount</c> is rewritten by splicing the new
+/// value into the original bytes. The onboarding flag is the one extra key, and only
+/// when the caller asks and the flag is not already true. Every other byte of the
+/// file, including per-project trust and MCP state, is preserved.
 /// </summary>
 internal sealed class ClaudeStateFile
 {
     private const string AccountPropertyName = "oauthAccount";
+    private const string OnboardingPropertyName = "hasCompletedOnboarding";
     private const int MaxPatchAttempts = 5;
+
+    private static readonly byte[] _jsonTrue = "true"u8.ToArray();
 
     private readonly Func<CancellationToken, Task> _beforeReplace;
 
@@ -45,7 +49,7 @@ internal sealed class ClaudeStateFile
         }
 
         byte[] bytes = await SharedFileReader.ReadAllBytesAsync(Path, cancellationToken);
-        if (LocateAccountValue(bytes) is not AccountSpan span)
+        if (LocateRootValues(bytes, locateOnboarding: false).Account is not ValueSpan span)
         {
             return null;
         }
@@ -72,10 +76,26 @@ internal sealed class ClaudeStateFile
     /// A file that keeps changing across <see cref="MaxPatchAttempts"/> attempts
     /// fails the patch instead of guessing; the journal then completes it at the
     /// next startup. A read that lands on a half-written file fails the same way,
-    /// from <see cref="LocateAccountValue"/>: splicing a block into bytes that are
+    /// from <see cref="LocateRootValues"/>: splicing a block into bytes that are
     /// not a whole document would write the file out as garbage.
+    /// This method rewrites the account block only and does not write
+    /// <c>hasCompletedOnboarding</c>.
     /// </summary>
-    public async Task PatchAccountBlockAsync(OAuthAccountBlock account, CancellationToken cancellationToken)
+    public Task PatchAccountBlockAsync(OAuthAccountBlock account, CancellationToken cancellationToken) =>
+        PatchAccountBlockCoreAsync(account, recordCompletedOnboarding: false, cancellationToken);
+
+    /// <summary>
+    /// Patches <paramref name="account"/> the way <see cref="PatchAccountBlockAsync"/>
+    /// does, and in that same compare-and-swap sets <c>hasCompletedOnboarding</c> to
+    /// JSON true when the key is absent or not already boolean true. A value that is
+    /// already boolean true is left as it stands, and <c>lastOnboardingVersion</c> is
+    /// never written. A release does not call this: clearing the account must not
+    /// add the key.
+    /// </summary>
+    public Task PatchAccountBlockAndOnboardingAsync(OAuthAccountBlock account, CancellationToken cancellationToken) =>
+        PatchAccountBlockCoreAsync(account, recordCompletedOnboarding: true, cancellationToken);
+
+    private async Task PatchAccountBlockCoreAsync(OAuthAccountBlock account, bool recordCompletedOnboarding, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(account);
         byte[] value = JsonSerializer.SerializeToUtf8Bytes(account.Raw);
@@ -84,11 +104,7 @@ internal sealed class ClaudeStateFile
         {
             byte[]? original = await ReadBytesOrNullAsync(cancellationToken);
             byte[] basis = original ?? Encoding.UTF8.GetBytes("{}");
-
-            AccountSpan? span = LocateAccountValue(basis);
-            byte[] patched = span is AccountSpan existing
-                ? Splice(basis, existing.Start, existing.Length, value)
-                : AppendProperty(basis, value);
+            byte[] patched = BuildPatchedBytes(basis, value, recordCompletedOnboarding);
 
             string temporaryPath = await AtomicBytesFile.WriteTemporaryAsync(Path, patched, cancellationToken);
             try
@@ -116,13 +132,65 @@ internal sealed class ClaudeStateFile
         throw new IOException("The state file " + Path + " kept changing while the account block was being patched; the switch is journaled and completes at the next startup.");
     }
 
+    /// <summary>
+    /// Splices the account value, and when asked the onboarding flag, into
+    /// <paramref name="basis"/>. Edits are applied from the last byte backward so
+    /// each earlier offset stays valid. A flag that is already boolean true is
+    /// not an edit. A missing property is inserted before the root object's
+    /// closing brace rather than rewritten over some other key.
+    /// </summary>
+    private byte[] BuildPatchedBytes(byte[] basis, byte[] accountValue, bool recordCompletedOnboarding)
+    {
+        (ValueSpan? account, ValueSpan? onboarding) = LocateRootValues(basis, recordCompletedOnboarding);
+
+        List<(int Start, int Length, byte[] Bytes)> edits = [];
+        if (account is ValueSpan accountSpan)
+        {
+            edits.Add((accountSpan.Start, accountSpan.Length, accountValue));
+        }
+
+        if (recordCompletedOnboarding && onboarding is ValueSpan onboardingSpan && onboardingSpan.TokenType != JsonTokenType.True)
+        {
+            edits.Add((onboardingSpan.Start, onboardingSpan.Length, _jsonTrue));
+        }
+
+        // Last edit first: splicing an earlier span first would move every later offset.
+        edits.Sort(static (left, right) => right.Start.CompareTo(left.Start));
+        byte[] patched = basis;
+        foreach ((int start, int length, byte[] bytes) in edits)
+        {
+            patched = Splice(patched, start, length, bytes);
+        }
+
+        bool appendOnboarding = recordCompletedOnboarding && onboarding is null;
+        if (account is null || appendOnboarding)
+        {
+            List<(string Name, byte[] Value)> appended = [];
+            if (account is null)
+            {
+                appended.Add((AccountPropertyName, accountValue));
+            }
+
+            if (appendOnboarding)
+            {
+                appended.Add((OnboardingPropertyName, _jsonTrue));
+            }
+
+            patched = AppendProperties(patched, appended);
+        }
+
+        return patched;
+    }
+
     private async Task<byte[]?> ReadBytesOrNullAsync(CancellationToken cancellationToken) =>
         File.Exists(Path) ? await SharedFileReader.ReadAllBytesAsync(Path, cancellationToken) : null;
 
     /// <summary>
-    /// The span the <c>oauthAccount</c> value occupies, or null when the file is a
+    /// The spans of the root <c>oauthAccount</c> value and, when
+    /// <paramref name="locateOnboarding"/> is true, the root
+    /// <c>hasCompletedOnboarding</c> value. Either is null when the file is a
     /// JSON object without that property, read out of the whole document every time:
-    /// a file cut off after the block still yields a sound span, so the rest of the
+    /// a file cut off after a block still yields a sound span, so the rest of the
     /// bytes have to be read before one is handed back. Bytes that are not a whole
     /// JSON document throw <see cref="InvalidDataException"/> rather than reading
     /// as null or as a usable span: Claude
@@ -134,17 +202,18 @@ internal sealed class ClaudeStateFile
     /// for the next change; a switch fails with it and the journal completes at the
     /// next startup.
     /// </summary>
-    private AccountSpan? LocateAccountValue(byte[] bytes)
+    private (ValueSpan? Account, ValueSpan? Onboarding) LocateRootValues(byte[] bytes, bool locateOnboarding)
     {
         try
         {
             Utf8JsonReader reader = new(bytes, new JsonReaderOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip });
             if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
             {
-                return null;
+                return (null, null);
             }
 
-            AccountSpan? account = null;
+            ValueSpan? account = null;
+            ValueSpan? onboarding = null;
             while (reader.Read())
             {
                 if (reader.TokenType == JsonTokenType.EndObject && reader.CurrentDepth == 0)
@@ -157,7 +226,12 @@ internal sealed class ClaudeStateFile
                     // Trailing bytes throw from the read; the answer is asserted
                     // rather than discarded so the proof does not rest on which
                     // reader options are set here.
-                    return reader.Read() ? throw CaughtHalfWritten(cause: null) : account;
+                    if (reader.Read())
+                    {
+                        throw CaughtHalfWritten(cause: null);
+                    }
+
+                    return (account, onboarding);
                 }
 
                 if (reader.TokenType != JsonTokenType.PropertyName || reader.CurrentDepth != 1)
@@ -166,20 +240,31 @@ internal sealed class ClaudeStateFile
                 }
 
                 bool isAccount = reader.ValueTextEquals(AccountPropertyName);
+                bool isOnboarding = locateOnboarding && reader.ValueTextEquals(OnboardingPropertyName);
                 reader.Read();
-                if (!isAccount)
+                if (!isAccount && !isOnboarding)
                 {
                     reader.TrySkip();
                     continue;
                 }
 
                 int start = checked((int)reader.TokenStartIndex);
+                JsonTokenType tokenType = reader.TokenType;
                 reader.TrySkip();
                 int end = checked((int)reader.BytesConsumed);
-                account = new AccountSpan(start, end - start);
+                ValueSpan span = new(start, end - start, tokenType);
+                if (isAccount)
+                {
+                    account = span;
+                }
+
+                if (isOnboarding)
+                {
+                    onboarding = span;
+                }
             }
 
-            return account;
+            return (account, onboarding);
         }
         catch (JsonException exception)
         {
@@ -199,8 +284,12 @@ internal sealed class ClaudeStateFile
         return result;
     }
 
-    /// <summary>Inserts <c>"oauthAccount": value</c> before the root object's closing brace.</summary>
-    private static byte[] AppendProperty(byte[] original, byte[] value)
+    /// <summary>
+    /// Inserts each <c>"name": value</c> before the root object's closing brace.
+    /// A comma separates a new property from one already in the object, and from
+    /// a property inserted just before it.
+    /// </summary>
+    private static byte[] AppendProperties(byte[] original, List<(string Name, byte[] Value)> properties)
     {
         int closingBrace = Array.LastIndexOf(original, (byte)'}');
         if (closingBrace < 0)
@@ -209,11 +298,17 @@ internal sealed class ClaudeStateFile
         }
 
         bool hasProperties = original.AsSpan(0, closingBrace).IndexOf((byte)':') >= 0;
-        byte[] prefix = Encoding.UTF8.GetBytes((hasProperties ? "," : string.Empty) + "\n  \"" + AccountPropertyName + "\": ");
-        byte[] suffix = Encoding.UTF8.GetBytes("\n");
-        byte[] insertion = [.. prefix, .. value, .. suffix];
+        byte[] insertion = [];
+        foreach ((string name, byte[] value) in properties)
+        {
+            byte[] prefix = Encoding.UTF8.GetBytes((hasProperties ? "," : string.Empty) + "\n  \"" + name + "\": ");
+            insertion = [.. insertion, .. prefix, .. value];
+            hasProperties = true;
+        }
+
+        insertion = [.. insertion, (byte)'\n'];
         return Splice(original, closingBrace, 0, insertion);
     }
 
-    private readonly record struct AccountSpan(int Start, int Length);
+    private readonly record struct ValueSpan(int Start, int Length, JsonTokenType TokenType);
 }

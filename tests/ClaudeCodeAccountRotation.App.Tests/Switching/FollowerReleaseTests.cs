@@ -85,6 +85,29 @@ public sealed class FollowerReleaseTests : IDisposable
     }
 
     [Fact]
+    public async Task AReleaseFinishDoesNotAddTheOnboardingFlag()
+    {
+        RefreshTokenFingerprint fa = await _roots.WriteLiveAsync(HeldEmail, HeldToken, Token);
+        string prefix = "{\n  \"numStartups\": 4,\n  \"oauthAccount\": ";
+        string accountValue = "{\"accountUuid\": \"uuid-a@example.com\", \"emailAddress\": \"a@example.com\"}";
+        string suffix = ",\n  \"cachedChangelog\": \"kept\"\n}\n";
+        await File.WriteAllTextAsync(_roots.StateFilePath, prefix + accountValue + suffix, Token);
+        using FollowerImport follower = _roots.Follower();
+        await follower.ImportAsync(_roots.ReleaseRequest(HeldEmail, fa), Token);
+
+        Result<ImportResult, string> result = await follower.CommitAsync(new AccountEmail(HeldEmail), Token);
+
+        result.IsSuccess.ShouldBeTrue(result.IsFailure ? result.Error : null);
+        string patched = await File.ReadAllTextAsync(_roots.StateFilePath, Token);
+        patched.ShouldBe(prefix + "{}" + suffix);
+        JsonObject state = JsonNode.Parse(patched)!.AsObject();
+        state.ContainsKey("hasCompletedOnboarding").ShouldBeFalse();
+        state["numStartups"]!.GetValue<int>().ShouldBe(4);
+        state["cachedChangelog"]!.GetValue<string>().ShouldBe("kept");
+        state["oauthAccount"]!["emailAddress"].ShouldBeNull();
+    }
+
+    [Fact]
     public async Task EveryFingerprintLandsInExactlyOneNonStagingFileAfterACompletedRelease()
     {
         RefreshTokenFingerprint fa = await _roots.WriteLiveAsync(HeldEmail, HeldToken, Token);
