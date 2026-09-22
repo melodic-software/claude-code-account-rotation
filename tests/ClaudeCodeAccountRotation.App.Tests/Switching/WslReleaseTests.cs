@@ -65,6 +65,56 @@ public sealed class WslReleaseTests
     }
 
     /// <summary>
+    /// A rotation between L1 and F2 makes the exported pair a different one from
+    /// the pair the plan named. The gate verifies the bytes, the journal carries
+    /// that fingerprint, and the park puts it in the slot. The planned
+    /// fingerprint is left nowhere, and the mailbox keeps no second file.
+    /// </summary>
+    [Fact]
+    public async Task AReleaseWhoseAnswerNamesARotatedFingerprintParksThatFingerprint()
+    {
+        using WslSwitchHarness harness = new();
+        RefreshTokenFingerprint planned = await SetUpAsync(harness);
+        RefreshTokenFingerprint rotated = CredentialFiles.Pair("refresh-a-rotated").Fingerprint;
+        planned.ShouldNotBe(rotated);
+        harness.Side.OnImport = async request =>
+        {
+            request.Fingerprint.ShouldBe(planned);
+            await File.WriteAllTextAsync(request.ExportPath, CredentialFiles.Shape("refresh-a-rotated").ToJsonString(), Token);
+            return Result<ImportAnswer, string>.Success(new ImportAnswer(rotated, WslSwitchHarness.Email(Held), false, null));
+        };
+        harness.Side.OnCommit = async () =>
+        {
+            // The ExportVerified write has landed and the park has not, so the
+            // mailbox still holds the one rotated export this answer named.
+            WslSwitchJournalEntry? open = await harness.Journal.ReadOpenAsync(Token);
+            open.ShouldNotBeNull();
+            open.StepReached.ShouldBe(WslSwitchStep.ExportVerified);
+            open.OutgoingFingerprint.ShouldBe(rotated);
+            File.Exists(harness.ExportPath(Held)).ShouldBeTrue();
+            (await FingerprintAtAsync(harness.ExportPath(Held))).ShouldBe(rotated);
+            return Result<ImportResult, string>.Success(new ImportResult(
+                WslSwitchHarness.Email(Held),
+                rotated,
+                WslSwitchHarness.AccountJson(Held),
+                false));
+        };
+        using WslSwitch coordinator = harness.Coordinator();
+
+        Result<WslSwitchOutcome, SwitchRefusal> result =
+            await coordinator.ReleaseAsync(SideName.Wsl, quarantineForeignFamily: false, Token);
+
+        result.IsSuccess.ShouldBeTrue(result.IsFailure ? result.Error.ToString() : string.Empty);
+        result.Value.ParkedAs.ShouldBe(WslSwitchHarness.Email(Held));
+        (await FingerprintAtAsync(harness.PairPath(Held))).ShouldBe(rotated);
+        File.Exists(harness.RecordPath(Held)).ShouldBeFalse();
+        File.Exists(harness.ExportPath(Held)).ShouldBeFalse();
+        harness.MailboxFiles().ShouldBeEmpty();
+        File.Exists(harness.JournalPath).ShouldBeFalse();
+        (await HolderRecordFile.ReadAsync(harness.FolderFor(Held), Token)).ShouldBeNull();
+    }
+
+    /// <summary>
     /// The direction's own asymmetry, and the reason it is worth a fact: a
     /// release takes no pair out of any slot, so L2 is the journal write alone
     /// and the call list carries no claim.

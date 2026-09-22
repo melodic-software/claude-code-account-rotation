@@ -230,6 +230,10 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- A release whose live pair rotated before export parks the pair the follower actually holds.
+  The follower exports that pair and names its fingerprint, and the leader parks the verified
+  fingerprint into the slot. A rotation after export, while the release is stopped at Exported,
+  still unwinds and does not park the pre-rotation export (#83).
 - The usage and token clients no longer follow redirects (#16). A 307 or 308 would resend the
   request, including the refresh-token POST body, to the host the endpoint named. Both clients now
   install a primary handler that refuses redirects, and any 3xx stays the transport failure the

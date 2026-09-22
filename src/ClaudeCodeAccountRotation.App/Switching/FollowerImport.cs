@@ -428,9 +428,11 @@ internal sealed partial class FollowerImport : IDisposable
 
     /// <summary>
     /// Whether this side may give up the pair a release names, or why not.
-    /// Three refusals, all cheaper than a hand-off that moves the wrong pair:
+    /// Three refusals, all cheaper than a hand-off that moves the wrong account:
     /// this side holds nothing, it holds a pair the state file cannot name, or
-    /// it holds some pair other than the one the leader planned to park.
+    /// it is live on an account other than the one the release named. A live
+    /// pair that rotated since the plan is exported as this side holds it. The
+    /// leader parks the fingerprint the gate verified.
     /// </summary>
     private static string? Releasable(ImportRequest request, CredentialPair? live, OAuthAccountBlock? account) => live switch
     {
@@ -439,9 +441,6 @@ internal sealed partial class FollowerImport : IDisposable
             "not released: the live pair is here but the state file names no account for it, so nothing can say what would be leaving",
         _ when account.Email != request.Email =>
             "not released: this side is live on " + account.Email.Value + ", not " + request.Email.Value,
-        _ when live.Fingerprint != request.Fingerprint =>
-            "not released: the live pair reads " + live.Fingerprint.Sha256Hex[..12] + ", not the " + request.Fingerprint.Sha256Hex[..12]
-                + " the release named; a session rotated it, so nothing was exported",
         _ => null,
     };
 
@@ -515,12 +514,13 @@ internal sealed partial class FollowerImport : IDisposable
                     "not imported: the live pair is here but the state file names no account for it, so nothing can say what would be leaving");
             }
 
-            // A release names the pair it expects to take, and refuses rather
-            // than exporting one nobody planned to park: this side may have
-            // rotated its live pair, or been switched onto another account,
-            // between the leader's plan and this call. The import path does the
-            // same comparison after the export, at F5; a release can do it
-            // before, because the pair it is naming is the one already here.
+            // A release refuses before any export when this side holds nothing,
+            // cannot name the live pair, or is live on a different account. A
+            // pair that rotated since the plan is exported as this side holds
+            // it, and the leader parks the fingerprint the gate verified. A
+            // rotation after that export, while the release is stopped at
+            // Exported, is still unwound: F5 re-reads the live file and
+            // requires it to still be the exported pair before RemoveLive.
             if (request.IsRelease && Releasable(request, live, outgoingAccount) is string unreleasable)
             {
                 return Result<ImportAnswer, string>.Failure(unreleasable);

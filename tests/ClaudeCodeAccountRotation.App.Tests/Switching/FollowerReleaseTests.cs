@@ -146,18 +146,39 @@ public sealed class FollowerReleaseTests : IDisposable
     }
 
     [Fact]
-    public async Task AReleaseWhoseLivePairRotatedSinceThePlanIsRefusedBeforeAnythingIsExported()
+    public async Task AReleaseWhoseLivePairRotatedSinceThePlanExportsThePairThisSideHolds()
     {
-        await _roots.WriteLiveAsync(HeldEmail, HeldToken, Token);
+        RefreshTokenFingerprint rotated = await _roots.WriteLiveAsync(HeldEmail, "refresh-rotated", Token);
+        RefreshTokenFingerprint planned = RefreshTokenFingerprint.FromRefreshToken(HeldToken);
         using FollowerImport follower = _roots.Follower();
 
         Result<ImportAnswer, string> answer = await follower.ImportAsync(
-            _roots.ReleaseRequest(HeldEmail, RefreshTokenFingerprint.FromRefreshToken("refresh-rotated")),
+            _roots.ReleaseRequest(HeldEmail, planned),
             Token);
 
-        answer.IsFailure.ShouldBeTrue();
-        answer.Error.ShouldContain("rotated");
-        File.Exists(_roots.ExportPath(HeldEmail)).ShouldBeFalse();
+        answer.IsSuccess.ShouldBeTrue(answer.IsFailure ? answer.Error : null);
+        answer.Value.ExportedFingerprint.ShouldBe(rotated);
+        answer.Value.Outgoing?.Value.ShouldBe(HeldEmail);
+        // F4 has run and F5 has not: the live file still holds the rotated pair
+        // until the existing commit path removes it.
+        (await FollowerRoots.FingerprintOfAsync(_roots.LivePath, Token)).ShouldBe(rotated);
+        (await FollowerRoots.FingerprintOfAsync(_roots.ExportPath(HeldEmail), Token)).ShouldBe(rotated);
+        File.Exists(_roots.StagingPath).ShouldBeFalse();
+        ImportJournalEntry exported = (await _roots.Journal().ReadOpenAsync(Token))!;
+        exported.StepReached.ShouldBe(ImportStep.Exported);
+        exported.IsRelease.ShouldBeTrue();
+        exported.OutgoingFingerprint.ShouldBe(rotated);
+
+        // The existing commit path is what removes the live file. The export stays
+        // until the leader parks it, so this fingerprint has one non-staging copy.
+        Result<ImportResult, string> committed = await follower.CommitAsync(new AccountEmail(HeldEmail), Token);
+
+        committed.IsSuccess.ShouldBeTrue(committed.IsFailure ? committed.Error : null);
+        committed.Value.OutgoingFingerprint.ShouldBe(rotated);
+        File.Exists(_roots.LivePath).ShouldBeFalse();
+        (await FollowerRoots.FingerprintOfAsync(_roots.ExportPath(HeldEmail), Token)).ShouldBe(rotated);
+        (await _roots.NonStagingFilesHoldingAsync(rotated, Token)).Count.ShouldBe(1);
+        (await _roots.NonStagingFilesHoldingAsync(planned, Token)).Count.ShouldBe(0);
     }
 
     [Fact]
