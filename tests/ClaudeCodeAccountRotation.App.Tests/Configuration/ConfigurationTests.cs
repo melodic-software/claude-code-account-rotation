@@ -1,7 +1,9 @@
 using System.Diagnostics;
+using System.Net.Http;
 using System.Text;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Configuration;
+using ClaudeCodeAccountRotation.App.Security;
 using ClaudeCodeAccountRotation.App.Tests.Switching;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Configuration;
@@ -469,6 +471,25 @@ public sealed class ConfigurationTests : IDisposable
             using HttpClient client = new() { Timeout = TimeSpan.FromSeconds(20) };
             using HttpResponseMessage response = await client.GetAsync(new Uri(url + "/api/dashboard"), cancellationToken);
             ((int)response.StatusCode).ShouldBe(200, output.ToString());
+
+            // The printed port is the origin mutations accept. The file's listenPort
+            // is a different number on this launch, and a page opened there is not
+            // this instance.
+            using HttpRequestMessage boundOrigin = new(HttpMethod.Post, new Uri(url + "/api/accounts/not-an-email/switch"));
+            boundOrigin.Headers.TryAddWithoutValidation(SameOriginMutationFilter.HeaderName, "1");
+            boundOrigin.Headers.TryAddWithoutValidation("Origin", url);
+            using HttpResponseMessage posted = await client.SendAsync(boundOrigin, cancellationToken);
+            ((int)posted.StatusCode).ShouldBe(400, output.ToString());
+
+            int boundPort = new Uri(url).Port;
+            if (boundPort != 48211)
+            {
+                using HttpRequestMessage configuredOrigin = new(HttpMethod.Post, new Uri(url + "/api/accounts/not-an-email/switch"));
+                configuredOrigin.Headers.TryAddWithoutValidation(SameOriginMutationFilter.HeaderName, "1");
+                configuredOrigin.Headers.TryAddWithoutValidation("Origin", "http://127.0.0.1:48211");
+                using HttpResponseMessage rejected = await client.SendAsync(configuredOrigin, cancellationToken);
+                ((int)rejected.StatusCode).ShouldBe(403, output.ToString());
+            }
         }
         finally
         {

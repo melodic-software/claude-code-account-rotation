@@ -94,6 +94,7 @@ internal static class AppComposition
         InstanceLock acquired = instance.Value;
         services.AddSingleton(_ => acquired);
         services.AddSingleton(configuration);
+        services.AddSingleton(new LoopbackOrigins(configuration.ListenPort));
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton(new SwitchOptions(
             configuration.LiveConfigDirectory,
@@ -210,6 +211,13 @@ internal static class AppComposition
             if (url is null)
             {
                 return;
+            }
+
+            if (Uri.TryCreate(url, UriKind.Absolute, out Uri? bound) && bound.Port > 0)
+            {
+                // Before the URL is printed, so a page opened from that line posts
+                // to the port that was bound, including a launch that asked for 0.
+                app.Services.GetRequiredService<LoopbackOrigins>().UseBoundPort(bound.Port);
             }
 
             app.Services.GetRequiredService<InstanceLock>().PublishListenUrl(url);

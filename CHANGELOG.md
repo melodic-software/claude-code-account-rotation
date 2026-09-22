@@ -81,7 +81,8 @@ All notable changes to this project are documented in this file. The format foll
   that path (#30). The template itself carries no drive letter and no user path.
   `--help` lists every flag, including `-h` and `/?`. The process prints the dashboard
   URL and opens nothing. `--port 0` asks the operating system for a free port, and the
-  printed URL is the address that was bound.
+  printed URL is the address that was bound. Mutations accept that bound port as their
+  own origin; the port written in the file stays the configured one.
 - The other side can hand an account back to the store without taking another one
   (`POST /api/sides/{side}/release`), and the side panel carries `Hand back` beside `Switch` for it.
   Until now a pair only came back as the outgoing half of a switch to a different account, so a
