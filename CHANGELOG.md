@@ -239,6 +239,17 @@ All notable changes to this project are documented in this file. The format foll
   to two seconds on a fresh cancellation source, so a partial print is logged and
   the reads are not abandoned. A status JSON with `loggedIn` false stays a normal
   logged-out status.
+- The usage and token clients no longer follow redirects (#16). A 307 or 308 would resend the
+  request, including the refresh-token POST body, to the host the endpoint named. Both clients now
+  install a primary handler that refuses redirects, and any 3xx stays the transport failure the
+  status mapping already returns. The handler keeps the two-minute pooled connection lifetime the
+  factory's default primary handler sets, so DNS changes are still respected (Microsoft Learn,
+  IHttpClientFactory, HTTP handler lifetime).
+- When `config.json` sets `liveConfigDirectory` and leaves `stateFilePath` unset, the state file is
+  `<dir>/.claude.json`, the same place the defaults put it when `CLAUDE_CONFIG_DIR` is set. It used
+  to stay at the home default, so the watcher and the stale-identity repair patched `~/.claude.json`
+  instead of the file beside the overridden live directory (#19). An explicit `stateFilePath` is
+  still kept.
 - A login opens one browser, the profile the roster maps to the account. The CLI's own OAuth flow
   was opening its callback URL in the machine's default browser at the same time, so the operator
   got two windows on two URLs and could sign in through the wrong one. Every CLI command now runs
