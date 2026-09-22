@@ -4,11 +4,21 @@ using ClaudeCodeAccountRotation.Core.Switching;
 
 namespace ClaudeCodeAccountRotation.App.Dashboard;
 
-/// <summary>What the page renders. No token field exists on any of these types.</summary>
+/// <summary>
+/// What the page renders. No token field exists on any of these types.
+/// <para>
+/// <c>Banner</c> is the reconciliation banner. The page treats it as a warning
+/// and disables every Switch while it is set. <c>Setup</c> is a different
+/// field: one sentence naming the next control while the roster has no
+/// account that is not paused and is either live or already logged in. It
+/// disables nothing, and it is not a warnings-list entry.
+/// </para>
+/// </summary>
 internal sealed record DashboardView(
     LiveAccountView? LiveAccount,
     IReadOnlyList<AccountCardView> Accounts,
     string? Banner,
+    string? Setup,
     IReadOnlyList<string> Warnings,
     DateTimeOffset CapturedAt,
     RefreshView Refresh);

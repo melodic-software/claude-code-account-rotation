@@ -3,6 +3,7 @@ using System.Text;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.App.Switching;
+using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Ports;
@@ -39,8 +40,33 @@ internal sealed partial class DashboardAssembler(
     WslSwitch coordinator,
     SwitchOptions options,
     TimeProvider timeProvider,
+    IClaudeCliAuthStatus authStatus,
     ILogger<DashboardAssembler> logger)
 {
+    /// <summary>
+    /// The live e-mail whose adopt-live seat was already judged, and whether
+    /// that judgment was a refusal. One reference, swapped whole, so a poll
+    /// cannot pair one e-mail with another poll's verdict.
+    /// </summary>
+    private LiveSeatJudgment? _liveSeatJudgment;
+
+    private const string AdoptSentence = "Click Adopt to put the live account on the roster.";
+
+    private const string LoginSentence = "Click Login on the card that needs a login.";
+
+    private const string AddSentence = "Use Add an account, then Login.";
+
+    /// <summary>
+    /// How long a CLI tier judgment stands. The adopt route reads the CLI
+    /// again on every click, so a process-lifetime memory would keep naming
+    /// Adopt after the same address became Enterprise, or Add after it became
+    /// Max. A minute is long enough that the ten-second poll does not spawn
+    /// the CLI every time, and short enough that the sentence catches the
+    /// route. A change to <c>organizationRateLimitTier</c> drops the memory
+    /// immediately, without waiting out the minute.
+    /// </summary>
+    internal static readonly TimeSpan LiveSeatJudgmentLifetime = TimeSpan.FromMinutes(1);
+
     /// <summary>The roster entry as the page reads it.</summary>
     public static RosterEntryView? View(RosterEntry? entry) => entry is null
         ? null
@@ -180,10 +206,94 @@ internal sealed partial class DashboardAssembler(
             new LiveAccountView(liveEmail?.Value, livePair is not null, livePair?.Fingerprint.Sha256Hex[..12]),
             cards,
             published.LastReconciliation?.Banner,
+            await SetupSentenceAsync(cards, liveAccount, cancellationToken),
             warnings,
             capturedAt,
             Pass(capturedAt));
     }
+
+    /// <summary>
+    /// The first-run sentence, or null once the roster holds an account the
+    /// operator can use: one that is not paused and is either live or already
+    /// has credentials. Adopt, then Login, then Add, in that order, because
+    /// the machine is usually already logged in and Adopt is the step that
+    /// ends that. A live seat adopt-live would refuse as not Max is not
+    /// offered Adopt; the sentence falls through to Login or to Add.
+    /// </summary>
+    private async Task<string?> SetupSentenceAsync(
+        List<AccountCardView> cards,
+        OAuthAccountBlock? liveAccount,
+        CancellationToken cancellationToken)
+    {
+        if (cards.Exists(static card => card.Roster is { Paused: false } && (card.IsLive || card.HasCredentials)))
+        {
+            return null;
+        }
+
+        if (liveAccount is OAuthAccountBlock liveBlock
+            && liveBlock.Email is AccountEmail live
+            && cards.Exists(static card => card.IsLive && card.Roster is null)
+            && !await LiveSeatRefusedAsync(liveBlock, live, cancellationToken))
+        {
+            return AdoptSentence;
+        }
+
+        if (cards.Exists(static card => card.Roster is not null && !card.IsLive && !card.HeldAway && !card.HasCredentials))
+        {
+            return LoginSentence;
+        }
+
+        return AddSentence;
+    }
+
+    /// <summary>
+    /// Whether adopt-live would answer 409 for this live seat. The account
+    /// block can admit a Max tier and can never refuse one, which is the
+    /// admission rule the adopt route already uses, so the CLI is asked only
+    /// when the block does not already admit. A Max or refused judgment is
+    /// remembered for that e-mail and that <c>organizationRateLimitTier</c>,
+    /// and only for <see cref="LiveSeatJudgmentLifetime"/>. An unknown read
+    /// is not remembered.
+    /// </summary>
+    private async Task<bool> LiveSeatRefusedAsync(
+        OAuthAccountBlock liveAccount,
+        AccountEmail live,
+        CancellationToken cancellationToken)
+    {
+        if (MaxTierAdmission.Evaluate(null, liveAccount).Verdict == MaxTierVerdict.Admitted)
+        {
+            return false;
+        }
+
+        LiveSeatJudgment? judged = _liveSeatJudgment;
+        if (judged is not null && JudgmentStillApplies(judged, live, liveAccount))
+        {
+            return judged.Refused;
+        }
+
+        Result<ClaudeAuthStatus, string> status = await authStatus.ReadAsync(options.LiveConfigDirectory, cancellationToken);
+        MaxTierVerdict verdict = MaxTierAdmission.Evaluate(status.IsSuccess ? status.Value : null, liveAccount).Verdict;
+        if (verdict == MaxTierVerdict.Unknown)
+        {
+            // A failed or empty read is not a Team seat. Remembering it as
+            // "not refused" would keep naming Adopt after a later read reports
+            // enterprise. The next poll asks again. Adopt itself still allows
+            // an unknown seat; only Refused is a 409.
+            return false;
+        }
+
+        bool refused = verdict == MaxTierVerdict.Refused;
+        _liveSeatJudgment = new LiveSeatJudgment(live.Value, liveAccount.OrganizationRateLimitTier, refused, timeProvider.GetUtcNow());
+        return refused;
+    }
+
+    private bool JudgmentStillApplies(LiveSeatJudgment judged, AccountEmail live, OAuthAccountBlock liveAccount) =>
+        string.Equals(judged.Email, live.Value, StringComparison.Ordinal)
+        && string.Equals(judged.RateLimitTier, liveAccount.OrganizationRateLimitTier, StringComparison.Ordinal)
+        && timeProvider.GetUtcNow() - judged.ReadAt < LiveSeatJudgmentLifetime;
+
+    /// <summary>One live e-mail, the tier string it was read against, and when.</summary>
+    private sealed record LiveSeatJudgment(string Email, string? RateLimitTier, bool Refused, DateTimeOffset ReadAt);
 
     /// <summary>
     /// One card, whichever of the three sources it came from, beside the standing
