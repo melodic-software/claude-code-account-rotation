@@ -42,9 +42,10 @@ internal static class SwitchEndpoints
                 // read: leaving an earlier switch's values in place would let them
                 // disown a later account's own snapshot whose reset times happened
                 // to match.
-                state.PreSwitchWindows = before is null
+                PreSwitchWindows? windows = before is null
                     ? null
                     : new PreSwitchWindows(before.FiveHourResetsAt, before.SevenDayResetsAt);
+                state.Publish(current => current with { PreSwitchWindows = windows });
             }
 
             return outcome.Match(
