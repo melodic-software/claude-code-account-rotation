@@ -149,7 +149,7 @@ public sealed class FollowerReleaseTests : IDisposable
     public async Task AReleaseWhoseLivePairRotatedSinceThePlanExportsThePairThisSideHolds()
     {
         RefreshTokenFingerprint rotated = await _roots.WriteLiveAsync(HeldEmail, "refresh-rotated", Token);
-        RefreshTokenFingerprint planned = RefreshTokenFingerprint.FromRefreshToken(HeldToken);
+        var planned = RefreshTokenFingerprint.FromRefreshToken(HeldToken);
         using FollowerImport follower = _roots.Follower();
 
         Result<ImportAnswer, string> answer = await follower.ImportAsync(
