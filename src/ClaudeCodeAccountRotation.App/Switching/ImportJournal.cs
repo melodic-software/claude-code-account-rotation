@@ -34,7 +34,8 @@ internal sealed record ImportJournalEntry(
     JsonObject? IncomingAccount,
     JsonObject? OutgoingAccount,
     ImportStep StepReached,
-    DateTimeOffset StartedAt)
+    DateTimeOffset StartedAt,
+    RefreshTokenFingerprint? RequestedFingerprint = null)
 {
     /// <summary>Whether nothing arrives here: the park-back of this side's live pair.</summary>
     public bool IsRelease => Incoming is null;
@@ -59,6 +60,13 @@ internal sealed record ImportJournalEntry(
 /// the switch "already imported" from the release's own row, handing the leader
 /// an outgoing account its journal never planned to park.
 /// </para>
+/// <para>
+/// <see cref="RequestedFingerprint"/> is the fingerprint the request named.
+/// A release matches a re-issue against that, not against the pair that left:
+/// the live pair can have rotated, and the record still has to answer the
+/// plan that asked for it. A record written before the split leaves it null,
+/// and the pair that left was the one the request named.
+/// </para>
 /// </summary>
 internal sealed record LastImportEntry(
     AccountEmail? Incoming,
@@ -66,7 +74,8 @@ internal sealed record LastImportEntry(
     AccountEmail? Outgoing,
     RefreshTokenFingerprint? OutgoingFingerprint,
     JsonObject? OutgoingAccount,
-    DateTimeOffset CompletedAt)
+    DateTimeOffset CompletedAt,
+    RefreshTokenFingerprint? RequestedFingerprint = null)
 {
     /// <summary>Whether the transaction this records was a release.</summary>
     public bool IsRelease => Incoming is null;
@@ -175,7 +184,8 @@ internal sealed class ImportJournal
         JsonObject? IncomingAccount,
         JsonObject? OutgoingAccount,
         ImportStep StepReached,
-        DateTimeOffset StartedAt)
+        DateTimeOffset StartedAt,
+        string? RequestedFingerprint)
     {
         public static JournalDocument From(ImportJournalEntry entry) => new(
             entry.Incoming?.Value,
@@ -187,7 +197,8 @@ internal sealed class ImportJournal
             entry.IncomingAccount?.DeepClone().AsObject(),
             entry.OutgoingAccount?.DeepClone().AsObject(),
             entry.StepReached,
-            entry.StartedAt);
+            entry.StartedAt,
+            entry.RequestedFingerprint?.Sha256Hex);
 
         public ImportJournalEntry ToEntry() => new(
             Incoming is null ? null : new AccountEmail(Incoming),
@@ -199,7 +210,8 @@ internal sealed class ImportJournal
             IncomingAccount,
             OutgoingAccount,
             StepReached,
-            StartedAt);
+            StartedAt,
+            RequestedFingerprint is null ? null : new RefreshTokenFingerprint(RequestedFingerprint));
     }
 
     private sealed record LastImportDocument(
@@ -208,7 +220,8 @@ internal sealed class ImportJournal
         string? Outgoing,
         string? OutgoingFingerprint,
         JsonObject? OutgoingAccount,
-        DateTimeOffset CompletedAt)
+        DateTimeOffset CompletedAt,
+        string? RequestedFingerprint)
     {
         public static LastImportDocument From(LastImportEntry entry) => new(
             entry.Incoming?.Value,
@@ -216,7 +229,8 @@ internal sealed class ImportJournal
             entry.Outgoing?.Value,
             entry.OutgoingFingerprint?.Sha256Hex,
             entry.OutgoingAccount?.DeepClone().AsObject(),
-            entry.CompletedAt);
+            entry.CompletedAt,
+            entry.RequestedFingerprint?.Sha256Hex);
 
         public LastImportEntry ToEntry() => new(
             Incoming is null ? null : new AccountEmail(Incoming),
@@ -224,6 +238,7 @@ internal sealed class ImportJournal
             Outgoing is null ? null : new AccountEmail(Outgoing),
             OutgoingFingerprint is null ? null : new RefreshTokenFingerprint(OutgoingFingerprint),
             OutgoingAccount,
-            CompletedAt);
+            CompletedAt,
+            RequestedFingerprint is null ? null : new RefreshTokenFingerprint(RequestedFingerprint));
     }
 }

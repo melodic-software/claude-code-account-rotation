@@ -923,9 +923,10 @@ internal sealed partial class WslSwitch : IDisposable
 
         // A release names no claimed path, and that absence is what tells the
         // other side which way the pair is moving. Its fingerprint is the pair
-        // the leader expects that side to be live on, so a side that rotated or
-        // switched since L1 refuses rather than exporting one nobody planned to
-        // park.
+        // the leader last saw live on that side. A side that has switched to
+        // another account refuses before exporting. A side whose live pair has
+        // rotated exports the pair it holds, and the journal below records the
+        // fingerprint the gate verified.
         ImportRequest request;
         if (entry.IncomingFolderPath is string incomingFolder
             && entry.Incoming is AccountEmail incoming
