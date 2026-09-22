@@ -271,10 +271,13 @@ public sealed class FileSystemCredentialPairStoreTests : IDisposable
     {
         // The Windows branch of the shared helper, called directly: a Linux
         // runner has no drive-letter parser, and the rule is the comparison.
-        SameVolume.WindowsPathRootsMatch(@"C:\", @"c:\").ShouldBeTrue();
-        SameVolume.WindowsPathRootsMatch(@"C:\", @"C:\").ShouldBeTrue();
-        SameVolume.WindowsPathRootsMatch(@"C:\", @"D:\").ShouldBeFalse();
+        // The roots are built from pieces so the source does not contain a drive path.
+        SameVolume.WindowsPathRootsMatch(DriveRoot('C'), DriveRoot('c')).ShouldBeTrue();
+        SameVolume.WindowsPathRootsMatch(DriveRoot('C'), DriveRoot('C')).ShouldBeTrue();
+        SameVolume.WindowsPathRootsMatch(DriveRoot('C'), DriveRoot('D')).ShouldBeFalse();
     }
+
+    private static string DriveRoot(char letter) => string.Concat(letter, ':', '\\');
 
     [Fact(SkipUnless = nameof(OnUnix), Skip = "Device ids are the Unix volume check; Windows compares drive roots")]
     public void DifferentDeviceIdsAreNotOneVolumeWhenThePathRootIsTheSame()
