@@ -1,26 +1,67 @@
 name: ci
 
 # Build, test, and gate on every pull request and on main. The org's ci-gate
-# context (ci-status, whose pr-contract composite carries the pull-request
-# contract) arrives in the release phase; until then this workflow is the
-# whole lane.
+# context is the single check `ci-status` below: it aggregates every lane in
+# this file and carries the pull-request contract (title, do-not-merge label,
+# issue linkage) as steps of that one check, through the SHA-pinned
+# ci-workflows composites of the same names.
 
 on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    # `edited`, `labeled` and `unlabeled` can change the pr-title /
+    # do-not-merge / issue-linkage answers without a new commit, so the required
+    # check has to re-evaluate. Whether such an event is CONTRACT-ONLY (lanes
+    # gated off, ci-status carrying the recorded `ci-lanes` verdict forward) is
+    # decided by one predicate, repeated verbatim in `concurrency.group` and in
+    # every job's `if:` except `ci-status`:
+    #
+    #   github.event.pull_request.head.repo.full_name == github.repository &&
+    #   (contains(fromJSON('["labeled","unlabeled"]'), github.event.action) ||
+    #    (github.event.action == 'edited' && !github.event.changes.base))
+    #
+    # An `edited` event carrying `changes.base` is a BASE-BRANCH change: the
+    # merge commit the lanes test changes with it, so that runs in full. A fork
+    # pull request is never contract-only — its token is read-only on
+    # `pull_request` whatever `permissions:` requests, so it cannot record lane
+    # state — and runs the full workflow on every event exactly as before.
+    types: [opened, synchronize, reopened, ready_for_review, edited, labeled, unlabeled]
 
 permissions:
   contents: read
 
+# THE GROUP BRANCHES ON THE CONTRACT-ONLY PREDICATE, and every branch cancels
+# (`cancel-in-progress` takes one value per workflow and cannot branch). A
+# contract-only run takes a group of its own keyed on `github.run_id`, so it
+# can neither be cancelled nor evict anything: eviction of a PENDING run is
+# unconditional in GitHub's queueing and is not governed by
+# `cancel-in-progress`, so a shared group let one event evict another and leave
+# a check suite with no `ci-status` check run at all. The full branch keeps one
+# group per pull request, so a `synchronize` still cancels the run it
+# supersedes; keying on the number rather than `head_ref` stops same-named fork
+# branches from cancelling each other. Push runs fall back to the unique
+# `github.run_id` and are never cancelled.
+#
+# The cost of the branch: a contract-only run no longer queues behind the full
+# run whose `ci-lanes` status it carries forward, so the two race. The
+# `ci-status` composite closes that with a bounded wait on in-flight sibling
+# runs on the same head SHA; see `carry-forward-wait-seconds` below.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  group: >-
+    ${{ (github.event.pull_request.head.repo.full_name == github.repository &&
+    (contains(fromJSON('["labeled","unlabeled"]'), github.event.action) ||
+    (github.event.action == 'edited' && !github.event.changes.base)))
+    && format('ci-contract-{0}-{1}', github.event.pull_request.number, github.run_id)
+    || format('{0}-{1}', github.workflow, github.event.pull_request.number || github.run_id) }}
   cancel-in-progress: true
 
 jobs:
   build-test:
     name: Build and test (${{ matrix.os }})
+    # The contract-only gate, verbatim (see the predicate spelled out under
+    # `on.pull_request.types`).
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (contains(fromJSON('["labeled","unlabeled"]'), github.event.action) || (github.event.action == 'edited' && !github.event.changes.base))) }}
     strategy:
       fail-fast: false
       matrix:
@@ -53,6 +94,8 @@ jobs:
 
   gates:
     name: Repository gates
+    # The contract-only gate, verbatim.
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (contains(fromJSON('["labeled","unlabeled"]'), github.event.action) || (github.event.action == 'edited' && !github.event.changes.base))) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -65,3 +108,69 @@ jobs:
         run: shellcheck eng/*.sh
       - name: No machine paths in shipped surfaces
         run: bash eng/check-no-machine-paths.sh
+
+  ci-status:
+    name: ci-status
+    # `always()`, never a success-guard: a lane failure must still run this
+    # required aggregate so the aggregation below turns it red, and a skipped
+    # required check reports success to branch protection.
+    if: always()
+    needs:
+      - build-test
+      - gates
+    runs-on: ubuntu-24.04
+    # Derived from this repository's own measured full run, per the composite's
+    # README: the last twelve `ci` runs took 152-221 s wall including queue, so
+    # a contract-only event arriving as one starts waits up to that long, and
+    # `build-test`'s own 20-minute cap leaves room for a slower Windows lane.
+    # 10 minutes covers the measured p95 plus that headroom and the job's own
+    # work; `carry-forward-wait-seconds` below is then `10 * 60 - 60`.
+    timeout-minutes: 10
+    permissions:
+      contents: read # No checkout here; the composites read the pull request through the API.
+      # The carry-forward wait lists this workflow's runs on this head SHA to
+      # find any still incomplete. Under an explicit permissions block the
+      # default is none, so the Actions reads would 403 and the composite would
+      # degrade to the unwaited status read.
+      actions: read # Lists in-flight sibling runs for the carry-forward wait.
+      # pr-contract upserts the advisory linkage comment and moves the linkage
+      # label; ci-status records the `ci-lanes` commit status the carry-forward
+      # branch reads back on the next contract-only event.
+      pull-requests: write # Advisory linkage comment and label writes.
+      statuses: write # Records and reads back the `ci-lanes` commit status.
+    steps:
+      - name: Check the pull-request contract
+        uses: melodic-software/ci-workflows/.github/actions/pr-contract@91d06c94d733e5daa507e0afaa06a140bb46d337 # v0.25.0
+        with:
+          token: ${{ github.token }}
+          # The standards sync and Dependabot open pull requests that close no
+          # issue, so without this they collect the advisory linkage comment and
+          # the `needs-issue-linkage` label on every run. Exempts the linkage
+          # check only; the Conventional Commits title check and the
+          # do-not-merge label gate still apply to both authors. Exact login
+          # equality, never a `*[bot]` pattern, so a new bot is not silently
+          # skipped.
+          exempt-authors: 'dependabot[bot],melodic-standards-sync[bot]'
+      - name: Aggregate lane results
+        # `!cancelled()` so a failing pr-contract step does not skip the
+        # aggregation: the job still fails on the contract step's exit code, and
+        # the `ci-lanes` status is on the SHA for the next contract-only run.
+        if: ${{ !cancelled() }}
+        uses: melodic-software/ci-workflows/.github/actions/ci-status@91d06c94d733e5daa507e0afaa06a140bb46d337 # v0.25.0
+        with:
+          # Derived from the needs graph above — the single source of truth for
+          # the lane list. Adding a lane to needs automatically extends this
+          # check.
+          results: ${{ join(needs.*.result, ' ') }}
+          # No lane here is ever legitimately skipped on an event that reaches
+          # the aggregation: both are unconditional apart from the contract-only
+          # gate, and on a contract-only run this input is ignored in favour of
+          # the recorded status. So a `skipped` lane means one that should have
+          # run did not, and must go red.
+          treat-skipped-as: fail
+          # A contract-only run no longer queues behind the full run it reads
+          # from, so it waits for one instead. `timeout-minutes * 60 - 60`, the
+          # composite's derived ceiling, so the fail-closed error is never
+          # preempted by the job timeout.
+          carry-forward-wait-seconds: '540'
+          token: ${{ github.token }}
