@@ -437,9 +437,9 @@ public sealed class PeerTests
         try
         {
             string logPath = Path.Combine(prepared.AppData, "follower.log");
-            var justEnded = new byte[OneMebibyte + 1];
+            byte[] justEnded = new byte[OneMebibyte + 1];
             Array.Fill(justEnded, (byte)'J');
-            var oversized = new byte[OneMebibyte + 1];
+            byte[] oversized = new byte[OneMebibyte + 1];
             Array.Fill(oversized, (byte)'Q');
             await File.WriteAllBytesAsync(logPath, justEnded, TestContext.Current.CancellationToken);
             await File.WriteAllBytesAsync(logPath + ".2", oversized, TestContext.Current.CancellationToken);
@@ -478,7 +478,7 @@ public sealed class PeerTests
             }
 
             byte[] oneByte = [(byte)'Z'];
-            var underTheCap = new byte[OneMebibyte - 1];
+            byte[] underTheCap = new byte[OneMebibyte - 1];
             Array.Fill(underTheCap, (byte)'A');
             await File.WriteAllBytesAsync(logPath + ".1", oneByte, TestContext.Current.CancellationToken);
             await File.WriteAllBytesAsync(logPath + ".2", underTheCap, TestContext.Current.CancellationToken);
@@ -495,7 +495,7 @@ public sealed class PeerTests
                 File.Delete(Path.Combine(prepared.AppData, name));
             }
 
-            var oneByteOver = new byte[OneMebibyte];
+            byte[] oneByteOver = new byte[OneMebibyte];
             Array.Fill(oneByteOver, (byte)'B');
             await File.WriteAllBytesAsync(logPath + ".1", oneByte, TestContext.Current.CancellationToken);
             await File.WriteAllBytesAsync(logPath + ".2", oneByteOver, TestContext.Current.CancellationToken);
