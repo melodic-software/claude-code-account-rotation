@@ -322,6 +322,30 @@ public sealed class FileSystemCredentialPairStoreTests : IDisposable
         CopiesOf("refresh-a").ShouldBe(1);
     }
 
+    [Fact(SkipUnless = nameof(OnUnix), Skip = "rename(2) EXDEV is the Unix refusal; Windows compares drive roots")]
+    public async Task ARenameThatReportsCrossDeviceIsRefusedAndCreatesNoSecondFile()
+    {
+        // The device ids match, which is what a bind mount looks like, and the
+        // rename reports EXDEV. File.Move would copy; this must not.
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        var store = new FileSystemCredentialPairStore(
+            _liveDirectory,
+            _profilesRoot,
+            TimeProvider.System,
+            static _ => 1L,
+            static (_, _) => SameVolume.CrossDeviceError);
+        string parked = Path.Combine(Folder("a"), CredentialFiles.FileName);
+
+        InvalidOperationException refusal = await Should.ThrowAsync<InvalidOperationException>(
+            () => store.MoveLiveToParkedAsync(Folder("a"), TestContext.Current.CancellationToken));
+
+        refusal.Message.ShouldContain("different volumes");
+        refusal.Message.ShouldContain("never a copy");
+        File.Exists(Path.Combine(_liveDirectory, CredentialFiles.FileName)).ShouldBeTrue();
+        File.Exists(parked).ShouldBeFalse();
+        CopiesOf("refresh-a").ShouldBe(1);
+    }
+
     [Fact(SkipUnless = nameof(OnUnix), Skip = "A missing device id fails closed on Unix; Windows compares drive roots")]
     public async Task AMoveIsRefusedWhenTheDeviceIdCannotBeReadAndNoSecondFileIsCreated()
     {

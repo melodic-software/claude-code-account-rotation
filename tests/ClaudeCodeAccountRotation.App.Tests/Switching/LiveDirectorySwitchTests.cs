@@ -61,7 +61,8 @@ public sealed class LiveDirectorySwitchTests : IDisposable
         ICredentialPairStore? pairs = null,
         ILoginSessionRunner? logins = null,
         bool sharedStore = false,
-        Func<string, long?>? deviceId = null)
+        Func<string, long?>? deviceId = null,
+        Func<string, string, int>? rename = null)
     {
         SwitchOptions options = new(_liveDirectory, _stateFilePath, _profilesRoot, _appData, lockWait ?? TimeSpan.FromSeconds(2), gateTimeout ?? TimeSpan.FromMilliseconds(200));
         ICredentialPairStore store = pairs ?? new FileSystemCredentialPairStore(_liveDirectory, _profilesRoot, TimeProvider.System);
@@ -81,7 +82,8 @@ public sealed class LiveDirectorySwitchTests : IDisposable
             options,
             TimeProvider.System,
             NullLogger<LiveDirectorySwitch>.Instance,
-            deviceId);
+            deviceId,
+            rename);
     }
 
     private async Task<string?> StateFileEmailAsync()
@@ -325,6 +327,27 @@ public sealed class LiveDirectorySwitchTests : IDisposable
             Path.GetFullPath(path).StartsWith(_profilesRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal) ? 1L : 2L;
 
         ReconciliationReport report = await Switch(deviceId: deviceId).ReconcileAsync(TestContext.Current.CancellationToken);
+
+        File.Exists(stranded).ShouldBeTrue();
+        report.Quarantined.ShouldBeEmpty();
+        report.SwitchingBlocked.ShouldBeTrue();
+        report.Banner.ShouldNotBeNull().ShouldContain(stranded);
+        CopiesOf(_root, "refresh-rotated").ShouldBe(1);
+    }
+
+    [Fact(SkipUnless = nameof(OnUnix), Skip = "rename(2) EXDEV is the Unix refusal; Windows compares drive roots")]
+    public async Task ACredentialTemporaryWhoseRenameReportsCrossDeviceStaysPutAndIsNotCopied()
+    {
+        // Same device id, which a bind mount or two btrfs subvolumes can
+        // report, and rename still returns EXDEV. The file must stay put.
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        string folder = await ParkedProfileAsync("b@example.com", "refresh-b");
+        string stranded = Path.Combine(folder, TemporaryName(CredentialFiles.FileName));
+        await File.WriteAllTextAsync(stranded, CredentialFiles.Shape("refresh-rotated").ToJsonString(), TestContext.Current.CancellationToken);
+
+        ReconciliationReport report = await Switch(deviceId: static _ => 1L, rename: static (_, _) => SameVolume.CrossDeviceError)
+            .ReconcileAsync(TestContext.Current.CancellationToken);
 
         File.Exists(stranded).ShouldBeTrue();
         report.Quarantined.ShouldBeEmpty();

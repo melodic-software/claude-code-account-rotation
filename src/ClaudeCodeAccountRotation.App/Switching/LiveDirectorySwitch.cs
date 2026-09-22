@@ -53,6 +53,7 @@ internal sealed partial class LiveDirectorySwitch
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<LiveDirectorySwitch> _logger;
     private readonly Func<string, long?> _deviceId;
+    private readonly Func<string, string, int>? _rename;
     private readonly string _quarantineDirectory;
     private readonly string _liveOwnerPath;
 
@@ -86,7 +87,8 @@ internal sealed partial class LiveDirectorySwitch
             options,
             timeProvider,
             logger,
-            deviceId: null)
+            deviceId: null,
+            rename: null)
     {
     }
 
@@ -105,7 +107,8 @@ internal sealed partial class LiveDirectorySwitch
         SwitchOptions options,
         TimeProvider timeProvider,
         ILogger<LiveDirectorySwitch> logger,
-        Func<string, long?>? deviceId)
+        Func<string, long?>? deviceId,
+        Func<string, string, int>? rename = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         _pairs = pairs;
@@ -123,6 +126,7 @@ internal sealed partial class LiveDirectorySwitch
         _timeProvider = timeProvider;
         _logger = logger;
         _deviceId = deviceId ?? SameVolume.DeviceId;
+        _rename = rename;
         _quarantineDirectory = options.QuarantineDirectory;
         _liveOwnerPath = Path.Combine(options.AppDataDirectory, "state", LiveOwnerFileName);
     }
@@ -480,7 +484,23 @@ internal sealed partial class LiveDirectorySwitch
         }
 
         Directory.CreateDirectory(destinationDirectory);
-        await AtomicBytesFile.MoveIntoPlaceWithRetryAsync(path, destination, cancellationToken);
+        if (OperatingSystem.IsWindows())
+        {
+            // The drive-root check above is the volume boundary File.Move uses
+            // on Windows, and the retry covers a scanner holding the temp.
+            await AtomicBytesFile.MoveIntoPlaceWithRetryAsync(path, destination, cancellationToken);
+        }
+        else
+        {
+            // renameat2, not File.Move. A bind mount can share a device id
+            // with the live directory and still make rename return EXDEV, and
+            // File.Move would then copy the credential and delete the source.
+            int renamed = SameVolume.MoveByRename(path, destination, _rename);
+            if (renamed != 0)
+            {
+                throw new IOException("Refusing to move " + path + " to " + destination + ": a credential pair moves by rename or not at all.");
+            }
+        }
         LogQuarantined(path, destination, "credential temporary");
         return destination;
     }

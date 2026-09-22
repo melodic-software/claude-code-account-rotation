@@ -230,10 +230,12 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
-- On Linux, a credential rename compares device ids, so a profiles root on a different mount than
-  the live directory is refused. The path-root check let it through, because that root is `/` for
-  every absolute path. `File.Move` across volumes copies the file and then deletes it, per its
-  documentation, and that window is a second holder of the refresh token (#17).
+- On Linux, a credential rename compares device ids and then moves with `renameat2`
+  (`RENAME_NOREPLACE`). A profiles root on a different mount is refused, including a bind mount or
+  two btrfs subvolumes that share a device id: `rename(2)` returns `EXDEV` for those, and that is a
+  refusal. The path-root check let a cross-mount move through, because that root is `/` for every
+  absolute path. `File.Move` is not used for the Linux move: across volumes it copies the file and
+  then deletes it, per its documentation, and that window is a second holder of the refresh token (#17).
 - A failing `claude` command no longer hands the page the CLI's own text (#11).
   The string a switch toast can show stays a short classified sentence: the command
   timed out, it exited with a code, or `auth status` printed no JSON object. The
