@@ -52,6 +52,8 @@ internal sealed partial class LiveDirectorySwitch
     private readonly SwitchOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<LiveDirectorySwitch> _logger;
+    private readonly Func<string, long?> _deviceId;
+    private readonly Func<string, string, int>? _rename;
     private readonly string _quarantineDirectory;
     private readonly string _liveOwnerPath;
 
@@ -70,6 +72,43 @@ internal sealed partial class LiveDirectorySwitch
         SwitchOptions options,
         TimeProvider timeProvider,
         ILogger<LiveDirectorySwitch> logger)
+        : this(
+            pairs,
+            stateFile,
+            profiles,
+            journal,
+            gate,
+            logins,
+            authStatus,
+            policyReader,
+            recovery,
+            quota,
+            slots,
+            options,
+            timeProvider,
+            logger,
+            deviceId: null,
+            rename: null)
+    {
+    }
+
+    internal LiveDirectorySwitch(
+        ICredentialPairStore pairs,
+        ClaudeStateFile stateFile,
+        ProfileFolderStore profiles,
+        SwitchJournal journal,
+        CredentialMutationGate gate,
+        ILoginSessionRunner logins,
+        IClaudeCliAuthStatus authStatus,
+        ManagedLoginPolicyReader policyReader,
+        RecoveryFiles recovery,
+        QuotaState quota,
+        SharedStoreSlots slots,
+        SwitchOptions options,
+        TimeProvider timeProvider,
+        ILogger<LiveDirectorySwitch> logger,
+        Func<string, long?>? deviceId,
+        Func<string, string, int>? rename = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         _pairs = pairs;
@@ -86,6 +125,8 @@ internal sealed partial class LiveDirectorySwitch
         _options = options;
         _timeProvider = timeProvider;
         _logger = logger;
+        _deviceId = deviceId ?? SameVolume.DeviceId;
+        _rename = rename;
         _quarantineDirectory = options.QuarantineDirectory;
         _liveOwnerPath = Path.Combine(options.AppDataDirectory, "state", LiveOwnerFileName);
     }
@@ -443,7 +484,23 @@ internal sealed partial class LiveDirectorySwitch
         }
 
         Directory.CreateDirectory(destinationDirectory);
-        await AtomicBytesFile.MoveIntoPlaceWithRetryAsync(path, destination, cancellationToken);
+        if (OperatingSystem.IsWindows())
+        {
+            // The drive-root check above is the volume boundary File.Move uses
+            // on Windows, and the retry covers a scanner holding the temp.
+            await AtomicBytesFile.MoveIntoPlaceWithRetryAsync(path, destination, cancellationToken);
+        }
+        else
+        {
+            // renameat2, not File.Move. A bind mount can share a device id
+            // with the live directory and still make rename return EXDEV, and
+            // File.Move would then copy the credential and delete the source.
+            int renamed = SameVolume.MoveByRename(path, destination, _rename);
+            if (renamed != 0)
+            {
+                throw new IOException("Refusing to move " + path + " to " + destination + ": a credential pair moves by rename or not at all.");
+            }
+        }
         LogQuarantined(path, destination, "credential temporary");
         return destination;
     }
@@ -533,11 +590,11 @@ internal sealed partial class LiveDirectorySwitch
             && name[1..^SuffixLength].EndsWith(FileSystemCredentialPairStore.FileName, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool OnOneVolume(string first, string second) =>
-        string.Equals(
-            Path.GetPathRoot(Path.GetFullPath(first)),
-            Path.GetPathRoot(Path.GetFullPath(second)),
-            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+    /// <summary>
+    /// Whether a rename stays on one volume. The store's rename uses the same
+    /// helper, so the two gates cannot drift back to comparing path roots.
+    /// </summary>
+    private bool OnOneVolume(string first, string second) => SameVolume.OnOneVolume(first, second, _deviceId);
 
     private async Task<IReadOnlyList<string>> QuarantineDuplicateLineagesAsync(CancellationToken cancellationToken)
     {
