@@ -105,8 +105,9 @@ All notable changes to this project are documented in this file. The format foll
 ### Added
 
 - A login, a server-side logout, and a credential-folder deletion each leave an audit entry naming
-  the account and the outcome (#42). The console log stamps every line with a UTC timestamp, so
-  the entry says when.
+  the account and the outcome (#42). A login that expires and is then admitted records both, and a
+  profile whose email is not text does not keep its folder from being deleted. The console log
+  stamps every line with a UTC timestamp, so the entry says when.
 - The leader starts the follower through a wrapper which truncates `follower.log` under the
   follower's app data directory, running the executable `peers[].launch.executablePath` names
   and using the same app-data default the application uses when that key is absent (#92).

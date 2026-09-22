@@ -244,10 +244,13 @@ internal sealed partial class ProfileFolderStore
                 return email.Value;
             }
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            // Reading the name failed. The delete still proceeds, and the line
-            // falls through to the folder name rather than quoting this exception.
+            // Reading the name failed. A profile value of the wrong JSON type
+            // throws InvalidOperationException out of the account block, and
+            // that is not a reason to keep the folder. The delete still
+            // proceeds, and the line falls through to the folder name rather
+            // than quoting this exception.
         }
 
         Result<AccountEmail, string> parsed = AccountEmail.Parse(Path.GetFileName(folder));

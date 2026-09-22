@@ -778,15 +778,26 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
         LoginSessionState? recorded = null;
         lock (session.Sync)
         {
-            if (onlyWhilePending && session.State != LoginSessionState.Pending)
+            LoginSessionState previous = session.State;
+            if (onlyWhilePending && previous != LoginSessionState.Pending)
             {
                 return;
             }
 
-            if (session.State == LoginSessionState.Pending && state != LoginSessionState.Pending)
+            if (previous == LoginSessionState.Pending && state != LoginSessionState.Pending)
             {
                 session.FinishedAt = _clock.GetUtcNow();
                 scheduleEviction = true;
+                recorded = state;
+            }
+            else if (previous != LoginSessionState.Pending && state != LoginSessionState.Pending && previous != state)
+            {
+                // Expiry is recorded while the child is still being killed, and
+                // the pump may then admit the pair that child wrote. The page
+                // shows the later state, so the log names it too; otherwise the
+                // trail says the login expired after the credentials were
+                // accepted. The readable window already started on the way out
+                // of pending, and a second timer is not armed.
                 recorded = state;
             }
 
@@ -795,9 +806,10 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
             echo = session.Echo;
         }
 
-        // Once, on the way out of pending. The message the page shows is not
-        // the outcome: it is prose, and a future wording must not be able to
-        // pull the code or a token onto this line.
+        // The message the page shows is not the outcome: it is prose, and a
+        // future wording must not be able to pull the code or a token onto
+        // this line. A later settle that replaces one terminal state with
+        // another records that later outcome as well.
         if (recorded == LoginSessionState.Completed)
         {
             LogLoginCompleted(session.Email.Value);

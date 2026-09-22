@@ -156,6 +156,40 @@ public sealed class CredentialAuditLogTests
     }
 
     [Fact]
+    public async Task ALoginThatExpiresAndThenAdmitsRecordsBothOutcomes()
+    {
+        // The child writes a new pair and stays alive. The status read notices
+        // the expiry and kills it; the pump then admits the pair. The page ends
+        // on the admission, and the log has to say both that the login expired
+        // and that it completed.
+        await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        JsonObject started = await StartLoginAsync(client, TestContext.Current.CancellationToken);
+        string id = started["id"]!.GetValue<string>();
+        ScriptedLoginChild child = factory.LoginChild.Last;
+        Directory.CreateDirectory(child.ConfigDirectory);
+        JsonObject pair = CredentialFiles.Shape(RefreshToken);
+        pair["claudeAiOauth"]!.AsObject()["clientSecret"] = ClientSecret;
+        await File.WriteAllTextAsync(Path.Combine(child.ConfigDirectory, CredentialFiles.FileName), pair.ToJsonString(), TestContext.Current.CancellationToken);
+        JsonObject state = new() { ["numStartups"] = 1, ["oauthAccount"] = AppFactory.AccountJson(child.Email) };
+        await File.WriteAllTextAsync(Path.Combine(child.ConfigDirectory, ".claude.json"), state.ToJsonString(), TestContext.Current.CancellationToken);
+
+        factory.Clock.Advance(TimeSpan.FromMinutes(10));
+        using HttpResponseMessage response = await client.GetAsync(SessionPath(id), TestContext.Current.CancellationToken);
+        var runner = (ClaudeCliLoginSessionRunner)factory.Services.GetRequiredService<ILoginSessionRunner>();
+        await runner.FinishedAsync(new LoginSessionId(id)).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        JsonObject after = (await client.GetFromJsonAsync<JsonObject>(SessionPath(id), TestContext.Current.CancellationToken))!;
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        child.Killed.ShouldBeTrue();
+        after["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Completed));
+        ShouldRecord(factory, "login for " + ParkedEmail + " started");
+        ShouldRecord(factory, "login for " + ParkedEmail + " expired");
+        ShouldRecord(factory, "login for " + ParkedEmail + " completed");
+        ShouldOmitSecrets(factory);
+    }
+
+    [Fact]
     public async Task ARefusedLoginRecordsTheRevocationAndTheFolderDeletionWithoutThePair()
     {
         await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
