@@ -380,6 +380,11 @@
           row.pick.name = side.side;
           row.control.appendChild(row.pick);
           row.button = actionButton("Switch " + side.side + " side", "switch", function () { switchSide(side.side, row.pick.value); });
+          // The poll is what disables Switch on an empty value. A choice has to
+          // enable it immediately, or the picker stays dead until the next one.
+          row.pick.addEventListener("change", function () {
+            row.button.disabled = busy || !row.pick.value;
+          });
           // One control for the park-back, beside the switch and only on a side
           // that is answering: it reads what that side holds at click time and
           // the server re-reads it before anything moves.
