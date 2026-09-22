@@ -35,8 +35,9 @@ The assets are `claude-code-account-rotation-win-x64.exe` (the Windows leader),
 `claude-code-account-rotation-linux-x64` (the follower the WSL side runs),
 `SHA256SUMS`, and `config.template.json` (the template the executable embeds).
 
-Check each binary against the digest `SHA256SUMS` lists for it. Place the executable on `PATH`, or
-make a shortcut to it, and run it once.
+Check each binary against the digest `SHA256SUMS` lists for it. A release download does not keep
+the executable bit, so on Linux run `chmod +x claude-code-account-rotation-linux-x64` before the
+first run. Place the executable on `PATH`, or make a shortcut to it, and run it once.
 
 A missing `config.json` is written on that first run from the embedded template. The written file
 fills its paths from the user profile. It sits in the app data directory unless `--config` pointed
