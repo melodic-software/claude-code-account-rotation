@@ -230,6 +230,11 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- When `config.json` sets `liveConfigDirectory` and leaves `stateFilePath` unset, the state file is
+  `<dir>/.claude.json`, the same place the defaults put it when `CLAUDE_CONFIG_DIR` is set. It used
+  to stay at the home default, so the watcher and the stale-identity repair patched `~/.claude.json`
+  instead of the file beside the overridden live directory (#19). An explicit `stateFilePath` is
+  still kept.
 - A login opens one browser, the profile the roster maps to the account. The CLI's own OAuth flow
   was opening its callback URL in the machine's default browser at the same time, so the operator
   got two windows on two URLs and could sign in through the wrong one. Every CLI command now runs
