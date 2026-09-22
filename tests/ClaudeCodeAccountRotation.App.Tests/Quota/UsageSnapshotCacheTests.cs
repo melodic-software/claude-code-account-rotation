@@ -13,7 +13,7 @@ namespace ClaudeCodeAccountRotation.App.Tests.Quota;
 /// <para>
 /// Two properties matter more than the round trip itself. The file holds
 /// percentages and instants and nothing else, because it is a second on-disk
-/// artefact written beside credential files and must never become one; and
+/// artifact written beside credential files and must never become one; and
 /// every read of it is tolerant, because it is read at startup, where an
 /// unreadable file must cost its own contents rather than the tool.
 /// </para>

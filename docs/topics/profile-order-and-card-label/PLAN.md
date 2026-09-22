@@ -53,7 +53,7 @@ path segment so a roster entry cannot point a login at a directory outside `User
 
 ### Captured assumptions
 
-- Chromium serialises `info_cache` keys in an order the app must not depend on (research left it
+- Chromium serializes `info_cache` keys in an order the app must not depend on (research left it
   open); the sort makes the picker independent of it either way.
 - A directory name outside the `Profile N` / `Default` pattern is rare (Brave names none; Edge and
   Chrome name only those) and sorting it last by ordinal is enough.

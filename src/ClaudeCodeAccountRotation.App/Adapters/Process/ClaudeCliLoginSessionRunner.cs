@@ -464,7 +464,7 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
         catch (Exception)
 #pragma warning restore CA1031
         {
-            // Anything else that went wrong is still not a judgement, and the folder
+            // Anything else that went wrong is still not a judgment, and the folder
             // holds whatever the login left; the session says so rather than hanging.
             // The fault's own text stays out of it: a message built from one could
             // carry a path off this machine onto the page, the way nothing built from
@@ -521,12 +521,12 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     /// Judges the tier of the account that actually signed in, under that
     /// account's own folder and against the same <see cref="MaxTierAdmission"/>
     /// the roster admits by, from the CLI's answer alone, and adopts the fresh
-    /// login only once that judgement is in.
+    /// login only once that judgment is in.
     /// <para>
     /// No recorded identity takes part. A folder logged in before carries the
     /// earlier login's <c>profile.json</c>, and a login whose tidy-up could not
     /// run leaves a state file behind too, so nothing on disk proves which login
-    /// wrote the block that names a Max tier; handing any of it to the judgement
+    /// wrote the block that names a Max tier; handing any of it to the judgment
     /// would let a stale Max identity vouch for the seat that just signed in.
     /// Anything but Max is refused, including a tier that could not be read,
     /// since the operator's one address can carry both an Enterprise seat and a
@@ -535,7 +535,7 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     /// before this login: an unreadable tier there is no proof either way, and
     /// deleting what may be the earlier, admitted login is the greater harm, so
     /// that pair is kept and the operator told to remove the account instead.
-    /// Nothing is adopted on that branch, which is why the judgement comes first:
+    /// Nothing is adopted on that branch, which is why the judgment comes first:
     /// a folder whose credentials are kept keeps the profile and the residue that
     /// belong with them, rather than rewritten in the name of a login nothing could
     /// vouch for. The refused branch does adopt, deliberately, before the pair is

@@ -7,7 +7,7 @@ using ClaudeCodeAccountRotation.Core.Ports;
 namespace ClaudeCodeAccountRotation.App.Accounts;
 
 /// <summary>
-/// The one tier judgement for a folder that is not the live directory, asked
+/// The one tier judgment for a folder that is not the live directory, asked
 /// both when an account joins the roster and at the end of a login into that
 /// folder. The roster asks two sources, the identity the folder records and
 /// the CLI's own <c>auth status --json</c> run under it whenever there is a

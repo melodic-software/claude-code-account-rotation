@@ -202,7 +202,7 @@ internal sealed record RefreshView(bool InProgress, DateTimeOffset? LockedUntil,
 /// The buckets a card always shows a row for, in the order it shows them, as
 /// empty limits whose only job is to name and label a row no source carried.
 /// The raw kinds are the usage endpoint's own words, which is what lets a
-/// placeholder and a real row be recognised as the same bucket.
+/// placeholder and a real row be recognized as the same bucket.
 /// <para>
 /// The scoped bucket is the generic weekly-scoped window with no display name,
 /// which <see cref="UsageLimit.Label"/> renders as "scoped". The model behind it

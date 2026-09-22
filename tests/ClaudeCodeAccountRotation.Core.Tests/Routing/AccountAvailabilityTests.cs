@@ -8,7 +8,7 @@ namespace ClaudeCodeAccountRotation.Core.Tests.Routing;
 /// Pins the order accounts are listed in: the ones usable now first, by the
 /// window closest to turning over, so the subscription nearest its boundary is
 /// spent before it resets unused. The rules below are each one assertion, and
-/// the last fact is the judgement the rules cannot make for themselves — a real
+/// the last fact is the judgment the rules cannot make for themselves — a real
 /// roster shape whose sequence an operator approved, which a rule change can
 /// break while every per-rule fact stays green.
 /// </summary>

@@ -171,7 +171,7 @@ deliberate, commented invariant — and formatting the phrase on the server woul
 now into the payload. The page keeps its plain `forEach`: no client sort, no pinning, no DOM
 regrouping.
 
-One page behaviour does change, and it is about stability rather than form: because card order is
+One page behavior does change, and it is about stability rather than form: because card order is
 now data-dependent, a polled re-render can move a card out from under the pointer, and the Switch
 button on it fires without a confirm. A non-forced `render` is therefore skipped while the pointer
 or keyboard focus is inside `#cards`. A forced render, the one following the operator's own action,

@@ -468,7 +468,7 @@ The phase stays `[DOING]` for 2.0 alone.
 
 **Sanity Check:**
 
-- `.work/claude-subscription-rotation/spike-02b-bucket-keying.md` exists and its first line matches `^# Spike 02b .* (PER-TOKEN|SHARED)$`. Scope-change note 2026-09-12 (#52): still open; #52 shipped without it. The pass is safe under both answers (stop on the first 429, honour `Retry-After` for every read, keep unread accounts first in line, skip the doomed read when the access token is already expired) and the pass log records reads in the window, so the keying can be settled from the log as well as from the spike.
+- `.work/claude-subscription-rotation/spike-02b-bucket-keying.md` exists and its first line matches `^# Spike 02b .* (PER-TOKEN|SHARED)$`. Scope-change note 2026-09-12 (#52): still open; #52 shipped without it. The pass is safe under both answers (stop on the first 429, honor `Retry-After` for every read, keep unread accounts first in line, skip the doomed read when the access token is already expired) and the pass log records reads in the window, so the keying can be settled from the log as well as from the spike.
 - `dotnet test` exit 0; `grep -rn "seven_day_opus\|seven_day_sonnet\|tangelo\|nimbus_quill\|cinder_cove" src/ | wc -l` prints `0`.
 - `AnthropicUsageEndpointClientTests`: 200 → success; 429 with `Retry-After: 300` → `RateLimited` with `RetryAfter == 300 s` and exactly one request sent.
 - `QuotaRefreshTests.ParkedPairUnauthorizedRefreshesOnceThenRetriesOnce`: fake handler records exactly one token POST and exactly two usage GETs; written-back file has a new `refreshTokenExpiresAt` equal to `now + refresh_token_expires_in` and untouched sibling keys.

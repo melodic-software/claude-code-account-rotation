@@ -25,7 +25,7 @@ with source and capture time, plus a Refresh all action). Parent topic:
 Issue #52, "What to build": per card, the five-hour bucket, the seven-day bucket, and the Fable
 bucket, each with a percentage and its reset time, plus the source the figure came from and when
 it was captured ("a card that silently shows a stale number is worse than one that admits it is
-stale"); a "Refresh all" action that reads every account once, honouring the refresh budget
+stale"); a "Refresh all" action that reads every account once, honoring the refresh budget
 ("roughly eight reads per rolling five minutes per token under an honest User-Agent, then a
 300-second lockout"; one read per account per refresh, never a timer poll); an account whose quota
 has never been read renders as unknown rather than as zero or empty. Acceptance: Refresh all, then
@@ -132,7 +132,7 @@ sees, under the budget and paced.
   recorded; spike 02's own note reads "for one client identity", which leans shared). This plan
   therefore does not promise the parent's AC 4 bound ("every card within 60 s"): under a shared
   bucket a pass populates about eight cards and the rest wait for the next window. The pass is
-  safe under both hypotheses (stop on the first 429, honour `Retry-After` for every read, keep the
+  safe under both hypotheses (stop on the first 429, honor `Retry-After` for every read, keep the
   unread accounts first in line, skip the doomed read when the access token is already expired, and
   log reads-in-window so the operator can settle the keying from the log). Phase 4 records the AC 4
   re-scope in the parent plan as a dated scope-change note; the operator can reverse it by running
@@ -318,7 +318,7 @@ Work items, in order. TDD: each production item below is preceded by its red tes
      `Limits` always lists the `5-hour` and `7-day` rows, then every `WeeklyScoped` row, then every
      `Unknown` row; a row the sources lack is `Known false`; a row whose `ResetsAt` is earlier than
      the dashboard's `CapturedAt` is `WindowReset true` and `Percent null`. When no source has been
-     read the scoped row is still emitted, labelled `Fable` when the account's latest read carried
+     read the scoped row is still emitted, labeled `Fable` when the account's latest read carried
      one and `scoped` otherwise.
    - `DashboardAssembler`: the live card's tee snapshot (attributed exactly as today, note strings
      unchanged) becomes `UsageSnapshot.FromStatusline`; every card merges per bucket across the tee
@@ -394,7 +394,7 @@ Work items, in order. TDD: each production item below is preceded by its red tes
      per-card `Refresh` button; `Switch` and `Refresh` disabled while `dashboard.refresh.inProgress`
      or `busy`, and `Switch` disabled when `refresh.state === "stranded"`. Both buttons go through
      `mutate()`. Relative times are computed from `dashboard.capturedAt`.
-   - `app.css`: `.limit`, `.bar`, `.fill`, severity colours from the existing `--warn`/`--error`
+   - `app.css`: `.limit`, `.bar`, `.fill`, severity colors from the existing `--warn`/`--error`
      tokens, `.asof` in `--muted`.
 8. `tests/acceptance/check-single-holder.sh`: also scans `<appdata>/recovery/` (and `stale/`),
    listing any file found under a separate `recovery=` line; `tests/acceptance/README.md` gains
@@ -437,7 +437,7 @@ recorded under Phase 4. Deviations from the plan text are in `DEVIATIONS.md`.
 2. Tests: `UsageSnapshotCacheTests` (round trip; torn file loads nothing; a pass that wrote back a
    pair leaves no `refresh-`/`access-` text in the file).
    `DashboardAssemblerTests.ACachedSnapshotRendersAsCachedWithItsOriginalCaptureTime`.
-3. `CHANGELOG.md`: extend the Phase 1 entry with the restart behaviour.
+3. `CHANGELOG.md`: extend the Phase 1 entry with the restart behavior.
 
 **Sanity Check:**
 
