@@ -760,6 +760,7 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     private void Settle(Session session, LoginSessionState state, string? message, bool onlyWhilePending = false)
     {
         TaskCompletionSource? echo;
+        bool scheduleEviction = false;
         lock (session.Sync)
         {
             if (onlyWhilePending && session.State != LoginSessionState.Pending)
@@ -770,6 +771,7 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
             if (session.State == LoginSessionState.Pending && state != LoginSessionState.Pending)
             {
                 session.FinishedAt = _clock.GetUtcNow();
+                scheduleEviction = true;
             }
 
             session.State = state;
@@ -777,13 +779,28 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
             echo = session.Echo;
         }
 
+        if (scheduleEviction)
+        {
+            // The page does not poll a finished login, so the readable window has
+            // to end itself. The timer is the bound; a later request is not.
+            session.Eviction = _clock.CreateTimer(
+                _ => EvictWhenDue(session),
+                null,
+                CompletedSessionRetention,
+                Timeout.InfiniteTimeSpan);
+        }
+
         echo?.TrySetResult();
     }
+
+    /// <summary>How many sessions are still held. Tests use it to see an eviction that no request triggered.</summary>
+    internal int SessionCount => _sessions.Count;
 
     /// <summary>
     /// Drops sessions whose readable window has elapsed. Pending sessions are
     /// still logins, and a session whose reader has not returned is still
-    /// finishing the folder, so neither is removed.
+    /// finishing the folder, so neither is removed. A finished session also
+    /// arms its own timer, so this sweep is not the only way the window ends.
     /// </summary>
     internal void EvictFinishedSessions()
     {
@@ -812,6 +829,39 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
             }
 
             return now - finished >= CompletedSessionRetention && session.Pump.IsCompleted;
+        }
+    }
+
+    /// <summary>
+    /// The readable window elapsed with nobody asking. If the reader is still
+    /// finishing the folder, try once more when it returns; the window has
+    /// already elapsed by then, and a pending session never gets here.
+    /// </summary>
+    private void EvictWhenDue(Session session)
+    {
+        if (Volatile.Read(ref _disposed) != 0 || !IsReadyToEvict(session, _clock.GetUtcNow()))
+        {
+            if (Volatile.Read(ref _disposed) == 0
+                && !session.Pump.IsCompleted
+                && Interlocked.Exchange(ref session.EvictWhenPumpCompletes, 1) == 0)
+            {
+                session.Pump.ContinueWith(
+                    completed =>
+                    {
+                        _ = completed.Exception;
+                        EvictWhenDue(session);
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.None,
+                    TaskScheduler.Default);
+            }
+
+            return;
+        }
+
+        if (_sessions.TryRemove(session.Id.Value, out Session? removed))
+        {
+            removed.Dispose();
         }
     }
 
@@ -972,6 +1022,12 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
         /// <summary>The reader task; awaited by the tests that assert on a finished login.</summary>
         public Task Pump { get; set; } = Task.CompletedTask;
 
+        /// <summary>Fires once when the readable window ends, whether or not anyone asks again.</summary>
+        public ITimer? Eviction { get; set; }
+
+        /// <summary>Set once a due eviction has attached itself to a pump that is still finishing.</summary>
+        public int EvictWhenPumpCompletes;
+
         private int _disposed;
 
         public void Dispose()
@@ -981,6 +1037,7 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
                 return;
             }
 
+            Eviction?.Dispose();
             Child.Dispose();
             Lifetime.Dispose();
         }

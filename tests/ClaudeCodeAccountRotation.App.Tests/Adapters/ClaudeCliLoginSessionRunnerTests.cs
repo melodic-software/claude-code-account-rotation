@@ -271,6 +271,33 @@ public sealed class ClaudeCliLoginSessionRunnerTests : IDisposable
     }
 
     [Fact]
+    public async Task AFinishedSessionDropsItselfWhenTheWindowEndsAndNobodyAsksAgain()
+    {
+        // The page does not poll a finished login. The timer armed when the
+        // session leaves pending is what drops it; this test never calls the sweep.
+        var clock = new CapturingClock(new DateTimeOffset(2026, 9, 22, 0, 0, 0, TimeSpan.Zero));
+        using ClaudeCliLoginSessionRunner runner = Runner(clock: clock);
+        Result<LoginSession, string> started = await runner.StartAsync(Email(ParkedEmail), Folder(ParkedEmail), TestContext.Current.CancellationToken);
+        started.IsSuccess.ShouldBeTrue(started.IsFailure ? started.Error : "");
+        int timersAtStart = clock.Created.Count;
+        _script.Last.Exit();
+        await runner.FinishedAsync(started.Value.Id).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        runner.SessionCount.ShouldBe(1);
+        clock.Created.Count.ShouldBe(timersAtStart + 1);
+        (TimerCallback callback, _, TimeSpan due) = clock.Created[^1];
+        due.ShouldBe(ClaudeCliLoginSessionRunner.CompletedSessionRetention);
+
+        clock.Advance(ClaudeCliLoginSessionRunner.CompletedSessionRetention - TimeSpan.FromTicks(1));
+        callback(null);
+        runner.SessionCount.ShouldBe(1);
+
+        clock.Advance(TimeSpan.FromTicks(1));
+        callback(null);
+        runner.SessionCount.ShouldBe(0);
+    }
+
+    [Fact]
     public async Task ARunningSessionIsNotEvictedAfterItsLifetime()
     {
         // Still pending when the sweep runs, even though both the login's own
@@ -385,6 +412,38 @@ public sealed class ClaudeCliLoginSessionRunnerTests : IDisposable
 
         public void Dispose()
         {
+        }
+    }
+
+    /// <summary>
+    /// Records timers instead of waiting on the wall clock. The lifetime source
+    /// and the eviction each create one; the test fires the one it cares about.
+    /// </summary>
+    private sealed class CapturingClock(DateTimeOffset start) : TimeProvider
+    {
+        private DateTimeOffset _now = start;
+
+        public List<(TimerCallback Callback, object? State, TimeSpan Due)> Created { get; } = [];
+
+        public override DateTimeOffset GetUtcNow() => _now;
+
+        public void Advance(TimeSpan amount) => _now += amount;
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            Created.Add((callback, state, dueTime));
+            return new IdleTimer();
+        }
+
+        private sealed class IdleTimer : ITimer
+        {
+            public bool Change(TimeSpan dueTime, TimeSpan period) => true;
+
+            public void Dispose()
+            {
+            }
+
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         }
     }
 }

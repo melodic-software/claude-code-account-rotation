@@ -235,7 +235,8 @@ All notable changes to this project are documented in this file. The format foll
   exception is written to the log without being copied onto the page. Shutdown waits a short,
   bounded time for the reader to leave the child process before disposing it. A finished session
   stays readable for ten minutes, the same window the login itself is given, so a reload can still
-  see how it ended, and is then dropped.
+  see how it ended, and is then dropped. That drop is armed when the login leaves pending, so it
+  happens even when nothing asks about the session again.
 - A side row names the account that side holds, alias first the way a card does (#86): `holding`
   plus the alias and the address when the roster has an alias, the address alone when it does not,
   and `holding nothing` only when that side answered and holds none. An offline side whose
