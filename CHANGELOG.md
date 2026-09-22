@@ -8,6 +8,12 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- The README posture section states that the tool never calls the model API, that it reads the
+  undocumented usage endpoint with its own User-Agent (the research rates that read GRAY, with no
+  Anthropic statement either way, not ALLOWED), that a parked-pair refresh presents Claude Code's
+  public OAuth `client_id`, and that the loop lanes (`work-loop`, `babysit-loop`, `attend-queue`)
+  stay outside V1 while reader-side invalidation of a latched window is still an open problem
+  (#31). The status line records that a tagged release exists.
 - A rostered card is renamed by clicking its heading, which edits the display name in place, and
   the Edit panel carries notes so a warning has a home other than the name (#48). Leaving that
   field by pressing Switch, Refresh, Pause, Remove, or Edit runs that control; the rename is
@@ -90,6 +96,11 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- A tag matching `v*` uploads `config.template.json` with the two executables and `SHA256SUMS`
+  (#31). The README install section says how to download that release, place the executable on
+  `PATH` or make a shortcut, run it once so a missing config is written from the embedded
+  template, and add accounts. The process prints `Dashboard:` and the bound URL and opens no
+  browser. The default port is 48211, and `--port 0` asks the operating system for a free port.
 - A machine with nothing configured writes `config.json` on first run from the embedded
   `config.template.json`, filling every path from the user profile at runtime, and prints
   that path (#30). The template itself carries no drive letter and no user path.
