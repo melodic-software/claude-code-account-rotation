@@ -7,7 +7,7 @@ accounts with its 5-hour and 7-day headroom, ranks them by earliest weekly reset
 whole machine to the account you pick, with no browser step. Every open Claude Code session follows
 the switch on its next request.
 
-Status: pre-release, under construction. The confirmed Brief and the approved implementation plan
+Status: a tagged release exists. The confirmed Brief and the approved implementation plan
 live in `docs/topics/claude-subscription-rotation/PLAN.md`.
 
 ## Posture
@@ -20,6 +20,38 @@ live in `docs/topics/claude-subscription-rotation/PLAN.md`.
   copy exists at every instant. Nothing is ever copied to another machine.
 - The tool identifies itself honestly on every request it makes.
 - Every switch is a human click; nothing rotates on its own.
+- The tool never calls the model API.
+- It reads the undocumented usage endpoint with its own User-Agent, which the research rates GRAY
+  (no Anthropic statement either way), not ALLOWED.
+- The parked-pair refresh presents Claude Code's public OAuth `client_id`.
+- Running the loop lanes (`work-loop`, `babysit-loop`, `attend-queue`) while rotating accounts is
+  outside V1 because reader-side invalidation of a latched window is still an open problem.
+
+## Install
+
+Download the release from
+<https://github.com/melodic-software/claude-code-account-rotation/releases/latest>.
+The assets are `claude-code-account-rotation-win-x64.exe` (the Windows leader),
+`claude-code-account-rotation-linux-x64` (the follower the WSL side runs),
+`SHA256SUMS`, and `config.template.json` (the template the executable embeds).
+
+Check each binary against the digest `SHA256SUMS` lists for it. A release download does not keep
+the executable bit, so on Linux run `chmod +x claude-code-account-rotation-linux-x64` before the
+first run. Place the executable on `PATH`, or make a shortcut to it, and run it once.
+
+A missing `config.json` is written on that first run from the embedded template. The written file
+fills its paths from the user profile. It sits in the app data directory unless `--config` pointed
+somewhere else. That directory is `%LOCALAPPDATA%\claude-code-account-rotation` on Windows, and
+`claude-code-account-rotation` under the local application data directory (`~/.local/share` unless
+`XDG_DATA_HOME` is set) on Linux and macOS.
+
+The process prints `Dashboard:` and the bound URL, and it opens no browser. The default port is
+48211. `--port 0` asks the operating system for a free port for that launch. Open the printed URL.
+
+If a card says it is not on the roster, click Adopt. Adopt is only offered for a Max account
+that is already logged in on this machine. Otherwise use Add an account, then Login on the card
+that needs a login. `profilesRoot` is the only hand edit, and the tool has to be restarted after
+it.
 
 ## Build
 
@@ -58,8 +90,9 @@ The app does not call the GitHub API, and the dashboard has no "update available
    repository does not name that task.
 2. The page must show no blocking banner, so no switch or import is in flight. Look while the
    tool is still running.
-3. Stop the leader and the follower. There is no shutdown route in this repository (#91 owns
-   that), so stop both externally.
+3. Stop the leader and the follower with `POST /api/shutdown`, carrying the same mutation
+   header as the other dashboard writes. A 409 means a switch or import is still in flight,
+   so the process was left running.
 4. Download both release assets, `claude-code-account-rotation-win-x64.exe` and
    `claude-code-account-rotation-linux-x64`, and `SHA256SUMS`. Check each binary against the
    digest that file lists for it. Replace nothing until both match.
@@ -83,8 +116,9 @@ hand, in this order.
    working lineage: the token endpoint has already invalidated the refresh token in the profile
    folder. Restart that side, or refresh the card, so the file is restored. Do not continue while
    such a file remains, even when no card says `credentials stranded in recovery`.
-5. Stop the leader and the follower. There is no shutdown route in this repository (#91 owns
-   that), so stop both externally.
+5. Stop the leader and the follower with `POST /api/shutdown`, carrying the same mutation
+   header as the other dashboard writes. A 409 means a switch or import is still in flight,
+   so the process was left running.
 6. Read `appDataDirectory`, `profilesRoot`, `liveConfigDirectory`, and `stateFilePath` from
    `config.json`. Read the leader's file, and the follower's when `peers[].launch.configPath`
    names one, and take each side's `appDataDirectory` from its own file.
