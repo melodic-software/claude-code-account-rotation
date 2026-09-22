@@ -69,6 +69,11 @@ public sealed class DashboardStateTests
         ];
 
         await Task.WhenAll(writers);
+        // The writers can return before a descheduled reader runs again, so the
+        // count taken at the first read can still be the count here. Waiting is
+        // what makes that a slow reader. AssertOnePublication, on every read,
+        // is the invariant.
+        WaitUntilReadsAdvance(race, readsBeforeWrites, cancellationToken);
         Volatile.Read(ref race.Reads).ShouldBeGreaterThan(readsBeforeWrites);
         Volatile.Write(ref race.Finished, 1);
         await Task.WhenAll(readers);
@@ -115,6 +120,21 @@ public sealed class DashboardStateTests
             if (started.Elapsed > TimeSpan.FromSeconds(5))
             {
                 throw new TimeoutException("the dashboard reader never observed a publication");
+            }
+
+            Thread.Yield();
+        }
+    }
+
+    private static void WaitUntilReadsAdvance(Race race, int readsBeforeWrites, CancellationToken cancellationToken)
+    {
+        var started = Stopwatch.StartNew();
+        while (Volatile.Read(ref race.Reads) <= readsBeforeWrites)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (started.Elapsed > TimeSpan.FromSeconds(5))
+            {
+                return;
             }
 
             Thread.Yield();
