@@ -225,6 +225,52 @@ public sealed class RosterEndpointTests
     }
 
     [Fact]
+    public async Task PatchStoresNotesAndClearsAPresentAliasWithoutChangingTheOther()
+    {
+        // The heading's rename sends alias and nothing else, and the Edit panel
+        // sends notes even when the operator blanks the warning. A present key
+        // clears; a missing key leaves the field alone.
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        await client.PostAsJsonAsync(
+            _accounts,
+            new { email = NewEmail, alias = "weekly", notes = "not the other seat" },
+            TestContext.Current.CancellationToken);
+
+        using HttpResponseMessage renamed = await client.PatchAsJsonAsync(
+            Account(NewEmail),
+            new { alias = "weekly seat" },
+            TestContext.Current.CancellationToken);
+
+        renamed.StatusCode.ShouldBe(HttpStatusCode.OK);
+        RosterEntry stored = (await StoredRosterAsync(factory, TestContext.Current.CancellationToken)).Find(Email(NewEmail))!;
+        stored.Alias.ShouldBe("weekly seat");
+        stored.Notes.ShouldBe("not the other seat");
+        JsonObject card = (await CardAsync(client, NewEmail, TestContext.Current.CancellationToken))!;
+        card["roster"]!["notes"]!.GetValue<string>().ShouldBe("not the other seat");
+
+        using HttpResponseMessage cleared = await client.PatchAsJsonAsync(
+            Account(NewEmail),
+            new { alias = (string?)null },
+            TestContext.Current.CancellationToken);
+
+        cleared.StatusCode.ShouldBe(HttpStatusCode.OK);
+        stored = (await StoredRosterAsync(factory, TestContext.Current.CancellationToken)).Find(Email(NewEmail))!;
+        stored.Alias.ShouldBeNull();
+        stored.Notes.ShouldBe("not the other seat");
+
+        using HttpResponseMessage clearedNotes = await client.PatchAsJsonAsync(
+            Account(NewEmail),
+            new { notes = "   " },
+            TestContext.Current.CancellationToken);
+
+        clearedNotes.StatusCode.ShouldBe(HttpStatusCode.OK);
+        stored = (await StoredRosterAsync(factory, TestContext.Current.CancellationToken)).Find(Email(NewEmail))!;
+        stored.Notes.ShouldBeNull();
+        stored.Alias.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task PatchOnAnAccountThatIsNotOnTheRosterIsNotFound()
     {
         await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
@@ -478,8 +524,36 @@ public sealed class RosterEndpointTests
         // The code goes in the body, never in a path.
         script.ShouldContain("{ code: code }");
         // The ten-second poll must leave a half-typed code alone, the way it already
-        // leaves an open Edit panel alone.
-        script.ShouldContain("details.edit[open], details.login[open]");
+        // leaves an open Edit panel alone, and the same hold covers a display name
+        // that is only half typed.
+        script.ShouldContain("details.edit[open], details.login[open], input.rename");
+    }
+
+    [Fact]
+    public async Task ThePageRenamesFromTheHeadingAndKeepsNotesOnTheEditPanel()
+    {
+        await using AppFactory factory = new();
+        using HttpClient client = factory.CreateClient();
+
+        string script = await client.GetStringAsync(new Uri("/app.js", UriKind.Relative), TestContext.Current.CancellationToken);
+
+        // The heading is a display name. With no alias the local part stands in,
+        // and the address is on its own line either way so the account stays identifiable.
+        script.ShouldContain("function localPart");
+        script.ShouldContain("function displayName");
+        script.ShouldContain("alias || localPart(account.email)");
+        script.ShouldContain("element(\"p\", \"address\", account.email)");
+        script.ShouldNotContain("if (alias) { card.appendChild(element(\"p\", \"address\"");
+        // Rename is the heading itself, labeled, not only the disclosure under Remove.
+        script.ShouldContain("Rename this account");
+        script.ShouldContain("\"rename-label\", \"Rename\"");
+        script.ShouldContain("input.rename");
+        script.ShouldContain("{ alias: alias }");
+        // Notes stay on the Edit panel. The shared builder is still the display
+        // name, browser, and profile, and a blank note is sent so it can clear.
+        script.ShouldContain("labeled(form, \"Notes\", notes)");
+        script.ShouldContain("body.notes = notes.value.trim() || null");
+        script.ShouldContain("labeled(container, \"Display name\", alias)");
     }
 
     [Fact]

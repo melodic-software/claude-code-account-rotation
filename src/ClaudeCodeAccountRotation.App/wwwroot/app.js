@@ -110,15 +110,18 @@
     return -1;
   }
 
-  // The alias, browser, and profile fields, built once and used both by the Add
-  // form and by each card's Edit panel, so the two can never drift apart.
+  // The display name, browser, and profile fields, built once and used both by
+  // the Add form and by each card's Edit panel, so the two can never drift
+  // apart. Notes are not in here: a warning belongs on an account that already
+  // exists, and the Edit panel is the only place that surfaces them.
   function accountFields(container, entry) {
     var values = entry || {};
     var alias = element("input");
     alias.type = "text";
-    alias.placeholder = "optional, e.g. weekly";
+    alias.className = "alias";
+    alias.placeholder = "short display name, e.g. weekly";
     alias.value = values.alias || "";
-    labeled(container, "Alias", alias);
+    labeled(container, "Display name", alias);
 
     var browser = element("select");
     BROWSERS.forEach(function (name) {
@@ -584,6 +587,13 @@
     panel.appendChild(element("summary", null, "Edit"));
     var form = element("form", "roster-form");
     var fields = accountFields(form, account.roster);
+    // A warning is a note, not a name. The heading stays a short display name
+    // because this field is where that sentence goes.
+    var notes = element("textarea");
+    notes.rows = 3;
+    notes.value = (account.roster && account.roster.notes) || "";
+    notes.placeholder = "warnings belong here, not in the name";
+    labeled(form, "Notes", notes);
     var save = element("button", null, "Save");
     save.type = "submit";
     form.appendChild(save);
@@ -595,7 +605,11 @@
     form.addEventListener("submit", function (event) {
       event.preventDefault();
       panel.open = false;
-      mutate(accountPath(account.email), "PATCH", fields.read(), function (result) {
+      var body = fields.read();
+      // A present key can clear the field. Sending notes on every save, including
+      // a blank one, is what lets the operator take a warning back off the card.
+      body.notes = notes.value.trim() || null;
+      mutate(accountPath(account.email), "PATCH", body, function (result) {
         showToast(result.ok ? account.email + " updated" : refused(result.body), result.ok ? "ok" : "error");
       });
     });
@@ -804,6 +818,95 @@
     return mutate(accountPath(email, "/refresh"), "POST", null, started);
   }
 
+  // The part of the address an operator can say out loud. It is a heading, not
+  // an identity: the full address stays on the line under it.
+  function localPart(email) {
+    var at = email.indexOf("@");
+    return at > 0 ? email.slice(0, at) : email;
+  }
+
+  // The name the card leads with. An alias is a display name; without one the
+  // local part stands in so the heading is never empty.
+  function displayName(account) {
+    var alias = account.roster && account.roster.alias;
+    return alias || localPart(account.email);
+  }
+
+  // Alias only. A missing key leaves notes, the browser, and pause alone, which
+  // is what makes typing a name safe while the Edit panel holds a warning.
+  function renameAccount(account, alias) {
+    return mutate(accountPath(account.email), "PATCH", { alias: alias }, function (result) {
+      showToast(result.ok ? account.email + " renamed" : refused(result.body), result.ok ? "ok" : "error");
+    });
+  }
+
+  function showDisplayName(heading, account) {
+    heading.textContent = "";
+    if (!account.roster) {
+      heading.appendChild(document.createTextNode(displayName(account)));
+      return;
+    }
+    var button = element("button", "rename");
+    button.type = "button";
+    button.title = "Rename this account";
+    button.setAttribute("aria-label", "Rename " + displayName(account));
+    button.appendChild(element("span", "display-name", displayName(account)));
+    button.appendChild(element("span", "rename-label", "Rename"));
+    button.addEventListener("click", function () {
+      // The Edit panel is already changing this account. Focus its display-name
+      // field instead of opening a second editor that a save would throw away.
+      var aliasField = heading.parentNode && heading.parentNode.querySelector("details.edit[open] input.alias");
+      if (aliasField) {
+        aliasField.focus();
+        if (aliasField.select) { aliasField.select(); }
+        return;
+      }
+      beginRename(heading, account);
+    });
+    heading.appendChild(button);
+  }
+
+  function beginRename(heading, account) {
+    var input = element("input", "rename");
+    input.type = "text";
+    input.value = (account.roster && account.roster.alias) || "";
+    input.placeholder = localPart(account.email);
+    input.setAttribute("aria-label", "Display name");
+    input.autocomplete = "off";
+    heading.textContent = "";
+    heading.appendChild(input);
+    input.focus();
+    if (input.select) { input.select(); }
+    var settled = false;
+    function finish(save) {
+      if (settled) { return; }
+      settled = true;
+      var alias = input.value.trim() || null;
+      var current = (account.roster && account.roster.alias) || null;
+      if (!save || alias === current) {
+        showDisplayName(heading, account);
+        return;
+      }
+      renameAccount(account, alias);
+    }
+    input.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        finish(false);
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        finish(true);
+      }
+    });
+    input.addEventListener("blur", function () { finish(true); });
+  }
+
+  function cardHeading(account) {
+    var heading = element("h2");
+    showDisplayName(heading, account);
+    return heading;
+  }
+
   // Whether the arriving payload would move a card, which is the only thing the
   // guard below defers for.
   function reordered(arriving) {
@@ -827,9 +930,10 @@
     warnings.hidden = dashboard.warnings.length === 0;
     dashboard.warnings.forEach(function (warning) { warnings.appendChild(element("li", null, warning)); });
     // Rendering rebuilds every card, so the ten-second poll would otherwise wipe an
-    // Edit panel, or a half-typed login code, out from under whoever is typing it.
-    // A mutation's own render passes force, since that one has to show the result.
-    if (!force && cards.querySelector("details.edit[open], details.login[open]")) { return; }
+    // Edit panel, a half-typed login code, or a display name being typed, out from
+    // under whoever is typing it. A mutation's own render passes force, since that
+    // one has to show the result.
+    if (!force && cards.querySelector("details.edit[open], details.login[open], input.rename")) { return; }
     // The hazard is a card moving, not a card being redrawn. Switch fires without a
     // confirm, so an order that changes while the pointer rests on the list, or
     // while a button inside it holds focus, sends the operator to whichever account
@@ -850,11 +954,12 @@
       var card = element("section", "card" + (account.isLive ? " live" : "") + (paused ? " paused" : ""));
       var at = new Date(dashboard.capturedAt).getTime();
       var chip = stateChip(account, at);
-      var alias = roster && roster.alias;
-      card.appendChild(element("h2", null, alias || account.email));
-      // The alias is what the operator calls this account and the address is what
-      // the tool acts on; on its own line the address costs no heading room.
-      if (alias) { card.appendChild(element("p", "address", account.email)); }
+      card.appendChild(cardHeading(account));
+      // The heading is the display name, or the local part when the account has
+      // no alias. The address is always its own line under that: the card-layout
+      // record hid it only when the heading was the address itself, and a local
+      // part is not the address, so this line is what keeps the account identifiable.
+      card.appendChild(element("p", "address", account.email));
 
       var badges = element("div", "badges");
       // Two axes, and a card shows the second only when it adds something: the
