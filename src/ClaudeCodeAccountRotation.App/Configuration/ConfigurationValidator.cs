@@ -1,3 +1,4 @@
+using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Configuration;
 
@@ -9,7 +10,9 @@ namespace ClaudeCodeAccountRotation.App.Configuration;
 /// copy), a profiles root that equals, contains, or sits inside the live
 /// directory or the home root, or one under a sync folder (Files On-Demand
 /// dehydrates a credential file into a placeholder and a synced folder uploads
-/// refresh tokens, a second holder by another name).
+/// refresh tokens, a second holder by another name). Junctions and symbolic
+/// links are followed before those comparisons. A profiles root or app data
+/// directory that is itself a link is refused even when its target would pass.
 /// </summary>
 internal static class ConfigurationValidator
 {
@@ -40,9 +43,34 @@ internal static class ConfigurationValidator
             return ValidateFollower(configuration, volumeOf);
         }
 
-        string live = Normalize(configuration.LiveConfigDirectory);
-        string profiles = Normalize(configuration.ProfilesRoot);
-        string home = Normalize(homeDirectory);
+        Result<string, string> liveResult = ForComparison("live config directory", configuration.LiveConfigDirectory);
+        Result<string, string> profilesResult = ForComparison("profiles root", configuration.ProfilesRoot);
+        Result<string, string> homeResult = ForComparison("home directory", homeDirectory);
+        Result<string, string> appDataResult = ForComparison("app data directory", configuration.AppDataDirectory);
+        if (liveResult.IsFailure)
+        {
+            return Failure(liveResult.Error);
+        }
+
+        if (profilesResult.IsFailure)
+        {
+            return Failure(profilesResult.Error);
+        }
+
+        if (homeResult.IsFailure)
+        {
+            return Failure(homeResult.Error);
+        }
+
+        if (appDataResult.IsFailure)
+        {
+            return Failure(appDataResult.Error);
+        }
+
+        string live = liveResult.Value;
+        string profiles = profilesResult.Value;
+        string home = homeResult.Value;
+        string appData = appDataResult.Value;
 
         if (Same(profiles, live) || Contains(profiles, live) || Contains(live, profiles))
         {
@@ -56,10 +84,15 @@ internal static class ConfigurationValidator
 
         // Both roots that ever hold a credential file: the profiles root (parked pairs) and
         // the app data directory (quarantined pairs). Each must share the live volume, since
-        // every move is a rename, and neither may sit under a sync folder.
-        string appData = Normalize(configuration.AppDataDirectory);
+        // every move is a rename, and neither may sit under a sync folder. The paths here
+        // are the resolved ones, so a link into a sync folder or onto another volume is
+        // judged by where the files would land.
         string? liveVolume = volumeOf(live);
-        foreach ((string label, string root) in new[] { ("profiles root", profiles), ("app data directory", appData) })
+        foreach ((string label, string configured, string root) in new[]
+        {
+            ("profiles root", configuration.ProfilesRoot, profiles),
+            ("app data directory", configuration.AppDataDirectory, appData),
+        })
         {
             string? rootVolume = volumeOf(root);
             if (!string.Equals(liveVolume, rootVolume, StringComparison.OrdinalIgnoreCase))
@@ -69,7 +102,7 @@ internal static class ConfigurationValidator
 
             foreach (string variable in _syncEnvironmentVariables)
             {
-                if (environment(variable) is string syncRoot && !string.IsNullOrWhiteSpace(syncRoot) && (Same(root, Normalize(syncRoot)) || Contains(Normalize(syncRoot), root)))
+                if (environment(variable) is string syncRoot && !string.IsNullOrWhiteSpace(syncRoot) && UnderSyncRoot(root, syncRoot))
                 {
                     return Failure("the " + label + " " + root + " sits under the " + variable + " sync folder " + syncRoot + "; credentials must never be synced");
                 }
@@ -78,6 +111,14 @@ internal static class ConfigurationValidator
             if (SyncFolderUnderHome(root, home) is string syncFolder)
             {
                 return Failure("the " + label + " " + root + " sits under the " + syncFolder + " folder; credentials must never be synced");
+            }
+
+            // After the target has been checked. A link whose target is a sync
+            // folder or another volume was already refused above; a link whose
+            // target would otherwise pass is still refused. The reason names no path.
+            if (DirectoryLinks.ItselfALink(configured))
+            {
+                return Failure("the " + label + " is a junction or symbolic link; credentials are not stored through one");
             }
         }
 
@@ -111,18 +152,43 @@ internal static class ConfigurationValidator
         // then pass for exactly the configuration it exists to refuse. And the
         // resolved one too, so neither "/tmp/../mnt/c/..." nor a link under the
         // home directory that points onto the mount can spell its way past.
-        string live = Resolved(configuration.LiveConfigDirectory);
-        string appData = Resolved(configuration.AppDataDirectory);
+        // The mount check runs before a missing-target refusal so a link onto
+        // the mount is still named as the mount, including when the final
+        // directory has not been created.
+        Result<DirectoryLinks.CanonicalPath, string> liveCanonical = DirectoryLinks.Canonicalize(configuration.LiveConfigDirectory);
+        if (liveCanonical.IsFailure)
+        {
+            return Failure("the follower's live config directory " + liveCanonical.Error);
+        }
+
+        string live = liveCanonical.Value.Path;
         if (UnderWindowsMount(configuration.LiveConfigDirectory) || UnderWindowsMount(live))
         {
             return Failure("the follower's live config directory " + configuration.LiveConfigDirectory + " sits under /mnt/; a follower's live pair must be on its own file system, never on the Windows volume through DrvFs");
         }
 
+        if (liveCanonical.Value.TargetMissing)
+        {
+            return Failure("the follower's live config directory has a junction or symbolic link whose target is missing");
+        }
+
+        Result<string, string> appDataResult = ForComparison("follower's app data directory", configuration.AppDataDirectory);
+        if (appDataResult.IsFailure)
+        {
+            return Failure(appDataResult.Error);
+        }
+
+        string appData = appDataResult.Value;
         string? liveVolume = volumeOf(live);
         string? appDataVolume = volumeOf(appData);
         if (!string.Equals(liveVolume, appDataVolume, StringComparison.OrdinalIgnoreCase))
         {
             return Failure("the follower's app data directory " + appData + " (volume " + (appDataVolume ?? "?") + ") must sit on the same volume as its live config directory " + live + " (volume " + (liveVolume ?? "?") + "): the import journal decides after a crash what the live file already holds");
+        }
+
+        if (DirectoryLinks.ItselfALink(configuration.AppDataDirectory))
+        {
+            return Failure("the follower's app data directory is a junction or symbolic link; credentials are not stored through one");
         }
 
         if (string.IsNullOrWhiteSpace(configuration.Mailbox))
@@ -175,7 +241,15 @@ internal static class ConfigurationValidator
     {
         try
         {
-            string full = Path.GetFullPath(path);
+            // The mount or drive of the final target. A junction's own drive
+            // letter is not the volume a file created through it lands on.
+            Result<DirectoryLinks.CanonicalPath, string> canonical = DirectoryLinks.Canonicalize(path);
+            if (canonical.IsFailure || canonical.Value.TargetMissing)
+            {
+                return null;
+            }
+
+            string full = canonical.Value.Path;
             if (OperatingSystem.IsWindows())
             {
                 return new DriveInfo(full).Name;
@@ -224,41 +298,39 @@ internal static class ConfigurationValidator
             : null;
     }
 
-    private static string Normalize(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
-
     /// <summary>
-    /// The normalized path with every symbolic link along it followed, so a
-    /// directory is judged by where its files really land. A link is followed
-    /// whether or not its target exists. Each link found restarts the walk from
-    /// the root of the path it produced, so a link inside a link's target is
-    /// followed too, and a cycle stops at 40 links in all.
+    /// The path comparisons use, with links followed. A missing link target is a
+    /// refusal that names no path: the unresolved spelling is not a usable root.
     /// </summary>
-    private static string Resolved(string path)
+    private static Result<string, string> ForComparison(string label, string path)
     {
-        string pending = Normalize(path);
-        for (int hop = 0; hop < 40; hop++)
+        Result<DirectoryLinks.CanonicalPath, string> canonical = DirectoryLinks.Canonicalize(path);
+        if (canonical.IsFailure)
         {
-            string current = Path.GetPathRoot(pending)!;
-            string[] parts = pending[current.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
-            int index = 0;
-            for (; index < parts.Length; index++)
-            {
-                current = Path.Combine(current, parts[index]);
-                if (new FileInfo(current).LinkTarget is string target)
-                {
-                    pending = Normalize(Path.Combine(Path.GetDirectoryName(current)!, target, string.Join(Path.DirectorySeparatorChar, parts[(index + 1)..])));
-                    break;
-                }
-            }
-
-            if (index == parts.Length)
-            {
-                return current;
-            }
+            return Result<string, string>.Failure("the " + label + " " + canonical.Error);
         }
 
-        return pending;
+        return canonical.Value.TargetMissing
+            ? Result<string, string>.Failure("the " + label + " has a junction or symbolic link whose target is missing")
+            : Result<string, string>.Success(canonical.Value.Path);
     }
+
+    /// <summary>Whether <paramref name="root"/> is the sync folder or sits inside it, in either spelling.</summary>
+    private static bool UnderSyncRoot(string root, string syncRoot)
+    {
+        string lexical = Normalize(syncRoot);
+        if (Same(root, lexical) || Contains(lexical, root))
+        {
+            return true;
+        }
+
+        Result<DirectoryLinks.CanonicalPath, string> canonical = DirectoryLinks.Canonicalize(syncRoot);
+        return canonical.IsSuccess
+            && !canonical.Value.TargetMissing
+            && (Same(root, canonical.Value.Path) || Contains(canonical.Value.Path, root));
+    }
+
+    private static string Normalize(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
 
     private static StringComparison Comparison => OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 

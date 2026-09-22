@@ -383,15 +383,14 @@ internal sealed class FileSystemCredentialPairStore : ICredentialPairStore
     private string ProfileFolder(string folderPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(folderPath);
-        string full = Path.GetFullPath(folderPath);
-        string relative = Path.GetRelativePath(_profilesRoot, full);
         // The same rule as ProfileFolderStore.UnderRoot: one level below the root, never
-        // outside it and never deeper, so a request-built path cannot reach past the folders.
-        if (relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relative) || relative == "." || relative.Contains(Path.DirectorySeparatorChar, StringComparison.Ordinal))
+        // outside it and never deeper, and never through a junction or symbolic link.
+        Result<string, string> child = DirectoryLinks.DirectChild(_profilesRoot, folderPath);
+        if (child.IsFailure)
         {
-            throw new ArgumentException("A profile folder must sit directly under the profiles root " + _profilesRoot + "; got " + full, nameof(folderPath));
+            throw new ArgumentException(child.Error, nameof(folderPath));
         }
 
-        return full;
+        return child.Value;
     }
 }

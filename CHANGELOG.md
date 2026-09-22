@@ -281,6 +281,10 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- Containment and volume checks follow junctions and symbolic links before comparing
+  paths. A profiles root, a profile folder, or the app data directory that is itself a
+  link is refused, and a link whose target is missing is refused, so a credential pair
+  cannot be moved through a link onto a sync folder or another volume (#8).
 - The refresh lock refreshes its directory mtime every five seconds while it is held. A switch
   holds that lock across the journal, the profile and owner writes, and the state-file patch
   retries, which can run past the 60-second steal window. Refreshing the mtime keeps the hold

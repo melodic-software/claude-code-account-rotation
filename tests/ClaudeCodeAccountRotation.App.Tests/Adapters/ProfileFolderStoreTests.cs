@@ -11,6 +11,8 @@ public sealed class ProfileFolderStoreTests : IDisposable
     private readonly string _profilesRoot = Path.Combine(Path.GetTempPath(), "claude-code-account-rotation-tests", Guid.NewGuid().ToString("N"));
     private readonly ProfileFolderStore _store;
 
+    public static bool OnUnix => !OperatingSystem.IsWindows();
+
     public ProfileFolderStoreTests()
     {
         Directory.CreateDirectory(_profilesRoot);
@@ -192,6 +194,32 @@ public sealed class ProfileFolderStoreTests : IDisposable
         File.Exists(Path.Combine(folder, ".claude.json")).ShouldBeTrue();
         JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(folder, "profile.json"), TestContext.Current.CancellationToken))!["emailAddress"]!
             .GetValue<string>().ShouldBe("stale@example.com");
+    }
+
+    [Fact(SkipUnless = nameof(OnUnix), Skip = "Symbolic links are the Unix form of this refusal")]
+    public async Task ASymlinkedProfileFolderIsRefusedAndNotWrittenThrough()
+    {
+        string outside = Path.Combine(Path.GetTempPath(), "claude-code-account-rotation-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(outside);
+        string link = Path.Combine(_profilesRoot, "a@example.com");
+        Directory.CreateSymbolicLink(link, outside);
+        try
+        {
+            ArgumentException refusal = await Should.ThrowAsync<ArgumentException>(() => _store.WriteProfileAsync(
+                link,
+                OAuthAccountBlock.FromJson(AccountJson("a@example.com")),
+                TestContext.Current.CancellationToken));
+
+            refusal.Message.ShouldContain("symbolic link");
+            refusal.Message.ShouldNotContain(link);
+            refusal.Message.ShouldNotContain(outside);
+            File.Exists(Path.Combine(outside, "profile.json")).ShouldBeFalse();
+            (await _store.ListAsync(TestContext.Current.CancellationToken)).ShouldBeEmpty();
+        }
+        finally
+        {
+            Directory.Delete(outside, recursive: true);
+        }
     }
 
     public void Dispose()

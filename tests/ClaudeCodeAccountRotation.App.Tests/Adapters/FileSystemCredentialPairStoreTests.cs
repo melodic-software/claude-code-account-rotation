@@ -263,6 +263,8 @@ public sealed class FileSystemCredentialPairStoreTests : IDisposable
 
     public static bool OnUnix => !OperatingSystem.IsWindows();
 
+    public static bool OnWindows => OperatingSystem.IsWindows();
+
     public static bool OnLinuxX64 =>
         OperatingSystem.IsLinux() && RuntimeInformation.OSArchitecture == Architecture.X64;
 
@@ -371,6 +373,56 @@ public sealed class FileSystemCredentialPairStoreTests : IDisposable
         SameVolume.OnOneVolume("/proc/self", "/tmp", SameVolume.DeviceId).ShouldBeFalse();
     }
 
+    [Fact(SkipUnless = nameof(OnUnix), Skip = "Symbolic links are the Unix form of this refusal")]
+    public async Task ASymlinkedProfileFolderIsRefusedAndThePairStaysLive()
+    {
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        string outside = Path.Combine(_root, "outside");
+        Directory.CreateDirectory(outside);
+        string link = Path.Combine(_profilesRoot, "a");
+        Directory.CreateSymbolicLink(link, outside);
+
+        ArgumentException refusal = await Should.ThrowAsync<ArgumentException>(
+            () => _store.MoveLiveToParkedAsync(link, TestContext.Current.CancellationToken));
+
+        refusal.Message.ShouldContain("symbolic link");
+        refusal.Message.ShouldNotContain(link);
+        refusal.Message.ShouldNotContain(outside);
+        File.Exists(Path.Combine(_liveDirectory, CredentialFiles.FileName)).ShouldBeTrue();
+        File.Exists(Path.Combine(outside, CredentialFiles.FileName)).ShouldBeFalse();
+    }
+
+    [Fact(SkipUnless = nameof(OnWindows), Skip = "Junctions are a Windows reparse point")]
+    public async Task AJunctionProfileFolderIsRefusedAndThePairStaysLive()
+    {
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        string outside = Path.Combine(_root, "outside");
+        Directory.CreateDirectory(outside);
+        string junction = Path.Combine(_profilesRoot, "a");
+        if (!WindowsJunction.TryCreate(junction, outside))
+        {
+            Assert.Skip("This process cannot create a directory junction.");
+        }
+
+        ArgumentException refusal = await Should.ThrowAsync<ArgumentException>(
+            () => _store.MoveLiveToParkedAsync(junction, TestContext.Current.CancellationToken));
+
+        refusal.Message.ShouldContain("junction");
+        refusal.Message.ShouldNotContain(junction);
+        refusal.Message.ShouldNotContain(outside);
+        File.Exists(Path.Combine(_liveDirectory, CredentialFiles.FileName)).ShouldBeTrue();
+        File.Exists(Path.Combine(outside, CredentialFiles.FileName)).ShouldBeFalse();
+    }
+
+    [Fact(SkipUnless = nameof(OnLinuxX64), Skip = "stat is implemented for linux-x64")]
+    public void ASymlinkOntoAnotherVolumeIsNotOneVolume()
+    {
+        string link = Path.Combine(_root, "to-proc");
+        Directory.CreateSymbolicLink(link, "/proc");
+
+        SameVolume.OnOneVolume(link, _root, SameVolume.DeviceId).ShouldBeFalse();
+    }
+
     [Fact(SkipUnless = nameof(OnLinuxX64), Skip = "stat is implemented for linux-x64")]
     public void APathThatDoesNotExistYetTakesItsAncestorsDeviceId()
     {
@@ -389,9 +441,6 @@ public sealed class FileSystemCredentialPairStoreTests : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(_root))
-        {
-            Directory.Delete(_root, recursive: true);
-        }
+        WindowsJunction.DeleteTree(_root);
     }
 }
