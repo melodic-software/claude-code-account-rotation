@@ -33,9 +33,10 @@ public sealed class OutboundClientLoggingTests
         });
         AppComposition.AddOutboundClients(services, UserAgent);
         // Nothing reaches the network: the factory's own handlers stay, only the
-        // socket at the bottom of the chain is replaced.
-        services.ConfigureHttpClientDefaults(builder =>
-            builder.ConfigurePrimaryHttpMessageHandler(static () => new RecordingHandler(RecordingHandler.Json(HttpStatusCode.OK, """{"limits":[]}"""))));
+        // socket at the bottom of the chain is replaced. Named, because the
+        // composition root's own primary handler runs after a defaults registration.
+        using RecordingHandler handler = new(RecordingHandler.Json(HttpStatusCode.OK, """{"limits":[]}"""));
+        OutboundHandlerStub.Install(services, handler);
 
         await using ServiceProvider provider = services.BuildServiceProvider();
         IUsageEndpointClient client = provider.GetRequiredService<IUsageEndpointClient>();

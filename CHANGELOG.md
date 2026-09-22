@@ -236,6 +236,12 @@ All notable changes to this project are documented in this file. The format foll
 - After a side hands its account back, its picker returns to `choose an account` instead of the
   first account in the list, including the account just released. Switch stays disabled until an
   account is chosen (#85).
+- The usage and token clients no longer follow redirects (#16). A 307 or 308 would resend the
+  request, including the refresh-token POST body, to the host the endpoint named. Both clients now
+  install a primary handler that refuses redirects, and any 3xx stays the transport failure the
+  status mapping already returns. The handler keeps the two-minute pooled connection lifetime the
+  factory's default primary handler sets, so DNS changes are still respected (Microsoft Learn,
+  IHttpClientFactory, HTTP handler lifetime).
 - When `config.json` sets `liveConfigDirectory` and leaves `stateFilePath` unset, the state file is
   `<dir>/.claude.json`, the same place the defaults put it when `CLAUDE_CONFIG_DIR` is set. It used
   to stay at the home default, so the watcher and the stale-identity repair patched `~/.claude.json`
