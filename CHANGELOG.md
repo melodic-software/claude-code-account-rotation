@@ -50,10 +50,10 @@ All notable changes to this project are documented in this file. The format foll
   and using the same app-data default the application uses when that key is absent (#92).
 - `POST /api/shutdown` stops the leader or the follower with exit code 0, and refuses while a
   switch or import journal is open (#91).
-- A tag matching `v*` uploads five assets (#31): the two executables
-  `claude-code-account-rotation-win-x64.exe` and `claude-code-account-rotation-linux-x64`, the
-  `claude-code-account-rotation-follower-log` wrapper the leader execs beside the Linux binary,
-  `config.template.json`, and `SHA256SUMS`. The README install section says how to download that
+- The tag release uploads two more assets, five in all (#31): the
+  `claude-code-account-rotation-follower-log` wrapper the leader execs beside the Linux binary, and
+  `config.template.json`, alongside the two executables and `SHA256SUMS` v1.0.0 already published.
+  The README install section says how to download that
   release, mark the Linux binary
   executable (`chmod +x`, because a release download does not keep that bit), place it on
   `PATH` or make a shortcut, run it once so a missing config is written from the embedded
@@ -218,6 +218,9 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- A tag matching `v*` builds and uploads three assets (#31): the two executables
+  `claude-code-account-rotation-win-x64.exe` and `claude-code-account-rotation-linux-x64`, and
+  `SHA256SUMS`.
 - The other side can hand an account back to the store without taking another one
   (`POST /api/sides/{side}/release`), and the side panel carries `Hand back` beside `Switch` for it.
   Until now a pair only came back as the outgoing half of a switch to a different account, so a
