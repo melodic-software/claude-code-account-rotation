@@ -230,6 +230,13 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- A login whose reader failed unexpectedly stayed pending for the whole ten minutes, and the
+  failure never reached the log (#41). The session now reports that failure at once, and the
+  exception is written to the log without being copied onto the page. Shutdown waits a short,
+  bounded time for the reader to leave the child process before disposing it. A finished session
+  stays readable for ten minutes, the same window the login itself is given, so a reload can still
+  see how it ended, and is then dropped. That drop is armed when the login leaves pending, so it
+  happens even when nothing asks about the session again.
 - The dashboard publishes its reconciliation report, hand-off line, and pre-switch windows as one
   snapshot, swapped in as a single reference. A poll can no longer show a report from one
   publication beside windows or a hand-off line from another (#18). Clearing the pre-switch

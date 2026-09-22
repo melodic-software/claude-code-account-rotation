@@ -9,6 +9,7 @@ using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Ports;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeCodeAccountRotation.App.Adapters.Process;
 
@@ -25,7 +26,8 @@ namespace ClaudeCodeAccountRotation.App.Adapters.Process;
 /// completion signal is the credential file appearing in the folder.
 /// </para>
 /// <para>
-/// Sessions live in memory for ten minutes. The child is killed on expiry, on
+/// A finished session stays readable for ten minutes, the same window a login
+/// is given to complete, and is then dropped. The child is killed on expiry, on
 /// cancel, and at shutdown. Nothing here writes the code anywhere but the
 /// child's standard input, and no message returned to the page is built from
 /// the child's own output.
@@ -34,6 +36,23 @@ namespace ClaudeCodeAccountRotation.App.Adapters.Process;
 internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner, IDisposable
 {
     public static readonly TimeSpan SessionLifetime = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// How long a session stays readable after it leaves
+    /// <see cref="LoginSessionState.Pending"/>. The same ten minutes as
+    /// <see cref="SessionLifetime"/>: a reload during the login's own window
+    /// still finds the session, and a finished one is never dropped sooner than
+    /// that. A session that is still pending, or whose reader has not finished,
+    /// is kept.
+    /// </summary>
+    internal static readonly TimeSpan CompletedSessionRetention = SessionLifetime;
+
+    /// <summary>
+    /// How long shutdown waits for a login's reader to leave the child before
+    /// the child is disposed. The reader is cancelled first; this bound is only
+    /// the finish that follows. Every session in flight shares that one wait.
+    /// </summary>
+    internal static readonly TimeSpan DisposeWait = TimeSpan.FromSeconds(2);
 
     /// <summary>How long a start waits for the URL, and a code for the CLI's answer.</summary>
     private static readonly TimeSpan _replyBudget = TimeSpan.FromSeconds(45);
@@ -75,6 +94,7 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     private const string FaultedMessage =
         "Judging what kind of account signed in failed, so the credentials in that folder were left in place."
         + " Remove the account from the roster, which revokes that login, before switching to it.";
+    private const string PumpFaultedMessage = "The login stopped unexpectedly. Start it again.";
 
     private readonly LoginChildFactory _start;
     private readonly ProfileFolderStore _profiles;
@@ -83,7 +103,9 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     private readonly IClaudeCliAuthStatus _authStatus;
     private readonly IClaudeCliLogout _logout;
     private readonly TimeProvider _clock;
+    private readonly ILogger<ClaudeCliLoginSessionRunner> _logger;
     private readonly ConcurrentDictionary<string, Session> _sessions = new(StringComparer.Ordinal);
+    private int _disposed;
 
     public ClaudeCliLoginSessionRunner(
         LoginChildFactory start,
@@ -92,7 +114,8 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
         CredentialMutationGate gate,
         IClaudeCliAuthStatus authStatus,
         IClaudeCliLogout logout,
-        TimeProvider clock)
+        TimeProvider clock,
+        ILogger<ClaudeCliLoginSessionRunner> logger)
     {
         ArgumentNullException.ThrowIfNull(start);
         ArgumentNullException.ThrowIfNull(profiles);
@@ -101,6 +124,7 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
         ArgumentNullException.ThrowIfNull(authStatus);
         ArgumentNullException.ThrowIfNull(logout);
         ArgumentNullException.ThrowIfNull(clock);
+        ArgumentNullException.ThrowIfNull(logger);
         _start = start;
         _profiles = profiles;
         _stateFile = stateFile;
@@ -108,6 +132,7 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
         _authStatus = authStatus;
         _logout = logout;
         _clock = clock;
+        _logger = logger;
     }
 
     /// <summary>
@@ -211,6 +236,7 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
 
     public async Task<Result<LoginSession, string>> SubmitCodeAsync(LoginSessionId id, string code, CancellationToken cancellationToken)
     {
+        EvictFinishedSessions();
         if (!_sessions.TryGetValue(id.Value, out Session? session))
         {
             return Result<LoginSession, string>.Failure("no login session with that id is running");
@@ -286,6 +312,7 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
 
     public LoginSession? Status(LoginSessionId id)
     {
+        EvictFinishedSessions();
         if (!_sessions.TryGetValue(id.Value, out Session? session))
         {
             return null;
@@ -309,9 +336,24 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
 
     public void Dispose()
     {
-        foreach (Session session in _sessions.Values)
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        Session[] sessions = [.. _sessions.Values];
+        foreach (Session session in sessions)
         {
             Cancel(session);
+        }
+
+        // The reader is cancelled above. Wait for it to leave the child, but
+        // not forever: a pump stuck past this bound is disposed anyway, which
+        // is the shutdown race the wait exists to make rare.
+        WaitForPumps(sessions);
+
+        foreach (Session session in sessions)
+        {
             session.Dispose();
         }
 
@@ -341,59 +383,128 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     [GeneratedRegex(@"https://[^\s\p{Cc}""'<>]+", RegexOptions.None, matchTimeoutMilliseconds: 2000)]
     private static partial Regex UrlPattern();
 
+    /// <summary>
+    /// Reads the child, then finishes the folder. Anything other than the child
+    /// ending is logged and, if the session is still pending, recorded as a
+    /// failure before the ten-minute expiry. The pump task itself does not
+    /// fault: an exception that escaped this method would be unobserved, because
+    /// nothing in production awaits <see cref="Session.Pump"/>, and the session
+    /// would stay pending until expiry with no line in the log.
+    /// </summary>
     private async Task PumpAsync(Session session)
     {
         try
         {
-            while (true)
+            // Every step runs. A fault from the read must not skip killing the
+            // child or finishing the folder; the first fault is the one logged.
+            Exception? read = await RunStepAsync(() => ReadLoopAsync(session));
+            Exception? kill = RunStep(session.Child.Kill);
+            Exception? finish = await RunStepAsync(() => FinishAsync(session));
+            Exception? fault = read ?? kill ?? finish;
+            if (fault is not null)
             {
-                string? chunk = await session.Child.ReadAsync(session.Lifetime.Token);
-                if (chunk is null)
-                {
-                    break;
-                }
-
-                string seen;
-                lock (session.Sync)
-                {
-                    session.Output.Append(chunk);
-                    seen = session.Output.ToString();
-                }
-
-                if (session.SignInUrl is null && ExtractAuthorizeUrl(seen) is Uri url)
-                {
-                    session.SignInUrl = url;
-                    session.Started.TrySetResult();
-                }
-
-                // A rejection is only ever a nicety: the completion signal is the
-                // credential file, so a CLI that reworded this line leaves the
-                // session pending and the operator free to paste again.
-                if (seen.Contains("invalid code", StringComparison.OrdinalIgnoreCase))
-                {
-                    Settle(session, LoginSessionState.Pending, RejectedMessage);
-                }
-
-                if (_clock.GetUtcNow() >= session.ExpiresAt)
-                {
-                    EnforceExpiry(session);
-                }
+                RecordPumpFault(session, fault);
             }
         }
-        catch (OperationCanceledException)
+#pragma warning disable CA1031 // Do not catch general exception types
+        catch (Exception exception)
+#pragma warning restore CA1031
         {
-            // Expiry or cancel; the finish below records where that left the folder.
-        }
-        catch (IOException)
-        {
-            // The child's pipes closed under us; same.
+            // The steps above capture their own failures. This is a fault in the
+            // bookkeeping around them, and it still has to end the session.
+            RecordPumpFault(session, exception);
         }
         finally
         {
-            session.Child.Kill();
-            await FinishAsync(session);
             session.Started.TrySetResult();
         }
+    }
+
+    private async Task ReadLoopAsync(Session session)
+    {
+        while (true)
+        {
+            string? chunk = await session.Child.ReadAsync(session.Lifetime.Token);
+            if (chunk is null)
+            {
+                return;
+            }
+
+            string seen;
+            lock (session.Sync)
+            {
+                session.Output.Append(chunk);
+                seen = session.Output.ToString();
+            }
+
+            if (session.SignInUrl is null && ExtractAuthorizeUrl(seen) is Uri url)
+            {
+                session.SignInUrl = url;
+                session.Started.TrySetResult();
+            }
+
+            // A rejection is only ever a nicety: the completion signal is the
+            // credential file, so a CLI that reworded this line leaves the
+            // session pending and the operator free to paste again.
+            if (seen.Contains("invalid code", StringComparison.OrdinalIgnoreCase))
+            {
+                Settle(session, LoginSessionState.Pending, RejectedMessage);
+            }
+
+            if (_clock.GetUtcNow() >= session.ExpiresAt)
+            {
+                EnforceExpiry(session);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Runs one step of the pump. Cancellation and a closed pipe are how a
+    /// login ends, and neither is a fault. Anything else is returned so the
+    /// caller can log it and still run the steps after it: a throw from
+    /// killing the child must not skip the folder finish or the signal that
+    /// the session has ended.
+    /// </summary>
+    private static async Task<Exception?> RunStepAsync(Func<Task> step)
+    {
+        try
+        {
+            await step();
+            return null;
+        }
+#pragma warning disable CA1031 // Do not catch general exception types
+        catch (Exception exception)
+#pragma warning restore CA1031
+        {
+            return IsOrdinaryEnd(exception) ? null : exception;
+        }
+    }
+
+    private static Exception? RunStep(Action step)
+    {
+        try
+        {
+            step();
+            return null;
+        }
+#pragma warning disable CA1031 // Do not catch general exception types
+        catch (Exception exception)
+#pragma warning restore CA1031
+        {
+            return IsOrdinaryEnd(exception) ? null : exception;
+        }
+    }
+
+    private static bool IsOrdinaryEnd(Exception exception) =>
+        exception is OperationCanceledException or IOException;
+
+    private void RecordPumpFault(Session session, Exception exception)
+    {
+        LogPumpFaulted(session.Email.Value, exception.GetType().Name, exception);
+        // onlyWhilePending: FinishAsync may already have said how the folder
+        // was left, and that message is the one the page should keep. The log
+        // above is what names the fault either way.
+        Settle(session, LoginSessionState.Failed, PumpFaultedMessage, onlyWhilePending: true);
     }
 
     /// <summary>
@@ -461,14 +572,16 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
             Settle(session, LoginSessionState.Failed, UnjudgedMessage);
         }
 #pragma warning disable CA1031 // Do not catch general exception types
-        catch (Exception)
+        catch (Exception exception)
 #pragma warning restore CA1031
         {
             // Anything else that went wrong is still not a judgment, and the folder
             // holds whatever the login left; the session says so rather than hanging.
-            // The fault's own text stays out of it: a message built from one could
-            // carry a path off this machine onto the page, the way nothing built from
-            // the child's output ever does.
+            // The fault's own text stays out of the message: a message built from one
+            // could carry a path off this machine onto the page, the way nothing built
+            // from the child's output ever does. The log keeps it, which is the only
+            // place a path is useful.
+            LogFinishFaulted(session.Email.Value, exception.GetType().Name, exception);
             Settle(session, LoginSessionState.Failed, FaultedMessage);
         }
     }
@@ -613,6 +726,7 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     /// </summary>
     private Session? RunningAgainst(string folder)
     {
+        EvictFinishedSessions();
         foreach (Session running in _sessions.Values)
         {
             EnforceExpiry(running);
@@ -643,9 +757,10 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
         session.Lifetime.Cancel();
     }
 
-    private static void Settle(Session session, LoginSessionState state, string? message, bool onlyWhilePending = false)
+    private void Settle(Session session, LoginSessionState state, string? message, bool onlyWhilePending = false)
     {
         TaskCompletionSource? echo;
+        bool scheduleEviction = false;
         lock (session.Sync)
         {
             if (onlyWhilePending && session.State != LoginSessionState.Pending)
@@ -653,13 +768,158 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
                 return;
             }
 
+            if (session.State == LoginSessionState.Pending && state != LoginSessionState.Pending)
+            {
+                session.FinishedAt = _clock.GetUtcNow();
+                scheduleEviction = true;
+            }
+
             session.State = state;
             session.Message = message;
             echo = session.Echo;
         }
 
+        if (scheduleEviction)
+        {
+            // The page does not poll a finished login, so the readable window has
+            // to end itself. The timer is the bound; a later request is not.
+            session.Eviction = _clock.CreateTimer(
+                _ => EvictWhenDue(session),
+                null,
+                CompletedSessionRetention,
+                Timeout.InfiniteTimeSpan);
+        }
+
         echo?.TrySetResult();
     }
+
+    /// <summary>How many sessions are still held. Tests use it to see an eviction that no request triggered.</summary>
+    internal int SessionCount => _sessions.Count;
+
+    /// <summary>
+    /// Drops sessions whose readable window has elapsed. Pending sessions are
+    /// still logins, and a session whose reader has not returned is still
+    /// finishing the folder, so neither is removed. A finished session also
+    /// arms its own timer, so this sweep is not the only way the window ends.
+    /// </summary>
+    internal void EvictFinishedSessions()
+    {
+        DateTimeOffset now = _clock.GetUtcNow();
+        foreach (Session session in _sessions.Values)
+        {
+            if (!IsReadyToEvict(session, now))
+            {
+                continue;
+            }
+
+            if (_sessions.TryRemove(session.Id.Value, out Session? removed))
+            {
+                removed.Dispose();
+            }
+        }
+    }
+
+    private static bool IsReadyToEvict(Session session, DateTimeOffset now)
+    {
+        lock (session.Sync)
+        {
+            if (session.State == LoginSessionState.Pending || session.FinishedAt is not DateTimeOffset finished)
+            {
+                return false;
+            }
+
+            return now - finished >= CompletedSessionRetention && session.Pump.IsCompleted;
+        }
+    }
+
+    /// <summary>
+    /// The readable window elapsed with nobody asking. If the reader is still
+    /// finishing the folder, try once more when it returns; the window has
+    /// already elapsed by then, and a pending session never gets here.
+    /// </summary>
+    private void EvictWhenDue(Session session)
+    {
+        if (Volatile.Read(ref _disposed) != 0 || !IsReadyToEvict(session, _clock.GetUtcNow()))
+        {
+            if (Volatile.Read(ref _disposed) == 0
+                && !session.Pump.IsCompleted
+                && Interlocked.Exchange(ref session.EvictWhenPumpCompletes, 1) == 0)
+            {
+                session.Pump.ContinueWith(
+                    completed =>
+                    {
+                        _ = completed.Exception;
+                        EvictWhenDue(session);
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.None,
+                    TaskScheduler.Default);
+            }
+
+            return;
+        }
+
+        if (_sessions.TryRemove(session.Id.Value, out Session? removed))
+        {
+            removed.Dispose();
+        }
+    }
+
+    private static void WaitForPumps(IReadOnlyList<Session> sessions)
+    {
+        if (sessions.Count == 0)
+        {
+            return;
+        }
+
+        Task[] pumps = [.. sessions.Select(static session => session.Pump)];
+        using CancellationTokenSource cancel = new();
+        var all = Task.WhenAll(pumps);
+        var delay = Task.Delay(DisposeWait, cancel.Token);
+        Task.WhenAny(all, delay).GetAwaiter().GetResult();
+        cancel.Cancel();
+        try
+        {
+            // Observe the delay. It has either elapsed or just been cancelled,
+            // and disposing the source first would race that observation.
+            delay.GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException)
+        {
+            // The pumps finished inside the bound; the leftover wait was cancelled.
+        }
+
+        // A faulted pump must be observed here too. WhenAll aggregates those faults.
+        ObserveFault(all);
+        foreach (Task pump in pumps)
+        {
+            ObserveFault(pump);
+        }
+    }
+
+    private static void ObserveFault(Task task)
+    {
+        if (task.IsFaulted)
+        {
+            _ = task.Exception;
+            return;
+        }
+
+        if (!task.IsCompleted)
+        {
+            task.ContinueWith(
+                static completed => _ = completed.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
+    }
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "login for {Account} stopped unexpectedly ({Failure})")]
+    private partial void LogPumpFaulted(string account, string failure, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "login for {Account} could not be finished ({Failure})")]
+    private partial void LogFinishFaulted(string account, string failure, Exception exception);
 
     private static LoginSession Snapshot(Session session)
     {
@@ -733,6 +993,12 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
 
         public DateTimeOffset ExpiresAt { get; }
 
+        /// <summary>
+        /// When the session first left <see cref="LoginSessionState.Pending"/>, which is
+        /// where the readable window is measured from. Null while the login is still running.
+        /// </summary>
+        public DateTimeOffset? FinishedAt { get; set; }
+
         /// <summary>Cancelled at expiry, at cancel, and at shutdown; unblocks the pump's read.</summary>
         public CancellationTokenSource Lifetime { get; }
 
@@ -756,8 +1022,22 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
         /// <summary>The reader task; awaited by the tests that assert on a finished login.</summary>
         public Task Pump { get; set; } = Task.CompletedTask;
 
+        /// <summary>Fires once when the readable window ends, whether or not anyone asks again.</summary>
+        public ITimer? Eviction { get; set; }
+
+        /// <summary>Set once a due eviction has attached itself to a pump that is still finishing.</summary>
+        public int EvictWhenPumpCompletes;
+
+        private int _disposed;
+
         public void Dispose()
         {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            {
+                return;
+            }
+
+            Eviction?.Dispose();
             Child.Dispose();
             Lifetime.Dispose();
         }
