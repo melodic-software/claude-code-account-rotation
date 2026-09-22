@@ -232,7 +232,9 @@ All notable changes to this project are documented in this file. The format foll
 
 - The dashboard publishes its reconciliation report, hand-off line, and pre-switch windows as one
   snapshot, swapped in as a single reference. A poll can no longer show a report from one
-  publication beside windows or a hand-off line from another (#18).
+  publication beside windows or a hand-off line from another (#18). Clearing the pre-switch
+  marker matches the instance that poll observed, so a later switch that published the same two
+  reset times keeps its marker.
 - On Linux, a credential rename compares device ids and then moves with `renameat2`
   (`RENAME_NOREPLACE`). A profiles root on a different mount is refused, including a bind mount or
   two btrfs subvolumes that share a device id: `rename(2)` returns `EXDEV` for those, and that is a

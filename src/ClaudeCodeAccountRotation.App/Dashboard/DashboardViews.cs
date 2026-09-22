@@ -322,6 +322,16 @@ internal sealed record DashboardSnapshot(
 {
     /// <summary>Nothing published yet.</summary>
     public static DashboardSnapshot Empty { get; } = new(null, null, null);
+
+    /// <summary>
+    /// Drops the pre-switch marker when it is the instance <paramref name="observed"/>
+    /// names. A later switch can publish the same two reset times in a new instance;
+    /// record equality would treat that as the marker this poll observed and clear it.
+    /// </summary>
+    public DashboardSnapshot WithoutObservedPreSwitchWindows(PreSwitchWindows observed) =>
+        ReferenceEquals(PreSwitchWindows, observed)
+            ? this with { PreSwitchWindows = null }
+            : this;
 }
 
 /// <summary>

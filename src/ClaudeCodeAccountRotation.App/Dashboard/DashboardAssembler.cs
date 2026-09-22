@@ -645,11 +645,10 @@ internal sealed partial class DashboardAssembler(
             }
 
             // The first snapshot whose windows differ is the incoming account's own.
-            // Cleared only while those windows are still the published ones, so a
-            // switch that landed a newer pair during this poll keeps that pair.
-            state.Publish(current => current.PreSwitchWindows != before
-                ? current
-                : current with { PreSwitchWindows = null });
+            // Cleared only while the published marker is the instance this poll
+            // observed. A switch that landed during this poll keeps its marker,
+            // including one that carries the same two reset times.
+            state.Publish(current => current.WithoutObservedPreSwitchWindows(before));
         }
 
         return (UsageSnapshot.FromStatusline(snapshot, account), null);

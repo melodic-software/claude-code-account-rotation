@@ -32,6 +32,20 @@ public sealed class DashboardStateTests
     }
 
     [Fact]
+    public void ClearingPreSwitchWindowsMatchesTheObservedInstance()
+    {
+        DateTimeOffset at = DateTimeOffset.UnixEpoch.AddHours(1);
+        var observed = new PreSwitchWindows(at, at);
+        var newer = new PreSwitchWindows(at, at);
+        DashboardSnapshot holdingObserved = DashboardSnapshot.Empty with { PreSwitchWindows = observed };
+        DashboardSnapshot holdingNewer = DashboardSnapshot.Empty with { PreSwitchWindows = newer };
+
+        holdingObserved.WithoutObservedPreSwitchWindows(observed).PreSwitchWindows.ShouldBeNull();
+        DashboardSnapshot kept = holdingNewer.WithoutObservedPreSwitchWindows(observed);
+        ReferenceEquals(kept.PreSwitchWindows, newer).ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task AReaderNeverMixesAReconciliationWithWindowsFromAnotherPublication()
     {
         DashboardState state = new();
