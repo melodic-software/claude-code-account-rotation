@@ -230,6 +230,15 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- A failing `claude` command no longer hands the page the CLI's own text (#11).
+  The string a switch toast can show stays a short classified sentence: the command
+  timed out, it exited with a code, or `auth status` printed no JSON object. The
+  parser's message is left out, because for an invalid literal it quotes the
+  document. What the child printed is logged and cut off at 400 characters with an
+  explicit truncation marker. After a timeout kill, both pipes are awaited for up
+  to two seconds on a fresh cancellation source, so a partial print is logged and
+  the reads are not abandoned. A status JSON with `loggedIn` false stays a normal
+  logged-out status.
 - A login opens one browser, the profile the roster maps to the account. The CLI's own OAuth flow
   was opening its callback URL in the machine's default browser at the same time, so the operator
   got two windows on two URLs and could sign in through the wrong one. Every CLI command now runs
