@@ -291,33 +291,90 @@ internal sealed record LoginSessionView(
     string? BrowserError,
     DateTimeOffset ExpiresAt);
 
-/// <summary>Held across requests: the last reconciliation report for the banner.</summary>
+/// <summary>
+/// One publication of the values held across requests. A reader that takes this
+/// reference sees the reconciliation report, the hand-off line, and the
+/// pre-switch windows together.
+/// <para>
+/// <c>HandOffBanner</c> is what the last hand-off reconciliation left
+/// standing, or null when it left nothing: a claim the other side has not
+/// answered for is a pair the operator can see nowhere else, since the slot is
+/// claimed and neither side holds it yet. It is a warning rather than the
+/// banner because it blocks nothing on this side; the account's own card
+/// already says <c>in-transit</c>.
+/// </para>
+/// <para>
+/// <c>PreSwitchWindows</c> is the windows the tee held immediately before
+/// the last switch this tool performed. A session that was mid-turn at switch
+/// time bills its response to the outgoing account and then writes those
+/// windows under the incoming account's name, so a snapshot still carrying
+/// these reset times belongs to the account that just left, whatever it says.
+/// Cleared by the first snapshot whose reset times differ.
+/// ponytail: in memory, like the reconciliation report beside it. A restart
+/// forgets the stash, and the worst case is one stale card until the next
+/// statusline write.
+/// </para>
+/// </summary>
+internal sealed record DashboardSnapshot(
+    ReconciliationReport? LastReconciliation,
+    string? HandOffBanner,
+    PreSwitchWindows? PreSwitchWindows)
+{
+    /// <summary>Nothing published yet.</summary>
+    public static DashboardSnapshot Empty { get; } = new(null, null, null);
+
+    /// <summary>
+    /// Drops the pre-switch marker when it is the instance <paramref name="observed"/>
+    /// names. A later switch can publish the same two reset times in a new instance;
+    /// record equality would treat that as the marker this poll observed and clear it.
+    /// </summary>
+    public DashboardSnapshot WithoutObservedPreSwitchWindows(PreSwitchWindows observed) =>
+        ReferenceEquals(PreSwitchWindows, observed)
+            ? this with { PreSwitchWindows = null }
+            : this;
+}
+
+/// <summary>
+/// The slot those values are published through. Writers swap in one
+/// <see cref="DashboardSnapshot"/>; readers copy that reference out.
+/// </summary>
 internal sealed class DashboardState
 {
-    public ReconciliationReport? LastReconciliation { get; set; }
+    // One reference. The snapshot's fields are written on the publishing thread
+    // before this swap, and Volatile.Read sees those writes, so a reader cannot
+    // take a report from one publication and windows or a hand-off line from
+    // another. CompareExchange is the conditional form of Interlocked.Exchange:
+    // the next snapshot is built from the one it replaces, and the swap lands
+    // only while that one is still current.
+    private DashboardSnapshot _published = DashboardSnapshot.Empty;
+
+    /// <summary>The latest publication.</summary>
+    public DashboardSnapshot Read() => Volatile.Read(ref _published);
 
     /// <summary>
-    /// What the last hand-off reconciliation left standing, or null when it left
-    /// nothing: a claim the other side has not answered for is a pair the
-    /// operator can see nowhere else, since the slot is claimed and neither
-    /// side holds it yet. It is a warning rather than the banner because it
-    /// blocks nothing on this side; the account's own card already says
-    /// <c>in-transit</c>.
+    /// Publishes the snapshot <paramref name="update"/> builds from the
+    /// publication it replaces. The function may run again when another write
+    /// lands first, so it only builds the next snapshot.
     /// </summary>
-    public string? HandOffBanner { get; set; }
+    public void Publish(Func<DashboardSnapshot, DashboardSnapshot> update)
+    {
+        ArgumentNullException.ThrowIfNull(update);
+        DashboardSnapshot observed = Volatile.Read(ref _published);
+        while (true)
+        {
+            DashboardSnapshot next = update(observed);
+            // Reference, not record equality: two publications of the same
+            // numbers are still different snapshots, and only the reference
+            // CompareExchange compared is the one this swap replaced.
+            DashboardSnapshot prior = Interlocked.CompareExchange(ref _published, next, observed);
+            if (ReferenceEquals(prior, observed))
+            {
+                return;
+            }
 
-    /// <summary>
-    /// The windows the tee held immediately before the last switch this tool
-    /// performed. A session that was mid-turn at switch time bills its response
-    /// to the outgoing account and then writes those windows under the incoming
-    /// account's name, so a snapshot still carrying these reset times belongs to
-    /// the account that just left, whatever it says. Cleared by the first
-    /// snapshot whose reset times differ.
-    /// ponytail: in memory, like the reconciliation report beside it. A restart
-    /// forgets the stash, and the worst case is one stale card until the next
-    /// statusline write.
-    /// </summary>
-    public PreSwitchWindows? PreSwitchWindows { get; set; }
+            observed = prior;
+        }
+    }
 }
 
 /// <summary>The outgoing account's last known reset times, kept only to disown them.</summary>
