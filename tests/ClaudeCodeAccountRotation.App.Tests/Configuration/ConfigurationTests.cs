@@ -44,6 +44,43 @@ public sealed class ConfigurationTests : IDisposable
     }
 
     [Fact]
+    public async Task ALiveDirectoryInTheFileMovesTheStateFileUnderIt()
+    {
+        string live = Path.Combine(_root, "elsewhere");
+        string path = Path.Combine(_root, "appdata", "config.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(
+            path,
+            new JsonObject { ["liveConfigDirectory"] = live }.ToJsonString(),
+            TestContext.Current.CancellationToken);
+
+        Result<ClaudeCodeAccountRotationConfiguration, string> loaded = await ConfigurationFile.LoadOrCreateAsync(path, Defaults(), TestContext.Current.CancellationToken);
+
+        loaded.IsSuccess.ShouldBeTrue(loaded.IsFailure ? loaded.Error : "");
+        loaded.Value.StateFilePath.ShouldBe(Path.Combine(live, ".claude.json"));
+        loaded.Value.StateFilePath.ShouldNotBe(Defaults().StateFilePath);
+    }
+
+    [Fact]
+    public async Task AnExplicitStateFilePathIsKeptWhenTheLiveDirectoryIsAlsoSet()
+    {
+        string live = Path.Combine(_root, "elsewhere");
+        string state = Path.Combine(_root, "custom", ".claude.json");
+        string path = Path.Combine(_root, "appdata", "config.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(
+            path,
+            new JsonObject { ["liveConfigDirectory"] = live, ["stateFilePath"] = state }.ToJsonString(),
+            TestContext.Current.CancellationToken);
+
+        Result<ClaudeCodeAccountRotationConfiguration, string> loaded = await ConfigurationFile.LoadOrCreateAsync(path, Defaults(), TestContext.Current.CancellationToken);
+
+        loaded.IsSuccess.ShouldBeTrue(loaded.IsFailure ? loaded.Error : "");
+        loaded.Value.LiveConfigDirectory.ShouldBe(live);
+        loaded.Value.StateFilePath.ShouldBe(state);
+    }
+
+    [Fact]
     public async Task FirstRunWritesTheConfigurationWithResolvedDefaults()
     {
         string path = Path.Combine(_root, "appdata", "config.json");
