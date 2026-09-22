@@ -76,11 +76,14 @@ internal sealed partial class DashboardAssembler(
         // about one slot and the reading that notices it is the one below.
         List<string> warnings = [];
         List<(AccountCardView Card, AccountStanding Standing)> built = [];
+        // One publication for the whole payload: the report, the hand-off line,
+        // and the pre-switch windows below are this snapshot's, not a second read.
+        DashboardSnapshot published = state.Read();
         if (liveEmail is AccountEmail live)
         {
             ParkedProfile? ownFolder = parked.FirstOrDefault(profile => profile.Email == live);
             string liveFolder = ownFolder?.FolderPath ?? profiles.FolderPathFor(live);
-            (UsageSnapshot? observed, string? note) = Attribute(snapshot, live);
+            (UsageSnapshot? observed, string? note) = Attribute(snapshot, live, published.PreSwitchWindows);
             built.Add(Card(
                 live,
                 isLive: true,
@@ -156,12 +159,12 @@ internal sealed partial class DashboardAssembler(
             warnings.Add("The live directory holds a credential pair but the state file names no account.");
         }
 
-        if (state.LastReconciliation is { SwitchingBlocked: true } blocked)
+        if (published.LastReconciliation is { SwitchingBlocked: true } blocked)
         {
             warnings.Add(blocked.JournalOutcome);
         }
 
-        if (state.HandOffBanner is string inTransit)
+        if (published.HandOffBanner is string inTransit)
         {
             warnings.Add(inTransit);
         }
@@ -176,7 +179,7 @@ internal sealed partial class DashboardAssembler(
         return new DashboardView(
             new LiveAccountView(liveEmail?.Value, livePair is not null, livePair?.Fingerprint.Sha256Hex[..12]),
             cards,
-            state.LastReconciliation?.Banner,
+            published.LastReconciliation?.Banner,
             warnings,
             capturedAt,
             Pass(capturedAt));
@@ -614,7 +617,10 @@ internal sealed partial class DashboardAssembler(
     /// time writes.</item>
     /// </list>
     /// </summary>
-    private (UsageSnapshot? Observed, string? Note) Attribute(StatuslineSnapshot? snapshot, AccountEmail account)
+    private (UsageSnapshot? Observed, string? Note) Attribute(
+        StatuslineSnapshot? snapshot,
+        AccountEmail account,
+        PreSwitchWindows? preSwitchWindows)
     {
         if (snapshot is null)
         {
@@ -631,7 +637,7 @@ internal sealed partial class DashboardAssembler(
             return (null, "The statusline snapshot names " + observed.Value + ", not this account.");
         }
 
-        if (state.PreSwitchWindows is PreSwitchWindows before)
+        if (preSwitchWindows is PreSwitchWindows before)
         {
             if (before.FiveHourResetsAt == snapshot.FiveHourResetsAt && before.SevenDayResetsAt == snapshot.SevenDayResetsAt)
             {
@@ -639,7 +645,11 @@ internal sealed partial class DashboardAssembler(
             }
 
             // The first snapshot whose windows differ is the incoming account's own.
-            state.PreSwitchWindows = null;
+            // Cleared only while those windows are still the published ones, so a
+            // switch that landed a newer pair during this poll keeps that pair.
+            state.Publish(current => current.PreSwitchWindows != before
+                ? current
+                : current with { PreSwitchWindows = null });
         }
 
         return (UsageSnapshot.FromStatusline(snapshot, account), null);

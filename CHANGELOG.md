@@ -230,6 +230,9 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- The dashboard publishes its reconciliation report, hand-off line, and pre-switch windows as one
+  snapshot, swapped in as a single reference. A poll can no longer show a report from one
+  publication beside windows or a hand-off line from another (#18).
 - A failing `claude` command no longer hands the page the CLI's own text (#11).
   The string a switch toast can show stays a short classified sentence: the command
   timed out, it exited with a code, or `auth status` printed no JSON object. The
