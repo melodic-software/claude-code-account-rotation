@@ -230,6 +230,12 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- A side row names the account that side holds, alias first the way a card does (#86): `holding`
+  plus the alias and the address when the roster has an alias, the address alone when it does not,
+  and `holding nothing` when the side holds none.
+- After a side hands its account back, its picker returns to `choose an account` instead of the
+  first account in the list, including the account just released. Switch stays disabled until an
+  account is chosen (#85).
 - When `config.json` sets `liveConfigDirectory` and leaves `stateFilePath` unset, the state file is
   `<dir>/.claude.json`, the same place the defaults put it when `CLAUDE_CONFIG_DIR` is set. It used
   to stay at the home default, so the watcher and the stale-identity repair patched `~/.claude.json`

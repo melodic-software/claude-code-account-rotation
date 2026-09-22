@@ -261,6 +261,9 @@
   }
 
   function switchSide(side, email) {
+    // An empty picker is "choose an account". The button is disabled in that
+    // state; this refuses the hand-off if a click lands anyway.
+    if (!email) { return; }
     return mutate(sidePath(side, "/accounts/" + encodeURIComponent(email) + "/switch"), "POST", null, function (result) {
       if (!result.ok) {
         showToast(refused(result.body), "error");
@@ -287,6 +290,7 @@
         if (result.body.refusal === "ForeignFamily"
           && window.confirm(result.body.message + "\n\nHand it back into quarantine? The family that side holds is kept there and never used, and the one in the store stays as it is.")) {
           mutate(sidePath(side, "/release") + "?quarantineForeignFamily=true", "POST", null, function (retry) {
+            if (retry.ok) { clearSidePicker(side); }
             showToast(retry.ok
               ? "The " + retry.body.side + " side holds nothing; a superseded family was quarantined at " + retry.body.quarantinedAt
               : refused(retry.body), retry.ok ? "warn" : "error");
@@ -296,8 +300,17 @@
         showToast(refused(result.body), "error");
         return;
       }
+      // The account just handed back is now on offer. Leaving the picker on it,
+      // or on whichever account sorts first, would hand a pair straight back out.
+      clearSidePicker(side);
       showToast("The " + result.body.side + " side holds nothing; " + (result.body.parkedAs || holding) + " is parked here", "ok");
     });
+  }
+
+  // A release succeeded: the picker returns to "choose an account". Switch is
+  // already disabled while the value is empty, so the empty picker cannot hand off.
+  function clearSidePicker(side) {
+    if (sideRows[side] && sideRows[side].pick) { sideRows[side].pick.value = ""; }
   }
 
   // One line per configured side, and on it that side's switch control: which
@@ -310,6 +323,25 @@
     return lastAccounts.filter(function (account) {
       return (account.offeredTo || []).indexOf(side.side) !== -1;
     });
+  }
+
+  // Alias-first, the way a card's heading is. liveAccount is the address from
+  // GET /api/sides; the alias is roster.alias on the dashboard account with that
+  // email. Nothing held is said on purpose rather than left blank.
+  function heldAccount(email) {
+    if (!email) { return "holding nothing"; }
+    var account = lastAccounts.filter(function (candidate) { return candidate.email === email; })[0];
+    var alias = account && account.roster && account.roster.alias;
+    return alias ? "holding " + alias + " (" + email + ")" : "holding " + email;
+  }
+
+  function sideStateText(side) {
+    var held = heldAccount(side.liveAccount);
+    var prefix = side.side + " side: " + side.detail;
+    // An online side that holds nothing already ends its detail with this
+    // phrase ("online, holding nothing"). Appending it again would say it twice.
+    if (held === "holding nothing" && typeof side.detail === "string" && side.detail.slice(-held.length) === held) { return prefix; }
+    return prefix + ", " + held;
   }
 
   // Updated in place rather than rebuilt, so nothing here is ever taken from
@@ -330,7 +362,7 @@
         sidesLine.appendChild(row.node);
       }
 
-      row.state.textContent = side.side + " side: " + side.detail + (side.liveAccount ? ", holding " + side.liveAccount : "");
+      row.state.textContent = sideStateText(side);
       var mode = side.online ? "switch" : (side.canStart ? "start" : "none");
       if (row.mode !== mode) {
         if (row.control) { row.node.removeChild(row.control); }
@@ -370,6 +402,11 @@
           row.offers = arriving;
           var held = row.pick.value;
           row.pick.innerHTML = "";
+          // The empty choice is first, and it is the selection whenever the
+          // previous address is no longer on offer. Never the first real account.
+          var placeholder = element("option", null, "choose an account");
+          placeholder.value = "";
+          row.pick.appendChild(placeholder);
           offers.forEach(function (account) {
             var option = element("option", null, (account.roster && account.roster.alias) || account.email);
             option.value = account.email;
