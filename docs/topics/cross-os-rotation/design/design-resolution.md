@@ -424,7 +424,7 @@ files. Because the leader is the only slot writer, the existing `Rename` `FileNo
 | Piece | Owner | Mechanism |
 |---|---|---|
 | `store.shared`, `role`, `peers[]`, holder records, `WslSwitch` coordinator, follower `import` route, staged adapter, `linux-x64` publish | this repository | product code; the release workflow uploads `win-x64` and `linux-x64` |
-| Leader autostart at logon (missing today) | dotfiles | Startup-folder shortcut, the existing start-menu-shortcut script's precedent |
+| Leader autostart at logon (missing today) | provisioning, `provisioning#552` | logon scheduled task, the precedent being that repository's existing logon task; stdout redirected to a log, restart on failure. Amended 2026-09-22: this row read "dotfiles, Startup-folder shortcut" and was wrong. The dotfiles repository has no autostart machinery — its start-menu-shortcut script writes Start Menu `.lnk` files, which do not run at logon — and that repository's remote-access plan assigns logon and scheduled tasks to provisioning |
 | Leader `peers[]` values (distro name, WSL user, `storePathFromPeer`) | dotfiles | derived from the fleet manifest and `wslpath`, written by a `modify_` script over `config.json` |
 | Follower binary in `~/.local/bin` | dotfiles, `isWsl` branch | the same shape as the existing Claude Code install script; refuses a `/mnt/` install target |
 | Follower `config.json` (`mailbox`, `claudeExecutable`) | dotfiles, `isWsl` | template; the Windows profile path resolved with `wslpath` at apply time, never typed |
