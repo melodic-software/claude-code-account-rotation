@@ -19,7 +19,9 @@ namespace ClaudeCodeAccountRotation.App.Adapters.Peers;
 /// and <b>no</b> <c>Origin</c> header, which is what the follower's filter
 /// wants from a non-browser caller: the custom header is the thing a
 /// cross-site form post cannot add, and an absent Origin is what a
-/// process-to-process request honestly has.
+/// process-to-process request honestly has. The bearer is added by
+/// <see cref="FollowerLoopbackTokenHandler"/> on this client. This class does
+/// not read the follower's instance file and does not copy the token.
 /// </para>
 /// <para>
 /// Nothing here throws for an unreachable side. The distro being off is an

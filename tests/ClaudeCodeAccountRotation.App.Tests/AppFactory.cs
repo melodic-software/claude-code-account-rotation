@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Net.Http.Headers;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Adapters.Process;
@@ -183,6 +184,23 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
         HttpClient client = CreateClient();
         client.DefaultRequestHeaders.Add("X-Claude-Code-Account-Rotation", "1");
         return client;
+    }
+
+    /// <summary>A client with the instance bearer removed, for a refusal.</summary>
+    public HttpClient CreateAnonymousClient()
+    {
+        HttpClient client = CreateClient();
+        client.DefaultRequestHeaders.Authorization = null;
+        return client;
+    }
+
+    protected override void ConfigureClient(HttpClient client)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        base.ConfigureClient(client);
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            Services.GetRequiredService<InstanceLock>().Token);
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)

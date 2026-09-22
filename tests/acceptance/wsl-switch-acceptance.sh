@@ -125,6 +125,23 @@ leader_url="http://127.0.0.1:$leader_port"
 follower_url="http://127.0.0.1:$follower_port"
 header="X-Claude-Code-Account-Rotation: 1"
 
+# Line 2 of instance.url is the loopback token. It is passed to curl on stdin
+# and this script never prints the instance file.
+leader_token() {
+  sed -n '2p' "$win_appdata_here/instance.url" 2>/dev/null | tr -d '\r\n' || true
+}
+
+follower_token() {
+  wsl.exe -d "$distro" -u "$wsl_user" --exec cat -- "$wsl_appdata/instance.url" 2>/dev/null \
+    | tr -d '\000\r' | sed -n '2p' | tr -d '\n' || true
+}
+
+curl_with_token() {
+  local token="$1"
+  shift
+  printf 'header = "Authorization: Bearer %s"\n' "$token" | curl --config - "$@"
+}
+
 log_dir="$win_root_here/logs"
 leader_pid=""
 follower_wrapper_pid=""
@@ -287,6 +304,19 @@ wait_for() {
   return 1
 }
 
+# /healthz stays bare. A protected route sends the bearer from line 2.
+wait_for_follower_dashboard() {
+  local attempts="${1:-120}" index token
+  for index in $(seq 1 "$attempts"); do
+    token="$(follower_token)"
+    if [[ -n "$token" ]] && curl_with_token "$token" -fsS --max-time 2 "$follower_url/api/dashboard" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
+
 start_follower() {
   local fail_after="${1:-}" log
   log="$log_dir/follower-$(date -u +%H%M%S)-$RANDOM.log"
@@ -300,7 +330,7 @@ start_follower() {
     > "$log" 2>&1 &
   follower_wrapper_pid=$!
   cp -f "$log" "$log_dir/follower-latest.log" 2>/dev/null || true
-  wait_for "$follower_url/api/dashboard" || { fail "the follower did not come up; see $log"; return 1; }
+  wait_for_follower_dashboard || { fail "the follower did not come up; see $log"; return 1; }
 }
 
 start_leader() {
@@ -324,35 +354,35 @@ start_leader() {
 # made and a leader killed mid-request leaves it having made two.
 wsl_switch() {
   local code
-  code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 180 -X POST -H "$header" \
+  code="$(curl_with_token "$(leader_token)" -sS -o /dev/null -w '%{http_code}' --max-time 180 -X POST -H "$header" \
     "$leader_url/api/sides/wsl/accounts/$1/switch" 2>/dev/null || echo "000")"
   printf '%s' "${code: -3}"
 }
 
 windows_switch() {
-  curl -sS -o /dev/null -w '%{http_code}' --max-time 120 -X POST -H "$header" \
+  curl_with_token "$(leader_token)" -sS -o /dev/null -w '%{http_code}' --max-time 120 -X POST -H "$header" \
     "$leader_url/api/accounts/$1/switch" 2>/dev/null || echo "000"
 }
 
 wsl_release() {
   local code query=""
   [[ "${1:-}" == "quarantine" ]] && query="?quarantineForeignFamily=true"
-  code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 180 -X POST -H "$header" \
+  code="$(curl_with_token "$(leader_token)" -sS -o /dev/null -w '%{http_code}' --max-time 180 -X POST -H "$header" \
     "$leader_url/api/sides/wsl/release$query" 2>/dev/null || echo "000")"
   printf '%s' "${code: -3}"
 }
 
 side_online() {
-  curl -fsS --max-time 5 "$leader_url/api/sides/wsl" 2>/dev/null \
+  curl_with_token "$(leader_token)" -fsS --max-time 5 "$leader_url/api/sides/wsl" 2>/dev/null \
     | sed -n 's/.*"online":\([a-z]*\).*/\1/p' | head -1
 }
 
 # One poll of the leader's dashboard, which is where its own crash table runs.
-poll_leader() { curl -fsS --max-time 60 "$leader_url/api/dashboard" >/dev/null 2>&1 || true; }
+poll_leader() { curl_with_token "$(leader_token)" -fsS --max-time 60 "$leader_url/api/dashboard" >/dev/null 2>&1 || true; }
 
 follower_live_account() {
   local body
-  body="$(curl -fsS --max-time 5 "$follower_url/api/dashboard" 2>/dev/null || true)"
+  body="$(curl_with_token "$(follower_token)" -fsS --max-time 5 "$follower_url/api/dashboard" 2>/dev/null || true)"
   [[ -n "$body" ]] || { echo "unreachable"; return; }
   printf '%s' "$body" | sed -n 's/.*"liveAccount":"\([^"]*\)".*/\1/p' | head -1 | grep . || echo "none"
 }
@@ -666,7 +696,7 @@ for index in $(seq 1 30); do
 done
 expect "the side goes offline within 15 s of the follower stopping" "yes" "$offline"
 
-curl -sS -o /dev/null --max-time 30 -X POST -H "$header" "$leader_url/api/sides/wsl/start" 2>/dev/null || true
+curl_with_token "$(leader_token)" -sS -o /dev/null --max-time 30 -X POST -H "$header" "$leader_url/api/sides/wsl/start" 2>/dev/null || true
 online="no"
 for index in $(seq 1 120); do
   if [[ "$(side_online)" == "true" ]]; then
@@ -679,7 +709,7 @@ expect "the leader restarting the side reports online within 60 s" "yes" "$onlin
 
 # 6. A mutating route with the custom header and no Origin is neither 400 nor
 #    403: this is exactly the shape the leader sends the follower.
-status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -X POST -H "$header" \
+status="$(curl_with_token "$(follower_token)" -sS -o /dev/null -w '%{http_code}' --max-time 10 -X POST -H "$header" \
   -H 'Content-Type: application/json' -d '{"email":"nobody@example.com"}' \
   "$follower_url/api/import/abort" 2>/dev/null || echo "000")"
 if [[ "$status" == "400" || "$status" == "403" ]]; then

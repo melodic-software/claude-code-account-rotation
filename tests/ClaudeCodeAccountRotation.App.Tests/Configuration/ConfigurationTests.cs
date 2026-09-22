@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Configuration;
@@ -627,13 +628,16 @@ public sealed class ConfigurationTests : IDisposable
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         Task stdout = ReadLinesAsync(process.StandardOutput, output, dashboard, cancellationToken);
         Task stderr = ReadLinesAsync(process.StandardError, output, dashboard, cancellationToken);
+        string? token = null;
         try
         {
             string? url = await WaitForDashboardAsync(process, dashboard, cancellationToken);
             url.ShouldNotBeNull(output.ToString());
             url.ShouldStartWith("http://127.0.0.1:");
+            token = (await File.ReadAllLinesAsync(Path.Combine(appData, "instance.url"), cancellationToken))[1].Trim();
 
             using HttpClient client = new() { Timeout = TimeSpan.FromSeconds(20) };
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
             using HttpResponseMessage response = await client.GetAsync(new Uri(url + "/api/dashboard"), cancellationToken);
             ((int)response.StatusCode).ShouldBe(200, output.ToString());
 
@@ -666,6 +670,10 @@ public sealed class ConfigurationTests : IDisposable
 
             await stdout;
             await stderr;
+            if (token is not null)
+            {
+                output.ToString().ShouldNotContain(token);
+            }
         }
     }
 

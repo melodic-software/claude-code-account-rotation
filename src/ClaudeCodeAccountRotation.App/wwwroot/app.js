@@ -42,6 +42,58 @@
   // the same rebuild that fills cardNodes. What an arriving payload is compared
   // against to tell a reorder from an update in place.
   var renderedOrder = [];
+  // The per-process token from the document's meta. Empty until the operator
+  // pastes one. It stays in this closure: the page does not put it in storage
+  // or in a URL.
+  var instanceToken = readInstanceToken();
+  var polling = false;
+
+  function readInstanceToken() {
+    var meta = document.querySelector('meta[name="ccar-instance-token"]');
+    var value = meta ? (meta.getAttribute("content") || "") : "";
+    return value.trim();
+  }
+
+  function showTokenForm() {
+    var form = document.getElementById("instance-token");
+    if (!form) {
+      form = element("form", "roster-form instance-token");
+      form.id = "instance-token";
+      var input = element("input");
+      input.type = "text";
+      input.autocomplete = "off";
+      input.spellcheck = false;
+      input.placeholder = "paste the instance token";
+      var label = element("label", "field");
+      label.appendChild(element("span", null, "Instance token"));
+      label.appendChild(input);
+      form.appendChild(label);
+      var button = element("button", null, "Continue");
+      button.type = "submit";
+      form.appendChild(button);
+      form.addEventListener("submit", function (event) {
+        event.preventDefault();
+        var value = input.value.trim();
+        input.value = "";
+        if (!value) { return; }
+        instanceToken = value;
+        form.hidden = true;
+        loadProfiles();
+      });
+      document.body.insertBefore(form, document.body.firstChild);
+    }
+    form.hidden = false;
+  }
+
+  function loseToken() {
+    instanceToken = "";
+    showTokenForm();
+  }
+
+  function withBearer(headers) {
+    headers.Authorization = "Bearer " + instanceToken;
+    return headers;
+  }
 
   function showToast(text, kind) {
     toast.textContent = text;
@@ -215,15 +267,20 @@
   }
 
   function send(path, method, body) {
+    if (!instanceToken) {
+      showTokenForm();
+      return Promise.resolve({ ok: false, body: { error: "unauthorized" } });
+    }
     var options = {
       method: method,
-      headers: { "X-Claude-Code-Account-Rotation": "1", "Accept": "application/json" }
+      headers: withBearer({ "X-Claude-Code-Account-Rotation": "1", "Accept": "application/json" })
     };
     if (body) {
       options.headers["Content-Type"] = "application/json";
       options.body = JSON.stringify(body);
     }
     return fetch(path, options).then(function (response) {
+      if (response.status === 401) { loseToken(); }
       return response.json().then(function (payload) { return { ok: response.ok, body: payload }; });
     });
   }
@@ -1099,12 +1156,26 @@
   }
 
   function refresh(force) {
-    return fetch("/api/dashboard", { headers: { "Accept": "application/json" } })
-      .then(function (response) { return response.json(); })
-      .then(function (dashboard) { render(dashboard, force); })
-      .then(function () { return fetch("/api/sides", { headers: { "Accept": "application/json" } }); })
-      .then(function (response) { return response.ok ? response.json() : []; })
-      .then(function (sides) { renderSides(Array.isArray(sides) ? sides : []); })
+    if (!instanceToken) { return Promise.resolve(); }
+    return fetch("/api/dashboard", { headers: withBearer({ "Accept": "application/json" }) })
+      .then(function (response) {
+        if (response.status === 401) { loseToken(); return null; }
+        return response.json();
+      })
+      .then(function (dashboard) {
+        if (!dashboard || !instanceToken) { return null; }
+        render(dashboard, force);
+        return fetch("/api/sides", { headers: withBearer({ "Accept": "application/json" }) });
+      })
+      .then(function (response) {
+        if (!response || !instanceToken) { return []; }
+        if (response.status === 401) { loseToken(); return []; }
+        return response.ok ? response.json() : [];
+      })
+      .then(function (sides) {
+        if (!instanceToken) { return; }
+        renderSides(Array.isArray(sides) ? sides : []);
+      })
       .catch(function (error) { showToast("Dashboard unavailable: " + error, "error"); });
   }
 
@@ -1151,14 +1222,37 @@
 
   // Before the first render, so the Add form and every card's Edit panel are
   // built from the same list. An enumeration that fails is an empty list, not a
-  // dead page: the typed field is still there.
-  fetch("/api/browser-profiles", { headers: { "Accept": "application/json" } })
-    .then(function (response) { return response.ok ? response.json() : []; })
-    .catch(function () { return []; })
-    .then(function (found) {
-      profileCatalog = Array.isArray(found) ? found : [];
-      addFields = accountFields(document.getElementById("add-fields"), null);
-      refresh();
-      setInterval(refresh, POLL_MS);
-    });
+  // dead page: the typed field is still there. An empty token does not call
+  // this, the dashboard, or the side list; the paste form is the whole page
+  // until there is one.
+  function loadProfiles() {
+    if (!instanceToken) {
+      showTokenForm();
+      return;
+    }
+    fetch("/api/browser-profiles", { headers: withBearer({ "Accept": "application/json" }) })
+      .then(function (response) {
+        if (response.status === 401) { loseToken(); return null; }
+        return response.ok ? response.json() : [];
+      })
+      .catch(function () { return []; })
+      .then(function (found) {
+        if (found === null || !instanceToken) { return; }
+        profileCatalog = Array.isArray(found) ? found : [];
+        if (!addFields) {
+          addFields = accountFields(document.getElementById("add-fields"), null);
+        }
+        refresh();
+        if (!polling) {
+          polling = true;
+          setInterval(refresh, POLL_MS);
+        }
+      });
+  }
+
+  if (instanceToken) {
+    loadProfiles();
+  } else {
+    showTokenForm();
+  }
 })();
