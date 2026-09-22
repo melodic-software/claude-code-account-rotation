@@ -215,7 +215,7 @@ not fire.
 Acceptance, met: the measurement is recorded with its method and its discriminator, and no probe
 directory remains.
 
-### Phase 1: the side model in Core [TODO] (#66)
+### Phase 1: the side model in Core [DONE] (#66)
 
 Review: architecture
 
@@ -269,7 +269,7 @@ Nothing here can reach a credential file.
 **Depends on:** nothing. **Parallelism:** none, it is the gate. **Waits:** none. **Human gate:** the
 merge. **Estimate:** 2-3 h of agent work.
 
-### Phase 2: the leader claims and parks, behind `store.shared` [TODO] (#67)
+### Phase 2: the leader claims and parks, behind `store.shared` [DONE] (#67)
 
 Review: code-design, security
 
@@ -333,7 +333,7 @@ the next dashboard read. No credential file is moved that today's switch does no
 configuration pair is the only shared file and each phase adds its own keys. **Waits:** none.
 **Human gate:** the merge. **Estimate:** about 1 day of agent work.
 
-### Phase 3: the follower's staged import, and Linux parity [TODO] (#68)
+### Phase 3: the follower's staged import, and Linux parity [DONE] (#68)
 
 Review: code-design, security. **The riskiest phase; see Risks.**
 
@@ -438,7 +438,7 @@ revert with no operational step. A half-built follower cannot be reached: nothin
 suite and the reconciler suite are separate agent lanes. **Waits:** none. **Human gate:** the merge.
 **Estimate:** about 1 to 1.5 days of agent work, the longest of the parallel pair.
 
-### Phase 4: the coordinator, the two roles, and the crash acceptance [TODO] (#69)
+### Phase 4: the coordinator, the two roles, and the crash acceptance [DONE] (#69)
 
 Review: architecture, security
 
@@ -618,7 +618,7 @@ at a time from the page, on the laptop. Phases 6 to 8 are quality of life and br
    operator at the page**; phase 8's desktop rollout should be planned that way rather than
    discovering it again.
 
-### Phase 6: breadth on the page [TODO] (#71)
+### Phase 6: breadth on the page [DONE] (#71)
 
 Review: code-design
 
@@ -638,7 +638,7 @@ still green.
 slice's plain state word returns. **Depends on:** phase 5. **Parallelism:** with phases 7 and 8.
 **Waits:** none. **Human gate:** the merge. **Estimate:** about 1 day.
 
-### Phase 7: escape hatches and recovery ergonomics [TODO] (#72)
+### Phase 7: escape hatches and recovery ergonomics [DONE] (#72)
 
 Review: security
 
@@ -660,7 +660,7 @@ state.
 escape-hatch semantics, since this is the one place the design deliberately allows a second family.
 **Estimate:** about 1 day.
 
-### Phase 8: the second machine, dotfiles, and autostart [TODO] (#73)
+### Phase 8: the second machine, dotfiles, and autostart [DONE] (#73)
 
 Review: close-out
 
