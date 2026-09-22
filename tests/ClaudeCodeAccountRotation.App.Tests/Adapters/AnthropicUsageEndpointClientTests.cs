@@ -105,6 +105,24 @@ public sealed class AnthropicUsageEndpointClientTests
     }
 
     [Fact]
+    public async Task ARedirectIsATransportFailureAndIsNotFollowed()
+    {
+        using HttpResponseMessage redirect = new(HttpStatusCode.TemporaryRedirect);
+        redirect.Headers.Location = new Uri("https://redirect.example/usage");
+        using RecordingHandler handler = new(redirect);
+        using HttpClient http = new(handler);
+        AnthropicUsageEndpointClient client = new(http, UserAgent, TimeProvider.System);
+
+        Result<JsonDocument, UsageReadFailure> read = await client.ReadUsageAsync("access-token", TestContext.Current.CancellationToken);
+
+        read.IsFailure.ShouldBeTrue();
+        read.Error.Kind.ShouldBe(UsageReadFailureKind.Transport);
+        read.Error.Detail.ShouldBe("the endpoint answered 307");
+        handler.Requests.Count.ShouldBe(1);
+        handler.Requests.Single().RequestUri!.ToString().ShouldBe("https://api.anthropic.com/api/oauth/usage");
+    }
+
+    [Fact]
     public async Task AServerErrorIsATransportFailureCarryingItsStatus()
     {
         using RecordingHandler handler = new(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
