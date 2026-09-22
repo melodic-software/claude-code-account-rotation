@@ -187,15 +187,39 @@ public sealed class ShutdownEndpointTests
     private static IHostApplicationLifetime Lifetime(IServiceProvider services) =>
         services.GetRequiredService<IHostApplicationLifetime>();
 
+    /// <summary>
+    /// How long to wait for <see cref="IHostApplicationLifetime.ApplicationStopping"/>
+    /// after a 200. <c>HttpResponse.OnCompleted</c> runs once the response has
+    /// finished, and TestServer can hand the body to the client before that
+    /// callback, so sampling the token at the end of <c>ReadAsStringAsync</c>
+    /// races the callback.
+    /// </summary>
+    private static readonly TimeSpan _applicationStoppingGrace = TimeSpan.FromSeconds(5);
+
     private static async Task<(HttpStatusCode Status, string Body, bool Stopping)> PostAsync(
         HttpClient client,
         IHostApplicationLifetime lifetime,
         CancellationToken cancellationToken)
     {
-        bool stopping = false;
-        using CancellationTokenRegistration registration = lifetime.ApplicationStopping.Register(() => stopping = true);
         using HttpResponseMessage response = await client.PostAsync(_shutdown, content: null, cancellationToken);
         string body = await response.Content.ReadAsStringAsync(cancellationToken);
-        return (response.StatusCode, body, stopping || lifetime.ApplicationStopping.IsCancellationRequested);
+        bool stopping = lifetime.ApplicationStopping.IsCancellationRequested;
+        if (response.StatusCode == HttpStatusCode.OK && !stopping)
+        {
+            using var wait = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                lifetime.ApplicationStopping);
+            try
+            {
+                await Task.Delay(_applicationStoppingGrace, wait.Token);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+            }
+
+            stopping = lifetime.ApplicationStopping.IsCancellationRequested;
+        }
+
+        return (response.StatusCode, body, stopping);
     }
 }

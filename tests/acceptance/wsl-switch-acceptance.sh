@@ -109,6 +109,15 @@ wsl_root="/tmp/$run_id"
 wsl_live="$wsl_root/live"
 wsl_appdata="$wsl_root/appdata"
 follower_exe="$follower_publish/claude-code-account-rotation"
+follower_wrapper="$follower_publish/claude-code-account-rotation-follower-log"
+repo="$(cd "$here/../.." && pwd)"
+repo_drive="$(printf '%s' "${repo:1:1}" | tr '[:upper:]' '[:lower:]')"
+wrapper_src_wsl="/mnt/$repo_drive${repo:2}/src/ClaudeCodeAccountRotation.App/follower-log"
+# Publish places the wrapper beside the binary. A directory copied into the
+# distro before that, or a copy that dropped the executable bit, is repaired
+# from this tree: the page's Start execs the wrapper, not the binary.
+wsl_run "test -f '$follower_wrapper' || cp -f '$wrapper_src_wsl' '$follower_wrapper'; chmod +x '$follower_wrapper' '$follower_exe'; test -x '$follower_wrapper'" >/dev/null \
+  || { echo "the follower wrapper is not executable at $follower_wrapper" >&2; exit 2; }
 
 leader_port=48411
 follower_port=48412

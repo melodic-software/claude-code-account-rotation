@@ -56,6 +56,7 @@ public sealed class PeerTests
             "-d", "Some-Distribution",
             "-u", "someone",
             "--exec", "/opt/rotation/claude-code-account-rotation-follower-log",
+            "--follower", "/opt/rotation/claude-code-account-rotation",
             "--port", "48212",
         ]);
         string.Join(' ', arguments).ShouldNotContain("\\");
@@ -67,7 +68,7 @@ public sealed class PeerTests
         // A follower started with no --config creates one from the defaults,
         // and the default role is leader. Over temp roots that is how a leader
         // ends up squatting the follower's port. --config still follows the
-        // wrapper; the binary path itself is not on this command line.
+        // wrapper. --exec is the wrapper; --follower is the configured binary.
         IReadOnlyList<string> arguments = WslDistributionPeerHost.Arguments(
             new PeerLaunch("Some-Distribution", "someone", "/opt/rotation/claude-code-account-rotation", 48212, "/mnt/c/tmp/follower.json"));
 
@@ -76,6 +77,7 @@ public sealed class PeerTests
             "-d", "Some-Distribution",
             "-u", "someone",
             "--exec", "/opt/rotation/claude-code-account-rotation-follower-log",
+            "--follower", "/opt/rotation/claude-code-account-rotation",
             "--port", "48212",
             "--config", "/mnt/c/tmp/follower.json",
         ]);
@@ -162,6 +164,162 @@ public sealed class PeerTests
         }
     }
 
+    /// <summary>
+    /// <c>peers[].launch.executablePath</c> is whatever the operator installed.
+    /// A sibling named <c>claude-code-account-rotation-linux-x64</c> must not
+    /// win over that path.
+    /// </summary>
+    [Fact(SkipUnless = nameof(OnLinux), Skip = "The wrapper runs under /bin/sh")]
+    public async Task TheWrapperRunsTheNamedFollowerRatherThanASibling()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        string root = Path.Combine(Path.GetTempPath(), "claude-code-account-rotation-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            string install = Path.Combine(root, "install");
+            string appData = Path.Combine(root, "appdata");
+            Directory.CreateDirectory(install);
+            Directory.CreateDirectory(appData);
+            string wrapper = Path.Combine(install, "claude-code-account-rotation-follower-log");
+            File.Copy(WrapperSource(), wrapper);
+            string decoy = Path.Combine(install, "claude-code-account-rotation-linux-x64");
+            string named = Path.Combine(install, "custom follower");
+            string argvPath = Path.Combine(root, "argv");
+            string witnessPath = Path.Combine(root, "witness");
+            string configPath = Path.Combine(root, "follower.json");
+            await File.WriteAllTextAsync(
+                configPath,
+                "{\"appDataDirectory\":\"" + appData + "\"}",
+                TestContext.Current.CancellationToken);
+            await WriteSiblingBinaryAsync(decoy, "wrong binary", argvPath, witnessPath, TestContext.Current.CancellationToken);
+            await WriteSiblingBinaryAsync(named, "named binary", argvPath, witnessPath, TestContext.Current.CancellationToken);
+
+            WrapperRun run = await RunWrapperAsync(wrapper, configPath, TestContext.Current.CancellationToken, named);
+
+            run.ExitCode.ShouldBe(0);
+            (await File.ReadAllTextAsync(Path.Combine(appData, "follower.log"), TestContext.Current.CancellationToken))
+                .ShouldBe("named binary\n");
+            (await File.ReadAllTextAsync(argvPath, TestContext.Current.CancellationToken))
+                .ShouldBe("--port\n48212\n--config\n" + configPath + "\n");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// <c>ConfigurationFile.Merge</c>
+    /// keeps the platform default when <c>appDataDirectory</c> is omitted, null,
+    /// blank, or the file does not exist yet. The log has to land in that same
+    /// directory or the first start exits before the application can create it.
+    /// </summary>
+    [Fact(SkipUnless = nameof(OnLinux), Skip = "The wrapper runs under /bin/sh")]
+    public async Task AnOmittedOrNullAppDataDirectoryUsesThePlatformDefault()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        string root = Path.Combine(Path.GetTempPath(), "claude-code-account-rotation-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            string install = Path.Combine(root, "install");
+            string xdg = Path.Combine(root, "xdg");
+            string home = Path.Combine(root, "home");
+            Directory.CreateDirectory(install);
+            Directory.CreateDirectory(xdg);
+            Directory.CreateDirectory(home);
+            string wrapper = Path.Combine(install, "claude-code-account-rotation-follower-log");
+            File.Copy(WrapperSource(), wrapper);
+            string binary = Path.Combine(install, "claude-code-account-rotation");
+            string argvPath = Path.Combine(root, "argv");
+            string witnessPath = Path.Combine(root, "witness");
+            await WriteSiblingBinaryAsync(binary, "started", argvPath, witnessPath, TestContext.Current.CancellationToken);
+            string logPath = Path.Combine(xdg, "claude-code-account-rotation", "follower.log");
+
+            string?[] documents = ["{\"role\":\"follower\"}", "{\"appDataDirectory\":null}", "{\"appDataDirectory\":\"  \"}", null];
+            foreach (string? document in documents)
+            {
+                string configPath = Path.Combine(root, "follower.json");
+                if (document is null)
+                {
+                    File.Delete(configPath);
+                }
+                else
+                {
+                    await File.WriteAllTextAsync(configPath, document, TestContext.Current.CancellationToken);
+                }
+
+                WrapperRun run = await RunWrapperAsync(
+                    wrapper,
+                    configPath,
+                    TestContext.Current.CancellationToken,
+                    home: home,
+                    xdgDataHome: xdg);
+
+                run.ExitCode.ShouldBe(0);
+                (await File.ReadAllTextAsync(logPath, TestContext.Current.CancellationToken)).ShouldBe("started\n");
+                Directory.Exists(Path.Combine(home, ".local")).ShouldBeFalse();
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// The default serializer writes <c>&amp;</c> as <c>\u0026</c>. A text scan
+    /// that keeps the escape would log beside a directory the application never
+    /// opens.
+    /// </summary>
+    [Fact(SkipUnless = nameof(OnLinux), Skip = "The wrapper runs under /bin/sh")]
+    public async Task AnEscapedAppDataDirectoryIsDecoded()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        string root = Path.Combine(Path.GetTempPath(), "claude-code-account-rotation-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            string install = Path.Combine(root, "install");
+            Directory.CreateDirectory(install);
+            string appData = Path.Combine(root, "app&data");
+            string wrapper = Path.Combine(install, "claude-code-account-rotation-follower-log");
+            File.Copy(WrapperSource(), wrapper);
+            string binary = Path.Combine(install, "claude-code-account-rotation");
+            string argvPath = Path.Combine(root, "argv");
+            string witnessPath = Path.Combine(root, "witness");
+            string configPath = Path.Combine(root, "follower.json");
+            await File.WriteAllTextAsync(
+                configPath,
+                "{\"appDataDirectory\":\"" + appData.Replace("&", "\\u0026", StringComparison.Ordinal) + "\"}",
+                TestContext.Current.CancellationToken);
+            await WriteSiblingBinaryAsync(binary, "decoded", argvPath, witnessPath, TestContext.Current.CancellationToken);
+
+            WrapperRun run = await RunWrapperAsync(wrapper, configPath, TestContext.Current.CancellationToken);
+
+            run.ExitCode.ShouldBe(0);
+            (await File.ReadAllTextAsync(Path.Combine(appData, "follower.log"), TestContext.Current.CancellationToken))
+                .ShouldBe("decoded\n");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static int WitnessRuns(string witnessPath) =>
         File.ReadAllText(witnessPath).Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
 
@@ -183,7 +341,13 @@ public sealed class PeerTests
         }
     }
 
-    private static async Task<WrapperRun> RunWrapperAsync(string wrapper, string configPath, CancellationToken cancellationToken)
+    private static async Task<WrapperRun> RunWrapperAsync(
+        string wrapper,
+        string configPath,
+        CancellationToken cancellationToken,
+        string? follower = null,
+        string? home = null,
+        string? xdgDataHome = null)
     {
         ProcessStartInfo start = new("/bin/sh")
         {
@@ -192,7 +356,23 @@ public sealed class PeerTests
             RedirectStandardError = true,
             WorkingDirectory = Path.GetDirectoryName(wrapper)!,
         };
+        if (home is not null)
+        {
+            start.Environment["HOME"] = home;
+        }
+
+        if (xdgDataHome is not null)
+        {
+            start.Environment["XDG_DATA_HOME"] = xdgDataHome;
+        }
+
         start.ArgumentList.Add(wrapper);
+        if (follower is not null)
+        {
+            start.ArgumentList.Add("--follower");
+            start.ArgumentList.Add(follower);
+        }
+
         start.ArgumentList.Add("--port");
         start.ArgumentList.Add("48212");
         start.ArgumentList.Add("--config");

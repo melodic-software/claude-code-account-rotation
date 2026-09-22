@@ -20,7 +20,9 @@ Roughly forty minutes.
 ```sh
 dotnet publish src/ClaudeCodeAccountRotation.App -c Release -r win-x64 --self-contained false -o <win>
 dotnet publish src/ClaudeCodeAccountRotation.App -c Release -r linux-x64 --self-contained true -o <linux>
-# copy <linux> into the distro, off the mount, and chmod +x it
+# copy <linux> into the distro, off the mount. Publish writes
+# claude-code-account-rotation-follower-log beside the binary; the script
+# copies it from this tree if it is missing and marks both executable.
 bash tests/acceptance/wsl-switch-acceptance.sh --leader <win> --follower <linux inside the distro>
 ```
 

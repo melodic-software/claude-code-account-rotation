@@ -10,9 +10,11 @@ namespace ClaudeCodeAccountRotation.App.Adapters.Peers;
 
 /// <summary>
 /// The follower as the leader's child: <c>wsl.exe -d &lt;distribution&gt; -u
-/// &lt;user&gt; --exec &lt;wrapper&gt; --port &lt;port&gt; [--config &lt;path&gt;]</c>.
+/// &lt;user&gt; --exec &lt;wrapper&gt; --follower &lt;executablePath&gt; --port &lt;port&gt; [--config &lt;path&gt;]</c>.
 /// The wrapper is <c>claude-code-account-rotation-follower-log</c> beside the
-/// configured binary, and it keeps the follower's stdout.
+/// configured binary. <c>--exec</c> is that wrapper; <c>--follower</c> is the
+/// binary <see cref="PeerLaunch.ExecutablePath"/> names, so a renamed build is
+/// the process that actually starts. The wrapper keeps the follower's stdout.
 /// <para>
 /// Design decision 3 makes the follower leader-spawned, so nothing is
 /// installed in the distro that a running leader does not start. This class is
@@ -98,10 +100,12 @@ internal sealed partial class WslDistributionPeerHost : IPeerProcessHost, IDispo
     /// <summary>
     /// The command line, separated so a test can assert it without spawning anything.
     /// <para>
-    /// <c>--exec</c> is the wrapper beside <see cref="PeerLaunch.ExecutablePath"/>,
-    /// not that binary. The configured path is a Linux path spelled on Windows,
-    /// so the sibling is built by splitting on <c>/</c> and rejoining with
-    /// <c>/</c>. <see cref="Path.GetDirectoryName(string)"/> would emit backslashes.
+    /// <c>--exec</c> is the wrapper beside <see cref="PeerLaunch.ExecutablePath"/>.
+    /// <c>--follower</c> is that path, so the wrapper runs the configured binary
+    /// rather than a hard-coded sibling name. The configured path is a Linux path
+    /// spelled on Windows, so the sibling wrapper is built by splitting on
+    /// <c>/</c> and rejoining with <c>/</c>.
+    /// <see cref="Path.GetDirectoryName(string)"/> would emit backslashes.
     /// </para>
     /// </summary>
     public static IReadOnlyList<string> Arguments(PeerLaunch launch)
@@ -112,6 +116,7 @@ internal sealed partial class WslDistributionPeerHost : IPeerProcessHost, IDispo
             "-d", launch.Distribution,
             "-u", launch.User,
             "--exec", WrapperPath(launch.ExecutablePath),
+            "--follower", launch.ExecutablePath,
             "--port", launch.Port.ToString(CultureInfo.InvariantCulture),
         ];
         if (!string.IsNullOrWhiteSpace(launch.ConfigPath))
