@@ -21,11 +21,18 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- The page and the first-run template ship inside the executable; no files beside it. -->
+    <!-- The page and the first-run template ship inside the executable. The
+         follower-log wrapper is the one file published beside it. -->
     <EmbeddedResource Include="wwwroot\**" />
     <EmbeddedResource Include="config.template.json">
       <LogicalName>ClaudeCodeAccountRotation.App.config.template.json</LogicalName>
     </EmbeddedResource>
+    <!-- The leader execs this beside the Linux binary. It stays a file:
+         wsl.exe cannot run a script embedded in the single-file bundle. -->
+    <Content Include="follower-log" Link="claude-code-account-rotation-follower-log" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest">
+      <TargetPath>claude-code-account-rotation-follower-log</TargetPath>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+    </Content>
   </ItemGroup>
 
   <ItemGroup>

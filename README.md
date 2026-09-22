@@ -33,11 +33,13 @@ Download the release from
 <https://github.com/melodic-software/claude-code-account-rotation/releases/latest>.
 The assets are `claude-code-account-rotation-win-x64.exe` (the Windows leader),
 `claude-code-account-rotation-linux-x64` (the follower the WSL side runs),
-`SHA256SUMS`, and `config.template.json` (the template the executable embeds).
+`claude-code-account-rotation-follower-log` (the wrapper the leader starts in its
+place), `SHA256SUMS`, and `config.template.json` (the template the executable embeds).
 
 Check each binary against the digest `SHA256SUMS` lists for it. A release download does not keep
-the executable bit, so on Linux run `chmod +x claude-code-account-rotation-linux-x64` before the
-first run. Place the executable on `PATH`, or make a shortcut to it, and run it once.
+the executable bit, so on Linux run `chmod +x` on `claude-code-account-rotation-linux-x64` and
+`claude-code-account-rotation-follower-log` before the first run. Place the executable on `PATH`,
+or make a shortcut to it, and run it once.
 
 A missing `config.json` is written on that first run from the embedded template. The written file
 fills its paths from the user profile. It sits in the app data directory unless `--config` pointed
@@ -93,11 +95,13 @@ The app does not call the GitHub API, and the dashboard has no "update available
 3. Stop the leader and the follower with `POST /api/shutdown`, carrying the same mutation
    header as the other dashboard writes. A 409 means a switch or import is still in flight,
    so the process was left running.
-4. Download both release assets, `claude-code-account-rotation-win-x64.exe` and
-   `claude-code-account-rotation-linux-x64`, and `SHA256SUMS`. Check each binary against the
-   digest that file lists for it. Replace nothing until both match.
-5. Replace both binaries, then start them. A version mismatch marks the other side incompatible,
-   so both sides have to be the release you just checked.
+4. Download `claude-code-account-rotation-win-x64.exe`,
+   `claude-code-account-rotation-linux-x64`, `claude-code-account-rotation-follower-log`,
+   and `SHA256SUMS`. Check each binary and the wrapper against the digest that
+   file lists for it. Replace nothing until they match. Place
+   `claude-code-account-rotation-follower-log` in the same directory as the Linux binary.
+5. Replace both binaries and the wrapper, then start them. A version mismatch marks the other
+   side incompatible, so both sides have to be the release you just checked.
 
 ## Uninstall
 
