@@ -232,10 +232,11 @@ All notable changes to this project are documented in this file. The format foll
 
 - A side row names the account that side holds, alias first the way a card does (#86): `holding`
   plus the alias and the address when the roster has an alias, the address alone when it does not,
-  and `holding nothing` when the side holds none.
+  and `holding nothing` only when that side answered and holds none. An offline side whose
+  dashboard could not be read does not claim to hold nothing.
 - After a side hands its account back, its picker returns to `choose an account` instead of the
-  first account in the list, including the account just released. Switch stays disabled until an
-  account is chosen (#85).
+  first account in the list, including the account just released. Switch is disabled in that same
+  turn, and the request's re-enable does not turn it back on while the picker is empty (#85).
 - The usage and token clients no longer follow redirects (#16). A 307 or 308 would resend the
   request, including the refresh-token POST body, to the host the endpoint named. Both clients now
   install a primary handler that refuses redirects, and any 3xx stays the transport failure the

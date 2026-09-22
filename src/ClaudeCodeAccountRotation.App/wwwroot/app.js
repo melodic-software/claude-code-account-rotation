@@ -308,9 +308,13 @@
   }
 
   // A release succeeded: the picker returns to "choose an account". Switch is
-  // already disabled while the value is empty, so the empty picker cannot hand off.
+  // disabled here, in the same turn, because the request's re-enable runs before
+  // the refresh and a failed refresh would otherwise leave it clickable.
   function clearSidePicker(side) {
-    if (sideRows[side] && sideRows[side].pick) { sideRows[side].pick.value = ""; }
+    var row = sideRows[side];
+    if (!row || !row.pick) { return; }
+    row.pick.value = "";
+    if (row.button) { row.button.disabled = true; }
   }
 
   // One line per configured side, and on it that side's switch control: which
@@ -327,21 +331,24 @@
 
   // Alias-first, the way a card's heading is. liveAccount is the address from
   // GET /api/sides; the alias is roster.alias on the dashboard account with that
-  // email. Nothing held is said on purpose rather than left blank.
+  // email. An absent address is "holding nothing" only when the side answered
+  // and said so. An offline read also leaves the address null, because the
+  // dashboard could not be read, and that side may still hold an account.
   function heldAccount(email) {
-    if (!email) { return "holding nothing"; }
     var account = lastAccounts.filter(function (candidate) { return candidate.email === email; })[0];
     var alias = account && account.roster && account.roster.alias;
     return alias ? "holding " + alias + " (" + email + ")" : "holding " + email;
   }
 
   function sideStateText(side) {
-    var held = heldAccount(side.liveAccount);
     var prefix = side.side + " side: " + side.detail;
-    // An online side that holds nothing already ends its detail with this
-    // phrase ("online, holding nothing"). Appending it again would say it twice.
-    if (held === "holding nothing" && typeof side.detail === "string" && side.detail.slice(-held.length) === held) { return prefix; }
-    return prefix + ", " + held;
+    if (!side.liveAccount) {
+      if (!side.online) { return prefix; }
+      var nothing = "holding nothing";
+      if (typeof side.detail === "string" && side.detail.slice(-nothing.length) === nothing) { return prefix; }
+      return prefix + ", " + nothing;
+    }
+    return prefix + ", " + heldAccount(side.liveAccount);
   }
 
   // Updated in place rather than rebuilt, so nothing here is ever taken from
@@ -941,7 +948,16 @@
     // otherwise send a second request whose refusal toast overwrote the outcome of
     // the first. The re-enable is unconditional and the following render applies
     // the per-account state, so a failed request can never leave a button dead.
+    // A side Switch whose picker is the empty "choose an account" is the exception:
+    // the re-enable runs before the refresh, and a failed refresh would leave that
+    // Switch clickable with nothing selected.
     Array.prototype.forEach.call(document.querySelectorAll("button"), function (button) { button.disabled = disabled; });
+    if (!disabled) {
+      Object.keys(sideRows).forEach(function (name) {
+        var row = sideRows[name];
+        if (row.button && row.pick && !row.pick.value) { row.button.disabled = true; }
+      });
+    }
   }
 
   addForm.addEventListener("submit", function (event) {
