@@ -661,15 +661,46 @@ public sealed class LiveDirectorySwitchTests : IDisposable
         await ParkedProfileAsync("b@example.com", "refresh-b");
         await ParkedProfileAsync("c@example.com", "refresh-c");
         // A zero gate wait is the endpoint's posture: a second switch during one is a 409, not a queue.
-        LiveDirectorySwitch executor = Switch(gateTimeout: TimeSpan.Zero);
+        // The first switch blocks after the park, which is after it holds the gate and before it
+        // lets go. The second starts only once that block is reached, so the overlap is not an
+        // accident of the zero wait returning before the first await.
+        TaskCompletionSource<bool> holding = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<bool> release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        DelegatingPairStore pairs = new(new FileSystemCredentialPairStore(_liveDirectory, _profilesRoot, TimeProvider.System))
+        {
+            AfterParkAsync = async () =>
+            {
+                holding.TrySetResult(true);
+                await release.Task;
+            },
+        };
+        LiveDirectorySwitch executor = Switch(gateTimeout: TimeSpan.Zero, pairs: pairs);
         _cli.Email = "b@example.com";
-
         Task<Result<SwitchOutcome, SwitchRefusal>> toB = executor.SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken);
-        Task<Result<SwitchOutcome, SwitchRefusal>> toC = executor.SwitchToAsync(Email("c@example.com"), TestContext.Current.CancellationToken);
-        Result<SwitchOutcome, SwitchRefusal>[] results = await Task.WhenAll(toB, toC);
+        try
+        {
+            Task arrived = await Task.WhenAny(holding.Task, toB);
+            if (toB.IsFaulted)
+            {
+                await toB;
+            }
 
-        results.Count(static result => result.IsSuccess).ShouldBe(1);
-        results.Single(static result => result.IsFailure).Error.ShouldBe(SwitchRefusal.MutationInProgress);
+            arrived.ShouldBeSameAs(holding.Task, "the first switch must reach the park while it still holds the gate");
+            Task<Result<SwitchOutcome, SwitchRefusal>> toC = executor.SwitchToAsync(Email("c@example.com"), TestContext.Current.CancellationToken);
+            Result<SwitchOutcome, SwitchRefusal> refused = await toC;
+            release.TrySetResult(true);
+            Result<SwitchOutcome, SwitchRefusal> succeeded = await toB;
+            Result<SwitchOutcome, SwitchRefusal>[] results = [succeeded, refused];
+
+            results.Count(static result => result.IsSuccess).ShouldBe(1);
+            results.Single(static result => result.IsFailure).Error.ShouldBe(SwitchRefusal.MutationInProgress);
+        }
+        finally
+        {
+            release.TrySetResult(true);
+            _ = await toB;
+        }
+
         List<RefreshTokenFingerprint> fingerprints = [];
         foreach (string directory in new[] { _liveDirectory, Path.Combine(_profilesRoot, "a@example.com"), Path.Combine(_profilesRoot, "b@example.com"), Path.Combine(_profilesRoot, "c@example.com") })
         {
@@ -1027,10 +1058,18 @@ public sealed class LiveDirectorySwitchTests : IDisposable
         reconciled.StaleRecord.ShouldBeTrue();
     }
 
-    /// <summary>Forwards to the real store and runs a hook after the park, the seam a request abort needs.</summary>
+    /// <summary>
+    /// Forwards to the real store. <see cref="AfterPark"/> is the seam a request
+    /// abort needs. <see cref="AfterParkAsync"/> is awaited in that same place,
+    /// after the park rename and before this method returns, which is while the
+    /// switch still holds the mutation gate and before the unpark.
+    /// </summary>
     private sealed class DelegatingPairStore(ICredentialPairStore inner) : ICredentialPairStore
     {
         public Action? AfterPark { get; init; }
+
+        /// <summary>Awaited after the park, still inside the gate, so a test can hold that window open.</summary>
+        public Func<Task>? AfterParkAsync { get; init; }
 
         /// <summary>Runs just before the unpark rename: the seam a crash between the record write and the move needs.</summary>
         public Action? BeforeUnpark { get; init; }
@@ -1043,6 +1082,10 @@ public sealed class LiveDirectorySwitchTests : IDisposable
         {
             await inner.MoveLiveToParkedAsync(folderPath, cancellationToken);
             AfterPark?.Invoke();
+            if (AfterParkAsync is not null)
+            {
+                await AfterParkAsync();
+            }
         }
 
         public Task MoveParkedToLiveAsync(string folderPath, CancellationToken cancellationToken)
