@@ -14,6 +14,7 @@ using ClaudeCodeAccountRotation.Core.Switching;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeCodeAccountRotation.App.Endpoints;
 
@@ -34,12 +35,14 @@ namespace ClaudeCodeAccountRotation.App.Endpoints;
 /// rather than silently leaving a live token behind. <c>?logout=false</c> is
 /// the operator's deliberate override: the folder goes and the response says
 /// the token was not revoked. A folder that holds no pair skips the logout
-/// entirely; there is nothing to revoke. A folder whose pair is stranded in
+/// entirely; there is nothing to revoke. The revocation and the folder deletion
+/// are each logged with the account and the outcome, and neither line carries
+/// the token or the logout's own diagnostic. A folder whose pair is stranded in
 /// recovery is put back first, so the revocation reaches the lineage that is
 /// actually alive.
 /// </para>
 /// </summary>
-internal static class RosterEndpoints
+internal static partial class RosterEndpoints
 {
     public static void Map(IEndpointRouteBuilder routes)
     {
@@ -168,9 +171,14 @@ internal static class RosterEndpoints
             RecoveryFiles recovery,
             SharedStoreSlots slots,
             SwitchOptions options,
+            ILoggerFactory loggers,
             CancellationToken cancellationToken) =>
         {
             ArgumentNullException.ThrowIfNull(options);
+            ArgumentNullException.ThrowIfNull(loggers);
+            // A static class cannot be a logger type argument. The category is
+            // still this type's name, which is what ILogger<T> would have used.
+            ILogger logger = loggers.CreateLogger(typeof(RosterEndpoints).FullName!);
             Result<AccountEmail, string> parsed = AccountEmail.Parse(email);
             if (parsed.IsFailure)
             {
@@ -281,12 +289,17 @@ internal static class RosterEndpoints
                     Result<Unit, string> loggedOut = await cli.LogoutAsync(folder, committed);
                     if (loggedOut.IsFailure)
                     {
+                        // loggedOut.Error reaches the page as a classified sentence.
+                        // It does not reach the log: the port's diagnostic can repeat
+                        // what the child printed.
+                        LogLogoutFailed(logger, target.Value);
                         return Refused(
                             "LogoutFailed",
                             "That account's login could not be revoked, so the folder was kept: " + loggedOut.Error
                             + " Retry, or remove with logout=false to delete the folder without revoking.");
                     }
 
+                    LogLogoutRevoked(logger, target.Value);
                     revoked = true;
                 }
 
@@ -433,6 +446,13 @@ internal static class RosterEndpoints
 
     private static bool? Flag(JsonObject body, string key) =>
         body[key] is JsonValue value && value.TryGetValue(out bool flag) ? flag : null;
+
+    // The account and the outcome only. The logout diagnostic is not an outcome.
+    [LoggerMessage(Level = LogLevel.Information, Message = "logout for {Account} revoked")]
+    private static partial void LogLogoutRevoked(ILogger logger, string account);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "logout for {Account} failed")]
+    private static partial void LogLogoutFailed(ILogger logger, string account);
 }
 
 /// <summary>What a removal did, including whether the refresh token was revoked.</summary>

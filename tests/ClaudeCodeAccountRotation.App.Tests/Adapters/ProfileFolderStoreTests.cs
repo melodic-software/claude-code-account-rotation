@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Switching;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Adapters;
 
@@ -13,7 +14,7 @@ public sealed class ProfileFolderStoreTests : IDisposable
     public ProfileFolderStoreTests()
     {
         Directory.CreateDirectory(_profilesRoot);
-        _store = new ProfileFolderStore(_profilesRoot);
+        _store = new ProfileFolderStore(_profilesRoot, NullLogger<ProfileFolderStore>.Instance);
     }
 
     private static JsonObject AccountJson(string email) => new() { ["accountUuid"] = "uuid-" + email, ["emailAddress"] = email };

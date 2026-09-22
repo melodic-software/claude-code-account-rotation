@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Text.Json.Nodes;
+using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 
@@ -10,8 +12,10 @@ namespace ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 /// the <c>oauthAccount</c> block of the folder's own <c>.claude.json</c>; the
 /// folder name is a label and is never trusted. Deletion is allowed only for a
 /// folder this store discovered itself, never for a path built from a request.
+/// A deletion is logged with the account and the outcome. The line carries no
+/// credential material, and a failure's exception text stays out of it.
 /// </summary>
-internal sealed class ProfileFolderStore
+internal sealed partial class ProfileFolderStore
 {
     public const string ProfileFileName = "profile.json";
     private const string StateFileName = ".claude.json";
@@ -28,15 +32,18 @@ internal sealed class ProfileFolderStore
         [FileSystemCredentialPairStore.FileName, ProfileFileName, HolderRecordFile.FileName, SupersededFamilyFile.FileName];
 
     private readonly string _profilesRoot;
+    private readonly ILogger<ProfileFolderStore> _logger;
 
     // A singleton mutated by every dashboard poll and every switch at once, so the
     // set must be safe for concurrent adds and removes.
     private readonly ConcurrentDictionary<string, byte> _discovered;
 
-    public ProfileFolderStore(string profilesRoot)
+    public ProfileFolderStore(string profilesRoot, ILogger<ProfileFolderStore> logger)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(profilesRoot);
+        ArgumentNullException.ThrowIfNull(logger);
         _profilesRoot = Path.GetFullPath(profilesRoot);
+        _logger = logger;
         _discovered = new ConcurrentDictionary<string, byte>(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
     }
 
@@ -83,7 +90,7 @@ internal sealed class ProfileFolderStore
         return AtomicJsonFile.WriteAsync(Path.Combine(UnderRoot(folderPath), ProfileFileName), account.Raw, cancellationToken);
     }
 
-    public Task DeleteFolderAsync(string folderPath, CancellationToken cancellationToken)
+    public async Task DeleteFolderAsync(string folderPath, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         string folder = UnderRoot(folderPath);
@@ -92,9 +99,23 @@ internal sealed class ProfileFolderStore
             throw new InvalidOperationException("Refusing to delete " + folder + ": only a folder discovered by listing the profiles root can be deleted.");
         }
 
-        Directory.Delete(folder, recursive: true);
+        // Named before the delete, while the profile is still there to read.
+        // The folder name is only a fallback, and only when it is itself an
+        // address: a path is not an account, and it does not belong on the line.
+        string account = await AccountForAuditAsync(folder, cancellationToken);
+        try
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // The exception text can quote a path. The outcome is the record.
+            LogCredentialFolderDeleteFailed(account);
+            throw;
+        }
+
         _discovered.TryRemove(folder, out _);
-        return Task.CompletedTask;
+        LogCredentialFolderDeleted(account);
     }
 
     /// <summary>
@@ -207,6 +228,39 @@ internal sealed class ProfileFolderStore
             return null;
         }
     }
+
+    /// <summary>
+    /// The address an audit line may name for <paramref name="folder"/>. The
+    /// profile wins. A folder that has never been logged in has no profile, and
+    /// its directory name is the address the roster asked for, when that name
+    /// parses as one.
+    /// </summary>
+    private static async Task<string> AccountForAuditAsync(string folder, CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (await ReadAccountInFolderAsync(folder, cancellationToken) is { Email: AccountEmail email })
+            {
+                return email.Value;
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Reading the name failed. The delete still proceeds, and the line
+            // falls through to the folder name rather than quoting this exception.
+        }
+
+        Result<AccountEmail, string> parsed = AccountEmail.Parse(Path.GetFileName(folder));
+        return parsed.IsSuccess ? parsed.Value.Value : "unknown";
+    }
+
+    // Audit lines name the account and the outcome only. No token, no code, no
+    // path, and no exception text: a delete failure's message can carry a path.
+    [LoggerMessage(Level = LogLevel.Information, Message = "credential folder for {Account} deleted")]
+    private partial void LogCredentialFolderDeleted(string account);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "credential folder for {Account} could not be deleted")]
+    private partial void LogCredentialFolderDeleteFailed(string account);
 
     private string UnderRoot(string folderPath)
     {

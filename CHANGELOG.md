@@ -104,6 +104,9 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- A login, a server-side logout, and a credential-folder deletion each leave an audit entry naming
+  the account and the outcome (#42). The console log stamps every line with a UTC timestamp, so
+  the entry says when.
 - `POST /api/shutdown` stops the leader or the follower with exit code 0, and refuses while a
   switch or import journal is open (#91).
 - A tag matching `v*` uploads `config.template.json` with the two executables and `SHA256SUMS`
