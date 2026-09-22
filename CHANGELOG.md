@@ -96,6 +96,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- `POST /api/shutdown` stops the leader or the follower with exit code 0, and refuses while a
+  switch or import journal is open (#91).
 - A tag matching `v*` uploads `config.template.json` with the two executables and `SHA256SUMS`
   (#31). The README install section says how to download that release, mark the Linux binary
   executable (`chmod +x`, because a release download does not keep that bit), place it on

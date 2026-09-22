@@ -110,6 +110,17 @@ internal static class AppComposition
             // unconditionally is the ordinary way to write one; reading that as
             // "on" turns every later run into a corrupted export.
             !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(CrashInjection.CorruptExportEnvironmentVariableName))));
+        // A pass is a credential operation, not a request: the account in flight
+        // must be allowed to finish or its rotated pair is stranded. The worst
+        // case is one gated refresh unit — a 2 s wait for the mutation gate, a
+        // 20 s token POST, three write attempts each wrapping AtomicBytesFile's
+        // 2 s transient retry, and 1.75 s of pacing between them — which is about
+        // 30 s. The framework's default 30 s would cut that unit off at its worst
+        // moment, so the drain is given 45 s. Set before the role split so the
+        // follower gets the same drain: its import releases the refresh lock from
+        // Dispose when the container shuts down.
+        services.Configure<Microsoft.Extensions.Hosting.HostOptions>(
+            static options => options.ShutdownTimeout = TimeSpan.FromSeconds(45));
         if (configuration.Role == RotationRole.Follower)
         {
             ComposeFollower(services, configuration);
@@ -177,15 +188,6 @@ internal static class AppComposition
         // object holding the channel its 202 writes to.
         services.AddSingleton<QuotaRefreshWorker>();
         services.AddHostedService(static provider => provider.GetRequiredService<QuotaRefreshWorker>());
-        // A pass is a credential operation, not a request: the account in flight
-        // must be allowed to finish or its rotated pair is stranded. The worst
-        // case is one gated refresh unit — a 2 s wait for the mutation gate, a
-        // 20 s token POST, three write attempts each wrapping AtomicBytesFile's
-        // 2 s transient retry, and 1.75 s of pacing between them — which is about
-        // 30 s. The framework's default 30 s would cut that unit off at its worst
-        // moment, so the drain is given 45 s.
-        services.Configure<Microsoft.Extensions.Hosting.HostOptions>(
-            static options => options.ShutdownTimeout = TimeSpan.FromSeconds(45));
         // No checks registered: liveness only. MapRoutes maps the /healthz route this serves.
         services.AddHealthChecks();
 
@@ -236,14 +238,15 @@ internal static class AppComposition
         // status word and the middleware writes the no-store cache headers itself.
         app.MapHealthChecks("/healthz");
 
-        // The follower serves four import routes and a dashboard the leader reads,
-        // and nothing else. The roster, login, switch and refresh routes are not
-        // mapped at all, so R1's "the WSL side exposes no add, no login, no roster
-        // write" is a 404 from the router rather than a check inside a handler that
-        // a later edit could forget.
+        // The follower serves four import routes, the shutdown route, and a dashboard
+        // the leader reads, and nothing else. The roster, login, switch and refresh
+        // routes are not mapped at all, so R1's "the WSL side exposes no add, no login,
+        // no roster write" is a 404 from the router rather than a check inside a
+        // handler that a later edit could forget.
         if (app.Services.GetRequiredService<ClaudeCodeAccountRotationConfiguration>().Role == RotationRole.Follower)
         {
             ImportEndpoints.Map(app);
+            ShutdownEndpoints.Map(app);
             return;
         }
 
@@ -258,6 +261,7 @@ internal static class AppComposition
         RosterEndpoints.Map(app);
         RefreshEndpoints.Map(app);
         LoginEndpoints.Map(app);
+        ShutdownEndpoints.Map(app);
     }
 
     /// <summary>
