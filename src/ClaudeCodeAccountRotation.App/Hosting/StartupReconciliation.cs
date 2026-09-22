@@ -27,14 +27,15 @@ internal sealed partial class StartupReconciliation(
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         ReconciliationReport report = await executor.ReconcileAsync(cancellationToken);
-        state.Publish(current => current with { LastReconciliation = report });
         LogReconciled(report.JournalOutcome, report.Quarantined.Count, report.SwitchingBlocked);
         // The leader half of the hand-off crash table, after the Windows one and
         // before the first request: a hand-off this process died in the middle of
         // is finished or left in transit by its own rules, not by a Windows
         // switch's, which know nothing about mailboxes.
         WslReconciliation handOff = await coordinator.ReconcileAsync(cancellationToken);
-        state.Publish(current => current with { HandOffBanner = handOff.Banner });
+        // One publication: a poll must not see the new report beside the banner
+        // this pass has not written yet.
+        state.Publish(current => current with { LastReconciliation = report, HandOffBanner = handOff.Banner });
         LogHandOffReconciled(handOff.Outcome);
         await RestoreStrandedPairsAsync(cancellationToken);
         await LoadCachedUsageAsync(cancellationToken);
