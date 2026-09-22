@@ -71,7 +71,9 @@ Draft written 2026-09-04 by `/planning:plan` from the Brief above, the design sl
 (`design/design-threads.md`, `design/type-inventory.md`, `design/library-topology.md`,
 `design/capability-matrix.md`), spikes 01 to 04, and the org standards. Status: **APPROVED by the
 user 2026-09-04** with no revisions; every `[EXEC-SHAPE]` and `[FALLBACK]` decision below stands as
-written. Phase tags advance `[TODO]` → `[DOING]` → `[DONE]` during implementation.
+written. Phase tags advance `[TODO]` → `[DOING]` → `[DONE]` during implementation. A phase the
+project decides not to build takes `[NOT BUILT, by decision]` instead, and carries the decision and
+what would reopen it under its own heading; phase 3 is the only one.
 
 ### Goal
 
@@ -1054,7 +1056,8 @@ evidence captured this session; the last row is below the bar and is flagged for
   its own branch in `claude-code-plugins`. Commit at every green checkpoint via `/source-control:commit`.
 - Verification checkpoints: each phase's Sanity Check block, then `/verification:confirm` before the
   phase PR.
-- Phase tags in this file advance `[TODO]` → `[DOING]` → `[DONE]`; edits to this file are
+- Phase tags in this file advance `[TODO]` → `[DOING]` → `[DONE]`, or land on
+  `[NOT BUILT, by decision]`; edits to this file are
   main-session only.
 - Sequential fallback for W6 as stated above.
 - Close-out at the final PR: `/planning:plan close-out` (publish PLAN.md to the PR, graduate durable
