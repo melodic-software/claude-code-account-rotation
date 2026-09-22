@@ -3,16 +3,16 @@ using ClaudeCodeAccountRotation.Core;
 
 namespace ClaudeCodeAccountRotation.App.Configuration;
 
-/// <summary>The command line: <c>--config &lt;path&gt;</c>, <c>--port &lt;n&gt;</c>, <c>--version</c>, <c>--help</c>.</summary>
+/// <summary>The command line: <c>--config &lt;path&gt;</c>, <c>--port &lt;n&gt;</c>, <c>--version</c>, <c>--help</c> (and <c>-h</c>, <c>/?</c>).</summary>
 internal sealed record StartupArguments(string? ConfigPath, int? Port, bool ShowVersion, bool ShowHelp)
 {
     public const string Usage = """
         claude-code-account-rotation [--config <path>] [--port <n>] [--version] [--help]
 
           --config <path>   configuration file (default: <app data>/claude-code-account-rotation/config.json)
-          --port <n>        listen port for this launch (overrides the configured port)
+          --port <n>        listen port for this launch (overrides the configured port; 0 lets the operating system choose a free port)
           --version         print the version and exit
-          --help            print this text and exit
+          --help, -h, /?    print this text and exit
         """;
 
     public static Result<StartupArguments, string> Parse(IReadOnlyList<string> arguments)
@@ -31,9 +31,9 @@ internal sealed record StartupArguments(string? ConfigPath, int? Port, bool Show
                     configPath = arguments[++index];
                     break;
                 case "--port" when index + 1 < arguments.Count:
-                    if (!int.TryParse(arguments[++index], NumberStyles.None, CultureInfo.InvariantCulture, out int parsed) || parsed is < 1 or > 65535)
+                    if (!int.TryParse(arguments[++index], NumberStyles.None, CultureInfo.InvariantCulture, out int parsed) || parsed is < 0 or > 65535)
                     {
-                        return Result<StartupArguments, string>.Failure("--port expects a number between 1 and 65535");
+                        return Result<StartupArguments, string>.Failure("--port expects a number between 0 and 65535");
                     }
 
                     port = parsed;

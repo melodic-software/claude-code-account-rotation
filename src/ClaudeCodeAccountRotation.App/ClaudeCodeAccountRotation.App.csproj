@@ -21,8 +21,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- The page ships inside the executable; no build step, no files beside it. -->
+    <!-- The page and the first-run template ship inside the executable; no files beside it. -->
     <EmbeddedResource Include="wwwroot\**" />
+    <EmbeddedResource Include="config.template.json">
+      <LogicalName>ClaudeCodeAccountRotation.App.config.template.json</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
   <ItemGroup>
