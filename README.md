@@ -73,17 +73,24 @@ hand, in this order.
 
 1. If the logon task from melodic-software/provisioning#552 is installed, disable it. This
    repository does not name that task.
-2. Stop the leader and the follower. There is no shutdown route in this repository (#91 owns
+2. Start the leader and the follower if either is not running. Startup finishes or unwinds an
+   open switch or import journal, and it restores a recovery file. Do this even when you already
+   stopped the processes: a journal left behind is what the next start uses to finish a move, and
+   deleting it first leaves a parked pair with nothing to put it back.
+3. While they are running, the page must show no blocking banner, the same rule as an upgrade.
+   No switch or import may be in flight.
+4. On each side, look in `recovery/`. A `*.credentials.json` outside `stale/` can be the only
+   working lineage: the token endpoint has already invalidated the refresh token in the profile
+   folder. Restart that side, or refresh the card, so the file is restored. Do not continue while
+   such a file remains, even when no card says `credentials stranded in recovery`.
+5. Stop the leader and the follower. There is no shutdown route in this repository (#91 owns
    that), so stop both externally.
-3. If the page warned that a rotated pair is stranded (a card reads `credentials stranded in
-   recovery`), start once so recovery can restore it. Confirm that side's `recovery/` directory
-   has no `*.credentials.json` outside `stale/`, then stop again.
-4. Read `appDataDirectory`, `profilesRoot`, `liveConfigDirectory`, and `stateFilePath` from
+6. Read `appDataDirectory`, `profilesRoot`, `liveConfigDirectory`, and `stateFilePath` from
    `config.json`. Read the leader's file, and the follower's when `peers[].launch.configPath`
    names one, and take each side's `appDataDirectory` from its own file.
-5. Delete each side's app data directory. Also delete `config.json` when `--config` or
+7. Delete each side's app data directory. Also delete `config.json` when `--config` or
    `peers[].launch.configPath` put that file outside the app data directory.
-6. Delete the executables you installed.
+8. Delete the executables you installed.
 
 `config.json` sits in the app data directory unless `--config` pointed somewhere else. That
 directory is `%LOCALAPPDATA%\claude-code-account-rotation` on Windows, and
