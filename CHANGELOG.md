@@ -237,6 +237,12 @@ All notable changes to this project are documented in this file. The format foll
   stays readable for ten minutes, the same window the login itself is given, so a reload can still
   see how it ended, and is then dropped. That drop is armed when the login leaves pending, so it
   happens even when nothing asks about the session again.
+- On Linux, a credential rename compares device ids and then moves with `renameat2`
+  (`RENAME_NOREPLACE`). A profiles root on a different mount is refused, including a bind mount or
+  two btrfs subvolumes that share a device id: `rename(2)` returns `EXDEV` for those, and that is a
+  refusal. The path-root check let a cross-mount move through, because that root is `/` for every
+  absolute path. `File.Move` is not used for the Linux move: across volumes it copies the file and
+  then deletes it, per its documentation, and that window is a second holder of the refresh token (#17).
 - A release whose live pair rotated before export parks the pair the follower actually holds.
   The follower exports that pair and names its fingerprint, and the leader parks the verified
   fingerprint into the slot. A re-issued release still matches that completed record by the
