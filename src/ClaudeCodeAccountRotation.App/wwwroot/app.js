@@ -12,6 +12,7 @@
   var OTHER = "other";
   var cards = document.getElementById("cards");
   var banner = document.getElementById("banner");
+  var setup = document.getElementById("setup");
   var warnings = document.getElementById("warnings");
   var captured = document.getElementById("captured");
   var refreshAllButton = document.getElementById("refresh-all");
@@ -966,17 +967,23 @@
   }
 
   function render(dashboard, force) {
-    // The header, the banner, and the warnings are not part of any card, so they
-    // are written before the guards below and on every poll: an operator with an
-    // Edit panel open would otherwise watch the page's own timestamp, the pass's
-    // progress, the Refresh all button, and a banner that has since been cleared
-    // freeze at whatever they said when the panel opened.
+    // The header, the banner, the setup sentence, and the warnings are not part
+    // of any card, so they are written before the guards below and on every
+    // poll: an operator with an Edit panel, a half-typed login code, or a
+    // display name open would otherwise watch the page's own timestamp, the
+    // pass's progress, the Refresh all button, and a banner or setup sentence
+    // that has since been cleared freeze at whatever they said when the field
+    // opened. The setup sentence disables nothing; Switch still follows
+    // canSwitchHere, a request in flight, the reconciliation banner, and a
+    // refresh pass.
     lastAccounts = dashboard.accounts;
     captured.textContent = "as of " + new Date(dashboard.capturedAt).toLocaleTimeString();
     refreshStateLine.textContent = passState(dashboard);
     refreshAllButton.disabled = busy || dashboard.refresh.inProgress;
     banner.hidden = !dashboard.banner;
     banner.textContent = dashboard.banner || "";
+    setup.hidden = !dashboard.setup;
+    setup.textContent = dashboard.setup || "";
     warnings.innerHTML = "";
     warnings.hidden = dashboard.warnings.length === 0;
     dashboard.warnings.forEach(function (warning) { warnings.appendChild(element("li", null, warning)); });

@@ -8,6 +8,14 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- An empty dashboard names the next step in `setup`, one sentence beside the reconciliation
+  banner (#34). It is shown while the roster has no account that is not paused and is either
+  live or already logged in. It says to click Adopt when the live account is not on the roster,
+  to click Login when a roster card needs a login, and otherwise to use Add an account, then
+  Login. A live Team or Enterprise account is not offered Adopt, because that admission is
+  already refused. One such account clears the sentence. The sentence sits outside the cards,
+  so the ten-second poll can replace it without wiping an open Edit, Login, or rename field,
+  and it disables nothing: Switch stays on the existing rule.
 - The README posture section states that the tool never calls the model API, that it reads the
   undocumented usage endpoint with its own User-Agent (the research rates that read GRAY, with no
   Anthropic statement either way, not ALLOWED), that a parked-pair refresh presents Claude Code's

@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
+using ClaudeCodeAccountRotation.App.Dashboard;
 using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.App.Tests.Adapters;
@@ -39,6 +40,12 @@ public sealed class DashboardAssemblerTests
     private const string ThirdEmail = "c@example.com";
     private const string FourthEmail = "d@example.com";
     private const string FifthEmail = "e@example.com";
+
+    private const string AdoptSetup = "Click Adopt to put the live account on the roster.";
+
+    private const string LoginSetup = "Click Login on the card that needs a login.";
+
+    private const string AddSetup = "Use Add an account, then Login.";
 
     [Fact]
     public async Task ASnapshotNamingTheLiveAccountIsShownOnItsCard()
@@ -901,6 +908,221 @@ public sealed class DashboardAssemblerTests
         Limit(card, 1).GetProperty("percent").ValueKind.ShouldBe(JsonValueKind.Null);
     }
 
+    [Fact]
+    public async Task AnEmptyRosterNamesAdoptWhenTheLiveAccountCanJoin()
+    {
+        // The live card is not on the roster, so the next step is Adopt, even
+        // when another card is waiting on Login. The sentence is its own field.
+        await using AppFactory factory = new();
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        await RosterAsync(factory, Entry(FirstEmail));
+        factory.Services.GetRequiredService<DashboardState>().Publish(current => current with
+        {
+            LastReconciliation = new ReconciliationReport([], "clear", false, "A duplicate lineage is quarantined."),
+        });
+
+        Payload dashboard = await DashboardAsync(factory);
+
+        SetupOf(dashboard).ShouldBe(AdoptSetup);
+        dashboard.Element.GetProperty("banner").GetString().ShouldBe("A duplicate lineage is quarantined.");
+        dashboard.Element.GetProperty("banner").GetString().ShouldNotBe(SetupOf(dashboard));
+        dashboard.Element.GetProperty("warnings").EnumerateArray()
+            .Select(static warning => warning.GetString())
+            .ShouldNotContain(AdoptSetup);
+        Card(dashboard, FirstEmail).GetProperty("canSwitchHere").GetBoolean().ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task ARosterCardThatNeedsLoginIsNamedWhenNothingLiveCanBeAdopted()
+    {
+        await using AppFactory factory = new();
+        await RosterAsync(factory, Entry(FirstEmail));
+
+        Payload dashboard = await DashboardAsync(factory);
+
+        SetupOf(dashboard).ShouldBe(LoginSetup);
+        dashboard.Element.GetProperty("banner").ValueKind.ShouldBe(JsonValueKind.Null);
+        Card(dashboard, FirstEmail).GetProperty("canSwitchHere").GetBoolean().ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task AnEmptyDashboardNamesAddThenLogin()
+    {
+        await using AppFactory factory = new();
+
+        Payload dashboard = await DashboardAsync(factory);
+
+        SetupOf(dashboard).ShouldBe(AddSetup);
+        dashboard.Element.GetProperty("banner").ValueKind.ShouldBe(JsonValueKind.Null);
+        dashboard.Element.GetProperty("warnings").EnumerateArray().ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task ALiveSeatAdoptWouldRefuseNamesAddRatherThanAdopt()
+    {
+        // The same evidence adopt-live refuses with 409 NotAMaxAccount. The
+        // sentence must not send the operator at that button.
+        await using AppFactory factory = new();
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        factory.Cli.SubscriptionType = "enterprise";
+
+        Payload dashboard = await DashboardAsync(factory);
+
+        SetupOf(dashboard).ShouldBe(AddSetup);
+        dashboard.Element.GetProperty("banner").ValueKind.ShouldBe(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task AnUnreadableLiveSeatIsAskedAgainOnceTheCliAnswers()
+    {
+        // The first read failed, so the seat is unknown and Adopt is still the
+        // step the route would allow. A later read that reports enterprise has
+        // to replace that sentence; remembering the failure as "not refused"
+        // would leave Adopt on the page for the rest of the process.
+        await using AppFactory factory = new();
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        factory.Cli.ReadError = "the CLI printed nothing";
+
+        Payload first = await DashboardAsync(factory);
+
+        SetupOf(first).ShouldBe(AdoptSetup);
+
+        factory.Cli.ReadError = null;
+        factory.Cli.SubscriptionType = "enterprise";
+
+        Payload second = await DashboardAsync(factory);
+
+        SetupOf(second).ShouldBe(AddSetup);
+    }
+
+    [Fact]
+    public async Task ARememberedRefusalExpiresAndALaterMaxAnswerNamesAdopt()
+    {
+        await using AppFactory factory = new();
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        factory.Cli.SubscriptionType = "enterprise";
+
+        Payload first = await DashboardAsync(factory);
+        SetupOf(first).ShouldBe(AddSetup);
+
+        // Inside the minute the memory stands, so a quiet upgrade does not
+        // spawn the CLI on the very next poll.
+        factory.Cli.SubscriptionType = "max";
+        Payload held = await DashboardAsync(factory);
+        SetupOf(held).ShouldBe(AddSetup);
+
+        factory.Clock.Advance(DashboardAssembler.LiveSeatJudgmentLifetime);
+
+        Payload second = await DashboardAsync(factory);
+        SetupOf(second).ShouldBe(AdoptSetup);
+    }
+
+    [Fact]
+    public async Task ARememberedMaxAnswerExpiresAndALaterEnterpriseAnswerNamesAdd()
+    {
+        await using AppFactory factory = new();
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        factory.Cli.SubscriptionType = "max";
+
+        Payload first = await DashboardAsync(factory);
+        SetupOf(first).ShouldBe(AdoptSetup);
+
+        factory.Clock.Advance(DashboardAssembler.LiveSeatJudgmentLifetime);
+        factory.Cli.SubscriptionType = "enterprise";
+
+        Payload second = await DashboardAsync(factory);
+        SetupOf(second).ShouldBe(AddSetup);
+    }
+
+    [Fact]
+    public async Task AChangedRateLimitTierAsksAgainBeforeTheJudgmentExpires()
+    {
+        // The tier string is part of the memory. A new one is a different
+        // login, so the sentence follows the CLI now instead of waiting out
+        // the minute.
+        await using AppFactory factory = new();
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        factory.Cli.SubscriptionType = "enterprise";
+
+        Payload first = await DashboardAsync(factory);
+        SetupOf(first).ShouldBe(AddSetup);
+
+        JsonObject account = AppFactory.AccountJson(LiveEmail);
+        account["organizationRateLimitTier"] = "default_claude_ai";
+        await File.WriteAllTextAsync(
+            factory.StateFilePath,
+            new JsonObject { ["numStartups"] = 3, ["oauthAccount"] = account }.ToJsonString(),
+            TestContext.Current.CancellationToken);
+        factory.Cli.SubscriptionType = "max";
+
+        Payload second = await DashboardAsync(factory);
+        SetupOf(second).ShouldBe(AdoptSetup);
+    }
+
+    [Fact]
+    public async Task ARefusedLiveSeatFallsThroughToLoginWhenARosterCardNeedsIt()
+    {
+        await using AppFactory factory = new();
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        factory.Cli.SubscriptionType = "enterprise";
+        await RosterAsync(factory, Entry(FirstEmail));
+
+        Payload dashboard = await DashboardAsync(factory);
+
+        SetupOf(dashboard).ShouldBe(LoginSetup);
+    }
+
+    [Fact]
+    public async Task ALiveMaxTierStillNamesAdoptWhenTheCliReportsAnotherSubscription()
+    {
+        // The account block admits a Max tier before the CLI's subscription is
+        // read, which is the adopt route's own order. A tier that already
+        // admits is not a 409, so the sentence still says Adopt.
+        await using AppFactory factory = new();
+        JsonObject account = AppFactory.AccountJson(LiveEmail);
+        account["organizationRateLimitTier"] = "default_claude_max_20x";
+        await File.WriteAllTextAsync(
+            factory.StateFilePath,
+            new JsonObject { ["numStartups"] = 3, ["oauthAccount"] = account }.ToJsonString(),
+            TestContext.Current.CancellationToken);
+        factory.Cli.SubscriptionType = "enterprise";
+
+        Payload dashboard = await DashboardAsync(factory);
+
+        SetupOf(dashboard).ShouldBe(AdoptSetup);
+    }
+
+    [Fact]
+    public async Task AUsableRosterAccountClearsTheSetupSentence()
+    {
+        // One non-paused account that is live, or one that already has
+        // credentials, is enough. The sentence is null, and Switch stays on
+        // canSwitchHere.
+        await using AppFactory factory = new();
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        await factory.ParkedProfileAsync(OtherEmail, "refresh-b", TestContext.Current.CancellationToken);
+        await RosterAsync(factory, Entry(LiveEmail), Entry(OtherEmail), Entry(FirstEmail));
+
+        Payload dashboard = await DashboardAsync(factory);
+
+        dashboard.Element.GetProperty("setup").ValueKind.ShouldBe(JsonValueKind.Null);
+        Card(dashboard, OtherEmail).GetProperty("canSwitchHere").GetBoolean().ShouldBeTrue();
+        Card(dashboard, LiveEmail).GetProperty("canSwitchHere").GetBoolean().ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task APausedAccountWithCredentialsDoesNotClearTheSentenceAndCanStillBeSwitchedTo()
+    {
+        await using AppFactory factory = new();
+        await factory.ParkedProfileAsync(OtherEmail, "refresh-b", TestContext.Current.CancellationToken);
+        await RosterAsync(factory, Entry(OtherEmail, paused: true));
+
+        Payload dashboard = await DashboardAsync(factory);
+
+        SetupOf(dashboard).ShouldBe(AddSetup);
+        Card(dashboard, OtherEmail).GetProperty("canSwitchHere").GetBoolean().ShouldBeTrue();
+    }
+
     /// <summary>The instant the fake side's tee is taken at, three hours before the factory's own clock.</summary>
     private static readonly DateTimeOffset _teeCapturedAt = new(2026, 9, 7, 9, 0, 0, TimeSpan.Zero);
 
@@ -1083,6 +1305,12 @@ public sealed class DashboardAssemblerTests
         dashboard.GetProperty("accounts").EnumerateArray().Single(card => card.GetProperty("email").GetString() == email);
 
     private static JsonElement Card(Payload dashboard, string email) => Card(dashboard.Element, email);
+
+    private static string? SetupOf(Payload dashboard)
+    {
+        JsonElement setup = dashboard.Element.GetProperty("setup");
+        return setup.ValueKind == JsonValueKind.Null ? null : setup.GetString();
+    }
 
     private static async Task<Payload> DashboardAsync(AppFactory factory)
     {
