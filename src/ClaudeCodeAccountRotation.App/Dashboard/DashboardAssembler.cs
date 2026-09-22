@@ -3,6 +3,7 @@ using System.Text;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.App.Switching;
+using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Ports;
@@ -39,8 +40,22 @@ internal sealed partial class DashboardAssembler(
     WslSwitch coordinator,
     SwitchOptions options,
     TimeProvider timeProvider,
+    IClaudeCliAuthStatus authStatus,
     ILogger<DashboardAssembler> logger)
 {
+    /// <summary>
+    /// The live e-mail whose adopt-live seat was already judged, and whether
+    /// that judgment was a refusal. One reference, swapped whole, so a poll
+    /// cannot pair one e-mail with another poll's verdict.
+    /// </summary>
+    private LiveSeatJudgment? _liveSeatJudgment;
+
+    private const string AdoptSentence = "Click Adopt to put the live account on the roster.";
+
+    private const string LoginSentence = "Click Login on the card that needs a login.";
+
+    private const string AddSentence = "Use Add an account, then Login.";
+
     /// <summary>The roster entry as the page reads it.</summary>
     public static RosterEntryView? View(RosterEntry? entry) => entry is null
         ? null
@@ -180,10 +195,78 @@ internal sealed partial class DashboardAssembler(
             new LiveAccountView(liveEmail?.Value, livePair is not null, livePair?.Fingerprint.Sha256Hex[..12]),
             cards,
             published.LastReconciliation?.Banner,
+            await SetupSentenceAsync(cards, liveAccount, cancellationToken),
             warnings,
             capturedAt,
             Pass(capturedAt));
     }
+
+    /// <summary>
+    /// The first-run sentence, or null once the roster holds an account the
+    /// operator can use: one that is not paused and is either live or already
+    /// has credentials. Adopt, then Login, then Add, in that order, because
+    /// the machine is usually already logged in and Adopt is the step that
+    /// ends that. A live seat adopt-live would refuse as not Max is not
+    /// offered Adopt; the sentence falls through to Login or to Add.
+    /// </summary>
+    private async Task<string?> SetupSentenceAsync(
+        List<AccountCardView> cards,
+        OAuthAccountBlock? liveAccount,
+        CancellationToken cancellationToken)
+    {
+        if (cards.Exists(static card => card.Roster is { Paused: false } && (card.IsLive || card.HasCredentials)))
+        {
+            return null;
+        }
+
+        if (liveAccount is OAuthAccountBlock liveBlock
+            && liveBlock.Email is AccountEmail live
+            && cards.Exists(static card => card.IsLive && card.Roster is null)
+            && !await LiveSeatRefusedAsync(liveBlock, live, cancellationToken))
+        {
+            return AdoptSentence;
+        }
+
+        if (cards.Exists(static card => card.Roster is not null && !card.IsLive && !card.HeldAway && !card.HasCredentials))
+        {
+            return LoginSentence;
+        }
+
+        return AddSentence;
+    }
+
+    /// <summary>
+    /// Whether adopt-live would answer 409 for this live seat. The account
+    /// block can admit a Max tier and can never refuse one, which is the
+    /// admission rule the adopt route already uses, so the CLI is asked only
+    /// when the block does not already admit. A judgment is remembered for
+    /// that e-mail: a Team or Enterprise seat stays refused, and the
+    /// ten-second poll must not spawn the CLI to relearn it.
+    /// </summary>
+    private async Task<bool> LiveSeatRefusedAsync(
+        OAuthAccountBlock liveAccount,
+        AccountEmail live,
+        CancellationToken cancellationToken)
+    {
+        if (MaxTierAdmission.Evaluate(null, liveAccount).Verdict == MaxTierVerdict.Admitted)
+        {
+            return false;
+        }
+
+        LiveSeatJudgment? judged = _liveSeatJudgment;
+        if (judged is not null && string.Equals(judged.Email, live.Value, StringComparison.Ordinal))
+        {
+            return judged.Refused;
+        }
+
+        Result<ClaudeAuthStatus, string> status = await authStatus.ReadAsync(options.LiveConfigDirectory, cancellationToken);
+        bool refused = MaxTierAdmission.Evaluate(status.IsSuccess ? status.Value : null, liveAccount).Verdict == MaxTierVerdict.Refused;
+        _liveSeatJudgment = new LiveSeatJudgment(live.Value, refused);
+        return refused;
+    }
+
+    /// <summary>One live e-mail and the adopt-live refusal already read for it.</summary>
+    private sealed record LiveSeatJudgment(string Email, bool Refused);
 
     /// <summary>
     /// One card, whichever of the three sources it came from, beside the standing
