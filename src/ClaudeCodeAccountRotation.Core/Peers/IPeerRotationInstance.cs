@@ -27,9 +27,11 @@ namespace ClaudeCodeAccountRotation.Core.Peers;
 /// </param>
 /// <param name="Fingerprint">
 /// The pair this transaction is about, as the leader last read it. For an
-/// import it is what the stage must read back as; for a release it is the pair
-/// the leader expects that side to be live on, and a side that has rotated or
-/// switched since refuses rather than exporting a pair nobody planned to park.
+/// import it is what the stage must read back as. For a release it is the
+/// pair the leader last saw live on that side. A side that has since
+/// switched to another account refuses before exporting. A side whose live
+/// pair has rotated exports the pair it holds, and the answer names that
+/// fingerprint so the leader parks it.
 /// </param>
 public sealed record ImportRequest(
     AccountEmail Email,

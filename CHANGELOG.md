@@ -230,6 +230,12 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- A release whose live pair rotated before export parks the pair the follower actually holds.
+  The follower exports that pair and names its fingerprint, and the leader parks the verified
+  fingerprint into the slot. A re-issued release still matches that completed record by the
+  fingerprint the request named, so a leader whose journal was lost is answered from the record
+  rather than told there is nothing to hand back. A rotation after export, while the release is
+  stopped at Exported, still unwinds and does not park the pre-rotation export (#83).
 - A side row names the account that side holds, alias first the way a card does (#86): `holding`
   plus the alias and the address when the roster has an alias, the address alone when it does not,
   and `holding nothing` only when that side answered and holds none. An offline side whose

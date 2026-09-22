@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
@@ -146,18 +147,77 @@ public sealed class FollowerReleaseTests : IDisposable
     }
 
     [Fact]
-    public async Task AReleaseWhoseLivePairRotatedSinceThePlanIsRefusedBeforeAnythingIsExported()
+    public async Task AReleaseWhoseLivePairRotatedSinceThePlanExportsThePairThisSideHolds()
     {
-        await _roots.WriteLiveAsync(HeldEmail, HeldToken, Token);
+        RefreshTokenFingerprint rotated = await _roots.WriteLiveAsync(HeldEmail, "refresh-rotated", Token);
+        var planned = RefreshTokenFingerprint.FromRefreshToken(HeldToken);
         using FollowerImport follower = _roots.Follower();
 
         Result<ImportAnswer, string> answer = await follower.ImportAsync(
-            _roots.ReleaseRequest(HeldEmail, RefreshTokenFingerprint.FromRefreshToken("refresh-rotated")),
+            _roots.ReleaseRequest(HeldEmail, planned),
             Token);
 
-        answer.IsFailure.ShouldBeTrue();
-        answer.Error.ShouldContain("rotated");
-        File.Exists(_roots.ExportPath(HeldEmail)).ShouldBeFalse();
+        answer.IsSuccess.ShouldBeTrue(answer.IsFailure ? answer.Error : null);
+        answer.Value.ExportedFingerprint.ShouldBe(rotated);
+        answer.Value.Outgoing?.Value.ShouldBe(HeldEmail);
+        // F4 has run and F5 has not: the live file still holds the rotated pair
+        // until the existing commit path removes it.
+        (await FollowerRoots.FingerprintOfAsync(_roots.LivePath, Token)).ShouldBe(rotated);
+        (await FollowerRoots.FingerprintOfAsync(_roots.ExportPath(HeldEmail), Token)).ShouldBe(rotated);
+        File.Exists(_roots.StagingPath).ShouldBeFalse();
+        ImportJournalEntry exported = (await _roots.Journal().ReadOpenAsync(Token))!;
+        exported.StepReached.ShouldBe(ImportStep.Exported);
+        exported.IsRelease.ShouldBeTrue();
+        exported.OutgoingFingerprint.ShouldBe(rotated);
+        exported.RequestedFingerprint.ShouldBe(planned);
+
+        // The existing commit path is what removes the live file. The export stays
+        // until the leader parks it, so this fingerprint has one non-staging copy.
+        Result<ImportResult, string> committed = await follower.CommitAsync(new AccountEmail(HeldEmail), Token);
+
+        committed.IsSuccess.ShouldBeTrue(committed.IsFailure ? committed.Error : null);
+        committed.Value.OutgoingFingerprint.ShouldBe(rotated);
+        File.Exists(_roots.LivePath).ShouldBeFalse();
+        (await FollowerRoots.FingerprintOfAsync(_roots.ExportPath(HeldEmail), Token)).ShouldBe(rotated);
+        (await _roots.NonStagingFilesHoldingAsync(rotated, Token)).Count.ShouldBe(1);
+        (await _roots.NonStagingFilesHoldingAsync(planned, Token)).Count.ShouldBe(0);
+
+        // The same plan, asked again after the live file is gone. The record is
+        // keyed on the fingerprint the request named, and it hands back the pair
+        // that actually left. A different fingerprint is a different transaction.
+        Result<ImportAnswer, string> again = await follower.ImportAsync(_roots.ReleaseRequest(HeldEmail, planned), Token);
+        again.IsSuccess.ShouldBeTrue(again.IsFailure ? again.Error : null);
+        again.Value.AlreadyImported.ShouldBeTrue();
+        again.Value.ExportedFingerprint.ShouldBe(rotated);
+        again.Value.Result.ShouldNotBeNull().OutgoingFingerprint.ShouldBe(rotated);
+
+        Result<ImportAnswer, string> other = await follower.ImportAsync(
+            _roots.ReleaseRequest(HeldEmail, RefreshTokenFingerprint.FromRefreshToken("refresh-other")),
+            Token);
+        other.IsFailure.ShouldBeTrue();
+        other.Error.ShouldContain("nothing to hand back");
+    }
+
+    [Fact]
+    public async Task AReleaseRecordThatPredatesTheRequestFingerprintStillAnswersTheSamePlan()
+    {
+        // Records written before the split omit RequestedFingerprint. The pair
+        // that left was the one the request named, and that is what a re-issue
+        // still has to match.
+        RefreshTokenFingerprint fa = await _roots.WriteLiveAsync(HeldEmail, HeldToken, Token);
+        using FollowerImport follower = _roots.Follower();
+        await follower.ImportAsync(_roots.ReleaseRequest(HeldEmail, fa), Token);
+        await follower.CommitAsync(new AccountEmail(HeldEmail), Token);
+        string path = Path.Combine(_roots.AppData, "state", "last-import.json");
+        JsonObject document = JsonNode.Parse(await File.ReadAllTextAsync(path, Token))!.AsObject();
+        document.Remove("RequestedFingerprint").ShouldBeTrue();
+        await File.WriteAllTextAsync(path, document.ToJsonString(), Token);
+
+        Result<ImportAnswer, string> again = await follower.ImportAsync(_roots.ReleaseRequest(HeldEmail, fa), Token);
+
+        again.IsSuccess.ShouldBeTrue(again.IsFailure ? again.Error : null);
+        again.Value.AlreadyImported.ShouldBeTrue();
+        again.Value.ExportedFingerprint.ShouldBe(fa);
     }
 
     [Fact]

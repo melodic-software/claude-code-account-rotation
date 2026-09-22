@@ -428,9 +428,11 @@ internal sealed partial class FollowerImport : IDisposable
 
     /// <summary>
     /// Whether this side may give up the pair a release names, or why not.
-    /// Three refusals, all cheaper than a hand-off that moves the wrong pair:
+    /// Three refusals, all cheaper than a hand-off that moves the wrong account:
     /// this side holds nothing, it holds a pair the state file cannot name, or
-    /// it holds some pair other than the one the leader planned to park.
+    /// it is live on an account other than the one the release named. A live
+    /// pair that rotated since the plan is exported as this side holds it. The
+    /// leader parks the fingerprint the gate verified.
     /// </summary>
     private static string? Releasable(ImportRequest request, CredentialPair? live, OAuthAccountBlock? account) => live switch
     {
@@ -439,9 +441,6 @@ internal sealed partial class FollowerImport : IDisposable
             "not released: the live pair is here but the state file names no account for it, so nothing can say what would be leaving",
         _ when account.Email != request.Email =>
             "not released: this side is live on " + account.Email.Value + ", not " + request.Email.Value,
-        _ when live.Fingerprint != request.Fingerprint =>
-            "not released: the live pair reads " + live.Fingerprint.Sha256Hex[..12] + ", not the " + request.Fingerprint.Sha256Hex[..12]
-                + " the release named; a session rotated it, so nothing was exported",
         _ => null,
     };
 
@@ -465,11 +464,16 @@ internal sealed partial class FollowerImport : IDisposable
             return null;
         }
 
-        // For an import the fingerprint identifies the pair that arrived; for a
-        // release it identifies the pair that left. Either way it is the one
-        // the request named, so a re-issue for a different pair of the same
-        // account is a new transaction rather than an answered one.
-        RefreshTokenFingerprint? recorded = last.IsRelease ? last.OutgoingFingerprint : last.IncomingFingerprint;
+        // For an import the fingerprint identifies the pair that arrived. For a
+        // release it identifies the pair the request named, which is not always
+        // the pair that left: a rotation before export parks the live pair and
+        // still has to answer a re-issue of the same plan. Matching the pair
+        // that left would miss this record, and the next attempt would refuse
+        // with nothing to hand back because the live file is already gone.
+        // A record from before that split stored only the pair that left.
+        RefreshTokenFingerprint? recorded = last.IsRelease
+            ? last.RequestedFingerprint ?? last.OutgoingFingerprint
+            : last.IncomingFingerprint;
         return recorded == request.Fingerprint
             ? new ImportResult(last.Outgoing, last.OutgoingFingerprint, last.OutgoingAccount, AlreadyImported: true)
             : null;
@@ -515,12 +519,13 @@ internal sealed partial class FollowerImport : IDisposable
                     "not imported: the live pair is here but the state file names no account for it, so nothing can say what would be leaving");
             }
 
-            // A release names the pair it expects to take, and refuses rather
-            // than exporting one nobody planned to park: this side may have
-            // rotated its live pair, or been switched onto another account,
-            // between the leader's plan and this call. The import path does the
-            // same comparison after the export, at F5; a release can do it
-            // before, because the pair it is naming is the one already here.
+            // A release refuses before any export when this side holds nothing,
+            // cannot name the live pair, or is live on a different account. A
+            // pair that rotated since the plan is exported as this side holds
+            // it, and the leader parks the fingerprint the gate verified. A
+            // rotation after that export, while the release is stopped at
+            // Exported, is still unwound: F5 re-reads the live file and
+            // requires it to still be the exported pair before RemoveLive.
             if (request.IsRelease && Releasable(request, live, outgoingAccount) is string unreleasable)
             {
                 return Result<ImportAnswer, string>.Failure(unreleasable);
@@ -540,7 +545,8 @@ internal sealed partial class FollowerImport : IDisposable
                 request.Account,
                 hold.OutgoingAccount,
                 ImportStep.Planned,
-                hold.StartedAt);
+                hold.StartedAt,
+                request.Fingerprint);
             // The completed-transaction record goes before the new one is
             // written. F1 has already decided this is not a replay — the
             // account, the direction and the fingerprint all had to match for
@@ -737,7 +743,8 @@ internal sealed partial class FollowerImport : IDisposable
                 entry.Outgoing,
                 entry.OutgoingFingerprint,
                 entry.OutgoingAccount,
-                timeProvider.GetUtcNow()),
+                timeProvider.GetUtcNow(),
+                entry.RequestedFingerprint),
             cancellationToken);
         await journal.ClearAsync(cancellationToken);
         pairs.DeleteStaging();
