@@ -362,7 +362,7 @@ internal static class AppComposition
                 // written for rather than the client's generic one.
                 client.Timeout = WslSwitch.ImportTimeout + TimeSpan.FromSeconds(30);
             }).AddHttpMessageHandler(provider => new FollowerLoopbackTokenHandler(
-                new WslFollowerInstanceTokenSource(peer.Launch),
+                new WslFollowerInstanceTokenSource(peer),
                 provider.GetRequiredService<ILogger<FollowerLoopbackTokenHandler>>()));
         }
 

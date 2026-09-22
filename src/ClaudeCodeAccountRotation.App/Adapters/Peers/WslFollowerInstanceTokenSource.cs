@@ -10,11 +10,13 @@ namespace ClaudeCodeAccountRotation.App.Adapters.Peers;
 
 /// <summary>
 /// Line 2 of the follower's <c>instance.url</c>, read as the follower user.
+/// The user is the launch record when the page starts the follower, and the
+/// peer entry's own distribution and user when the operator started it.
 /// The path is an argument, never a shell string, and a Linux path stays
 /// slash-separated. <see cref="Path.Combine(string, string)"/> is the wrong
 /// tool for that path: on Windows it would insert backslashes.
 /// </summary>
-internal sealed class WslFollowerInstanceTokenSource(PeerLaunch? launch) : IFollowerInstanceTokenReader
+internal sealed class WslFollowerInstanceTokenSource(PeerConfiguration peer) : IFollowerInstanceTokenReader
 {
     internal const string UnavailableReason = "the follower instance token is unavailable";
 
@@ -24,19 +26,19 @@ internal sealed class WslFollowerInstanceTokenSource(PeerLaunch? launch) : IFoll
 
     public async Task<Result<string, string>> ReadAsync(CancellationToken cancellationToken)
     {
-        if (launch is null)
+        if (peer.FollowerIdentity is not PeerFollowerIdentity identity)
         {
             return Result<string, string>.Failure(UnavailableReason);
         }
 
-        Result<string, string> directory = await AppDataDirectoryAsync(launch, cancellationToken);
+        Result<string, string> directory = await AppDataDirectoryAsync(identity, cancellationToken);
         if (directory.IsFailure)
         {
             return directory;
         }
 
         Result<CommandOutput, string> file = await RunAsync(
-            CatArguments(launch.Distribution, launch.User, InstanceUrlPath(directory.Value)),
+            CatArguments(identity.Distribution, identity.User, InstanceUrlPath(directory.Value)),
             cancellationToken);
         if (file.IsFailure || file.Value.ExitCode != 0)
         {
@@ -90,6 +92,17 @@ internal sealed class WslFollowerInstanceTokenSource(PeerLaunch? launch) : IFoll
     }
 
     /// <summary>
+    /// <c>config.json</c> inside a Linux app-data directory. The follower loads
+    /// this file when no configuration path was named, and the file may point
+    /// <c>appDataDirectory</c> somewhere else.
+    /// </summary>
+    internal static string DefaultConfigPath(string appDataDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(appDataDirectory);
+        return TrimTrailingSlash(appDataDirectory) + "/config.json";
+    }
+
+    /// <summary>
     /// The directory the follower uses when its configuration does not name one:
     /// <c>XDG_DATA_HOME</c> when that value is absolute, otherwise the home
     /// directory's local share. Same rule as the follower's own default.
@@ -105,15 +118,51 @@ internal sealed class WslFollowerInstanceTokenSource(PeerLaunch? launch) : IFoll
         return TrimTrailingSlash(home) + "/.local/share/" + ConfigurationDefaults.ProductToken;
     }
 
-    private static async Task<Result<string, string>> AppDataDirectoryAsync(PeerLaunch peerLaunch, CancellationToken cancellationToken)
+    /// <summary>
+    /// The directory the follower's <c>instance.url</c> lives in. An explicit
+    /// configuration path is read as named: its <c>appDataDirectory</c> wins,
+    /// and a file that names none falls back to the default directory. With
+    /// no path, that default directory is resolved first and its
+    /// <c>config.json</c> is read, because the file may name a different
+    /// directory. A missing, unreadable, or non-overriding default file keeps
+    /// the default directory.
+    /// </summary>
+    private static async Task<Result<string, string>> AppDataDirectoryAsync(PeerFollowerIdentity identity, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(peerLaunch.ConfigPath))
+        if (!string.IsNullOrWhiteSpace(identity.ConfigPath))
         {
-            return await DefaultDirectoryAsync(peerLaunch, cancellationToken);
+            Result<string, string> configured = await ReadNamedDirectoryAsync(identity, identity.ConfigPath, cancellationToken);
+            if (configured.IsFailure)
+            {
+                return configured;
+            }
+
+            return configured.Value.Length == 0
+                ? await DefaultDirectoryAsync(identity, cancellationToken)
+                : configured;
         }
 
+        Result<string, string> fallback = await DefaultDirectoryAsync(identity, cancellationToken);
+        if (fallback.IsFailure)
+        {
+            return fallback;
+        }
+
+        Result<string, string> fromDefaultFile = await ReadNamedDirectoryAsync(identity, DefaultConfigPath(fallback.Value), cancellationToken);
+        return fromDefaultFile.IsSuccess && fromDefaultFile.Value.Length > 0
+            ? fromDefaultFile
+            : fallback;
+    }
+
+    /// <summary>
+    /// The root <c>appDataDirectory</c> named in one configuration file.
+    /// Success with an empty string means the file parsed and did not name
+    /// one. Failure means the file could not be read or would not parse.
+    /// </summary>
+    private static async Task<Result<string, string>> ReadNamedDirectoryAsync(PeerFollowerIdentity identity, string configPath, CancellationToken cancellationToken)
+    {
         Result<CommandOutput, string> config = await RunAsync(
-            CatArguments(peerLaunch.Distribution, peerLaunch.User, peerLaunch.ConfigPath),
+            CatArguments(identity.Distribution, identity.User, configPath),
             cancellationToken);
         if (config.IsFailure || config.Value.ExitCode != 0)
         {
@@ -125,20 +174,18 @@ internal sealed class WslFollowerInstanceTokenSource(PeerLaunch? launch) : IFoll
             return Result<string, string>.Failure(UnreadableReason);
         }
 
-        return string.IsNullOrWhiteSpace(configured)
-            ? await DefaultDirectoryAsync(peerLaunch, cancellationToken)
-            : Result<string, string>.Success(configured);
+        return Result<string, string>.Success(configured ?? string.Empty);
     }
 
-    private static async Task<Result<string, string>> DefaultDirectoryAsync(PeerLaunch peerLaunch, CancellationToken cancellationToken)
+    private static async Task<Result<string, string>> DefaultDirectoryAsync(PeerFollowerIdentity identity, CancellationToken cancellationToken)
     {
-        Result<string, string> home = await PrintEnvAsync(peerLaunch, "HOME", required: true, cancellationToken);
+        Result<string, string> home = await PrintEnvAsync(identity, "HOME", required: true, cancellationToken);
         if (home.IsFailure)
         {
             return home;
         }
 
-        Result<string, string> xdg = await PrintEnvAsync(peerLaunch, "XDG_DATA_HOME", required: false, cancellationToken);
+        Result<string, string> xdg = await PrintEnvAsync(identity, "XDG_DATA_HOME", required: false, cancellationToken);
         if (xdg.IsFailure)
         {
             return xdg;
@@ -147,9 +194,9 @@ internal sealed class WslFollowerInstanceTokenSource(PeerLaunch? launch) : IFoll
         return Result<string, string>.Success(DefaultAppDataDirectory(xdg.Value, home.Value));
     }
 
-    private static async Task<Result<string, string>> PrintEnvAsync(PeerLaunch peerLaunch, string name, bool required, CancellationToken cancellationToken)
+    private static async Task<Result<string, string>> PrintEnvAsync(PeerFollowerIdentity identity, string name, bool required, CancellationToken cancellationToken)
     {
-        Result<CommandOutput, string> printed = await RunAsync(PrintEnvArguments(peerLaunch.Distribution, peerLaunch.User, name), cancellationToken);
+        Result<CommandOutput, string> printed = await RunAsync(PrintEnvArguments(identity.Distribution, identity.User, name), cancellationToken);
         if (printed.IsFailure)
         {
             return Result<string, string>.Failure(UnreadableReason);

@@ -2,6 +2,8 @@ using System.Net;
 using System.Text;
 using ClaudeCodeAccountRotation.App.Adapters.Peers;
 using ClaudeCodeAccountRotation.Core;
+using ClaudeCodeAccountRotation.Core.Configuration;
+using ClaudeCodeAccountRotation.Core.Switching;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Adapters;
 
@@ -49,10 +51,14 @@ public sealed class FollowerLoopbackTokenHandlerTests
     }
 
     [Fact]
-    public async Task AMissingLaunchFailsClosedWithoutCallingTheFollower()
+    public async Task AMissingIdentityFailsClosedWithoutCallingTheFollower()
     {
-        WslFollowerInstanceTokenSource source = new(launch: null);
-        Result<string, string> read = await source.ReadAsync(TestContext.Current.CancellationToken);
+        PeerConfiguration unnamed = new(SideName.Wsl, new Uri("http://127.0.0.1:48212"), "/mnt/c/store");
+        PeerConfiguration distributionOnly = unnamed with { Distribution = "Some-Distribution" };
+        PeerConfiguration userOnly = unnamed with { User = "someone" };
+        Result<string, string> unnamedRead = await new WslFollowerInstanceTokenSource(unnamed).ReadAsync(TestContext.Current.CancellationToken);
+        Result<string, string> distributionRead = await new WslFollowerInstanceTokenSource(distributionOnly).ReadAsync(TestContext.Current.CancellationToken);
+        Result<string, string> userRead = await new WslFollowerInstanceTokenSource(userOnly).ReadAsync(TestContext.Current.CancellationToken);
         RecordingLogger<FollowerLoopbackTokenHandler> logger = new();
         RecordingInner inner = new(HttpStatusCode.OK);
         using HttpClient client = Client(new FailingReader(), logger, inner);
@@ -60,13 +66,41 @@ public sealed class FollowerLoopbackTokenHandlerTests
         using HttpResponseMessage response = await client.GetAsync(new Uri("http://127.0.0.1/api/dashboard"), TestContext.Current.CancellationToken);
         string body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
 
-        read.IsFailure.ShouldBeTrue();
-        read.Error.ShouldBe(WslFollowerInstanceTokenSource.UnavailableReason);
+        unnamed.FollowerIdentity.ShouldBeNull();
+        distributionOnly.FollowerIdentity.ShouldBeNull();
+        userOnly.FollowerIdentity.ShouldBeNull();
+        unnamedRead.IsFailure.ShouldBeTrue();
+        unnamedRead.Error.ShouldBe(WslFollowerInstanceTokenSource.UnavailableReason);
+        distributionRead.Error.ShouldBe(WslFollowerInstanceTokenSource.UnavailableReason);
+        userRead.Error.ShouldBe(WslFollowerInstanceTokenSource.UnavailableReason);
+        unnamedRead.Error.ShouldNotContain("instance.url");
         response.StatusCode.ShouldBe(HttpStatusCode.ServiceUnavailable);
         body.ShouldBe("{\"error\":\"" + WslFollowerInstanceTokenSource.UnavailableReason + "\"}");
         body.ShouldNotContain("instance.url");
         inner.Calls.ShouldBe(0);
         string.Join('\n', logger.Lines).ShouldNotContain("token-a");
+    }
+
+    [Fact]
+    public void PeerLevelDistributionAndUserAreAcceptedAsIdentity()
+    {
+        PeerConfiguration manual = new(
+            SideName.Wsl,
+            new Uri("http://127.0.0.1:48212"),
+            "/mnt/c/store",
+            Distribution: "Some-Distribution",
+            User: "someone",
+            ConfigPath: "/var/lib/follower/config.json");
+        PeerFollowerIdentity identity = new("Some-Distribution", "someone", "/var/lib/follower/config.json");
+        const string instancePath = "/var/lib/follower/instance.url";
+
+        manual.FollowerIdentity.ShouldBe(identity);
+        IReadOnlyList<string> cat = WslFollowerInstanceTokenSource.CatArguments(identity.Distribution, identity.User, instancePath);
+        cat.ShouldBe(["-d", "Some-Distribution", "-u", "someone", "--exec", "cat", "--", instancePath]);
+        string.Join(' ', cat).ShouldNotContain("\\");
+        WslFollowerInstanceTokenSource.PrintEnvArguments(identity.Distribution, identity.User, "HOME")
+            .ShouldBe(["-d", "Some-Distribution", "-u", "someone", "--exec", "printenv", "--", "HOME"]);
+        WslFollowerInstanceTokenSource.InstanceUrlPath("/var/lib/follower").ShouldBe(instancePath);
     }
 
     [Fact]
@@ -88,6 +122,9 @@ public sealed class FollowerLoopbackTokenHandlerTests
             .ShouldBe("/opt/follower-home/.local/share/claude-code-account-rotation");
         WslFollowerInstanceTokenSource.DefaultAppDataDirectory(null, "/opt/follower-home")
             .ShouldBe("/opt/follower-home/.local/share/claude-code-account-rotation");
+        WslFollowerInstanceTokenSource.DefaultConfigPath("/var/lib/follower").ShouldBe("/var/lib/follower/config.json");
+        WslFollowerInstanceTokenSource.DefaultConfigPath("/var/lib/follower/").ShouldBe("/var/lib/follower/config.json");
+        WslFollowerInstanceTokenSource.DefaultConfigPath("/xdg/claude-code-account-rotation").ShouldNotContain("\\");
     }
 
     [Fact]

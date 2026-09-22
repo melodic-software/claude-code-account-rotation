@@ -103,6 +103,9 @@ internal static class ConfigurationFile
                 ["side"] = peer.Side.Value,
                 ["baseAddress"] = peer.BaseAddress.ToString(),
                 ["storePathFromPeer"] = peer.StorePathFromPeer,
+                ["distribution"] = peer.Distribution,
+                ["user"] = peer.User,
+                ["configPath"] = peer.ConfigPath,
                 ["launch"] = peer.Launch is null ? null : new JsonObject
                 {
                     ["distribution"] = peer.Launch.Distribution,
@@ -168,6 +171,12 @@ internal static class ConfigurationFile
     /// dropped rather than failing the whole file, because the alternative is a
     /// tool that will not start over a key that only disables one lane. The
     /// dropped entry shows up as a side that is simply not on the page.
+    /// <para>
+    /// <c>distribution</c>, <c>user</c>, and <c>configPath</c> sit beside
+    /// <c>launch</c>. They name a follower the operator started. A distribution
+    /// without a user, or a user without a distribution, is stored as neither,
+    /// and the entry stays. <c>configPath</c> is kept either way.
+    /// </para>
     /// </summary>
     private static List<PeerConfiguration>? Peers(JsonObject raw)
     {
@@ -189,10 +198,29 @@ internal static class ConfigurationFile
                 continue;
             }
 
-            peers.Add(new PeerConfiguration(new SideName(side), baseAddress, storePath, Launch(peer)));
+            (string? distribution, string? user) = DistributionAndUser(peer);
+            peers.Add(new PeerConfiguration(
+                new SideName(side),
+                baseAddress,
+                storePath,
+                Launch(peer),
+                distribution,
+                user,
+                Text(peer, "configPath")));
         }
 
         return peers;
+    }
+
+    /// <summary>
+    /// Peer-level <c>distribution</c> and <c>user</c>. Either one without the
+    /// other is neither: the entry stays, and nothing is recorded as identity.
+    /// </summary>
+    private static (string? Distribution, string? User) DistributionAndUser(JsonObject peer)
+    {
+        string? distribution = Text(peer, "distribution");
+        string? user = Text(peer, "user");
+        return distribution is not null && user is not null ? (distribution, user) : (null, null);
     }
 
     /// <summary>
