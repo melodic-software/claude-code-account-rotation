@@ -90,6 +90,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- `POST /api/shutdown` stops the leader or the follower with exit code 0, and refuses while a
+  switch or import journal is open (#91).
 - A machine with nothing configured writes `config.json` on first run from the embedded
   `config.template.json`, filling every path from the user profile at runtime, and prints
   that path (#30). The template itself carries no drive letter and no user path.
