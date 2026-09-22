@@ -8,6 +8,12 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- A rostered card is renamed by clicking its heading, which edits the display name in place, and
+  the Edit panel carries notes so a warning has a home other than the name (#48). Leaving that
+  field by pressing Switch, Refresh, Pause, Remove, or Edit runs that control; the rename is
+  saved after the click, and opening Edit does not rebuild the card. The heading stays
+  the display name with the address on the line beneath. An account with no alias shows the local
+  part of the address as that heading and still shows the full address beneath it.
 - The README now says how to move from one release to the next and how to uninstall (#36, #37).
   An upgrade disables the logon task from melodic-software/provisioning#552 when that task is
   installed, stops the leader and the follower, replaces both release binaries after their

@@ -72,6 +72,46 @@ header h1 { margin: 0; font-size: 1.6rem; letter-spacing: 0.01em; }
 
 .card.live { border-color: var(--live); box-shadow: 0 0 0 2px color-mix(in srgb, var(--live) 30%, transparent); }
 .card h2 { margin: 0; font-size: 1.05rem; word-break: break-all; }
+/* The heading is the display name and the control that renames it, so it must
+   not pick up the accent button chrome. The word sits beside the name, on the
+   card, because the disclosure under Remove is where rename used to hide. */
+.card h2 button.rename {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.card h2 button.rename .display-name { min-width: 0; text-align: left; }
+.card h2 button.rename:hover .display-name,
+.card h2 button.rename:focus-visible .display-name { text-decoration: underline; }
+.card h2 button.rename .rename-label {
+  flex: none;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 400;
+  white-space: nowrap;
+  word-break: normal;
+}
+.card h2 input.rename {
+  width: 100%;
+  margin: 0;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--field);
+  color: var(--ink);
+  font: inherit;
+}
 /* An address has no spaces to wrap at and a card is 280px wide. */
 .address { margin: 0; color: var(--muted); font-size: 0.85rem; word-break: break-all; }
 
@@ -164,7 +204,8 @@ button.danger { background: transparent; border-color: var(--error); color: var(
 .roster-form .field > span { font-size: 0.85rem; color: var(--muted); }
 /* More specific than .field's own display, so a hidden row is really gone. */
 .roster-form .field[hidden] { display: none; }
-.roster-form input, .roster-form select {
+.roster-form textarea { resize: vertical; }
+.roster-form input, .roster-form select, .roster-form textarea {
   width: 100%;
   padding: 0.45rem 0.6rem;
   border-radius: 6px;
