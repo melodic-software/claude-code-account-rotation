@@ -8,6 +8,14 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- The README now says how to move from one release to the next and how to uninstall (#36, #37).
+  An upgrade disables the logon task from melodic-software/provisioning#552 when that task is
+  installed, stops the leader and the follower, replaces both release binaries after their
+  SHA256SUMS check, and leaves `config.json`, `roster.json`, and `state/live-owner.json`
+  untouched. Uninstall starts each side first so an open journal can be reconciled and a
+  recovery file can be restored, even when no card warned about it, then removes each side's
+  app data and the installed executables, and leaves the profiles root, the live directory,
+  and Claude Code's state file.
 - A card for an account whose hand-off is in flight says which way its own pair is going:
   `in transit from wsl` for one coming back to the store, `in transit to wsl` for one going out,
   read off the suffix of its file in the mailbox rather than off the holder record, which names the
