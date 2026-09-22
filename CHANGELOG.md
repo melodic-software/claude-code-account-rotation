@@ -289,7 +289,9 @@ All notable changes to this project are documented in this file. The format foll
   with no backup deletes the destination before the new file is renamed, so a sharing failure can
   leave the state file missing once the retry budget runs out. A destination another process holds
   is retried for those same two seconds, including the access-denied result that move returns (#9).
-- Startup reconciliation logs a busy mutation gate and lets the host start. A torn parked credential
+- Startup reconciliation logs a busy mutation gate and lets the host start. The recovery sweep
+  takes that same gate, and a busy one leaves a stranded pair where it is instead of writing it
+  beside the mutation that holds the gate. A torn parked credential
   file is skipped and left in place during that scan, so it no longer fails host startup. A torn
   live credential file no longer fails `GET /api/dashboard`: the live card comes back without a
   login expiry. An unreadable parked file warns once per folder, not on every ten-second poll (#9).

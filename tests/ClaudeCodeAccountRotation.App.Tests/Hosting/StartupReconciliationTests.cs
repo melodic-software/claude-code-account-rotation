@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.App.Switching;
+using ClaudeCodeAccountRotation.Core.Identity;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -91,6 +92,53 @@ public sealed class StartupReconciliationTests
 
             health.IsSuccessStatusCode.ShouldBeTrue();
             factory.Logs.Lines.ShouldContain(line => line.Contains("startup reconciliation did not run", StringComparison.Ordinal));
+        }
+        finally
+        {
+            permit.Value?.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task AHeldMutationGateLeavesAStrandedPairWhereItIs()
+    {
+        // Recovery compares a fingerprint and then writes the parked pair. Doing
+        // that while another mutation holds the gate can put a pair back into a
+        // folder that mutation just emptied, so the sweep waits and, at startup,
+        // leaves the file for a later pass.
+        await using AppFactory factory = new();
+        string folder = await factory.ParkedProfileAsync("a@example.com", "refresh-stranded", TestContext.Current.CancellationToken);
+        string recovery = Path.Combine(factory.AppData, "recovery");
+        Directory.CreateDirectory(recovery);
+        JsonObject envelope = new()
+        {
+            ["folder"] = folder,
+            ["expectedFingerprint"] = RefreshTokenFingerprint.FromRefreshToken("refresh-stranded").Sha256Hex,
+            ["pair"] = CredentialFiles.Shape("refresh-rotated"),
+        };
+        string recoveryFile = Path.Combine(recovery, "a@example.com.credentials.json");
+        await File.WriteAllTextAsync(recoveryFile, envelope.ToJsonString(), TestContext.Current.CancellationToken);
+        StrongBox<IDisposable?> permit = new();
+        factory.Overrides = services =>
+        {
+            services.Replace(ServiceDescriptor.Singleton(_ =>
+            {
+                CredentialMutationGate gate = new();
+                permit.Value = gate.AcquireAsync(TimeSpan.Zero, CancellationToken.None).GetAwaiter().GetResult();
+                return gate;
+            }));
+        };
+
+        try
+        {
+            using HttpClient client = factory.CreateClient();
+            HttpResponseMessage health = await client.GetAsync(new Uri("/healthz", UriKind.Relative), TestContext.Current.CancellationToken);
+
+            health.IsSuccessStatusCode.ShouldBeTrue();
+            File.Exists(recoveryFile).ShouldBeTrue();
+            (await File.ReadAllTextAsync(Path.Combine(folder, CredentialFiles.FileName), TestContext.Current.CancellationToken))
+                .ShouldContain("refresh-stranded");
+            factory.Logs.Lines.ShouldContain(line => line.Contains("startup recovery did not run", StringComparison.Ordinal));
         }
         finally
         {

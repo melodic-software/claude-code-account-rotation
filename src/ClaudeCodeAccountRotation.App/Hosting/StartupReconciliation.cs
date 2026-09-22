@@ -17,6 +17,8 @@ internal sealed partial class StartupReconciliation(
     LiveDirectorySwitch executor,
     WslSwitch coordinator,
     RecoveryFiles recovery,
+    CredentialMutationGate gate,
+    SwitchOptions options,
     UsageSnapshotCache cache,
     QuotaState quota,
     DashboardState state,
@@ -72,15 +74,30 @@ internal sealed partial class StartupReconciliation(
 
     /// <summary>
     /// Puts back any credential pair a refresh rotated and could not write, now
-    /// that nothing else is running. Every file is already attempted inside its
-    /// own catch; this outer guard covers everything else, because a tool that
+    /// that nothing else is running. The sweep writes a parked pair after it has
+    /// compared fingerprints, so it takes the same mutation gate as a switch. A
+    /// busy gate is logged and the file stays where it is: applying it beside
+    /// the holder could recreate a pair that holder just moved, or overwrite a
+    /// login it just wrote. Every file is already attempted inside its own
+    /// catch; this outer guard covers everything else, because a tool that
     /// refuses to start over a recovery file would leave the operator with no way
     /// to reach the very page that explains it.
     /// </summary>
     private async Task RestoreStrandedPairsAsync(CancellationToken cancellationToken)
     {
+        IDisposable? permit = null;
         try
         {
+            try
+            {
+                permit = await gate.AcquireAsync(options.MutationGateTimeout, cancellationToken);
+            }
+            catch (TimeoutException)
+            {
+                LogRecoveryDeferred();
+                return;
+            }
+
             await recovery.RestoreAllAsync(cancellationToken);
         }
 #pragma warning disable CA1031 // Do not catch general exception types
@@ -89,6 +106,10 @@ internal sealed partial class StartupReconciliation(
         {
             LogRestoreSweepFailed(exception.GetType().Name);
             LogRestoreSweepFailedDetail(exception);
+        }
+        finally
+        {
+            permit?.Dispose();
         }
     }
 
@@ -132,6 +153,9 @@ internal sealed partial class StartupReconciliation(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "hand-off reconciliation did not run: another credential mutation holds the gate")]
     private partial void LogHandOffSkipped();
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "startup recovery did not run: another credential mutation holds the gate")]
+    private partial void LogRecoveryDeferred();
 
     // The type and the curated reason where the operator will see them, the
     // exception itself at Debug: a stack trace from a startup sweep over the
