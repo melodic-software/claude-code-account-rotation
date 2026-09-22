@@ -2,9 +2,10 @@ name: release
 
 # Publishes the two executables a machine installs: the Windows leader and the
 # linux-x64 follower the WSL side runs (#73 installs the follower from this
-# asset, so a machine never hand-stages a binary), plus the embedded
-# config.template.json. Tag-driven: the assets are built from the tag's own
-# tree and nothing publishes from a branch.
+# asset, so a machine never hand-stages a binary), the wrapper the leader
+# execs in place of that binary, plus the embedded config.template.json.
+# Tag-driven: the assets are built from the tag's own tree and nothing
+# publishes from a branch.
 
 on:
   push:
@@ -50,6 +51,8 @@ jobs:
           cp publish/win-x64/claude-code-account-rotation.exe dist/claude-code-account-rotation-win-x64.exe
           # The same file the executable embeds and writes from on first run.
           cp src/ClaudeCodeAccountRotation.App/config.template.json dist/config.template.json
+          # The leader execs this sibling of the Linux binary, not the binary.
+          cp src/ClaudeCodeAccountRotation.App/follower-log dist/claude-code-account-rotation-follower-log
       # The installer verifies the asset it downloads against this file, so a
       # truncated or substituted download is refused rather than run.
       - name: Checksums

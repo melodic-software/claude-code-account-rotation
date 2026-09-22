@@ -96,6 +96,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- The leader starts the follower through a wrapper which truncates `follower.log` under the
+  follower's app data directory (#92).
 - `POST /api/shutdown` stops the leader or the follower with exit code 0, and refuses while a
   switch or import journal is open (#91).
 - A tag matching `v*` uploads `config.template.json` with the two executables and `SHA256SUMS`

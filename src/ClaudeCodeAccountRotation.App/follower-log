@@ -1,0 +1,83 @@
+#!/bin/sh
+# The leader execs this instead of the follower binary. wsl.exe's stdout is a
+# discarded pty, so the child's stdout and stderr go to
+# <appDataDirectory>/follower.log, truncated on every start. This script
+# writes nothing to that file: it only redirects the child.
+#
+# POSIX sh, because Ubuntu's /bin/sh is dash. The sibling binary is
+# claude-code-account-rotation-linux-x64 when that file sits beside this
+# script, otherwise claude-code-account-rotation for a local build.
+
+set -eu
+
+script_dir=$(dirname -- "$0")
+if [ -f "$script_dir/claude-code-account-rotation-linux-x64" ]; then
+  binary="$script_dir/claude-code-account-rotation-linux-x64"
+else
+  binary="$script_dir/claude-code-account-rotation"
+fi
+
+config=""
+saw_config=0
+take_config=0
+for argument in "$@"; do
+  if [ "$take_config" -eq 1 ]; then
+    config=$argument
+    take_config=0
+    continue
+  fi
+  if [ "$argument" = "--config" ]; then
+    saw_config=1
+    take_config=1
+  fi
+done
+
+if [ "$saw_config" -eq 1 ]; then
+  if [ -z "$config" ]; then
+    printf '%s\n' "follower-log: --config needs a path" >&2
+    exit 1
+  fi
+
+  # The first JSON string for that key. The file the app writes puts the
+  # value on the same line, unescaped. Nothing else from the file is printed.
+  app_data=$(awk '
+    {
+      rest = $0
+      key = "\"appDataDirectory\""
+      while ((i = index(rest, key)) > 0) {
+        rest = substr(rest, i + length(key))
+        if (match(rest, /^[[:space:]]*:[[:space:]]*"[^"]*"/)) {
+          value = substr(rest, RSTART, RLENGTH)
+          sub(/^[[:space:]]*:[[:space:]]*"/, "", value)
+          sub(/"$/, "", value)
+          print value
+          exit
+        }
+      }
+    }
+  ' "$config")
+else
+  xdg=${XDG_DATA_HOME-}
+  case "$xdg" in
+    /*)
+      app_data="$xdg/claude-code-account-rotation"
+      ;;
+    *)
+      app_data="${HOME:?}/.local/share/claude-code-account-rotation"
+      ;;
+  esac
+fi
+
+if [ -z "$app_data" ]; then
+  printf '%s\n' "follower-log: appDataDirectory is not a string" >&2
+  exit 1
+fi
+
+mkdir -p -- "$app_data"
+log="$app_data/follower.log"
+if [ -L "$log" ]; then
+  printf '%s\n' "follower-log: refusing to follow a symlink at follower.log" >&2
+  exit 1
+fi
+
+exec "$binary" "$@" >"$log" 2>&1
