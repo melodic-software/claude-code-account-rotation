@@ -726,11 +726,30 @@ public sealed class ConfigurationTests : IDisposable
         return dashboard.Task.IsCompleted ? await dashboard.Task : null;
     }
 
+    /// <summary>
+    /// Cleanup must unlink a directory symlink and leave the target.
+    /// The same non-recursive remove is what drops a Windows junction;
+    /// a recursive delete walks the junction and fails.
+    /// </summary>
+    [Fact(SkipUnless = nameof(OnUnix), Skip = "Symbolic links are the Unix form of this cleanup")]
+    public void DeleteTreeUnlinksADirectorySymlinkWithoutDeletingItsTarget()
+    {
+        string target = Path.Combine(_root, "link-target");
+        Directory.CreateDirectory(target);
+        string kept = Path.Combine(target, "keep.txt");
+        File.WriteAllText(kept, "keep");
+        string parent = Path.Combine(_root, "link-parent");
+        Directory.CreateDirectory(parent);
+        Directory.CreateSymbolicLink(Path.Combine(parent, "via"), target);
+
+        WindowsJunction.DeleteTree(parent);
+
+        File.Exists(kept).ShouldBeTrue();
+        Directory.Exists(parent).ShouldBeFalse();
+    }
+
     public void Dispose()
     {
-        if (Directory.Exists(_root))
-        {
-            Directory.Delete(_root, recursive: true);
-        }
+        WindowsJunction.DeleteTree(_root);
     }
 }

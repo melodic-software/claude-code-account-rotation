@@ -41,6 +41,72 @@ internal static class WindowsJunction
         }
     }
 
+    /// <summary>
+    /// Deletes <paramref name="path"/> and everything under it. A junction or
+    /// symbolic link is removed as the reparse point itself.
+    /// <see cref="Directory.Delete(string, bool)"/> with recursion walks a
+    /// Windows junction and then fails with "the parameter is incorrect",
+    /// which is Win32 <c>ERROR_INVALID_PARAMETER</c> from the recursive
+    /// remove. The non-recursive remove deletes only the mount point.
+    /// </summary>
+    public static void DeleteTree(string path)
+    {
+        if (IsReparsePoint(path))
+        {
+            RemoveReparsePoint(path);
+            return;
+        }
+
+        if (!Directory.Exists(path))
+        {
+            return;
+        }
+
+        foreach (string entry in Directory.EnumerateFileSystemEntries(path))
+        {
+            if (IsReparsePoint(entry))
+            {
+                RemoveReparsePoint(entry);
+                continue;
+            }
+
+            if (Directory.Exists(entry))
+            {
+                DeleteTree(entry);
+            }
+            else
+            {
+                File.Delete(entry);
+            }
+        }
+
+        Directory.Delete(path, recursive: false);
+    }
+
+    private static bool IsReparsePoint(string path)
+    {
+        try
+        {
+            return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static void RemoveReparsePoint(string path)
+    {
+        FileAttributes attributes = File.GetAttributes(path);
+        if ((attributes & FileAttributes.Directory) != 0)
+        {
+            Directory.Delete(path, recursive: false);
+            return;
+        }
+
+        File.Delete(path);
+    }
+
     [SupportedOSPlatform("windows")]
     private static void Create(string junction, string target)
     {
