@@ -30,7 +30,7 @@ internal static class DashboardEndpoints
             // resolved it clears the line by writing null here.
             if (await coordinator.ReconcileAsync(cancellationToken) is { Decided: true } pass)
             {
-                state.HandOffBanner = pass.Banner;
+                state.Publish(current => current with { HandOffBanner = pass.Banner });
             }
 
             return Results.Ok(await assembler.AssembleAsync(cancellationToken));
