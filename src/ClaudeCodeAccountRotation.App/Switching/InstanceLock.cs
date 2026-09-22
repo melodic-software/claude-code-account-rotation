@@ -76,6 +76,17 @@ internal sealed class InstanceLock : IDisposable
         }
     }
 
+    /// <summary>
+    /// Rewrites the URL a second launch is told about. Port 0 is only a real
+    /// port after the socket binds, so the address written at acquire time is
+    /// replaced with the one the server actually took.
+    /// </summary>
+    public void PublishListenUrl(string listenUrl)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(listenUrl);
+        File.WriteAllText(_urlFilePath, listenUrl);
+    }
+
     public void Dispose()
     {
         try

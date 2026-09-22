@@ -9,9 +9,9 @@ namespace ClaudeCodeAccountRotation.App.Configuration;
 
 /// <summary>
 /// <c>config.json</c> under app data. A missing file is created on first run
-/// with the defaults resolved for this user, so what the user edits is what
-/// the tool runs with; an existing file overrides the defaults key by key, and
-/// a null or absent key keeps the default.
+/// from the embedded template, with the defaults resolved for this user, so
+/// what the user edits is what the tool runs with; an existing file overrides
+/// the defaults key by key, and a null or absent key keeps the default.
 /// </summary>
 internal static class ConfigurationFile
 {
@@ -26,9 +26,18 @@ internal static class ConfigurationFile
 
         if (!File.Exists(fullPath))
         {
+            Result<JsonObject, string> template = ReadTemplate();
+            if (template.IsFailure)
+            {
+                return Result<ClaudeCodeAccountRotationConfiguration, string>.Failure(template.Error);
+            }
+
+            // The template holds the keys and no paths. Nulls take the defaults
+            // computed for this user, and that resolved object is what is written.
+            ClaudeCodeAccountRotationConfiguration resolved = Merge(defaults, template.Value);
             Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
-            await AtomicJsonFile.WriteAsync(fullPath, ToJson(defaults), cancellationToken);
-            return Result<ClaudeCodeAccountRotationConfiguration, string>.Success(defaults);
+            await AtomicJsonFile.WriteAsync(fullPath, ToJson(resolved), cancellationToken);
+            return Result<ClaudeCodeAccountRotationConfiguration, string>.Success(resolved);
         }
 
         JsonObject raw;
@@ -48,6 +57,23 @@ internal static class ConfigurationFile
         }
 
         return Result<ClaudeCodeAccountRotationConfiguration, string>.Success(Merge(defaults, raw));
+    }
+
+    private static Result<JsonObject, string> ReadTemplate()
+    {
+        try
+        {
+            if (JsonNode.Parse(EmbeddedConfigTemplate.Json) is not JsonObject template)
+            {
+                return Result<JsonObject, string>.Failure("the embedded configuration template is not a JSON object");
+            }
+
+            return Result<JsonObject, string>.Success(template);
+        }
+        catch (JsonException exception)
+        {
+            return Result<JsonObject, string>.Failure("the embedded configuration template could not be parsed: " + exception.Message);
+        }
     }
 
     private static JsonObject ToJson(ClaudeCodeAccountRotationConfiguration configuration) => new()
