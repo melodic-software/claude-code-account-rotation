@@ -171,7 +171,7 @@ public sealed class ReleaseShapeReaderTests : IDisposable
 
         SwitchOptions options = new(liveDirectory, stateFilePath, profilesRoot, appData, TimeSpan.FromSeconds(2), TimeSpan.FromMilliseconds(200));
         ICredentialPairStore pairs = new FileSystemCredentialPairStore(liveDirectory, profilesRoot, TimeProvider.System);
-        ProfileFolderStore folders = new(profilesRoot);
+        ProfileFolderStore folders = new(profilesRoot, NullLogger<ProfileFolderStore>.Instance);
         NoLoginRunning logins = new();
         LiveDirectorySwitch repair = new(
             pairs,

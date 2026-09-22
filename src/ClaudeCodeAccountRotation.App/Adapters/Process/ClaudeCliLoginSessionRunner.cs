@@ -30,7 +30,9 @@ namespace ClaudeCodeAccountRotation.App.Adapters.Process;
 /// is given to complete, and is then dropped. The child is killed on expiry, on
 /// cancel, and at shutdown. Nothing here writes the code anywhere but the
 /// child's standard input, and no message returned to the page is built from
-/// the child's own output.
+/// the child's own output. An audit line names the account and the outcome of
+/// a start, a completion, a failure, or a revocation, and never the code, the
+/// pair, or anything the child printed.
 /// </para>
 /// </summary>
 internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner, IDisposable
@@ -216,6 +218,7 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
             // until the finally below releases it, which is at once.
             session.Pump = Task.Run(() => PumpAsync(session), CancellationToken.None);
             _sessions[session.Id.Value] = session;
+            LogLoginStarted(session.Email.Value);
         }
         finally
         {
@@ -685,7 +688,7 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
             return (LoginSessionState.Completed, adopted ? "Logged in as " + session.Email.Value + "." : ResidueKeptMessage);
         }
 
-        return (LoginSessionState.Failed, RefusedPrefix + (reason ?? UnreadableTierReason) + await DiscardAsync(session.Folder));
+        return (LoginSessionState.Failed, RefusedPrefix + (reason ?? UnreadableTierReason) + await DiscardAsync(session));
     }
 
     /// <summary>
@@ -703,12 +706,23 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     /// folder when a logout fails, because there nothing has yet been admitted.
     /// </para>
     /// </summary>
-    private async Task<string> DiscardAsync(string folder)
+    private async Task<string> DiscardAsync(Session session)
     {
-        Result<Unit, string> revoked = await _logout.LogoutAsync(folder, CancellationToken.None);
+        // The failure text is not the outcome. The port's error can repeat what
+        // the child printed, and that printout is the wrong thing to keep.
+        Result<Unit, string> revoked = await _logout.LogoutAsync(session.Folder, CancellationToken.None);
+        if (revoked.IsSuccess)
+        {
+            LogLogoutRevoked(session.Email.Value);
+        }
+        else
+        {
+            LogLogoutFailed(session.Email.Value);
+        }
+
         try
         {
-            await _profiles.DeleteFolderAsync(folder, CancellationToken.None);
+            await _profiles.DeleteFolderAsync(session.Folder, CancellationToken.None);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
@@ -761,22 +775,52 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     {
         TaskCompletionSource? echo;
         bool scheduleEviction = false;
+        LoginSessionState? recorded = null;
         lock (session.Sync)
         {
-            if (onlyWhilePending && session.State != LoginSessionState.Pending)
+            LoginSessionState previous = session.State;
+            if (onlyWhilePending && previous != LoginSessionState.Pending)
             {
                 return;
             }
 
-            if (session.State == LoginSessionState.Pending && state != LoginSessionState.Pending)
+            if (previous == LoginSessionState.Pending && state != LoginSessionState.Pending)
             {
                 session.FinishedAt = _clock.GetUtcNow();
                 scheduleEviction = true;
+                recorded = state;
+            }
+            else if (previous != LoginSessionState.Pending && state != LoginSessionState.Pending && previous != state)
+            {
+                // Expiry is recorded while the child is still being killed, and
+                // the pump may then admit the pair that child wrote. The page
+                // shows the later state, so the log names it too; otherwise the
+                // trail says the login expired after the credentials were
+                // accepted. The readable window already started on the way out
+                // of pending, and a second timer is not armed.
+                recorded = state;
             }
 
             session.State = state;
             session.Message = message;
             echo = session.Echo;
+        }
+
+        // The message the page shows is not the outcome: it is prose, and a
+        // future wording must not be able to pull the code or a token onto
+        // this line. A later settle that replaces one terminal state with
+        // another records that later outcome as well.
+        if (recorded == LoginSessionState.Completed)
+        {
+            LogLoginCompleted(session.Email.Value);
+        }
+        else if (recorded == LoginSessionState.Expired)
+        {
+            LogLoginExpired(session.Email.Value);
+        }
+        else if (recorded == LoginSessionState.Failed)
+        {
+            LogLoginFailed(session.Email.Value);
         }
 
         if (scheduleEviction)
@@ -920,6 +964,27 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
 
     [LoggerMessage(Level = LogLevel.Error, Message = "login for {Account} could not be finished ({Failure})")]
     private partial void LogFinishFaulted(string account, string failure, Exception exception);
+
+    // Audit lines: the account and the outcome, and nothing the child printed.
+    // {Failure} above is the exception type name. These do not take the exception,
+    // because its message can quote process output or the one-time code.
+    [LoggerMessage(Level = LogLevel.Information, Message = "login for {Account} started")]
+    private partial void LogLoginStarted(string account);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "login for {Account} completed")]
+    private partial void LogLoginCompleted(string account);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "login for {Account} failed")]
+    private partial void LogLoginFailed(string account);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "login for {Account} expired")]
+    private partial void LogLoginExpired(string account);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "logout for {Account} revoked")]
+    private partial void LogLogoutRevoked(string account);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "logout for {Account} failed")]
+    private partial void LogLogoutFailed(string account);
 
     private static LoginSession Snapshot(Session session)
     {

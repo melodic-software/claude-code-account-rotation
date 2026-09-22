@@ -49,7 +49,7 @@ public sealed class ClaudeCliLoginSessionRunnerTests : IDisposable
         TimeProvider? clock = null,
         ILogger<ClaudeCliLoginSessionRunner>? logger = null) => new(
         start ?? _script.Start,
-        new ProfileFolderStore(_profilesRoot),
+        new ProfileFolderStore(_profilesRoot, NullLogger<ProfileFolderStore>.Instance),
         new ClaudeStateFile(_stateFilePath),
         _gate,
         _cli,
