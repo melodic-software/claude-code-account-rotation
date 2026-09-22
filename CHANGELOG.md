@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-09-22
+
 ### Changed
 
 - An empty dashboard names the next step in `setup`, one sentence beside the reconciliation
@@ -36,6 +38,118 @@ All notable changes to this project are documented in this file. The format foll
   recovery file can be restored, even when no card warned about it, then removes each side's
   app data and the installed executables, and leaves the profiles root, the live directory,
   and Claude Code's state file.
+
+### Added
+
+- A login, a server-side logout, and a credential-folder deletion each leave an audit entry naming
+  the account and the outcome (#42). A login that expires and is then admitted records both, and a
+  profile whose email is not text does not keep its folder from being deleted. The console log
+  stamps every line with a UTC timestamp, so the entry says when.
+- The leader starts the follower through a wrapper which truncates `follower.log` under the
+  follower's app data directory, running the executable `peers[].launch.executablePath` names
+  and using the same app-data default the application uses when that key is absent (#92).
+- `POST /api/shutdown` stops the leader or the follower with exit code 0, and refuses while a
+  switch or import journal is open (#91).
+- A tag matching `v*` uploads five assets (#31): the two executables
+  `claude-code-account-rotation-win-x64.exe` and `claude-code-account-rotation-linux-x64`, the
+  `claude-code-account-rotation-follower-log` wrapper the leader execs beside the Linux binary,
+  `config.template.json`, and `SHA256SUMS`. The README install section says how to download that
+  release, mark the Linux binary
+  executable (`chmod +x`, because a release download does not keep that bit), place it on
+  `PATH` or make a shortcut, run it once so a missing config is written from the embedded
+  template, and add accounts: Adopt when the live card is not on the roster, otherwise Add
+  and then Login. The process prints `Dashboard:` and the bound URL and opens no
+  browser. The default port is 48211, and `--port 0` asks the operating system for a free port.
+- A machine with nothing configured writes `config.json` on first run from the embedded
+  `config.template.json`, filling every path from the user profile at runtime, and prints
+  that path (#30). The template itself carries no drive letter and no user path.
+  `--help` lists every flag, including `-h` and `/?`. The process prints the dashboard
+  URL and opens nothing. `--port 0` asks the operating system for a free port, and the
+  printed URL is the address that was bound. Mutations accept that bound port as their
+  own origin; the port written in the file stays the configured one.
+
+### Fixed
+
+- The loopback API requires the per-process token on the second line of `instance.url` (#7).
+  A request without it is refused with 401, including shutdown. `GET /healthz`, `GET /app.js`,
+  and `GET /app.css` stay open. The dashboard page still loads so the token can be pasted
+  there; the token is not part of the address and the process does not print it.
+- Containment and volume checks follow junctions and symbolic links before comparing
+  paths. A profiles root, a profile folder, or the app data directory that is itself a
+  link is refused, and a link whose target is missing is refused, so a credential pair
+  cannot be moved through a link onto a sync folder or another volume (#8).
+- The refresh lock refreshes its directory mtime every five seconds while it is held. A switch
+  holds that lock across the journal, the profile and owner writes, and the state-file patch
+  retries, which can run past the 60-second steal window. Refreshing the mtime keeps the hold
+  exclusive. Aborting on a deadline would leave the journal open (#9).
+- Replacing an existing file is one `File.Move` with overwrite, on Windows as well. `File.Replace`
+  with no backup deletes the destination before the new file is renamed, so a sharing failure can
+  leave the state file missing once the retry budget runs out. A destination another process holds
+  is retried for those same two seconds, including the access-denied result that move returns (#9).
+- Startup reconciliation logs a busy mutation gate and lets the host start. The recovery sweep
+  takes that same gate, and a busy one leaves a stranded pair where it is instead of writing it
+  beside the mutation that holds the gate. A torn parked credential
+  file is skipped and left in place during that scan, so it no longer fails host startup. A torn
+  live credential file no longer fails `GET /api/dashboard`: the live card comes back without a
+  login expiry. An unreadable parked file warns once per folder, not on every ten-second poll (#9).
+- The dashboard sends `Content-Security-Policy` (`default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'`)
+  and `X-Content-Type-Options: nosniff`. The ten-second poll still reads local files only (#9).
+- A login whose reader failed unexpectedly stayed pending for the whole ten minutes, and the
+  failure never reached the log (#41). The session now reports that failure at once, and the
+  exception is written to the log without being copied onto the page. Shutdown waits a short,
+  bounded time for the reader to leave the child process before disposing it. A finished session
+  stays readable for ten minutes, the same window the login itself is given, so a reload can still
+  see how it ended, and is then dropped. That drop is armed when the login leaves pending, so it
+  happens even when nothing asks about the session again.
+- The dashboard publishes its reconciliation report, hand-off line, and pre-switch windows as one
+  snapshot, swapped in as a single reference. A poll can no longer show a report from one
+  publication beside windows or a hand-off line from another (#18). Clearing the pre-switch
+  marker matches the instance that poll observed, so a later switch that published the same two
+  reset times keeps its marker.
+- On Linux, a credential rename compares device ids and then moves with `renameat2`
+  (`RENAME_NOREPLACE`). A profiles root on a different mount is refused, including a bind mount or
+  two btrfs subvolumes that share a device id: `rename(2)` returns `EXDEV` for those, and that is a
+  refusal. The path-root check let a cross-mount move through, because that root is `/` for every
+  absolute path. `File.Move` is not used for the Linux move: across volumes it copies the file and
+  then deletes it, per its documentation, and that window is a second holder of the refresh token (#17).
+- A release whose live pair rotated before export parks the pair the follower actually holds.
+  The follower exports that pair and names its fingerprint, and the leader parks the verified
+  fingerprint into the slot. A re-issued release still matches that completed record by the
+  fingerprint the request named, so a leader whose journal was lost is answered from the record
+  rather than told there is nothing to hand back. A rotation after export, while the release is
+  stopped at Exported, still unwinds and does not park the pre-rotation export (#83).
+- A side row names the account that side holds, alias first the way a card does (#86): `holding`
+  plus the alias and the address when the roster has an alias, the address alone when it does not,
+  and `holding nothing` only when that side answered and holds none. An offline side whose
+  dashboard could not be read does not claim to hold nothing.
+- After a side hands its account back, its picker returns to `choose an account` instead of the
+  first account in the list, including the account just released. Switch is disabled in that same
+  turn, and the request's re-enable does not turn it back on while the picker is empty (#85).
+- A failing `claude` command no longer hands the page the CLI's own text (#11).
+  The string a switch toast can show stays a short classified sentence: the command
+  timed out, it exited with a code, or `auth status` printed no JSON object. The
+  parser's message is left out, because for an invalid literal it quotes the
+  document. What the child printed is logged and cut off at 400 characters with an
+  explicit truncation marker. After a timeout kill, both pipes are awaited for up
+  to two seconds on a fresh cancellation source, so a partial print is logged and
+  the reads are not abandoned. A status JSON with `loggedIn` false stays a normal
+  logged-out status.
+- The usage and token clients no longer follow redirects (#16). A 307 or 308 would resend the
+  request, including the refresh-token POST body, to the host the endpoint named. Both clients now
+  install a primary handler that refuses redirects, and any 3xx stays the transport failure the
+  status mapping already returns. The handler keeps the two-minute pooled connection lifetime the
+  factory's default primary handler sets, so DNS changes are still respected (Microsoft Learn,
+  IHttpClientFactory, HTTP handler lifetime).
+- When `config.json` sets `liveConfigDirectory` and leaves `stateFilePath` unset, the state file is
+  `<dir>/.claude.json`, the same place the defaults put it when `CLAUDE_CONFIG_DIR` is set. It used
+  to stay at the home default, so the watcher and the stale-identity repair patched `~/.claude.json`
+  instead of the file beside the overridden live directory (#19). An explicit `stateFilePath` is
+  still kept.
+
+## [1.0.0] - 2026-09-21
+
+### Changed
+
 - A card for an account whose hand-off is in flight says which way its own pair is going:
   `in transit from wsl` for one coming back to the store, `in transit to wsl` for one going out,
   read off the suffix of its file in the mailbox rather than off the holder record, which names the
@@ -104,29 +218,6 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
-- A login, a server-side logout, and a credential-folder deletion each leave an audit entry naming
-  the account and the outcome (#42). A login that expires and is then admitted records both, and a
-  profile whose email is not text does not keep its folder from being deleted. The console log
-  stamps every line with a UTC timestamp, so the entry says when.
-- The leader starts the follower through a wrapper which truncates `follower.log` under the
-  follower's app data directory, running the executable `peers[].launch.executablePath` names
-  and using the same app-data default the application uses when that key is absent (#92).
-- `POST /api/shutdown` stops the leader or the follower with exit code 0, and refuses while a
-  switch or import journal is open (#91).
-- A tag matching `v*` uploads `config.template.json` with the two executables and `SHA256SUMS`
-  (#31). The README install section says how to download that release, mark the Linux binary
-  executable (`chmod +x`, because a release download does not keep that bit), place it on
-  `PATH` or make a shortcut, run it once so a missing config is written from the embedded
-  template, and add accounts: Adopt when the live card is not on the roster, otherwise Add
-  and then Login. The process prints `Dashboard:` and the bound URL and opens no
-  browser. The default port is 48211, and `--port 0` asks the operating system for a free port.
-- A machine with nothing configured writes `config.json` on first run from the embedded
-  `config.template.json`, filling every path from the user profile at runtime, and prints
-  that path (#30). The template itself carries no drive letter and no user path.
-  `--help` lists every flag, including `-h` and `/?`. The process prints the dashboard
-  URL and opens nothing. `--port 0` asks the operating system for a free port, and the
-  printed URL is the address that was bound. Mutations accept that bound port as their
-  own origin; the port written in the file stays the configured one.
 - The other side can hand an account back to the store without taking another one
   (`POST /api/sides/{side}/release`), and the side panel carries `Hand back` beside `Switch` for it.
   Until now a pair only came back as the outgoing half of a switch to a different account, so a
@@ -281,81 +372,6 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
-- The loopback API requires the per-process token on the second line of `instance.url` (#7).
-  A request without it is refused with 401, including shutdown. `GET /healthz`, `GET /app.js`,
-  and `GET /app.css` stay open. The dashboard page still loads so the token can be pasted
-  there; the token is not part of the address and the process does not print it.
-- Containment and volume checks follow junctions and symbolic links before comparing
-  paths. A profiles root, a profile folder, or the app data directory that is itself a
-  link is refused, and a link whose target is missing is refused, so a credential pair
-  cannot be moved through a link onto a sync folder or another volume (#8).
-- The refresh lock refreshes its directory mtime every five seconds while it is held. A switch
-  holds that lock across the journal, the profile and owner writes, and the state-file patch
-  retries, which can run past the 60-second steal window. Refreshing the mtime keeps the hold
-  exclusive. Aborting on a deadline would leave the journal open (#9).
-- Replacing an existing file is one `File.Move` with overwrite, on Windows as well. `File.Replace`
-  with no backup deletes the destination before the new file is renamed, so a sharing failure can
-  leave the state file missing once the retry budget runs out. A destination another process holds
-  is retried for those same two seconds, including the access-denied result that move returns (#9).
-- Startup reconciliation logs a busy mutation gate and lets the host start. The recovery sweep
-  takes that same gate, and a busy one leaves a stranded pair where it is instead of writing it
-  beside the mutation that holds the gate. A torn parked credential
-  file is skipped and left in place during that scan, so it no longer fails host startup. A torn
-  live credential file no longer fails `GET /api/dashboard`: the live card comes back without a
-  login expiry. An unreadable parked file warns once per folder, not on every ten-second poll (#9).
-- The dashboard sends `Content-Security-Policy` (`default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'`)
-  and `X-Content-Type-Options: nosniff`. The ten-second poll still reads local files only (#9).
-- A login whose reader failed unexpectedly stayed pending for the whole ten minutes, and the
-  failure never reached the log (#41). The session now reports that failure at once, and the
-  exception is written to the log without being copied onto the page. Shutdown waits a short,
-  bounded time for the reader to leave the child process before disposing it. A finished session
-  stays readable for ten minutes, the same window the login itself is given, so a reload can still
-  see how it ended, and is then dropped. That drop is armed when the login leaves pending, so it
-  happens even when nothing asks about the session again.
-- The dashboard publishes its reconciliation report, hand-off line, and pre-switch windows as one
-  snapshot, swapped in as a single reference. A poll can no longer show a report from one
-  publication beside windows or a hand-off line from another (#18). Clearing the pre-switch
-  marker matches the instance that poll observed, so a later switch that published the same two
-  reset times keeps its marker.
-- On Linux, a credential rename compares device ids and then moves with `renameat2`
-  (`RENAME_NOREPLACE`). A profiles root on a different mount is refused, including a bind mount or
-  two btrfs subvolumes that share a device id: `rename(2)` returns `EXDEV` for those, and that is a
-  refusal. The path-root check let a cross-mount move through, because that root is `/` for every
-  absolute path. `File.Move` is not used for the Linux move: across volumes it copies the file and
-  then deletes it, per its documentation, and that window is a second holder of the refresh token (#17).
-- A release whose live pair rotated before export parks the pair the follower actually holds.
-  The follower exports that pair and names its fingerprint, and the leader parks the verified
-  fingerprint into the slot. A re-issued release still matches that completed record by the
-  fingerprint the request named, so a leader whose journal was lost is answered from the record
-  rather than told there is nothing to hand back. A rotation after export, while the release is
-  stopped at Exported, still unwinds and does not park the pre-rotation export (#83).
-- A side row names the account that side holds, alias first the way a card does (#86): `holding`
-  plus the alias and the address when the roster has an alias, the address alone when it does not,
-  and `holding nothing` only when that side answered and holds none. An offline side whose
-  dashboard could not be read does not claim to hold nothing.
-- After a side hands its account back, its picker returns to `choose an account` instead of the
-  first account in the list, including the account just released. Switch is disabled in that same
-  turn, and the request's re-enable does not turn it back on while the picker is empty (#85).
-- A failing `claude` command no longer hands the page the CLI's own text (#11).
-  The string a switch toast can show stays a short classified sentence: the command
-  timed out, it exited with a code, or `auth status` printed no JSON object. The
-  parser's message is left out, because for an invalid literal it quotes the
-  document. What the child printed is logged and cut off at 400 characters with an
-  explicit truncation marker. After a timeout kill, both pipes are awaited for up
-  to two seconds on a fresh cancellation source, so a partial print is logged and
-  the reads are not abandoned. A status JSON with `loggedIn` false stays a normal
-  logged-out status.
-- The usage and token clients no longer follow redirects (#16). A 307 or 308 would resend the
-  request, including the refresh-token POST body, to the host the endpoint named. Both clients now
-  install a primary handler that refuses redirects, and any 3xx stays the transport failure the
-  status mapping already returns. The handler keeps the two-minute pooled connection lifetime the
-  factory's default primary handler sets, so DNS changes are still respected (Microsoft Learn,
-  IHttpClientFactory, HTTP handler lifetime).
-- When `config.json` sets `liveConfigDirectory` and leaves `stateFilePath` unset, the state file is
-  `<dir>/.claude.json`, the same place the defaults put it when `CLAUDE_CONFIG_DIR` is set. It used
-  to stay at the home default, so the watcher and the stale-identity repair patched `~/.claude.json`
-  instead of the file beside the overridden live directory (#19). An explicit `stateFilePath` is
-  still kept.
 - A login opens one browser, the profile the roster maps to the account. The CLI's own OAuth flow
   was opening its callback URL in the machine's default browser at the same time, so the operator
   got two windows on two URLs and could sign in through the wrong one. Every CLI command now runs
