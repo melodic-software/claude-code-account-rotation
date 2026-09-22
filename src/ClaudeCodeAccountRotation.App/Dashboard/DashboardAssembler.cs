@@ -239,9 +239,9 @@ internal sealed partial class DashboardAssembler(
     /// Whether adopt-live would answer 409 for this live seat. The account
     /// block can admit a Max tier and can never refuse one, which is the
     /// admission rule the adopt route already uses, so the CLI is asked only
-    /// when the block does not already admit. A judgment is remembered for
-    /// that e-mail: a Team or Enterprise seat stays refused, and the
-    /// ten-second poll must not spawn the CLI to relearn it.
+    /// when the block does not already admit. A Max or refused judgment is
+    /// remembered for that e-mail, so the ten-second poll does not spawn the
+    /// CLI to relearn it. An unknown read is not remembered.
     /// </summary>
     private async Task<bool> LiveSeatRefusedAsync(
         OAuthAccountBlock liveAccount,
@@ -260,7 +260,17 @@ internal sealed partial class DashboardAssembler(
         }
 
         Result<ClaudeAuthStatus, string> status = await authStatus.ReadAsync(options.LiveConfigDirectory, cancellationToken);
-        bool refused = MaxTierAdmission.Evaluate(status.IsSuccess ? status.Value : null, liveAccount).Verdict == MaxTierVerdict.Refused;
+        MaxTierVerdict verdict = MaxTierAdmission.Evaluate(status.IsSuccess ? status.Value : null, liveAccount).Verdict;
+        if (verdict == MaxTierVerdict.Unknown)
+        {
+            // A failed or empty read is not a Team seat. Remembering it as
+            // "not refused" would keep naming Adopt after a later read reports
+            // enterprise. The next poll asks again. Adopt itself still allows
+            // an unknown seat; only Refused is a 409.
+            return false;
+        }
+
+        bool refused = verdict == MaxTierVerdict.Refused;
         _liveSeatJudgment = new LiveSeatJudgment(live.Value, refused);
         return refused;
     }

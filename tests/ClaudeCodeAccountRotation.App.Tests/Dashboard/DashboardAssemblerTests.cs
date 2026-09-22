@@ -973,6 +973,29 @@ public sealed class DashboardAssemblerTests
     }
 
     [Fact]
+    public async Task AnUnreadableLiveSeatIsAskedAgainOnceTheCliAnswers()
+    {
+        // The first read failed, so the seat is unknown and Adopt is still the
+        // step the route would allow. A later read that reports enterprise has
+        // to replace that sentence; remembering the failure as "not refused"
+        // would leave Adopt on the page for the rest of the process.
+        await using AppFactory factory = new();
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        factory.Cli.ReadError = "the CLI printed nothing";
+
+        Payload first = await DashboardAsync(factory);
+
+        SetupOf(first).ShouldBe(AdoptSetup);
+
+        factory.Cli.ReadError = null;
+        factory.Cli.SubscriptionType = "enterprise";
+
+        Payload second = await DashboardAsync(factory);
+
+        SetupOf(second).ShouldBe(AddSetup);
+    }
+
+    [Fact]
     public async Task ARefusedLiveSeatFallsThroughToLoginWhenARosterCardNeedsIt()
     {
         await using AppFactory factory = new();
