@@ -230,6 +230,15 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- A failing `claude` command no longer hands the page the CLI's own text (#11).
+  The string a switch toast can show stays a short classified sentence: the command
+  timed out, it exited with a code, or `auth status` printed no JSON object. The
+  parser's message is left out, because for an invalid literal it quotes the
+  document. What the child printed is logged and cut off at 400 characters with an
+  explicit truncation marker. After a timeout kill, both pipes are awaited for up
+  to two seconds on a fresh cancellation source, so a partial print is logged and
+  the reads are not abandoned. A status JSON with `loggedIn` false stays a normal
+  logged-out status.
 - The usage and token clients no longer follow redirects (#16). A 307 or 308 would resend the
   request, including the refresh-token POST body, to the host the endpoint named. Both clients now
   install a primary handler that refuses redirects, and any 3xx stays the transport failure the

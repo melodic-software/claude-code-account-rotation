@@ -21,6 +21,24 @@ public sealed class ClaudeCliProcessAuthStatusTests : IDisposable
         return new ClaudeExecutable(Path.Combine(Environment.SystemDirectory, "cmd.exe"), [], Shim: path);
     }
 
+    /// <summary>
+    /// A stand-in CLI started the way production starts one. Windows goes through
+    /// the batch shim; Unix runs a shebang script as the executable. Same
+    /// <see cref="ClaudeExecutable"/> path either way, not a separate runner.
+    /// </summary>
+    private ClaudeExecutable ShellCli(string unixBody, string windowsBody)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return FakeCli(windowsBody);
+        }
+
+        string path = Path.Combine(_root, "claude.sh");
+        File.WriteAllText(path, "#!/bin/sh\n" + unixBody + "\n");
+        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        return new ClaudeExecutable(path, []);
+    }
+
     [Fact(SkipUnless = nameof(OnWindows), Skip = "The fake CLI is a Windows batch file")]
     public async Task AShimPathHoldingACommandSeparatorIsRunAsOneOperand()
     {
@@ -118,6 +136,129 @@ public sealed class ClaudeCliProcessAuthStatusTests : IDisposable
 
         result.IsFailure.ShouldBeTrue();
         result.Error.ShouldContain("timed out");
+    }
+
+    [Fact]
+    public async Task ANonZeroExitKeepsAStderrSentinelOutOfABoundedFailure()
+    {
+        // The head sits inside the logged excerpt; the tail sits past it. Neither
+        // may reach the failure string the page renders, and the log has to say
+        // it was cut.
+        const string head = "HEAD_SENTINEL_9f2e";
+        const string tail = "TAIL_SENTINEL_9f2e";
+        string payloadPath = Path.Combine(_root, "payload.txt");
+        await File.WriteAllTextAsync(payloadPath, head + new string('A', 500) + tail, TestContext.Current.CancellationToken);
+        ClaudeExecutable cli = ShellCli(
+            "cat '" + payloadPath + "' >&2\nexit 3",
+            "type \"" + payloadPath + "\" 1>&2\r\nexit /b 3");
+        RecordingLogger<ClaudeCliProcessAuthStatus> logger = new();
+        ClaudeCliProcessAuthStatus reader = new(cli, TimeSpan.FromSeconds(30), logger);
+
+        Result<ClaudeAuthStatus, string> result = await reader.ReadAsync(null, TestContext.Current.CancellationToken);
+
+        result.IsFailure.ShouldBeTrue();
+        result.Error.ShouldContain("exited with code 3");
+        result.Error.ShouldNotContain(head);
+        result.Error.ShouldNotContain(tail);
+        result.Error.Length.ShouldBeLessThan(400);
+        string logged = string.Join('\n', logger.Lines);
+        logged.ShouldContain(head);
+        logged.ShouldContain("(truncated)");
+        logged.ShouldNotContain(tail);
+    }
+
+    [Fact]
+    public async Task ATimedOutChildReturnsATimeoutAndThePipesAreDrainedIntoTheLog()
+    {
+        const string sentinel = "TIMEOUT_STDERR_SENTINEL_9f2e";
+        RecordingLogger<ClaudeCliProcessAuthStatus> logger = new();
+        ClaudeCliProcessAuthStatus reader = new(
+            ShellCli("echo " + sentinel + " >&2\nsleep 30", "echo " + sentinel + " 1>&2\r\nping -n 30 127.0.0.1 >nul"),
+            TimeSpan.FromSeconds(1),
+            logger);
+        int unobservedReads = 0;
+        void OnUnobserved(object? sender, UnobservedTaskExceptionEventArgs args)
+        {
+            args.SetObserved();
+            string text = args.Exception.ToString();
+            if (text.Contains("ReadToEnd", StringComparison.Ordinal))
+            {
+                Interlocked.Increment(ref unobservedReads);
+            }
+        }
+
+        TaskScheduler.UnobservedTaskException += OnUnobserved;
+        try
+        {
+            Result<ClaudeAuthStatus, string> result = await reader.ReadAsync(null, TestContext.Current.CancellationToken);
+
+            result.IsFailure.ShouldBeTrue();
+            result.Error.ShouldContain("timed out");
+            result.Error.ShouldNotContain(sentinel);
+            result.Error.Length.ShouldBeLessThan(400);
+            string.Join('\n', logger.Lines).ShouldContain(sentinel);
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            unobservedReads.ShouldBe(0);
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= OnUnobserved;
+        }
+    }
+
+    [Fact]
+    public async Task ACallerCancellationStillThrowsAfterTheChildIsKilled()
+    {
+        ClaudeCliProcessAuthStatus reader = new(
+            ShellCli("sleep 30", "ping -n 30 127.0.0.1 >nul"),
+            TimeSpan.FromSeconds(30),
+            new RecordingLogger<ClaudeCliProcessAuthStatus>());
+        using CancellationTokenSource caller = new(TimeSpan.FromMilliseconds(300));
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(caller.Token, TestContext.Current.CancellationToken);
+
+        await Should.ThrowAsync<OperationCanceledException>(() => reader.ReadAsync(null, linked.Token));
+    }
+
+    [Fact]
+    public async Task StatusJsonThatSaysLoggedOutIsANormalStatus()
+    {
+        // loggedIn false is the CLI's ordinary answer for a logged-out folder.
+        // Callers already branch on ClaudeAuthStatus.LoggedIn, so this is not
+        // reclassified as an error.
+        ClaudeExecutable cli = ShellCli(
+            "printf '%s\\n' '{\"loggedIn\":false}'",
+            "echo {\"loggedIn\":false}");
+        ClaudeCliProcessAuthStatus reader = new(cli, TimeSpan.FromSeconds(30), new RecordingLogger<ClaudeCliProcessAuthStatus>());
+
+        Result<ClaudeAuthStatus, string> result = await reader.ReadAsync(null, TestContext.Current.CancellationToken);
+
+        result.IsSuccess.ShouldBeTrue(result.IsFailure ? result.Error : "");
+        result.Value.LoggedIn.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task UnparsableStatusJsonDoesNotReturnTheBody()
+    {
+        // An invalid JSON literal is quoted whole by JsonException.Message, so the
+        // failure string must not carry this sentinel even though the log may.
+        const string sentinel = "sk-ant-NOJSON-9f2e";
+        RecordingLogger<ClaudeCliProcessAuthStatus> logger = new();
+        ClaudeExecutable cli = ShellCli(
+            "printf '%s\\n' '" + sentinel + " is not json'",
+            "echo " + sentinel + " is not json");
+        ClaudeCliProcessAuthStatus reader = new(cli, TimeSpan.FromSeconds(30), logger);
+
+        Result<ClaudeAuthStatus, string> result = await reader.ReadAsync(null, TestContext.Current.CancellationToken);
+
+        result.IsFailure.ShouldBeTrue();
+        result.Error.ShouldBe("claude auth status printed no JSON object");
+        result.Error.ShouldNotContain(sentinel);
+        string.Join('\n', logger.Lines).ShouldContain(sentinel);
+        string.Join('\n', logger.Lines).ShouldNotContain("(truncated)");
     }
 
     public void Dispose()
