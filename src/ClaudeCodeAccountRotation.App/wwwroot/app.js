@@ -261,6 +261,9 @@
   }
 
   function switchSide(side, email) {
+    // An empty picker is "choose an account". The button is disabled in that
+    // state; this refuses the hand-off if a click lands anyway.
+    if (!email) { return; }
     return mutate(sidePath(side, "/accounts/" + encodeURIComponent(email) + "/switch"), "POST", null, function (result) {
       if (!result.ok) {
         showToast(refused(result.body), "error");
@@ -287,6 +290,7 @@
         if (result.body.refusal === "ForeignFamily"
           && window.confirm(result.body.message + "\n\nHand it back into quarantine? The family that side holds is kept there and never used, and the one in the store stays as it is.")) {
           mutate(sidePath(side, "/release") + "?quarantineForeignFamily=true", "POST", null, function (retry) {
+            if (retry.ok) { clearSidePicker(side); }
             showToast(retry.ok
               ? "The " + retry.body.side + " side holds nothing; a superseded family was quarantined at " + retry.body.quarantinedAt
               : refused(retry.body), retry.ok ? "warn" : "error");
@@ -296,8 +300,21 @@
         showToast(refused(result.body), "error");
         return;
       }
+      // The account just handed back is now on offer. Leaving the picker on it,
+      // or on whichever account sorts first, would hand a pair straight back out.
+      clearSidePicker(side);
       showToast("The " + result.body.side + " side holds nothing; " + (result.body.parkedAs || holding) + " is parked here", "ok");
     });
+  }
+
+  // A release succeeded: the picker returns to "choose an account". Switch is
+  // disabled here, in the same turn, because the request's re-enable runs before
+  // the refresh and a failed refresh would otherwise leave it clickable.
+  function clearSidePicker(side) {
+    var row = sideRows[side];
+    if (!row || !row.pick) { return; }
+    row.pick.value = "";
+    if (row.button) { row.button.disabled = true; }
   }
 
   // One line per configured side, and on it that side's switch control: which
@@ -310,6 +327,28 @@
     return lastAccounts.filter(function (account) {
       return (account.offeredTo || []).indexOf(side.side) !== -1;
     });
+  }
+
+  // Alias-first, the way a card's heading is. liveAccount is the address from
+  // GET /api/sides; the alias is roster.alias on the dashboard account with that
+  // email. An absent address is "holding nothing" only when the side answered
+  // and said so. An offline read also leaves the address null, because the
+  // dashboard could not be read, and that side may still hold an account.
+  function heldAccount(email) {
+    var account = lastAccounts.filter(function (candidate) { return candidate.email === email; })[0];
+    var alias = account && account.roster && account.roster.alias;
+    return alias ? "holding " + alias + " (" + email + ")" : "holding " + email;
+  }
+
+  function sideStateText(side) {
+    var prefix = side.side + " side: " + side.detail;
+    if (!side.liveAccount) {
+      if (!side.online) { return prefix; }
+      var nothing = "holding nothing";
+      if (typeof side.detail === "string" && side.detail.slice(-nothing.length) === nothing) { return prefix; }
+      return prefix + ", " + nothing;
+    }
+    return prefix + ", " + heldAccount(side.liveAccount);
   }
 
   // Updated in place rather than rebuilt, so nothing here is ever taken from
@@ -330,7 +369,7 @@
         sidesLine.appendChild(row.node);
       }
 
-      row.state.textContent = side.side + " side: " + side.detail + (side.liveAccount ? ", holding " + side.liveAccount : "");
+      row.state.textContent = sideStateText(side);
       var mode = side.online ? "switch" : (side.canStart ? "start" : "none");
       if (row.mode !== mode) {
         if (row.control) { row.node.removeChild(row.control); }
@@ -348,6 +387,11 @@
           row.pick.name = side.side;
           row.control.appendChild(row.pick);
           row.button = actionButton("Switch " + side.side + " side", "switch", function () { switchSide(side.side, row.pick.value); });
+          // The poll is what disables Switch on an empty value. A choice has to
+          // enable it immediately, or the picker stays dead until the next one.
+          row.pick.addEventListener("change", function () {
+            row.button.disabled = busy || !row.pick.value;
+          });
           // One control for the park-back, beside the switch and only on a side
           // that is answering: it reads what that side holds at click time and
           // the server re-reads it before anything moves.
@@ -370,6 +414,11 @@
           row.offers = arriving;
           var held = row.pick.value;
           row.pick.innerHTML = "";
+          // The empty choice is first, and it is the selection whenever the
+          // previous address is no longer on offer. Never the first real account.
+          var placeholder = element("option", null, "choose an account");
+          placeholder.value = "";
+          row.pick.appendChild(placeholder);
           offers.forEach(function (account) {
             var option = element("option", null, (account.roster && account.roster.alias) || account.email);
             option.value = account.email;
@@ -899,7 +948,16 @@
     // otherwise send a second request whose refusal toast overwrote the outcome of
     // the first. The re-enable is unconditional and the following render applies
     // the per-account state, so a failed request can never leave a button dead.
+    // A side Switch whose picker is the empty "choose an account" is the exception:
+    // the re-enable runs before the refresh, and a failed refresh would leave that
+    // Switch clickable with nothing selected.
     Array.prototype.forEach.call(document.querySelectorAll("button"), function (button) { button.disabled = disabled; });
+    if (!disabled) {
+      Object.keys(sideRows).forEach(function (name) {
+        var row = sideRows[name];
+        if (row.button && row.pick && !row.pick.value) { row.button.disabled = true; }
+      });
+    }
   }
 
   addForm.addEventListener("submit", function (event) {
