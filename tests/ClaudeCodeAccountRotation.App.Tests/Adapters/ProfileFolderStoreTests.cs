@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Switching;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Adapters;
 
@@ -13,7 +14,7 @@ public sealed class ProfileFolderStoreTests : IDisposable
     public ProfileFolderStoreTests()
     {
         Directory.CreateDirectory(_profilesRoot);
-        _store = new ProfileFolderStore(_profilesRoot);
+        _store = new ProfileFolderStore(_profilesRoot, NullLogger<ProfileFolderStore>.Instance);
     }
 
     private static JsonObject AccountJson(string email) => new() { ["accountUuid"] = "uuid-" + email, ["emailAddress"] = email };
@@ -99,6 +100,23 @@ public sealed class ProfileFolderStoreTests : IDisposable
         _ = await _store.ListAsync(TestContext.Current.CancellationToken);
         await _store.DeleteFolderAsync(folder, TestContext.Current.CancellationToken);
         Directory.Exists(folder).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task DeleteFolderStillDeletesWhenTheProfileEmailIsNotText()
+    {
+        // A number where the address should be makes the account block throw
+        // while the audit line is choosing a name. The folder was already
+        // discovered, and that throw must not keep it.
+        ParkedProfile profile = await _store.EnsureFolderAsync(AccountEmail.Parse("a@example.com").Value, TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(
+            Path.Combine(profile.FolderPath, "profile.json"),
+            """{"emailAddress":42}""",
+            TestContext.Current.CancellationToken);
+
+        await _store.DeleteFolderAsync(profile.FolderPath, TestContext.Current.CancellationToken);
+
+        Directory.Exists(profile.FolderPath).ShouldBeFalse();
     }
 
     [Fact]

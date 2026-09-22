@@ -66,7 +66,7 @@ public sealed class LiveDirectorySwitchTests : IDisposable
     {
         SwitchOptions options = new(_liveDirectory, _stateFilePath, _profilesRoot, _appData, lockWait ?? TimeSpan.FromSeconds(2), gateTimeout ?? TimeSpan.FromMilliseconds(200));
         ICredentialPairStore store = pairs ?? new FileSystemCredentialPairStore(_liveDirectory, _profilesRoot, TimeProvider.System);
-        ProfileFolderStore folders = new(_profilesRoot);
+        ProfileFolderStore folders = new(_profilesRoot, NullLogger<ProfileFolderStore>.Instance);
         return new LiveDirectorySwitch(
             store,
             new ClaudeStateFile(_stateFilePath),

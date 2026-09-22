@@ -38,6 +38,31 @@ internal static class AppComposition
     private const string ConfigFileName = "config.json";
     private static readonly TimeSpan _cliTimeout = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// The host's simple console formatter prints no timestamp when
+    /// <see cref="Microsoft.Extensions.Logging.Console.ConsoleFormatterOptions.TimestampFormat"/>
+    /// is left null, which is its default. A trailing space keeps the stamp
+    /// off the level word. UTC, so two machines do not have to share a zone
+    /// before a line can be ordered.
+    /// </summary>
+    internal const string ConsoleTimestampFormat = "yyyy-MM-ddTHH:mm:ss.fffZ ";
+
+    /// <summary>
+    /// Selects the simple formatter and stamps every console line. Setting the
+    /// formatter name is required: while it is null the provider copies the
+    /// deprecated console options, whose timestamp is also null, over the
+    /// simple formatter's own options.
+    /// </summary>
+    internal static void ConfigureConsoleTimestamp(ILoggingBuilder logging)
+    {
+        ArgumentNullException.ThrowIfNull(logging);
+        logging.AddSimpleConsole(static options =>
+        {
+            options.TimestampFormat = ConsoleTimestampFormat;
+            options.UseUtcTimestamp = true;
+        });
+    }
+
     public static string Version =>
         typeof(AppComposition).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
         ?? typeof(AppComposition).Assembly.GetName().Version?.ToString()
@@ -47,6 +72,7 @@ internal static class AppComposition
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(arguments);
+        ConfigureConsoleTimestamp(builder.Logging);
 
         ClaudeCodeAccountRotationConfiguration defaults = ConfigurationDefaults.ForCurrentUser();
         string configPath = arguments.ConfigPath
@@ -135,7 +161,9 @@ internal static class AppComposition
         services.AddSingleton(new FileSystemCredentialPairStore(configuration.LiveConfigDirectory, configuration.ProfilesRoot, TimeProvider.System));
         services.AddSingleton<ICredentialPairStore>(static provider => provider.GetRequiredService<FileSystemCredentialPairStore>());
         services.AddSingleton(new ClaudeStateFile(configuration.StateFilePath));
-        services.AddSingleton(new ProfileFolderStore(configuration.ProfilesRoot));
+        services.AddSingleton(provider => new ProfileFolderStore(
+            configuration.ProfilesRoot,
+            provider.GetRequiredService<ILogger<ProfileFolderStore>>()));
         services.AddSingleton(new RateLimitGuardTeeFileReader(configuration.StatuslineTeePath));
         // Through the factory so the container owns the gate this file disposes.
         services.AddSingleton(_ => new RosterFile(configuration.AppDataDirectory));

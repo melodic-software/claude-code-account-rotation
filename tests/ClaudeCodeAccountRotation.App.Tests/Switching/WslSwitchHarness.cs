@@ -87,7 +87,7 @@ internal sealed class WslSwitchHarness : IDisposable
     {
         SwitchOptions options = Options;
         var pairs = new FileSystemCredentialPairStore(LiveDirectory, Store, Clock);
-        ProfileFolderStore profiles = new(Store);
+        ProfileFolderStore profiles = new(Store, NullLogger<ProfileFolderStore>.Instance);
         // The registry disposes the hosts it owns, and these facts configure
         // none, so the analyzer's scope rule is satisfied by saying so once.
 #pragma warning disable CA2000

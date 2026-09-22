@@ -42,7 +42,7 @@ internal sealed class RefreshHarness : IDisposable
         // The store keeps the system clock even here: its refresh lock polls
         // against GetUtcNow and would never terminate under a frozen one.
         Store = new FaultyPairStore(new FileSystemCredentialPairStore(LiveDirectory, ProfilesRoot, TimeProvider.System));
-        Profiles = new ProfileFolderStore(ProfilesRoot);
+        Profiles = new ProfileFolderStore(ProfilesRoot, NullLogger<ProfileFolderStore>.Instance);
         _roster = new RosterFile(AppData);
         ClaudeStateFile stateFile = new(StateFilePath);
         Recovery = new RecoveryFiles(options, Store, Profiles, State, RecoveryLog, Clock);
