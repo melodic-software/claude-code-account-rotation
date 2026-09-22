@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
@@ -168,6 +169,7 @@ public sealed class FollowerReleaseTests : IDisposable
         exported.StepReached.ShouldBe(ImportStep.Exported);
         exported.IsRelease.ShouldBeTrue();
         exported.OutgoingFingerprint.ShouldBe(rotated);
+        exported.RequestedFingerprint.ShouldBe(planned);
 
         // The existing commit path is what removes the live file. The export stays
         // until the leader parks it, so this fingerprint has one non-staging copy.
@@ -179,6 +181,43 @@ public sealed class FollowerReleaseTests : IDisposable
         (await FollowerRoots.FingerprintOfAsync(_roots.ExportPath(HeldEmail), Token)).ShouldBe(rotated);
         (await _roots.NonStagingFilesHoldingAsync(rotated, Token)).Count.ShouldBe(1);
         (await _roots.NonStagingFilesHoldingAsync(planned, Token)).Count.ShouldBe(0);
+
+        // The same plan, asked again after the live file is gone. The record is
+        // keyed on the fingerprint the request named, and it hands back the pair
+        // that actually left. A different fingerprint is a different transaction.
+        Result<ImportAnswer, string> again = await follower.ImportAsync(_roots.ReleaseRequest(HeldEmail, planned), Token);
+        again.IsSuccess.ShouldBeTrue(again.IsFailure ? again.Error : null);
+        again.Value.AlreadyImported.ShouldBeTrue();
+        again.Value.ExportedFingerprint.ShouldBe(rotated);
+        again.Value.Result.ShouldNotBeNull().OutgoingFingerprint.ShouldBe(rotated);
+
+        Result<ImportAnswer, string> other = await follower.ImportAsync(
+            _roots.ReleaseRequest(HeldEmail, RefreshTokenFingerprint.FromRefreshToken("refresh-other")),
+            Token);
+        other.IsFailure.ShouldBeTrue();
+        other.Error.ShouldContain("nothing to hand back");
+    }
+
+    [Fact]
+    public async Task AReleaseRecordThatPredatesTheRequestFingerprintStillAnswersTheSamePlan()
+    {
+        // Records written before the split omit RequestedFingerprint. The pair
+        // that left was the one the request named, and that is what a re-issue
+        // still has to match.
+        RefreshTokenFingerprint fa = await _roots.WriteLiveAsync(HeldEmail, HeldToken, Token);
+        using FollowerImport follower = _roots.Follower();
+        await follower.ImportAsync(_roots.ReleaseRequest(HeldEmail, fa), Token);
+        await follower.CommitAsync(new AccountEmail(HeldEmail), Token);
+        string path = Path.Combine(_roots.AppData, "state", "last-import.json");
+        JsonObject document = JsonNode.Parse(await File.ReadAllTextAsync(path, Token))!.AsObject();
+        document.Remove("RequestedFingerprint").ShouldBeTrue();
+        await File.WriteAllTextAsync(path, document.ToJsonString(), Token);
+
+        Result<ImportAnswer, string> again = await follower.ImportAsync(_roots.ReleaseRequest(HeldEmail, fa), Token);
+
+        again.IsSuccess.ShouldBeTrue(again.IsFailure ? again.Error : null);
+        again.Value.AlreadyImported.ShouldBeTrue();
+        again.Value.ExportedFingerprint.ShouldBe(fa);
     }
 
     [Fact]

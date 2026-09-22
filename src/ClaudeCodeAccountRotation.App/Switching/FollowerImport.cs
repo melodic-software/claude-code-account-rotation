@@ -464,11 +464,16 @@ internal sealed partial class FollowerImport : IDisposable
             return null;
         }
 
-        // For an import the fingerprint identifies the pair that arrived; for a
-        // release it identifies the pair that left. Either way it is the one
-        // the request named, so a re-issue for a different pair of the same
-        // account is a new transaction rather than an answered one.
-        RefreshTokenFingerprint? recorded = last.IsRelease ? last.OutgoingFingerprint : last.IncomingFingerprint;
+        // For an import the fingerprint identifies the pair that arrived. For a
+        // release it identifies the pair the request named, which is not always
+        // the pair that left: a rotation before export parks the live pair and
+        // still has to answer a re-issue of the same plan. Matching the pair
+        // that left would miss this record, and the next attempt would refuse
+        // with nothing to hand back because the live file is already gone.
+        // A record from before that split stored only the pair that left.
+        RefreshTokenFingerprint? recorded = last.IsRelease
+            ? last.RequestedFingerprint ?? last.OutgoingFingerprint
+            : last.IncomingFingerprint;
         return recorded == request.Fingerprint
             ? new ImportResult(last.Outgoing, last.OutgoingFingerprint, last.OutgoingAccount, AlreadyImported: true)
             : null;
@@ -540,7 +545,8 @@ internal sealed partial class FollowerImport : IDisposable
                 request.Account,
                 hold.OutgoingAccount,
                 ImportStep.Planned,
-                hold.StartedAt);
+                hold.StartedAt,
+                request.Fingerprint);
             // The completed-transaction record goes before the new one is
             // written. F1 has already decided this is not a replay — the
             // account, the direction and the fingerprint all had to match for
@@ -737,7 +743,8 @@ internal sealed partial class FollowerImport : IDisposable
                 entry.Outgoing,
                 entry.OutgoingFingerprint,
                 entry.OutgoingAccount,
-                timeProvider.GetUtcNow()),
+                timeProvider.GetUtcNow(),
+                entry.RequestedFingerprint),
             cancellationToken);
         await journal.ClearAsync(cancellationToken);
         pairs.DeleteStaging();

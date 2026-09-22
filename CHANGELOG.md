@@ -232,8 +232,10 @@ All notable changes to this project are documented in this file. The format foll
 
 - A release whose live pair rotated before export parks the pair the follower actually holds.
   The follower exports that pair and names its fingerprint, and the leader parks the verified
-  fingerprint into the slot. A rotation after export, while the release is stopped at Exported,
-  still unwinds and does not park the pre-rotation export (#83).
+  fingerprint into the slot. A re-issued release still matches that completed record by the
+  fingerprint the request named, so a leader whose journal was lost is answered from the record
+  rather than told there is nothing to hand back. A rotation after export, while the release is
+  stopped at Exported, still unwinds and does not park the pre-rotation export (#83).
 - A failing `claude` command no longer hands the page the CLI's own text (#11).
   The string a switch toast can show stays a short classified sentence: the command
   timed out, it exited with a code, or `auth status` printed no JSON object. The
