@@ -600,7 +600,7 @@ internal sealed partial class LiveDirectorySwitch
     {
         List<(string Path, bool IsLive, RefreshTokenFingerprint Fingerprint)> holders = [];
         string livePath = Path.Combine(_options.LiveConfigDirectory, FileSystemCredentialPairStore.FileName);
-        if (await _pairs.ReadLiveAsync(cancellationToken) is CredentialPair live)
+        if (await ReadForLineageScanAsync(_options.LiveConfigDirectory, live: true, cancellationToken) is CredentialPair live)
         {
             holders.Add((livePath, true, live.Fingerprint));
         }
@@ -609,7 +609,7 @@ internal sealed partial class LiveDirectorySwitch
         {
             foreach (string folder in Directory.EnumerateDirectories(_options.ProfilesRoot))
             {
-                if (await _pairs.ReadParkedAsync(folder, cancellationToken) is CredentialPair parked)
+                if (await ReadForLineageScanAsync(folder, live: false, cancellationToken) is CredentialPair parked)
                 {
                     holders.Add((Path.Combine(folder, FileSystemCredentialPairStore.FileName), false, parked.Fingerprint));
                 }
@@ -642,6 +642,30 @@ internal sealed partial class LiveDirectorySwitch
         }
 
         return quarantined;
+    }
+
+    /// <summary>
+    /// One credential file for the duplicate scan, or null when it is absent or
+    /// unreadable. Quarantine moves a second copy of a fingerprint. A file this
+    /// read cannot parse is not a duplicate that can be proved, and it is not
+    /// disposable, so it stays where it is. Skipping it is what keeps a torn
+    /// parked pair from failing host startup.
+    /// </summary>
+    private async Task<CredentialPair?> ReadForLineageScanAsync(string folder, bool live, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return live
+                ? await _pairs.ReadLiveAsync(cancellationToken)
+                : await _pairs.ReadParkedAsync(folder, cancellationToken);
+        }
+#pragma warning disable CA1031 // Do not catch general exception types
+        catch (Exception exception) when (exception is not OperationCanceledException)
+#pragma warning restore CA1031
+        {
+            LogUnreadableCredential(Path.GetFileName(Path.TrimEndingDirectorySeparator(folder)), exception.Message);
+            return null;
+        }
     }
 
     private async Task<(string Outcome, bool Blocks)> ReconcileJournalAsync(CancellationToken cancellationToken)
@@ -861,6 +885,9 @@ internal sealed partial class LiveDirectorySwitch
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "quarantined a duplicate credential lineage {Fingerprint}: {Source} -> {Destination}")]
     private partial void LogQuarantined(string source, string destination, string fingerprint);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "skipped an unreadable credential file in {Folder} during startup reconciliation: {Reason}")]
+    private partial void LogUnreadableCredential(string folder, string reason);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "a temporary file at {Source} holds a credential pair and could not be moved to quarantine; it stays where it is and switching is blocked")]
     private partial void LogStrandedTemporary(string source);

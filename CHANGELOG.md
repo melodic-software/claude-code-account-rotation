@@ -281,6 +281,22 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- The refresh lock refreshes its directory mtime every five seconds while it is held. A switch
+  holds that lock across the journal, the profile and owner writes, and the state-file patch
+  retries, which can run past the 60-second steal window. Refreshing the mtime keeps the hold
+  exclusive. Aborting on a deadline would leave the journal open (#9).
+- Replacing an existing file is one `File.Move` with overwrite, on Windows as well. `File.Replace`
+  with no backup deletes the destination before the new file is renamed, so a sharing failure can
+  leave the state file missing once the retry budget runs out. A destination another process holds
+  is retried for those same two seconds, including the access-denied result that move returns (#9).
+- Startup reconciliation logs a busy mutation gate and lets the host start. The recovery sweep
+  takes that same gate, and a busy one leaves a stranded pair where it is instead of writing it
+  beside the mutation that holds the gate. A torn parked credential
+  file is skipped and left in place during that scan, so it no longer fails host startup. A torn
+  live credential file no longer fails `GET /api/dashboard`: the live card comes back without a
+  login expiry. An unreadable parked file warns once per folder, not on every ten-second poll (#9).
+- The dashboard sends `Content-Security-Policy` (`default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'`)
+  and `X-Content-Type-Options: nosniff`. The ten-second poll still reads local files only (#9).
 - A login whose reader failed unexpectedly stayed pending for the whole ten minutes, and the
   failure never reached the log (#41). The session now reports that failure at once, and the
   exception is written to the log without being copied onto the page. Shutdown waits a short,

@@ -10,13 +10,20 @@ namespace ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 /// directory create (proper-lockfile: stale after 60 s, mtime refreshed every
 /// 5 s), and a contending process gets a retryable error. The tool acquires
 /// the same directory the same way, so a session's own refresh can never run
-/// between the tool's park and unpark. A hold lasts milliseconds, so the mtime
-/// is not refreshed while held.
+/// between the tool's park and unpark. The hold covers the journal, the
+/// profile and owner writes, and the state-file patch retries, which can run
+/// past <see cref="StaleAfter"/>. The directory's mtime is refreshed every
+/// <see cref="HeartbeatInterval"/> while the lock is held, the same cadence
+/// proper-lockfile uses. A deadline that abandoned the hold would leave the
+/// journal open.
 /// </summary>
 internal sealed partial class OAuthRefreshLock
 {
     public const string DirectoryName = ".oauth_refresh.lock";
     public static readonly TimeSpan StaleAfter = TimeSpan.FromSeconds(60);
+
+    /// <summary>How often a holder refreshes the directory mtime. proper-lockfile uses <c>update: 5000</c>.</summary>
+    public static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(5);
 
     private const int WindowsErrorAlreadyExists = 183;
     private const int WindowsErrorAccessDenied = 5;
@@ -26,13 +33,21 @@ internal sealed partial class OAuthRefreshLock
 
     private readonly string _lockDirectory;
     private readonly TimeProvider _timeProvider;
+    private readonly TimeSpan _heartbeatInterval;
 
     public OAuthRefreshLock(string liveConfigDirectory, TimeProvider timeProvider)
+        : this(liveConfigDirectory, timeProvider, HeartbeatInterval)
+    {
+    }
+
+    internal OAuthRefreshLock(string liveConfigDirectory, TimeProvider timeProvider, TimeSpan heartbeatInterval)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(liveConfigDirectory);
         ArgumentNullException.ThrowIfNull(timeProvider);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(heartbeatInterval, TimeSpan.Zero);
         _lockDirectory = Path.Combine(Path.GetFullPath(liveConfigDirectory), DirectoryName);
         _timeProvider = timeProvider;
+        _heartbeatInterval = heartbeatInterval;
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "Ownership of the held lock transfers to the caller through the result; disposing it releases the lock.")]
@@ -45,7 +60,7 @@ internal sealed partial class OAuthRefreshLock
             if (TryCreateExclusively(_lockDirectory))
             {
                 Stamp();
-                return Result<IAsyncDisposable, string>.Success(new Held(_lockDirectory));
+                return Result<IAsyncDisposable, string>.Success(new Held(_lockDirectory, _timeProvider, _heartbeatInterval));
             }
 
             // A stale directory is removed and the create retried at once, but only a
@@ -199,16 +214,52 @@ internal sealed partial class OAuthRefreshLock
     [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     private static partial int MakeDirectoryUnix(string path, uint mode);
 
-    private sealed class Held(string lockDirectory) : IAsyncDisposable
+    private sealed class Held : IAsyncDisposable
     {
-        private bool _released;
+        private readonly string _lockDirectory;
+        private readonly TimeProvider _timeProvider;
+        private readonly ITimer _heartbeat;
+        private int _released;
+
+        public Held(string lockDirectory, TimeProvider timeProvider, TimeSpan heartbeatInterval)
+        {
+            _lockDirectory = lockDirectory;
+            _timeProvider = timeProvider;
+            // The acquire already stamped. The first beat waits one interval, then
+            // repeats, so a hold that outlives the steal window still looks fresh.
+            _heartbeat = timeProvider.CreateTimer(Beat, state: null, heartbeatInterval, heartbeatInterval);
+        }
+
+        private void Beat(object? state)
+        {
+            _ = state;
+            if (Volatile.Read(ref _released) != 0 || !Directory.Exists(_lockDirectory))
+            {
+                return;
+            }
+
+            try
+            {
+                if (Volatile.Read(ref _released) != 0)
+                {
+                    return;
+                }
+
+                Directory.SetLastWriteTimeUtc(_lockDirectory, _timeProvider.GetUtcNow().UtcDateTime);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // Best effort, as the stamp at acquire is: a lock whose mtime
+                // could not be refreshed is still held. The next beat tries again.
+            }
+        }
 
         public ValueTask DisposeAsync()
         {
-            if (!_released)
+            if (Interlocked.Exchange(ref _released, 1) == 0)
             {
-                _released = true;
-                TryRemove(lockDirectory);
+                _heartbeat.Dispose();
+                TryRemove(_lockDirectory);
             }
 
             return ValueTask.CompletedTask;

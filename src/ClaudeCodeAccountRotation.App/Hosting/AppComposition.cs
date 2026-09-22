@@ -260,6 +260,7 @@ internal static class AppComposition
     public static void MapRoutes(WebApplication app)
     {
         ArgumentNullException.ThrowIfNull(app);
+        app.UseMiddleware<SecurityHeadersMiddleware>();
         app.UseMiddleware<LoopbackHostMiddleware>();
 
         // The framework's liveness probe with no checks registered: the body is the
