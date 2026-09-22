@@ -996,6 +996,70 @@ public sealed class DashboardAssemblerTests
     }
 
     [Fact]
+    public async Task ARememberedRefusalExpiresAndALaterMaxAnswerNamesAdopt()
+    {
+        await using AppFactory factory = new();
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        factory.Cli.SubscriptionType = "enterprise";
+
+        Payload first = await DashboardAsync(factory);
+        SetupOf(first).ShouldBe(AddSetup);
+
+        // Inside the minute the memory stands, so a quiet upgrade does not
+        // spawn the CLI on the very next poll.
+        factory.Cli.SubscriptionType = "max";
+        Payload held = await DashboardAsync(factory);
+        SetupOf(held).ShouldBe(AddSetup);
+
+        factory.Clock.Advance(DashboardAssembler.LiveSeatJudgmentLifetime);
+
+        Payload second = await DashboardAsync(factory);
+        SetupOf(second).ShouldBe(AdoptSetup);
+    }
+
+    [Fact]
+    public async Task ARememberedMaxAnswerExpiresAndALaterEnterpriseAnswerNamesAdd()
+    {
+        await using AppFactory factory = new();
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        factory.Cli.SubscriptionType = "max";
+
+        Payload first = await DashboardAsync(factory);
+        SetupOf(first).ShouldBe(AdoptSetup);
+
+        factory.Clock.Advance(DashboardAssembler.LiveSeatJudgmentLifetime);
+        factory.Cli.SubscriptionType = "enterprise";
+
+        Payload second = await DashboardAsync(factory);
+        SetupOf(second).ShouldBe(AddSetup);
+    }
+
+    [Fact]
+    public async Task AChangedRateLimitTierAsksAgainBeforeTheJudgmentExpires()
+    {
+        // The tier string is part of the memory. A new one is a different
+        // login, so the sentence follows the CLI now instead of waiting out
+        // the minute.
+        await using AppFactory factory = new();
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        factory.Cli.SubscriptionType = "enterprise";
+
+        Payload first = await DashboardAsync(factory);
+        SetupOf(first).ShouldBe(AddSetup);
+
+        JsonObject account = AppFactory.AccountJson(LiveEmail);
+        account["organizationRateLimitTier"] = "default_claude_ai";
+        await File.WriteAllTextAsync(
+            factory.StateFilePath,
+            new JsonObject { ["numStartups"] = 3, ["oauthAccount"] = account }.ToJsonString(),
+            TestContext.Current.CancellationToken);
+        factory.Cli.SubscriptionType = "max";
+
+        Payload second = await DashboardAsync(factory);
+        SetupOf(second).ShouldBe(AdoptSetup);
+    }
+
+    [Fact]
     public async Task ARefusedLiveSeatFallsThroughToLoginWhenARosterCardNeedsIt()
     {
         await using AppFactory factory = new();

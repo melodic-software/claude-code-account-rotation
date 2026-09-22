@@ -56,6 +56,17 @@ internal sealed partial class DashboardAssembler(
 
     private const string AddSentence = "Use Add an account, then Login.";
 
+    /// <summary>
+    /// How long a CLI tier judgment stands. The adopt route reads the CLI
+    /// again on every click, so a process-lifetime memory would keep naming
+    /// Adopt after the same address became Enterprise, or Add after it became
+    /// Max. A minute is long enough that the ten-second poll does not spawn
+    /// the CLI every time, and short enough that the sentence catches the
+    /// route. A change to <c>organizationRateLimitTier</c> drops the memory
+    /// immediately, without waiting out the minute.
+    /// </summary>
+    internal static readonly TimeSpan LiveSeatJudgmentLifetime = TimeSpan.FromMinutes(1);
+
     /// <summary>The roster entry as the page reads it.</summary>
     public static RosterEntryView? View(RosterEntry? entry) => entry is null
         ? null
@@ -240,8 +251,9 @@ internal sealed partial class DashboardAssembler(
     /// block can admit a Max tier and can never refuse one, which is the
     /// admission rule the adopt route already uses, so the CLI is asked only
     /// when the block does not already admit. A Max or refused judgment is
-    /// remembered for that e-mail, so the ten-second poll does not spawn the
-    /// CLI to relearn it. An unknown read is not remembered.
+    /// remembered for that e-mail and that <c>organizationRateLimitTier</c>,
+    /// and only for <see cref="LiveSeatJudgmentLifetime"/>. An unknown read
+    /// is not remembered.
     /// </summary>
     private async Task<bool> LiveSeatRefusedAsync(
         OAuthAccountBlock liveAccount,
@@ -254,7 +266,7 @@ internal sealed partial class DashboardAssembler(
         }
 
         LiveSeatJudgment? judged = _liveSeatJudgment;
-        if (judged is not null && string.Equals(judged.Email, live.Value, StringComparison.Ordinal))
+        if (judged is not null && JudgmentStillApplies(judged, live, liveAccount))
         {
             return judged.Refused;
         }
@@ -271,12 +283,17 @@ internal sealed partial class DashboardAssembler(
         }
 
         bool refused = verdict == MaxTierVerdict.Refused;
-        _liveSeatJudgment = new LiveSeatJudgment(live.Value, refused);
+        _liveSeatJudgment = new LiveSeatJudgment(live.Value, liveAccount.OrganizationRateLimitTier, refused, timeProvider.GetUtcNow());
         return refused;
     }
 
-    /// <summary>One live e-mail and the adopt-live refusal already read for it.</summary>
-    private sealed record LiveSeatJudgment(string Email, bool Refused);
+    private bool JudgmentStillApplies(LiveSeatJudgment judged, AccountEmail live, OAuthAccountBlock liveAccount) =>
+        string.Equals(judged.Email, live.Value, StringComparison.Ordinal)
+        && string.Equals(judged.RateLimitTier, liveAccount.OrganizationRateLimitTier, StringComparison.Ordinal)
+        && timeProvider.GetUtcNow() - judged.ReadAt < LiveSeatJudgmentLifetime;
+
+    /// <summary>One live e-mail, the tier string it was read against, and when.</summary>
+    private sealed record LiveSeatJudgment(string Email, string? RateLimitTier, bool Refused, DateTimeOffset ReadAt);
 
     /// <summary>
     /// One card, whichever of the three sources it came from, beside the standing
