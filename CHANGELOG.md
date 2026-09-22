@@ -9,7 +9,9 @@ All notable changes to this project are documented in this file. The format foll
 ### Changed
 
 - A rostered card is renamed by clicking its heading, which edits the display name in place, and
-  the Edit panel carries notes so a warning has a home other than the name (#48). The heading stays
+  the Edit panel carries notes so a warning has a home other than the name (#48). Leaving that
+  field by pressing Switch, Refresh, Pause, Remove, or Edit runs that control; the rename is
+  saved after the click, and opening Edit does not rebuild the card. The heading stays
   the display name with the address on the line beneath. An account with no alias shows the local
   part of the address as that heading and still shows the full address beneath it.
 - A card for an account whose hand-off is in flight says which way its own pair is going:

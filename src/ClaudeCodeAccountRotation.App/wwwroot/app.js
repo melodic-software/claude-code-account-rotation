@@ -878,16 +878,49 @@
     input.focus();
     if (input.select) { input.select(); }
     var settled = false;
+    // pointerdown is before blur, which is before click. Remember what was
+    // pressed so the save can get out of that click's way.
+    var pressed = null;
+    function onPointerDown(event) { pressed = event.target; }
+    document.addEventListener("pointerdown", onPointerDown, true);
+    function stopWatching() {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+    }
+    function typedAlias() {
+      return input.value.trim() || null;
+    }
     function finish(save) {
       if (settled) { return; }
       settled = true;
-      var alias = input.value.trim() || null;
+      stopWatching();
+      var alias = typedAlias();
       var current = (account.roster && account.roster.alias) || null;
       if (!save || alias === current) {
         showDisplayName(heading, account);
         return;
       }
       renameAccount(account, alias);
+    }
+    // The Edit panel is the thing that was opened. mutate() would refresh and
+    // rebuild the card, which closes that panel and drops whatever was typed.
+    function keepEditOpen(panel) {
+      if (settled) { return; }
+      settled = true;
+      stopWatching();
+      var alias = typedAlias();
+      var current = (account.roster && account.roster.alias) || null;
+      var field = panel.querySelector("input.alias");
+      if (field) { field.value = alias || ""; }
+      showDisplayName(heading, account);
+      if (alias === current) { return; }
+      if (account.roster) { account.roster.alias = alias; }
+      send(accountPath(account.email), "PATCH", { alias: alias }).then(function (result) {
+        showToast(result.ok ? account.email + " renamed" : refused(result.body), result.ok ? "ok" : "error");
+        if (!result.ok && account.roster) {
+          account.roster.alias = current;
+          showDisplayName(heading, account);
+        }
+      });
     }
     input.addEventListener("keydown", function (event) {
       if (event.key === "Escape") {
@@ -898,7 +931,25 @@
         finish(true);
       }
     });
-    input.addEventListener("blur", function () { finish(true); });
+    input.addEventListener("blur", function () {
+      if (settled) { return; }
+      var target = pressed;
+      pressed = null;
+      var edit = target && target.closest && target.closest("details.edit");
+      if (edit) {
+        keepEditOpen(edit);
+        return;
+      }
+      // A button pressed to leave the field is still enabled here. mutate()
+      // disables every button synchronously, so the save waits until that
+      // click has been dispatched.
+      var armed = target && target.closest && target.closest("button, summary, a, input, select, textarea");
+      if (armed) {
+        setTimeout(function () { finish(true); }, 0);
+        return;
+      }
+      finish(true);
+    });
   }
 
   function cardHeading(account) {

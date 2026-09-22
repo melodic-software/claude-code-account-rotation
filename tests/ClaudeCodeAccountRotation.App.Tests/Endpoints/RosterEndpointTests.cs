@@ -554,6 +554,11 @@ public sealed class RosterEndpointTests
         script.ShouldContain("labeled(form, \"Notes\", notes)");
         script.ShouldContain("body.notes = notes.value.trim() || null");
         script.ShouldContain("labeled(container, \"Display name\", alias)");
+        // Leaving the field by pressing another control must not disable that
+        // control before its click runs, and opening Edit must not refresh the card.
+        script.ShouldContain("pointerdown");
+        script.ShouldContain("details.edit");
+        script.ShouldContain("setTimeout(function () { finish(true); }, 0)");
     }
 
     [Fact]
