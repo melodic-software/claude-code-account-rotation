@@ -486,7 +486,20 @@ The phase stays `[DOING]` for 2.0 alone.
 - `QuotaRefreshTests.PausedPairNearLoginExpiryIsRefreshed`: a paused pair 5 days from login expiry gets one token POST; one 20 days out gets none.
 - Live acceptance (human): with ≥ 2 parked accounts, one idle > 8 h, click Refresh all; every card populated within 60 s (wall clock) with source, capture time, and "login expires in N days"; compare one card to that account's claude.ai Settings > Usage. Scope-change note 2026-09-12 (#52): "login expires in N days" moved to #49; the 60-second bound is not promised while the bucket keying is unknown, since under a shared bucket a pass populates about eight cards and the rest report "rate limited, retry in N s" and lead the next pass (converging in three passes over ten accounts). Running spike 02b per-token restores the bound as written. The runbook step is in `tests/acceptance/README.md`.
 
-### Phase 3: Ranking, queue, and switch proposals [TODO]
+### Phase 3: Ranking, queue, and switch proposals [NOT BUILT, by decision]
+
+**Decision 2026-09-22: AC 5 is unmet by choice, and this phase is not a debt.** Nothing in this
+phase shipped. `Core/Routing/` holds `AccountAvailability.cs` and `AccountStanding.cs` and nothing
+else: there is no `AccountRanking`, no `SwitchAdvisor`, no `RoutingPolicy`, no `AdvisorState`, and no
+reader for `stop-events.jsonl`. The dashboard orders every card by which account frees up next
+(#47), which is what an operator reads before a switch, and the operator picks from that order. The
+ranked queue of three, the proposal banner, the 30-minute switch-back cooldown, and the
+edge-triggered auto-refresh would sit on top of an order that already answers the question, so under
+the operator's standing "stop adding" they are not being built. The items below stay as the
+specification anyone reopening this would work from. What reopens it: an operator who finds the card
+order insufficient to choose from, a `StopFailure(rate_limit)` arriving unattended often enough to
+want the reactive proposal (Q27), or an autonomous lane that has to pick an account with nobody
+watching. Until one of those happens, AC 5 is waived rather than owed.
 
 The ranked queue of three, the switch and switch-back proposals, the 24-hour urgency flag, and the
 decision-point auto-refresh (AC 5). Pure functions over `AccountStanding` rows.
@@ -537,15 +550,20 @@ decision-point auto-refresh (AC 5). Pure functions over `AccountStanding` rows.
 - `SwitchAdvisorTests.CooldownSurvivesRestart`: a switch-back proposal at T, a new advisor built from the persisted state at T + 10 min, no second proposal.
 - `grep -rn "System.Threading.Timer\|PeriodicTimer\|Task.Delay" src/ClaudeCodeAccountRotation.App/Quota/ | wc -l` prints `0` (no timer path in the refresh code). Scope-change note 2026-09-12 (#52): `RefreshBudget` refuses and never waits; the one-second spacing is an injected delay delegate on `QuotaRefresh`, registered in `AppComposition`, so tests pace through a recorder and the grep stays green.
 
-### Phase 4: Roster operations and browser-assisted login [TODO]
+### Phase 4: Roster operations and browser-assisted login [DONE]
 
 Review: security
 
 Add, pause, remove, adopt-live, alias and browser mapping, and the Login button (AC 6, 7). The first
 work item settles the login mechanism (design thread T8).
 
-- [ ] **4.1 Spike 05b** (throwaway, this machine, recorded in
-  `.work/claude-subscription-rotation/spike-05b-piped-login.md`): run
+- [x] **4.1 Spike 05b** (2026-09-22 reconciliation; the mechanism was settled and the Captured
+  assumption in this file records it: the assumption beginning "The sign-in URL can be captured and
+  routed to a browser profile" is marked **Verified 2026-09-04** and ends "The Login button uses the
+  callback flow and keeps code-paste as the documented fallback." That is mechanism (b), and it is
+  what `ClaudeCliLoginSessionRunner` and the page implement. The spike file itself cannot be cited:
+  it lives under `.work/`, which is gitignored, so this assumption is the record of the verdict.)
+  Run
   `CLAUDE_CONFIG_DIR=<empty temp folder> claude auth login --email <parked email>` with stdin and
   stdout piped from a small script; capture the printed URL; complete the browser step in the mapped
   profile; write the displayed code to the child's stdin followed by a newline. Record: did the URL
@@ -556,14 +574,22 @@ work item settles the login mechanism (design thread T8).
   `login_hint=<email>` (the parameter the `--email` flag sets) and opens it in the mapped profile);
   the localhost callback completes it. If `login_hint` is not honored on that URL, AC 6 is met
   except for the pre-fill under (b), and the approval record says so.
-- [ ] **4.2** `ILoginSessionRunner` + `ClaudeCliLoginSessionRunner` per the 05b verdict; in-memory
+- [x] **4.2** (2026-09-22 reconciliation; shipped in `a9a8476` (#44) as
+  `Adapters/Process/ClaudeCliLoginSessionRunner.cs`, with `Adapters/ClaudeCliLoginSessionRunnerTests.cs`
+  and `Endpoints/LoginEndpointTests.cs`.) `ILoginSessionRunner` + `ClaudeCliLoginSessionRunner` per the 05b verdict; in-memory
   login sessions with a 10-minute expiry; the process is killed on expiry or cancel. On completion,
   rewrite `profile.json` from the folder's freshly written `.claude.json` `oauthAccount` block before
   pruning the login residue, so a stale block never wins over the new login.
-- [ ] **4.3** `IBrowserLauncher` + `ChromiumFamilyBrowserLauncher`: resolves the executable from
+- [x] **4.3** (2026-09-22 reconciliation; shipped in `a9a8476` (#44) as
+  `Adapters/Process/ChromiumFamilyBrowserLauncher.cs`, with `Adapters/ChromiumFamilyBrowserLauncherTests.cs`.)
+  `IBrowserLauncher` + `ChromiumFamilyBrowserLauncher`: resolves the executable from
   `config.json` overrides, then platform-known install paths for Chrome, Edge, Brave; arguments
   `--profile-directory=<dir>` and the URL, passed as an argument array (never a shell string).
-- [ ] **4.4** Roster: `RosterEntry`, `Roster`, `RosterFile` (atomic write); add and adopt-live admit
+- [x] **4.4** (2026-09-22 reconciliation; shipped in `a9a8476` (#44) as
+  `Core/Accounts/Roster.cs` and `RosterEntry.cs`, `Adapters/FileSystem/RosterFile.cs`, and
+  `Endpoints/RosterEndpoints.cs`, whose `adopt-live` route is mapped there; tests in
+  `Core.Tests/Accounts/RosterTests.cs`, `Adapters/RosterFileTests.cs` and
+  `Endpoints/RosterEndpointTests.cs`.) Roster: `RosterEntry`, `Roster`, `RosterFile` (atomic write); add and adopt-live admit
   only Max accounts (`subscriptionType == "max"` from `claude auth status --json` run under the
   folder, or an `organizationRateLimitTier` containing `claude_max` in the account block); a Team or
   Enterprise account is refused with the reason, since the Enterprise seat is never in the rotation
@@ -573,12 +599,14 @@ work item settles the login mechanism (design thread T8).
   (optional `claude auth logout` run with `CLAUDE_CONFIG_DIR=<folder>`, then delete the folder;
   refused for the live account), `POST /api/accounts/{email}/adopt-live` (adds the live state
   file's account to the roster; the dashboard offers it whenever the live email is not on the roster).
-- [ ] **4.5** Login endpoints per `design/type-inventory.md` "Routes"; page gains Add, Pause, Remove,
+- [x] **4.5** (2026-09-22 reconciliation; shipped in `a9a8476` (#44); the page carries Add, Pause,
+  Remove, Login and Adopt, and the code field is mechanism (b)'s, per 4.1's verdict. Tests in
+  `Endpoints/LoginEndpointTests.cs` and `Endpoints/BrowserProfileEndpointTests.cs`.) Login endpoints per `design/type-inventory.md` "Routes"; page gains Add, Pause, Remove,
   Login, Adopt buttons and the login code field (mechanism a) or the URL paste field (mechanism b).
 
 **Sanity Check:**
 
-- `.work/claude-subscription-rotation/spike-05b-piped-login.md` exists and its first line matches `^# Spike 05b .* (PASS|FAIL)$`.
+- ~~`.work/claude-subscription-rotation/spike-05b-piped-login.md` exists and its first line matches `^# Spike 05b .* (PASS|FAIL)$`.~~ Uncheckable: `.work/` is gitignored, so no clone can run this. The verdict is in this file's Captured assumptions instead (see 4.1).
 - `dotnet test` exit 0; `RosterEndpointTests`: add → `Directory.Exists(<profiles>/<sanitized>)`; pause → `RosterFile` round-trips `Paused == true` and the card renders the paused state (exclusion from the ranked queue is asserted by Phase 3's `AccountRankingTests` `Paused` case, since the queue lands at 3.5); remove → folder gone; remove on the live email → 409; adopt-live → roster contains the live email.
 - `ChromiumFamilyBrowserLauncherTests`: recorded arguments equal `["--profile-directory=Profile 3", "<url>"]` for Chrome with profile `Profile 3`.
 - `grep -rn "UseShellExecute = true" src/ClaudeCodeAccountRotation.App/Adapters/` prints nothing, and
@@ -588,16 +616,37 @@ work item settles the login mechanism (design thread T8).
   shells out.
 - Live acceptance (human): Login for a parked account opens the roster's browser and profile with the email pre-filled; after completion `CLAUDE_CONFIG_DIR=<folder> claude auth status --json | jq -r .email` prints that email and the card leaves "needs login" (the "login expires in N days" card text is 2.6 and is asserted in Phase 2's live acceptance).
 
-### Phase 5: Packaging, portability, and release [TODO]
+### Phase 5: Packaging, portability, and release [DOING]
 
 One executable, a config template, one login, working dashboard on a fresh Windows machine (AC 8).
+5.1 to 5.4 are done; 5.5 is the laptop install, still open as #33.
 
-- [ ] **5.1** Publish profile: `dotnet publish src/ClaudeCodeAccountRotation.App -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish/win-x64`; also build (not publish) for `linux-x64` and `osx-arm64` in CI to keep the code portable.
-- [ ] **5.2** First-run behavior: missing `config.json` → written from the embedded template with
+- [x] **5.1** (2026-09-22 reconciliation; **rewritten, because the item as written was wrong in both
+  halves.** `.github/workflows/release.yml` loops `for rid in linux-x64 win-x64` and *publishes* both
+  runtime identifiers, self-contained single-file, from one Linux runner; neither is build-only. And
+  **osx-arm64 exists nowhere in the repository**: it appears in no file under `.github/`, none under
+  `eng/`, not in `Directory.Build.props`, and not in the csproj, and the CI matrix is
+  `[ubuntu-24.04, windows-2025]`. The osx-arm64 clause is therefore **dropped, not met**: macOS is
+  already out of scope in the Brief (Q26, Keychain credential storage), so nothing was ever built for
+  it and nothing is owed. Reinstating it is part of answering Q26, not part of this phase.) Publish
+  profile: the two published runtime identifiers are **`linux-x64` and `win-x64`**, both self-contained
+  single-file with `IncludeNativeLibrariesForSelfExtract`, built by `release.yml` on a tag. The WSL
+  follower runs the `linux-x64` build; `eng/smoke-linux-publish.sh` and CI cover the
+  framework-dependent Linux leg.
+- [x] **5.2** (2026-09-22 reconciliation; shipped in `2cf77aa` (#107) as
+  `Configuration/EmbeddedConfigTemplate.cs` and `Configuration/StartupArguments.cs`.) First-run behavior: missing `config.json` → written from the embedded template with
   runtime-resolved defaults, message printed with the path; `--help` documents every flag; the
   process prints the dashboard URL and opens nothing automatically.
-- [ ] **5.3** `.github/workflows/release.yml`: on tag `v*`, publish and upload
-  `claude-code-account-rotation-win-x64.exe` plus `config.template.json` as release assets; `README.md` install
+- [x] **5.3** (2026-09-22 reconciliation; **asset set corrected.** The item promised two assets. The
+  workflow publishes **five**, and `v1.0.1` carries all five:
+  `claude-code-account-rotation-win-x64.exe`, `claude-code-account-rotation-linux-x64`,
+  `claude-code-account-rotation-follower-log`, `config.template.json` and `SHA256SUMS`. The Linux
+  binary is there because the WSL follower runs it (cross-OS phase 8); the `follower-log` wrapper
+  because the leader execs that sibling rather than the binary (#92, `f57f23f` #113); `SHA256SUMS`
+  because the dotfiles installer verifies each download against it. `2a30095` (#89) landed the
+  workflow, `924d6ba` (#110) added `config.template.json` and the README sections.)
+  `.github/workflows/release.yml`: on tag `v*`, publish and upload
+  the five assets above; `README.md` install
   section (download, place on PATH or make a shortcut, run once, add accounts) and a posture
   section that states plainly: every switch is a human click; the tool never calls the model API;
   it reads the undocumented usage endpoint with its own User-Agent, which the research rates GRAY
@@ -605,10 +654,18 @@ One executable, a config template, one login, working dashboard on a fresh Windo
   public OAuth `client_id`; running the loop lanes (`work-loop`, `babysit-loop`, `attend-queue`)
   while rotating accounts is outside V1 because reader-side invalidation of a latched window is
   still #1218's open half.
-- [ ] **5.4** Flip `RequiresCi: true` in github-iac once `main` emits the org's `ci-status` context
-  (github-iac#409 folded the four ci-gate callers into that single context; the pr-contract
-  composite runs as its steps) (human-run `pulumi up`).
-- [ ] **5.5** Laptop install (human): follow the README on the laptop; reach a working dashboard
+- [x] **5.4** (applied 2026-09-22; **citation corrected.** The item named github-iac#409, which is
+  the earlier change that folded the four ci-gate callers into the single `ci-status` context. The
+  flip itself is github-iac#527, closed by PR #528, merged 2026-09-22. `GovernedRepositories.cs`
+  now carries `RequiresCi: true` for this repository, and `pulumi up` has been applied: live, the
+  repository's `requires-ci` custom property reads `true`, and `repos/.../rules/branches/main`
+  reports the org `ci-gate` ruleset active with `ci-status` as its one required status check.)
+  Flip `RequiresCi: true` in github-iac once `main` emits the org's `ci-status` context
+  (human-run `pulumi up`).
+- [ ] **5.5** **Still open; this is issue #33.** The laptop has run the cross-OS phase 5 live slice
+  (2026-09-21, recorded in `tests/acceptance/README.md`), but that ran a hand-published build, not
+  the README's install path, and it did not exercise a non-default `profilesRoot`. Laptop install
+  (human): follow the README on the laptop; reach a working dashboard
   with one login and no code edit; set `profilesRoot` to a non-default writable directory and confirm
   it is honored.
 
@@ -617,7 +674,7 @@ One executable, a config template, one login, working dashboard on a fresh Windo
 - Publish exit 0; `ls publish/win-x64/*.exe | wc -l` prints `1`.
 - `publish/win-x64/claude-code-account-rotation.exe --version` prints the assembly version; `claude-code-account-rotation.exe --config <temp>/config.json --port 0` creates the file (`test -f`) and `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:<printed port>/api/dashboard` prints `200`.
 - `bash eng/check-no-machine-paths.sh` exit 0; `grep -c '"profilesRoot"' src/ClaudeCodeAccountRotation.App/config.template.json` prints `1` and `grep -c ':\\\\' src/ClaudeCodeAccountRotation.App/config.template.json` prints `0`.
-- `gh release view <tag> -R melodic-software/claude-code-account-rotation --json assets -q '.assets[].name'` lists `claude-code-account-rotation-win-x64.exe` and `config.template.json`.
+- `gh release view <tag> -R melodic-software/claude-code-account-rotation --json assets -q '.assets[].name'` lists all five: `claude-code-account-rotation-win-x64.exe`, `claude-code-account-rotation-linux-x64`, `claude-code-account-rotation-follower-log`, `config.template.json` and `SHA256SUMS`. Verified against `v1.0.1` on 2026-09-22.
 - Laptop (human): dashboard reachable; `profilesRoot` override honored; recorded in `tests/acceptance/README.md`.
 
 ### Phase 6: `rate-limit-guard` tee `account` field (separate repository and PR) [DONE]
@@ -901,7 +958,14 @@ what you found, what the brief expected, and the exact state of your work
   "shared" result re-scopes AC 4 through `/planning:plan review`.
 - D2: **closed 2026-09-04** from the binary: `<live dir>/.oauth_refresh.lock`, directory lock, stale
   at 60 s, refreshed every 5 s. Recheck trigger: the name or library changes in a CLI release.
-- D3 (spike 05b): piped login code acceptance. Decides Phase 4's mechanism.
+- D3 (spike 05b): piped login code acceptance. Decides Phase 4's mechanism. **Struck 2026-09-22: the
+  mechanism was decided.** The Captured assumption beginning "The sign-in URL can be captured and
+  routed to a browser profile" records the verdict, marked **Verified 2026-09-04**: the code-paste
+  prompt rejected pasted codes on a loaded machine, the interactive `/login` flow completes through a
+  localhost callback from a non-default browser profile, and "The Login button uses the callback flow
+  and keeps code-paste as the documented fallback." That is mechanism (b), and it is what shipped.
+  The spike file the item names lives under gitignored `.work/` and cannot be cited; the Captured
+  assumption is the record.
 - Whether the state-file patch is needed at all (Phase 1.5a probe).
 - Whether `claude auth logout` under a profile folder revokes server-side (research unknown 6); the
   optional logout on Remove is offered either way.
