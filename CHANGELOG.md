@@ -287,7 +287,8 @@ All notable changes to this project are documented in this file. The format foll
   exclusive. Aborting on a deadline would leave the journal open (#9).
 - Replacing an existing file is one `File.Move` with overwrite, on Windows as well. `File.Replace`
   with no backup deletes the destination before the new file is renamed, so a sharing failure can
-  leave the state file missing once the retry budget runs out (#9).
+  leave the state file missing once the retry budget runs out. A destination another process holds
+  is retried for those same two seconds, including the access-denied result that move returns (#9).
 - Startup reconciliation logs a busy mutation gate and lets the host start. A torn parked credential
   file is skipped and left in place during that scan, so it no longer fails host startup. A torn
   live credential file no longer fails `GET /api/dashboard`: the live card comes back without a

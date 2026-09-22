@@ -138,7 +138,7 @@ internal static class AtomicBytesFile
                 File.Delete(path);
                 return;
             }
-            catch (IOException exception) when (IsTransientSharingFailure(exception) && waited < _retryBudget)
+            catch (Exception exception) when (IsTransientSharingFailure(exception) && waited < _retryBudget)
             {
                 TimeSpan delay = backoff + TimeSpan.FromMilliseconds(RandomNumberGenerator.GetInt32(25));
                 await Task.Delay(delay, cancellationToken);
@@ -148,18 +148,26 @@ internal static class AtomicBytesFile
         }
     }
 
-    internal static async Task MoveIntoPlaceWithRetryAsync(string temporaryPath, string path, CancellationToken cancellationToken)
+    internal static Task MoveIntoPlaceWithRetryAsync(string temporaryPath, string path, CancellationToken cancellationToken) =>
+        MoveIntoPlaceWithRetryAsync(
+            temporaryPath,
+            path,
+            static (source, destination, overwrite) => File.Move(source, destination, overwrite),
+            cancellationToken);
+
+    internal static async Task MoveIntoPlaceWithRetryAsync(string temporaryPath, string path, Action<string, string, bool> move, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(move);
         TimeSpan waited = TimeSpan.Zero;
         TimeSpan backoff = _initialBackoff;
         while (true)
         {
             try
             {
-                MoveIntoPlace(temporaryPath, path);
+                MoveIntoPlace(temporaryPath, path, move);
                 return;
             }
-            catch (IOException exception) when (IsTransientSharingFailure(exception) && waited < _retryBudget)
+            catch (Exception exception) when (IsTransientSharingFailure(exception) && waited < _retryBudget)
             {
                 TimeSpan delay = backoff + TimeSpan.FromMilliseconds(RandomNumberGenerator.GetInt32(25));
                 await Task.Delay(delay, cancellationToken);
@@ -193,11 +201,16 @@ internal static class AtomicBytesFile
         move(temporaryPath, path, true);
     }
 
-    // Win32 ERROR_SHARING_VIOLATION (32) and ERROR_LOCK_VIOLATION (33), which
-    // MoveFileEx returns when the destination is briefly held. 1175 and 1176 are
-    // the ReplaceFile codes this writer no longer produces; they stay in the
-    // set so a failure that still surfaces them retries while the destination
-    // is intact.
-    private static bool IsTransientSharingFailure(IOException exception) =>
-        (exception.HResult & 0xFFFF) is 32 or 33 or 1175 or 1176;
+    // Win32 ERROR_SHARING_VIOLATION (32) and ERROR_LOCK_VIOLATION (33) are the
+    // codes a held file usually surfaces as IOException. MoveFileEx with
+    // MOVEFILE_REPLACE_EXISTING instead returns ERROR_ACCESS_DENIED (5) when the
+    // destination is open with no sharing, and that becomes
+    // UnauthorizedAccessException. 1175 and 1176 are the ReplaceFile codes this
+    // writer no longer produces; they stay in the set so a failure that still
+    // surfaces them retries while the destination is intact. A genuine ACL
+    // denial is the same code 5, and it spends the same two-second budget
+    // before it fails.
+    private static bool IsTransientSharingFailure(Exception exception) =>
+        exception is IOException or UnauthorizedAccessException
+        && (exception.HResult & 0xFFFF) is 5 or 32 or 33 or 1175 or 1176;
 }

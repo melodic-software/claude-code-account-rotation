@@ -53,6 +53,38 @@ public sealed class AtomicJsonFileTests : IDisposable
         File.Exists(temporary).ShouldBeTrue();
     }
 
+    /// <summary>
+    /// <c>MoveFileEx</c> reports a destination opened with no sharing as access
+    /// denied, not as a sharing violation. The retry has to treat that as the
+    /// same brief hold, or the first refusal fails the write while the previous
+    /// bytes are still there.
+    /// </summary>
+    [Fact]
+    public async Task AHeldDestinationIsRetriedWhenTheMoveIsRefusedAsAccessDenied()
+    {
+        string path = Path.Combine(_directory, "state.json");
+        await File.WriteAllTextAsync(path, "original", TestContext.Current.CancellationToken);
+        string temporary = Path.Combine(_directory, "next.tmp");
+        await File.WriteAllTextAsync(temporary, "next", TestContext.Current.CancellationToken);
+        int calls = 0;
+
+        await AtomicBytesFile.MoveIntoPlaceWithRetryAsync(temporary, path, (_, _, _) =>
+        {
+            calls++;
+            if (calls == 1)
+            {
+                // COR_E_UNAUTHORIZEDACCESS, the HResult Win32 code 5 is wrapped in.
+                throw new UnauthorizedAccessException("access denied") { HResult = unchecked((int)0x80070005) };
+            }
+
+            File.Move(temporary, path, overwrite: true);
+        }, TestContext.Current.CancellationToken);
+
+        calls.ShouldBe(2);
+        (await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken)).ShouldBe("next");
+        File.Exists(temporary).ShouldBeFalse();
+    }
+
     [Fact]
     public async Task ReplacesAnExistingFileWhole()
     {
