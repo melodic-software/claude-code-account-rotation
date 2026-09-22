@@ -230,6 +230,12 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- A login whose reader failed unexpectedly stayed pending for the whole ten minutes, and the
+  failure never reached the log (#41). The session now reports that failure at once, and the
+  exception is written to the log without being copied onto the page. Shutdown waits a short,
+  bounded time for the reader to leave the child process before disposing it. A finished session
+  stays readable for ten minutes, the same window the login itself is given, so a reload can still
+  see how it ended, and is then dropped.
 - A login opens one browser, the profile the roster maps to the account. The CLI's own OAuth flow
   was opening its callback URL in the machine's default browser at the same time, so the operator
   got two windows on two URLs and could sign in through the wrong one. Every CLI command now runs

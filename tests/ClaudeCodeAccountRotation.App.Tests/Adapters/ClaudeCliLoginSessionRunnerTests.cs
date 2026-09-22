@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Adapters.Process;
@@ -5,6 +6,8 @@ using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Ports;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Adapters;
 
@@ -41,14 +44,18 @@ public sealed class ClaudeCliLoginSessionRunnerTests : IDisposable
 
     private static AccountEmail Email(string value) => AccountEmail.Parse(value).Value;
 
-    private ClaudeCliLoginSessionRunner Runner(LoginChildFactory? start = null) => new(
+    private ClaudeCliLoginSessionRunner Runner(
+        LoginChildFactory? start = null,
+        TimeProvider? clock = null,
+        ILogger<ClaudeCliLoginSessionRunner>? logger = null) => new(
         start ?? _script.Start,
         new ProfileFolderStore(_profilesRoot),
         new ClaudeStateFile(_stateFilePath),
         _gate,
         _cli,
         _cli,
-        TimeProvider.System);
+        clock ?? TimeProvider.System,
+        logger ?? NullLogger<ClaudeCliLoginSessionRunner>.Instance);
 
     private async Task WriteStateFileAsync(string email) =>
         await File.WriteAllTextAsync(
@@ -181,12 +188,203 @@ public sealed class ClaudeCliLoginSessionRunnerTests : IDisposable
         _script.Last.CodesWritten.ShouldBe(["111111"]);
     }
 
+    [Fact]
+    public async Task AnUnexpectedPumpExceptionFailsTheSessionBeforeItsExpiry()
+    {
+        // A fault the read loop does not treat as the child ending used to leave
+        // the pump task unobserved and the session pending until the ten-minute
+        // expiry. The clock is not moved, so a failure here is the fault path.
+        var clock = new TestClock(new DateTimeOffset(2026, 9, 22, 0, 0, 0, TimeSpan.Zero));
+        RecordingLogger<ClaudeCliLoginSessionRunner> logger = new();
+        using ClaudeCliLoginSessionRunner runner = Runner(
+            (_, _) => Result<ILoginChild, string>.Success(new FaultingLoginChild()),
+            clock,
+            logger);
+        string folder = Folder(ParkedEmail);
+
+        Result<LoginSession, string> started = await runner.StartAsync(Email(ParkedEmail), folder, TestContext.Current.CancellationToken);
+
+        started.IsSuccess.ShouldBeTrue(started.IsFailure ? started.Error : "");
+        await runner.FinishedAsync(started.Value.Id).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        LoginSession status = runner.Status(started.Value.Id).ShouldNotBeNull();
+        status.State.ShouldBe(LoginSessionState.Failed);
+        status.ExpiresAt.ShouldBeGreaterThan(clock.GetUtcNow());
+        status.Message.ShouldNotBeNull().ShouldContain("credential file");
+        status.Message.ShouldNotContain(FaultingLoginChild.Sentinel);
+        logger.Lines.ShouldContain(line => line.Contains(nameof(NotSupportedException), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task DisposeAfterThePumpHasFinishedDoesNotThrowAndCanBeCalledTwice()
+    {
+        using ClaudeCliLoginSessionRunner runner = Runner();
+        Result<LoginSession, string> started = await runner.StartAsync(Email(ParkedEmail), Folder(ParkedEmail), TestContext.Current.CancellationToken);
+        started.IsSuccess.ShouldBeTrue(started.IsFailure ? started.Error : "");
+        _script.Last.Exit();
+        await runner.FinishedAsync(started.Value.Id).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var watch = Stopwatch.StartNew();
+        runner.Dispose();
+        runner.Dispose();
+
+        watch.Elapsed.ShouldBeLessThan(ClaudeCliLoginSessionRunner.DisposeWait);
+    }
+
+    [Fact]
+    public async Task DisposeWaitsABoundedTimeForAPumpThatDoesNotFinish()
+    {
+        // The read ignores cancellation and Kill does not unblock it, so the
+        // only way Dispose returns is the bound. A second call must not wait again.
+        using var child = new HungLoginChild();
+        using ClaudeCliLoginSessionRunner runner = Runner((_, _) => Result<ILoginChild, string>.Success(child));
+        Result<LoginSession, string> started = await runner.StartAsync(Email(ParkedEmail), Folder(ParkedEmail), TestContext.Current.CancellationToken);
+        started.IsSuccess.ShouldBeTrue(started.IsFailure ? started.Error : "");
+
+        var watch = Stopwatch.StartNew();
+        runner.Dispose();
+        watch.Elapsed.ShouldBeGreaterThan(ClaudeCliLoginSessionRunner.DisposeWait - TimeSpan.FromMilliseconds(500));
+        watch.Elapsed.ShouldBeLessThan(ClaudeCliLoginSessionRunner.DisposeWait + TimeSpan.FromSeconds(10));
+        var second = Stopwatch.StartNew();
+        runner.Dispose();
+        second.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(1));
+        child.Release();
+    }
+
+    [Fact]
+    public async Task AFinishedSessionStaysReadableForItsLifetimeAndIsThenEvicted()
+    {
+        var clock = new TestClock(new DateTimeOffset(2026, 9, 22, 0, 0, 0, TimeSpan.Zero));
+        using ClaudeCliLoginSessionRunner runner = Runner(clock: clock);
+        Result<LoginSession, string> started = await runner.StartAsync(Email(ParkedEmail), Folder(ParkedEmail), TestContext.Current.CancellationToken);
+        started.IsSuccess.ShouldBeTrue(started.IsFailure ? started.Error : "");
+        _script.Last.Exit();
+        await runner.FinishedAsync(started.Value.Id).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        runner.Status(started.Value.Id).ShouldNotBeNull().State.ShouldBe(LoginSessionState.Failed);
+
+        clock.Advance(ClaudeCliLoginSessionRunner.CompletedSessionRetention - TimeSpan.FromTicks(1));
+        runner.EvictFinishedSessions();
+        runner.Status(started.Value.Id).ShouldNotBeNull();
+
+        clock.Advance(TimeSpan.FromTicks(1));
+        runner.EvictFinishedSessions();
+        runner.Status(started.Value.Id).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task ARunningSessionIsNotEvictedAfterItsLifetime()
+    {
+        // Still pending when the sweep runs, even though both the login's own
+        // lifetime and the readable window after a finish have passed. Expiry
+        // is a separate step and happens when something next reads the session.
+        var clock = new TestClock(new DateTimeOffset(2026, 9, 22, 0, 0, 0, TimeSpan.Zero));
+        using ClaudeCliLoginSessionRunner runner = Runner(clock: clock);
+        Result<LoginSession, string> started = await runner.StartAsync(Email(ParkedEmail), Folder(ParkedEmail), TestContext.Current.CancellationToken);
+        started.IsSuccess.ShouldBeTrue(started.IsFailure ? started.Error : "");
+
+        clock.Advance(ClaudeCliLoginSessionRunner.SessionLifetime + ClaudeCliLoginSessionRunner.CompletedSessionRetention);
+        runner.EvictFinishedSessions();
+        LoginSession status = runner.Status(started.Value.Id).ShouldNotBeNull();
+        status.State.ShouldBe(LoginSessionState.Expired);
+    }
+
+    [Fact]
+    public async Task ASessionWhoseReaderIsStillFinishingIsNotEvicted()
+    {
+        // Expiry settles the session in the request; the folder is finished on
+        // the pump afterwards. That pump holds the mutation gate here, so the
+        // readable window can elapse while the reader is still in the finish.
+        var clock = new TestClock(new DateTimeOffset(2026, 9, 22, 0, 0, 0, TimeSpan.Zero));
+        using ClaudeCliLoginSessionRunner runner = Runner(clock: clock);
+        Result<LoginSession, string> started = await runner.StartAsync(Email(ParkedEmail), Folder(ParkedEmail), TestContext.Current.CancellationToken);
+        started.IsSuccess.ShouldBeTrue(started.IsFailure ? started.Error : "");
+        using IDisposable hold = await _gate.AcquireAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        clock.Advance(ClaudeCliLoginSessionRunner.SessionLifetime);
+        runner.Status(started.Value.Id).ShouldNotBeNull().State.ShouldBe(LoginSessionState.Expired);
+        clock.Advance(ClaudeCliLoginSessionRunner.CompletedSessionRetention);
+        runner.EvictFinishedSessions();
+        runner.Status(started.Value.Id).ShouldNotBeNull();
+
+        hold.Dispose();
+        await runner.FinishedAsync(started.Value.Id).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        runner.EvictFinishedSessions();
+        runner.Status(started.Value.Id).ShouldBeNull();
+    }
+
     public void Dispose()
     {
         _gate.Dispose();
         if (Directory.Exists(_root))
         {
             Directory.Delete(_root, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Prints the authorize URL, then throws <see cref="NotSupportedException"/> from
+    /// the next read and from Kill, which is neither cancellation nor a closed
+    /// pipe. A finish that ran only from a <c>finally</c> after Kill would be skipped.
+    /// </summary>
+    private sealed class FaultingLoginChild : ILoginChild
+    {
+        public const string Sentinel = "pump-fault-sentinel";
+
+        private int _reads;
+        private int _kills;
+
+        public Task<string?> ReadAsync(CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref _reads) == 1)
+            {
+                return Task.FromResult<string?>(LoginChildScript.AuthorizeBase + "?code=true");
+            }
+
+            throw new NotSupportedException(Sentinel);
+        }
+
+        public Task WriteCodeAsync(string code, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public void Kill()
+        {
+            // The pump's own kill is the fault. Shutdown kills again on the way
+            // out, and that call has to be safe.
+            if (Interlocked.Increment(ref _kills) == 1)
+            {
+                throw new NotSupportedException(Sentinel);
+            }
+        }
+
+        public void Dispose()
+        {
+        }
+    }
+
+    /// <summary>A read that neither cancellation nor Kill unblocks.</summary>
+    private sealed class HungLoginChild : ILoginChild
+    {
+        private readonly TaskCompletionSource<string?> _hung = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _reads;
+
+        public void Release() => _hung.TrySetResult(null);
+
+        public Task<string?> ReadAsync(CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref _reads) == 1)
+            {
+                return Task.FromResult<string?>(LoginChildScript.AuthorizeBase + "?code=true");
+            }
+
+            return _hung.Task;
+        }
+
+        public Task WriteCodeAsync(string code, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public void Kill()
+        {
+        }
+
+        public void Dispose()
+        {
         }
     }
 }

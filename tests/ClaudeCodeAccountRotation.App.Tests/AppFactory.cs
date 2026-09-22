@@ -220,7 +220,8 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
                 provider.GetRequiredService<CredentialMutationGate>(),
                 provider.GetRequiredService<IClaudeCliAuthStatus>(),
                 provider.GetRequiredService<IClaudeCliLogout>(),
-                Clock)));
+                Clock,
+                provider.GetRequiredService<ILogger<ClaudeCliLoginSessionRunner>>())));
             Overrides?.Invoke(services);
         });
     }

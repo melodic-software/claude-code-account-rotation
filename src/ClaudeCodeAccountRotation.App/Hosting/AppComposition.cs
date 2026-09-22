@@ -143,7 +143,8 @@ internal static class AppComposition
             provider.GetRequiredService<CredentialMutationGate>(),
             provider.GetRequiredService<IClaudeCliAuthStatus>(),
             provider.GetRequiredService<IClaudeCliLogout>(),
-            provider.GetRequiredService<TimeProvider>()));
+            provider.GetRequiredService<TimeProvider>(),
+            provider.GetRequiredService<ILogger<ClaudeCliLoginSessionRunner>>()));
         services.AddSingleton<LiveDirectorySwitch>();
         ComposePeers(services, configuration);
         services.AddSingleton(new WslSwitchJournal(configuration.AppDataDirectory));
