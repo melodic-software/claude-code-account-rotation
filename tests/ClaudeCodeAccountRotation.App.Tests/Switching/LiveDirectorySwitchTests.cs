@@ -53,12 +53,15 @@ public sealed class LiveDirectorySwitchTests : IDisposable
         return folder;
     }
 
+    public static bool OnUnix => !OperatingSystem.IsWindows();
+
     private LiveDirectorySwitch Switch(
         TimeSpan? lockWait = null,
         TimeSpan? gateTimeout = null,
         ICredentialPairStore? pairs = null,
         ILoginSessionRunner? logins = null,
-        bool sharedStore = false)
+        bool sharedStore = false,
+        Func<string, long?>? deviceId = null)
     {
         SwitchOptions options = new(_liveDirectory, _stateFilePath, _profilesRoot, _appData, lockWait ?? TimeSpan.FromSeconds(2), gateTimeout ?? TimeSpan.FromMilliseconds(200));
         ICredentialPairStore store = pairs ?? new FileSystemCredentialPairStore(_liveDirectory, _profilesRoot, TimeProvider.System);
@@ -77,7 +80,8 @@ public sealed class LiveDirectorySwitchTests : IDisposable
             new SharedStoreSlots(_profilesRoot, sharedStore, _gate, logins ?? new NoLoginRunning(), NullLogger<SharedStoreSlots>.Instance),
             options,
             TimeProvider.System,
-            NullLogger<LiveDirectorySwitch>.Instance);
+            NullLogger<LiveDirectorySwitch>.Instance,
+            deviceId);
     }
 
     private async Task<string?> StateFileEmailAsync()
@@ -289,6 +293,51 @@ public sealed class LiveDirectorySwitchTests : IDisposable
             .GetValue<string>().ShouldBe("refresh-rotated");
         report.SwitchingBlocked.ShouldBeTrue();
     }
+
+    [Fact(SkipUnless = nameof(OnUnix), Skip = "Device ids are the Unix volume check; Windows compares drive roots")]
+    public async Task ACredentialTemporaryOnTheSameInjectedDeviceMovesToQuarantine()
+    {
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        string folder = await ParkedProfileAsync("b@example.com", "refresh-b");
+        string stranded = Path.Combine(folder, TemporaryName(CredentialFiles.FileName));
+        await File.WriteAllTextAsync(stranded, CredentialFiles.Shape("refresh-rotated").ToJsonString(), TestContext.Current.CancellationToken);
+
+        ReconciliationReport report = await Switch(deviceId: static _ => 1L).ReconcileAsync(TestContext.Current.CancellationToken);
+
+        File.Exists(stranded).ShouldBeFalse();
+        report.Quarantined.ShouldHaveSingleItem();
+        CopiesOf(_root, "refresh-rotated").ShouldBe(1);
+    }
+
+    [Fact(SkipUnless = nameof(OnUnix), Skip = "Device ids are the Unix volume check; Windows compares drive roots")]
+    public async Task ACredentialTemporaryOnADifferentInjectedDeviceStaysPutAndIsNotCopied()
+    {
+        // Both paths are under one path root on Linux. The injected ids are what
+        // used to be invisible to the path-root check, and the refusal has to
+        // happen before any copy of the refresh token is written.
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        string folder = await ParkedProfileAsync("b@example.com", "refresh-b");
+        string stranded = Path.Combine(folder, TemporaryName(CredentialFiles.FileName));
+        await File.WriteAllTextAsync(stranded, CredentialFiles.Shape("refresh-rotated").ToJsonString(), TestContext.Current.CancellationToken);
+        Func<string, long?> deviceId = path =>
+            Path.GetFullPath(path).StartsWith(_profilesRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal) ? 1L : 2L;
+
+        ReconciliationReport report = await Switch(deviceId: deviceId).ReconcileAsync(TestContext.Current.CancellationToken);
+
+        File.Exists(stranded).ShouldBeTrue();
+        report.Quarantined.ShouldBeEmpty();
+        report.SwitchingBlocked.ShouldBeTrue();
+        report.Banner.ShouldNotBeNull().ShouldContain(stranded);
+        CopiesOf(_root, "refresh-rotated").ShouldBe(1);
+    }
+
+    private static int CopiesOf(string root, string refreshToken) =>
+        Directory.Exists(root)
+            ? Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+                .Count(path => File.ReadAllText(path).Contains(refreshToken, StringComparison.Ordinal))
+            : 0;
 
     [Fact]
     public async Task ASwitchRefusesWhileACredentialTemporaryIsStrandedInPlace()

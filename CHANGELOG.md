@@ -230,6 +230,10 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- On Linux, a credential rename compares device ids, so a profiles root on a different mount than
+  the live directory is refused. The path-root check let it through, because that root is `/` for
+  every absolute path. `File.Move` across volumes copies the file and then deletes it, per its
+  documentation, and that window is a second holder of the refresh token (#17).
 - The usage and token clients no longer follow redirects (#16). A 307 or 308 would resend the
   request, including the refresh-token POST body, to the host the endpoint named. Both clients now
   install a primary handler that refuses redirects, and any 3xx stays the transport failure the

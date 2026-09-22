@@ -52,6 +52,7 @@ internal sealed partial class LiveDirectorySwitch
     private readonly SwitchOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<LiveDirectorySwitch> _logger;
+    private readonly Func<string, long?> _deviceId;
     private readonly string _quarantineDirectory;
     private readonly string _liveOwnerPath;
 
@@ -70,6 +71,41 @@ internal sealed partial class LiveDirectorySwitch
         SwitchOptions options,
         TimeProvider timeProvider,
         ILogger<LiveDirectorySwitch> logger)
+        : this(
+            pairs,
+            stateFile,
+            profiles,
+            journal,
+            gate,
+            logins,
+            authStatus,
+            policyReader,
+            recovery,
+            quota,
+            slots,
+            options,
+            timeProvider,
+            logger,
+            deviceId: null)
+    {
+    }
+
+    internal LiveDirectorySwitch(
+        ICredentialPairStore pairs,
+        ClaudeStateFile stateFile,
+        ProfileFolderStore profiles,
+        SwitchJournal journal,
+        CredentialMutationGate gate,
+        ILoginSessionRunner logins,
+        IClaudeCliAuthStatus authStatus,
+        ManagedLoginPolicyReader policyReader,
+        RecoveryFiles recovery,
+        QuotaState quota,
+        SharedStoreSlots slots,
+        SwitchOptions options,
+        TimeProvider timeProvider,
+        ILogger<LiveDirectorySwitch> logger,
+        Func<string, long?>? deviceId)
     {
         ArgumentNullException.ThrowIfNull(options);
         _pairs = pairs;
@@ -86,6 +122,7 @@ internal sealed partial class LiveDirectorySwitch
         _options = options;
         _timeProvider = timeProvider;
         _logger = logger;
+        _deviceId = deviceId ?? SameVolume.DeviceId;
         _quarantineDirectory = options.QuarantineDirectory;
         _liveOwnerPath = Path.Combine(options.AppDataDirectory, "state", LiveOwnerFileName);
     }
@@ -533,11 +570,11 @@ internal sealed partial class LiveDirectorySwitch
             && name[1..^SuffixLength].EndsWith(FileSystemCredentialPairStore.FileName, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool OnOneVolume(string first, string second) =>
-        string.Equals(
-            Path.GetPathRoot(Path.GetFullPath(first)),
-            Path.GetPathRoot(Path.GetFullPath(second)),
-            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+    /// <summary>
+    /// Whether a rename stays on one volume. The store's rename uses the same
+    /// helper, so the two gates cannot drift back to comparing path roots.
+    /// </summary>
+    private bool OnOneVolume(string first, string second) => SameVolume.OnOneVolume(first, second, _deviceId);
 
     private async Task<IReadOnlyList<string>> QuarantineDuplicateLineagesAsync(CancellationToken cancellationToken)
     {

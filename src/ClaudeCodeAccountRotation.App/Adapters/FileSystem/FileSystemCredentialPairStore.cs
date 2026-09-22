@@ -35,8 +35,13 @@ internal sealed class FileSystemCredentialPairStore : ICredentialPairStore
     private readonly string _profilesRoot;
     private readonly TimeProvider _timeProvider;
     private readonly OAuthRefreshLock _refreshLock;
+    private readonly Func<string, long?> _deviceId;
 
-    public FileSystemCredentialPairStore(string liveConfigDirectory, string profilesRoot, TimeProvider timeProvider)
+    public FileSystemCredentialPairStore(
+        string liveConfigDirectory,
+        string profilesRoot,
+        TimeProvider timeProvider,
+        Func<string, long?>? deviceId = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(liveConfigDirectory);
         ArgumentException.ThrowIfNullOrWhiteSpace(profilesRoot);
@@ -46,6 +51,7 @@ internal sealed class FileSystemCredentialPairStore : ICredentialPairStore
         _profilesRoot = Path.GetFullPath(profilesRoot);
         _timeProvider = timeProvider;
         _refreshLock = new OAuthRefreshLock(_liveConfigDirectory, timeProvider);
+        _deviceId = deviceId ?? SameVolume.DeviceId;
     }
 
     public Task<CredentialPair?> ReadLiveAsync(CancellationToken cancellationToken) =>
@@ -337,9 +343,9 @@ internal sealed class FileSystemCredentialPairStore : ICredentialPairStore
     /// <summary>
     /// A rename that fails loudly instead of ever leaving two holders: the
     /// destination must not exist, and both paths must sit on one volume, since
-    /// File.Move across volumes silently copies then deletes.
+    /// File.Move across volumes copies the file and then deletes it.
     /// </summary>
-    private static void Rename(string sourcePath, string destinationPath)
+    private void Rename(string sourcePath, string destinationPath)
     {
         if (!File.Exists(sourcePath))
         {
@@ -351,20 +357,12 @@ internal sealed class FileSystemCredentialPairStore : ICredentialPairStore
             throw new InvalidOperationException("Refusing to move " + sourcePath + ": " + destinationPath + " already holds a credential pair, and a second holder is never created.");
         }
 
-        if (!SameVolume(sourcePath, destinationPath))
+        if (!SameVolume.OnOneVolume(sourcePath, destinationPath, _deviceId))
         {
             throw new InvalidOperationException("Refusing to move " + sourcePath + " to " + destinationPath + ": the paths are on different volumes and a move must be a rename, never a copy.");
         }
 
         File.Move(sourcePath, destinationPath);
-    }
-
-    private static bool SameVolume(string first, string second)
-    {
-        string? leftRoot = Path.GetPathRoot(Path.GetFullPath(first));
-        string? rightRoot = Path.GetPathRoot(Path.GetFullPath(second));
-        StringComparison comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        return string.Equals(leftRoot, rightRoot, comparison);
     }
 
     private string ProfileFolder(string folderPath)
