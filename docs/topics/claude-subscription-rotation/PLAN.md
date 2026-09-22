@@ -559,13 +559,21 @@ Review: security
 Add, pause, remove, adopt-live, alias and browser mapping, and the Login button (AC 6, 7). The first
 work item settles the login mechanism (design thread T8).
 
-- [x] **4.1 Spike 05b** (2026-09-22 reconciliation; the mechanism was settled and the Captured
-  assumption in this file records it: the assumption beginning "The sign-in URL can be captured and
-  routed to a browser profile" is marked **Verified 2026-09-04** and ends "The Login button uses the
-  callback flow and keeps code-paste as the documented fallback." That is mechanism (b), and it is
-  what `ClaudeCliLoginSessionRunner` and the page implement. The spike file itself cannot be cited:
-  it lives under `.work/`, which is gitignored, so this assumption is the record of the verdict.)
-  Run
+- [x] **4.1 Spike 05b** (2026-09-22 reconciliation; **the spike PASSED and mechanism (a), piped
+  login, is what shipped.** Read it off the code rather than off either record: `LoginChild.cs`
+  sets `RedirectStandardInput` and writes the operator's code to the child's standard input, the
+  page's login panel carries a "paste the code here" field and no URL paste field, and
+  `ClaudeCliLoginSessionRunner`'s own summary says it runs the CLI "with stdin and stdout piped, per
+  the spike that settled the mechanism on this machine", recording what the spike found: the URL
+  prints wrapped in OSC 8 escapes, the code prompt reads a piped line, and a rejected code leaves
+  the prompt open for another attempt. That is (a)'s PASS branch.
+  **Two records in this file are looser than the code and should be read against it.** The Captured
+  assumption beginning "The sign-in URL can be captured and routed to a browser profile", marked
+  **Verified 2026-09-04**, ends "The Login button uses the callback flow and keeps code-paste as the
+  documented fallback." The shipped flow is the other way round: the code field is the primary path
+  and the completion signal is the credential file appearing in the folder, not a callback. The
+  spike file that would settle the wording cannot be cited either: it lives under `.work/`, which is
+  gitignored. The code is the record.) Run
   `CLAUDE_CONFIG_DIR=<empty temp folder> claude auth login --email <parked email>` with stdin and
   stdout piped from a small script; capture the printed URL; complete the browser step in the mapped
   profile; write the displayed code to the child's stdin followed by a newline. Record: did the URL
@@ -602,7 +610,8 @@ work item settles the login mechanism (design thread T8).
   refused for the live account), `POST /api/accounts/{email}/adopt-live` (adds the live state
   file's account to the roster; the dashboard offers it whenever the live email is not on the roster).
 - [x] **4.5** (2026-09-22 reconciliation; shipped in `a9a8476` (#44); the page carries Add, Pause,
-  Remove, Login and Adopt, and the code field is mechanism (b)'s, per 4.1's verdict. Tests in
+  Remove, Login and Adopt, and the login code field is mechanism (a)'s, per 4.1. There is no URL
+  paste field, because (b) was never the shipped path. Tests in
   `Endpoints/LoginEndpointTests.cs` and `Endpoints/BrowserProfileEndpointTests.cs`.) Login endpoints per `design/type-inventory.md` "Routes"; page gains Add, Pause, Remove,
   Login, Adopt buttons and the login code field (mechanism a) or the URL paste field (mechanism b).
 
@@ -960,14 +969,13 @@ what you found, what the brief expected, and the exact state of your work
   "shared" result re-scopes AC 4 through `/planning:plan review`.
 - D2: **closed 2026-09-04** from the binary: `<live dir>/.oauth_refresh.lock`, directory lock, stale
   at 60 s, refreshed every 5 s. Recheck trigger: the name or library changes in a CLI release.
-- D3 (spike 05b): piped login code acceptance. Decides Phase 4's mechanism. **Struck 2026-09-22: the
-  mechanism was decided.** The Captured assumption beginning "The sign-in URL can be captured and
-  routed to a browser profile" records the verdict, marked **Verified 2026-09-04**: the code-paste
-  prompt rejected pasted codes on a loaded machine, the interactive `/login` flow completes through a
-  localhost callback from a non-default browser profile, and "The Login button uses the callback flow
-  and keeps code-paste as the documented fallback." That is mechanism (b), and it is what shipped.
-  The spike file the item names lives under gitignored `.work/` and cannot be cited; the Captured
-  assumption is the record.
+- D3 (spike 05b): piped login code acceptance. Decides Phase 4's mechanism. **Struck 2026-09-22:
+  answered yes, and mechanism (a) shipped.** The evidence is the code, since the spike file lives
+  under gitignored `.work/` and cannot be cited: `LoginChild.cs` pipes the operator's code to the
+  CLI child's standard input, the page offers a code field and no URL paste field, and
+  `ClaudeCliLoginSessionRunner` documents the spike's own findings, that the code prompt reads a
+  piped line and a rejected code leaves the prompt open. See 4.1, which also notes where this file's
+  Captured assumption describes the flow the other way round.
 - Whether the state-file patch is needed at all (Phase 1.5a probe).
 - Whether `claude auth logout` under a profile folder revokes server-side (research unknown 6); the
   optional logout on Remove is offered either way.
