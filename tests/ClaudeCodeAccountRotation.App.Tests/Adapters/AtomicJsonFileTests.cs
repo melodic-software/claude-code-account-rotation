@@ -26,6 +26,33 @@ public sealed class AtomicJsonFileTests : IDisposable
         Directory.GetFiles(_directory).ShouldBe([path]);
     }
 
+    /// <summary>
+    /// A placement that fails must leave the previous bytes. Windows
+    /// <c>File.Replace</c> with no backup does the opposite on Win32 1176: the
+    /// destination is already gone when the call throws. This failure is the
+    /// one <c>File.Move(overwrite: true)</c> has, and it is the call the
+    /// Windows branch makes. The Win32 code itself is not raised on this host.
+    /// </summary>
+    [Fact]
+    public void AFailedPlacementLeavesTheExistingBytesInPlace()
+    {
+        string path = Path.Combine(_directory, "state.json");
+        File.WriteAllText(path, "original");
+        string temporary = Path.Combine(_directory, "next.tmp");
+        File.WriteAllText(temporary, "next");
+        bool overwrite = false;
+
+        Should.Throw<IOException>(() => AtomicBytesFile.MoveIntoPlace(temporary, path, (_, _, overwriteFlag) =>
+        {
+            overwrite = overwriteFlag;
+            throw new IOException("sharing violation");
+        }));
+
+        overwrite.ShouldBeTrue();
+        File.ReadAllText(path).ShouldBe("original");
+        File.Exists(temporary).ShouldBeTrue();
+    }
+
     [Fact]
     public async Task ReplacesAnExistingFileWhole()
     {

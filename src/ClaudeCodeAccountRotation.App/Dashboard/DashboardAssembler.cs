@@ -50,6 +50,15 @@ internal sealed partial class DashboardAssembler(
     /// </summary>
     private LiveSeatJudgment? _liveSeatJudgment;
 
+    /// <summary>
+    /// Folders whose credential file has already produced one unreadable warning.
+    /// A stuck file must not log on every ten-second poll. A later successful
+    /// read removes the folder, so a new failure warns once.
+    /// </summary>
+    private readonly object _unreadableWarningGate = new();
+
+    private readonly HashSet<string> _unreadableFoldersWarned = new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+
     private const string AdoptSentence = "Click Adopt to put the live account on the roster.";
 
     private const string LoginSentence = "Click Login on the card that needs a login.";
@@ -80,9 +89,22 @@ internal sealed partial class DashboardAssembler(
 
     public async Task<DashboardView> AssembleAsync(CancellationToken cancellationToken)
     {
-        _ = await executor.RepairStaleIdentityAsync(cancellationToken);
+        // The repair reads the live pair on its way to the state file. A torn
+        // credential file there used to fail the whole payload. The page still
+        // comes back; the live card is the part that degrades.
+        try
+        {
+            _ = await executor.RepairStaleIdentityAsync(cancellationToken);
+        }
+#pragma warning disable CA1031 // Do not catch general exception types
+        catch (Exception exception) when (exception is not OperationCanceledException)
+#pragma warning restore CA1031
+        {
+            WarnUnreadableOnce(options.LiveConfigDirectory, exception.Message, live: true);
+        }
+
         OAuthAccountBlock? liveAccount = await stateFile.ReadAccountBlockAsync(cancellationToken);
-        CredentialPair? livePair = await pairs.ReadLiveAsync(cancellationToken);
+        (CredentialPair? livePair, bool liveUnreadable) = await ReadLivePairAsync(cancellationToken);
         IReadOnlyList<ParkedProfile> parked = await profiles.ListAsync(cancellationToken);
         StatuslineSnapshot? snapshot = await tee.ReadAsync(cancellationToken);
         Roster roster = await rosterFile.ReadAsync(cancellationToken);
@@ -113,7 +135,7 @@ internal sealed partial class DashboardAssembler(
             built.Add(Card(
                 live,
                 isLive: true,
-                livePair is not null,
+                livePair is not null || liveUnreadable,
                 ownFolder?.FolderPath,
                 observed,
                 note,
@@ -504,7 +526,9 @@ internal sealed partial class DashboardAssembler(
     /// The folder's own leaf reaches the log beside the store's reason. The reason
     /// can name the file path, since it is the store's own exception message, and a
     /// framework exception can quote the argument it rejected, so it can name a
-    /// number the file holds, but never a secret the file holds.
+    /// number the file holds, but never a secret the file holds. The first warning
+    /// is the one that is kept: a folder that stays unreadable does not log again
+    /// on every poll.
     /// </para>
     /// </summary>
     private async Task<DateTimeOffset?> ReadLoginExpiryAsync(ParkedProfile profile, CancellationToken cancellationToken)
@@ -516,14 +540,68 @@ internal sealed partial class DashboardAssembler(
 
         try
         {
-            return (await pairs.ReadParkedAsync(profile.FolderPath, cancellationToken))?.LoginExpiresAt;
+            DateTimeOffset? expiry = (await pairs.ReadParkedAsync(profile.FolderPath, cancellationToken))?.LoginExpiresAt;
+            ForgetUnreadable(profile.FolderPath);
+            return expiry;
         }
 #pragma warning disable CA1031 // Do not catch general exception types
         catch (Exception exception) when (exception is not OperationCanceledException)
 #pragma warning restore CA1031
         {
-            LogLoginExpiryUnreadable(FolderName(profile.FolderPath), exception.Message);
+            // The first warning is kept. A folder that stays unreadable does not
+            // log again on the next poll.
+            WarnUnreadableOnce(profile.FolderPath, exception.Message, live: false);
             return null;
+        }
+    }
+
+    /// <summary>
+    /// The live pair, or an unreadable flag when the file is there and cannot
+    /// be parsed. Absence is a null pair and a clear flag: the card then says
+    /// the account needs a login. A torn file keeps the card and drops the
+    /// expiry, which is the same degradation a parked folder already has.
+    /// </summary>
+    private async Task<(CredentialPair? Pair, bool Unreadable)> ReadLivePairAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            CredentialPair? pair = await pairs.ReadLiveAsync(cancellationToken);
+            ForgetUnreadable(options.LiveConfigDirectory);
+            return (pair, false);
+        }
+#pragma warning disable CA1031 // Do not catch general exception types
+        catch (Exception exception) when (exception is not OperationCanceledException)
+#pragma warning restore CA1031
+        {
+            WarnUnreadableOnce(options.LiveConfigDirectory, exception.Message, live: true);
+            return (null, true);
+        }
+    }
+
+    private void WarnUnreadableOnce(string folderPath, string reason, bool live)
+    {
+        lock (_unreadableWarningGate)
+        {
+            if (!_unreadableFoldersWarned.Add(folderPath))
+            {
+                return;
+            }
+        }
+
+        if (live)
+        {
+            LogLiveCredentialsUnreadable(reason);
+            return;
+        }
+
+        LogLoginExpiryUnreadable(FolderName(folderPath), reason);
+    }
+
+    private void ForgetUnreadable(string folderPath)
+    {
+        lock (_unreadableWarningGate)
+        {
+            _unreadableFoldersWarned.Remove(folderPath);
         }
     }
 
@@ -553,6 +631,9 @@ internal sealed partial class DashboardAssembler(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "login expiry unreadable for {Folder}: {Reason}")]
     private partial void LogLoginExpiryUnreadable(string folder, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "live credentials unreadable: {Reason}")]
+    private partial void LogLiveCredentialsUnreadable(string reason);
 
     /// <summary>
     /// The merged numbers as the card shows them: the five-hour and seven-day

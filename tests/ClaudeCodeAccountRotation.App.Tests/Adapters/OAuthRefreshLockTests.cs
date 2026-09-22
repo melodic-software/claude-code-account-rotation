@@ -63,6 +63,44 @@ public sealed class OAuthRefreshLockTests : IDisposable
     }
 
     [Fact]
+    public async Task ALongHoldRestampsTheDirectorySoItIsNotStolen()
+    {
+        // The steal window is 60 s of the lock's own clock. A holder that does
+        // not refresh the directory mtime is stolen once that clock moves past
+        // it. The beat is what keeps the directory fresh, so the test moves the
+        // clock and waits for the mtime to follow, instead of sleeping out the
+        // window.
+        TestClock clock = new(new DateTimeOffset(2020, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        OAuthRefreshLock refreshLock = new(_liveDirectory, clock, TimeSpan.FromMilliseconds(30));
+        Result<IAsyncDisposable, string> held = await refreshLock.AcquireAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+        held.IsSuccess.ShouldBeTrue();
+        await using IAsyncDisposable hold = held.Value;
+
+        clock.Advance(OAuthRefreshLock.StaleAfter + TimeSpan.FromSeconds(30));
+        DateTime target = clock.GetUtcNow().UtcDateTime;
+        DateTime observed = DateTime.MinValue;
+        for (int attempt = 0; attempt < 100; attempt++)
+        {
+            observed = Directory.GetLastWriteTimeUtc(_lockDirectory);
+            if (Math.Abs((observed - target).TotalSeconds) < 2)
+            {
+                break;
+            }
+
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        }
+
+        observed.ShouldBe(target, TimeSpan.FromSeconds(2));
+
+        MovingClock contenderClock = new(clock.GetUtcNow());
+        OAuthRefreshLock contender = new(_liveDirectory, contenderClock);
+        Result<IAsyncDisposable, string> stolen = await contender.AcquireAsync(TimeSpan.FromMilliseconds(400), TestContext.Current.CancellationToken);
+
+        stolen.IsFailure.ShouldBeTrue();
+        Directory.Exists(_lockDirectory).ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task StealsALockDirectoryOlderThanTheStaleThreshold()
     {
         Directory.CreateDirectory(_lockDirectory);
@@ -166,5 +204,13 @@ public sealed class OAuthRefreshLockTests : IDisposable
         {
             Directory.Delete(_liveDirectory, recursive: true);
         }
+    }
+
+    /// <summary>A clock that moves with wall time from a chosen instant, so a wait bound can expire.</summary>
+    private sealed class MovingClock(DateTimeOffset start) : TimeProvider
+    {
+        private readonly long _timestamp = Stopwatch.GetTimestamp();
+
+        public override DateTimeOffset GetUtcNow() => start + Stopwatch.GetElapsedTime(_timestamp);
     }
 }

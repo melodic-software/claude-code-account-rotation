@@ -1,9 +1,13 @@
 using System.Globalization;
 using System.Net.Http.Json;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Quota;
+using ClaudeCodeAccountRotation.App.Switching;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Hosting;
 
@@ -39,6 +43,59 @@ public sealed class StartupReconciliationTests
         // only copy of something, so it is kept where the operator can find it.
         File.Exists(Path.Combine(recovery, "a@example.com.credentials.json")).ShouldBeFalse();
         Directory.GetFiles(Path.Combine(recovery, "stale")).Length.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task ATornParkedCredentialFileDoesNotStopTheAppAndIsLeftInPlace()
+    {
+        // Startup reconciliation reads every parked pair. A torn file used to
+        // throw out of StartAsync and the host never bound. The file is not a
+        // duplicate that can be proved, so it is not quarantined either.
+        await using AppFactory factory = new();
+        string folder = await factory.ParkedProfileAsync("a@example.com", "refresh-a", TestContext.Current.CancellationToken);
+        string credentials = Path.Combine(folder, CredentialFiles.FileName);
+        await File.WriteAllTextAsync(credentials, "{", TestContext.Current.CancellationToken);
+
+        using HttpClient client = factory.CreateClient();
+        HttpResponseMessage health = await client.GetAsync(new Uri("/healthz", UriKind.Relative), TestContext.Current.CancellationToken);
+
+        health.IsSuccessStatusCode.ShouldBeTrue();
+        (await File.ReadAllTextAsync(credentials, TestContext.Current.CancellationToken)).ShouldBe("{");
+        factory.Logs.Lines.ShouldContain(line => line.Contains("unreadable credential file", StringComparison.Ordinal));
+        string quarantine = Path.Combine(factory.AppData, "quarantine");
+        if (Directory.Exists(quarantine))
+        {
+            Directory.GetFiles(quarantine, "*", SearchOption.AllDirectories).ShouldBeEmpty();
+        }
+    }
+
+    [Fact]
+    public async Task AHeldMutationGateDoesNotStopStartup()
+    {
+        await using AppFactory factory = new();
+        StrongBox<IDisposable?> permit = new();
+        factory.Overrides = services =>
+        {
+            services.Replace(ServiceDescriptor.Singleton(_ =>
+            {
+                CredentialMutationGate gate = new();
+                permit.Value = gate.AcquireAsync(TimeSpan.Zero, CancellationToken.None).GetAwaiter().GetResult();
+                return gate;
+            }));
+        };
+
+        try
+        {
+            using HttpClient client = factory.CreateClient();
+            HttpResponseMessage health = await client.GetAsync(new Uri("/healthz", UriKind.Relative), TestContext.Current.CancellationToken);
+
+            health.IsSuccessStatusCode.ShouldBeTrue();
+            factory.Logs.Lines.ShouldContain(line => line.Contains("startup reconciliation did not run", StringComparison.Ordinal));
+        }
+        finally
+        {
+            permit.Value?.Dispose();
+        }
     }
 
     [Fact]

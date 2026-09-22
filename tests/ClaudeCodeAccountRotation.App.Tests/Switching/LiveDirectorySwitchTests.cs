@@ -228,6 +228,39 @@ public sealed class LiveDirectorySwitchTests : IDisposable
     }
 
     [Fact]
+    public async Task ATornParkedCredentialFileIsLeftInPlaceAndTheScanContinues()
+    {
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        string torn = await ParkedProfileAsync("b@example.com", "refresh-b");
+        string tornFile = Path.Combine(torn, CredentialFiles.FileName);
+        await File.WriteAllTextAsync(tornFile, "{", TestContext.Current.CancellationToken);
+        string duplicate = await ParkedProfileAsync("c@example.com", "refresh-a");
+
+        ReconciliationReport report = await Switch().ReconcileAsync(TestContext.Current.CancellationToken);
+
+        (await File.ReadAllTextAsync(tornFile, TestContext.Current.CancellationToken)).ShouldBe("{");
+        report.Quarantined.ShouldHaveSingleItem().ShouldContain("c@example.com");
+        File.Exists(Path.Combine(duplicate, CredentialFiles.FileName)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task ATornLiveCredentialFileDoesNotFailReconciliation()
+    {
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(_liveDirectory, CredentialFiles.FileName), "{", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        string parked = await ParkedProfileAsync("b@example.com", "refresh-b");
+
+        ReconciliationReport report = await Switch().ReconcileAsync(TestContext.Current.CancellationToken);
+
+        report.SwitchingBlocked.ShouldBeFalse();
+        report.Quarantined.ShouldBeEmpty();
+        (await File.ReadAllTextAsync(Path.Combine(_liveDirectory, CredentialFiles.FileName), TestContext.Current.CancellationToken)).ShouldBe("{");
+        File.Exists(Path.Combine(parked, CredentialFiles.FileName)).ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task StartupQuarantinesADuplicateLineageAndBlocksSwitchingUntilCleared()
     {
         await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);

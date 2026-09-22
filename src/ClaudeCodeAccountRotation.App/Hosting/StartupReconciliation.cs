@@ -26,17 +26,44 @@ internal sealed partial class StartupReconciliation(
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        ReconciliationReport report = await executor.ReconcileAsync(cancellationToken);
-        LogReconciled(report.JournalOutcome, report.Quarantined.Count, report.SwitchingBlocked);
+        // The gate wait is zero, and hosted services start before Kestrel binds.
+        // A holder in that window is unlikely. A throw here would still abort
+        // startup, so a busy gate is logged and the host comes up anyway.
+        ReconciliationReport? report = null;
+        try
+        {
+            report = await executor.ReconcileAsync(cancellationToken);
+            LogReconciled(report.JournalOutcome, report.Quarantined.Count, report.SwitchingBlocked);
+        }
+        catch (TimeoutException)
+        {
+            LogReconcileSkipped();
+        }
+
         // The leader half of the hand-off crash table, after the Windows one and
         // before the first request: a hand-off this process died in the middle of
         // is finished or left in transit by its own rules, not by a Windows
-        // switch's, which know nothing about mailboxes.
-        WslReconciliation handOff = await coordinator.ReconcileAsync(cancellationToken);
+        // switch's, which know nothing about mailboxes. The same zero-timeout
+        // gate can throw once that pass has a pair to move.
+        WslReconciliation? handOff = null;
+        try
+        {
+            handOff = await coordinator.ReconcileAsync(cancellationToken);
+            LogHandOffReconciled(handOff.Outcome);
+        }
+        catch (TimeoutException)
+        {
+            LogHandOffSkipped();
+        }
+
         // One publication: a poll must not see the new report beside the banner
-        // this pass has not written yet.
-        state.Publish(current => current with { LastReconciliation = report, HandOffBanner = handOff.Banner });
-        LogHandOffReconciled(handOff.Outcome);
+        // this pass has not written yet. A pass that did not run leaves the
+        // previous value, which at startup is none.
+        state.Publish(current => current with
+        {
+            LastReconciliation = report ?? current.LastReconciliation,
+            HandOffBanner = handOff is null ? current.HandOffBanner : handOff.Banner,
+        });
         await RestoreStrandedPairsAsync(cancellationToken);
         await LoadCachedUsageAsync(cancellationToken);
     }
@@ -97,8 +124,14 @@ internal sealed partial class StartupReconciliation(
     [LoggerMessage(Level = LogLevel.Information, Message = "startup reconciliation: {JournalOutcome}; quarantined {QuarantinedCount}; switching blocked: {Blocked}")]
     private partial void LogReconciled(string journalOutcome, int quarantinedCount, bool blocked);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "startup reconciliation did not run: another credential mutation holds the gate")]
+    private partial void LogReconcileSkipped();
+
     [LoggerMessage(Level = LogLevel.Information, Message = "hand-off reconciliation at start: {Outcome}")]
     private partial void LogHandOffReconciled(string outcome);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "hand-off reconciliation did not run: another credential mutation holds the gate")]
+    private partial void LogHandOffSkipped();
 
     // The type and the curated reason where the operator will see them, the
     // exception itself at Debug: a stack trace from a startup sweep over the

@@ -268,8 +268,9 @@ Behavioral reference: `spike-04-swap.py` (memory slice), guard for guard.
   mount point outside Windows, where a `DriveInfo` built from a path names the path itself and had
   every configuration refused on the Ubuntu lane.)
   App concrete file classes: `AtomicJsonFile` (temp file in the target directory,
-  created with `UnixCreateMode` 0600 on non-Windows, `Flush(true)`, then `File.Replace` when the
-  target exists or `File.Move` when it does not; retry a sharing violation with jittered backoff from
+  created with `UnixCreateMode` 0600 on non-Windows, `Flush(true)`, then `File.Move(overwrite: true)`
+  on every platform, including Windows when the target exists (#9; `File.Replace` with no backup
+  deletes the destination on Win32 1176); retry a sharing violation with jittered backoff from
   50 ms up to 2 s total, then fail), `ClaudeStateFile` (re-read immediately before patch; locate the
   `oauthAccount` value span with `Utf8JsonReader` and splice only that span, so every other byte is
   preserved), `ProfileFolderStore` (deletes only folders it discovered through `ListAsync`, never a
@@ -287,8 +288,11 @@ Behavioral reference: `spike-04-swap.py` (memory slice), guard for guard.
   `%OneDriveCommercial%`, `%OneDriveConsumer%`, a `Dropbox` or `Google Drive` folder under the user
   profile): Files-On-Demand dehydrates a credential file into a placeholder, and a synced folder
   uploads refresh tokens, which is a second holder by another name.
-- [x] **1.5** (2026-09-05; `LibraryImport` of `CreateDirectoryW` and libc `mkdir`; the held lock's
-  mtime is not refreshed, a hold lasts milliseconds.) `OAuthRefreshLock`: the tool **participates in Claude Code's own refresh mutex**
+- [x] **1.5** (2026-09-05; `LibraryImport` of `CreateDirectoryW` and libc `mkdir`. 2026-09-22, #9:
+  the hold is not milliseconds. The journal, the profile and owner writes, and up to five
+  state-file patch attempts can pass the 60 s steal window, so the directory's mtime is refreshed
+  every 5 s while the lock is held, matching proper-lockfile's `update`. A deadline that left the
+  journal open was rejected.) `OAuthRefreshLock`: the tool **participates in Claude Code's own refresh mutex**
   instead of sampling it. Verified in the installed binary (2.1.261): the CLI takes
   `<live dir>/.oauth_refresh.lock` through `proper-lockfile` (`stale: 60000`, `update: 5000`), a
   directory created with an exclusive `mkdir`, and a contending session gets the retryable
@@ -297,7 +301,8 @@ Behavioral reference: `spike-04-swap.py` (memory slice), guard for guard.
   `Directory.CreateDirectory` is idempotent and useless here), treats an existing directory whose
   mtime is older than 60 s as stale and removes it, otherwise polls every 250 ms up to
   `RefreshLockWaitBound` (default 10 s) and then refuses with `RefreshLockPresent`; it holds the lock
-  across park → unpark → patch (milliseconds) and removes the directory in `finally`. The wildcard
+  across park → unpark → patch, refreshes the directory mtime every 5 s while it does (#9),
+  and removes the directory in `finally`. The wildcard
   `*.lock` file scan stays only as a secondary guard. D2 is closed by this item.
 - [x] **1.5a** (2026-09-06, this desktop, CLI 2.1.263: **keep the patch.** One switch with
   `patchStateFile: false` and three sessions open. The credential move worked and every session
@@ -364,7 +369,8 @@ Behavioral reference: `spike-04-swap.py` (memory slice), guard for guard.
   profiles with `HasCredentials`, roster entries) and `POST /api/accounts/{email}/switch` (200
   `SwitchOutcome`, 409 `SwitchRefusal`), `SameOriginMutationFilter` on every mutating route.
 - [x] **1.8** (2026-09-05) Page: `wwwroot/index.html`, `app.js`, `app.css` embedded; cards with email, live badge,
-  "needs login" badge, Switch button; result toast; polls `GET /api/dashboard` every 10 s.
+  "needs login" badge, Switch button; result toast; polls `GET /api/dashboard` every 10 s. That poll
+  reads local files only and is not the usage-endpoint polling the refresh contract forbids (#9).
 - [x] **1.9** (2026-09-05; the runbook also carries the 1.5a probe steps as its first section.) `tests/acceptance/check-single-holder.sh`: SHA-256 of `claudeAiOauth.refreshToken` in the
   live file and every `~/.claude-profiles/*/.credentials.json`; prints `files=N distinct=N duplicates=0`
   and exits 1 on any duplicate (the spike 04 hash check generalized to ten). `tests/acceptance/README.md`
@@ -930,9 +936,9 @@ what you found, what the brief expected, and the exact state of your work
 - [EXEC-SHAPE] Sanity-check commands as written per phase; the acceptance runbook lives in
   `tests/acceptance/` with one script (`check-single-holder.sh`) and one human checklist.
 - [FALLBACK — confirm or override] The tool acquires Claude Code's own `.oauth_refresh.lock`
-  directory (exclusive mkdir through P/Invoke, 60 s stale steal) and holds it for the milliseconds
-  of a switch; a profiles root under OneDrive, Dropbox, or Google Drive is refused; duplicate
-  lineages found at startup are quarantined under app data with a banner; the state-file patch is
+  directory (exclusive mkdir through P/Invoke, 60 s stale steal, mtime refreshed every 5 s while
+  held, #9) and holds it for the switch; a profiles root under OneDrive, Dropbox, or Google Drive is
+  refused; duplicate lineages found at startup are quarantined under app data with a banner; the state-file patch is
   kept or dropped by the Phase 1.5a probe's outcome without a second approval round.
 - [FALLBACK — confirm or override] Default listen port `48211`; lock wait bound 10 s; refresh budget
   6 per 5 min with a 60 s minimum gap (a 401 exempt); login-session expiry 10 min; a profiles root

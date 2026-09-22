@@ -625,6 +625,45 @@ public sealed class DashboardAssemblerTests
     }
 
     [Fact]
+    public async Task AStuckUnreadableParkedFileWarnsOnce()
+    {
+        await using AppFactory factory = new();
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        string folder = await factory.ParkedProfileAsync(OtherEmail, "refresh-b", TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateClient();
+        await File.WriteAllTextAsync(Path.Combine(folder, CredentialFiles.FileName), "{", TestContext.Current.CancellationToken);
+
+        using HttpResponseMessage first = await client.GetAsync(new Uri("/api/dashboard", UriKind.Relative), TestContext.Current.CancellationToken);
+        using HttpResponseMessage second = await client.GetAsync(new Uri("/api/dashboard", UriKind.Relative), TestContext.Current.CancellationToken);
+
+        first.IsSuccessStatusCode.ShouldBeTrue();
+        second.IsSuccessStatusCode.ShouldBeTrue();
+        factory.Logs.Lines.Count(line => line.Contains("login expiry unreadable for", StringComparison.Ordinal)).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task ATornLiveCredentialFileReturnsTheDashboardWithADegradedLiveCard()
+    {
+        await using AppFactory factory = new();
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(
+            Path.Combine(factory.LiveDirectory, CredentialFiles.FileName),
+            "{",
+            TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateClient();
+
+        using HttpResponseMessage response = await client.GetAsync(new Uri("/api/dashboard", UriKind.Relative), TestContext.Current.CancellationToken);
+        response.StatusCode.ShouldBe(System.Net.HttpStatusCode.OK);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        JsonElement card = Card(document.RootElement, LiveEmail);
+
+        card.GetProperty("isLive").GetBoolean().ShouldBeTrue();
+        card.GetProperty("hasCredentials").GetBoolean().ShouldBeTrue();
+        card.GetProperty("loginExpiresAt").ValueKind.ShouldBe(JsonValueKind.Null);
+        factory.Logs.Lines.ShouldContain(line => line.Contains("live credentials unreadable", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task AParkedCredentialFileWithAnEpochOutOfRangeLeavesTheExpiryBlankAndStillListsTheAccount()
     {
         // Well-formed JSON the parser still cannot turn into a pair: every field

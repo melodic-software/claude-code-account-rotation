@@ -1,6 +1,8 @@
 (function () {
   "use strict";
 
+  // Ten seconds. Each poll reads this machine's own files. It is not the
+  // usage-endpoint polling the refresh contract forbids.
   var POLL_MS = 10000;
   var BROWSERS = ["", "chrome", "edge", "brave"];
   // The window the refresh pass renews a paused login in, so the page's "soon"
