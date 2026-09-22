@@ -115,6 +115,43 @@ public sealed class OAuthRefreshLockTests : IDisposable
     }
 
     [Fact]
+    public async Task ADirectoryReplacedBetweenTheTwoStaleChecksIsLeftInPlace()
+    {
+        // Removal stats, stats again, then deletes. The hook sits between those
+        // two reads and replaces the stale directory with a fresh one. That
+        // fresh directory is not the one the first stat saw, so it stays, and
+        // the acquirer does not treat it as stolen.
+        Directory.CreateDirectory(_lockDirectory);
+        Directory.SetLastWriteTimeUtc(_lockDirectory, DateTime.UtcNow.AddSeconds(-61));
+        DateTime stamped = DateTime.MinValue;
+        int hooks = 0;
+        OAuthRefreshLock refreshLock = new(
+            _liveDirectory,
+            TimeProvider.System,
+            OAuthRefreshLock.HeartbeatInterval,
+            () =>
+            {
+                hooks++;
+                Directory.Delete(_lockDirectory);
+                Directory.CreateDirectory(_lockDirectory);
+                stamped = DateTime.UtcNow;
+                Directory.SetLastWriteTimeUtc(_lockDirectory, stamped);
+            });
+
+        Result<IAsyncDisposable, string> held = await refreshLock.AcquireAsync(TimeSpan.FromMilliseconds(400), TestContext.Current.CancellationToken);
+
+        if (held.IsSuccess)
+        {
+            await held.Value.DisposeAsync();
+        }
+
+        held.IsFailure.ShouldBeTrue();
+        hooks.ShouldBe(1);
+        Directory.Exists(_lockDirectory).ShouldBeTrue();
+        Directory.GetLastWriteTimeUtc(_lockDirectory).ShouldBe(stamped, TimeSpan.FromSeconds(1));
+    }
+
+    [Fact]
     public async Task TwoAcquisitionsSerialize()
     {
         OAuthRefreshLock refreshLock = new(_liveDirectory, TimeProvider.System);

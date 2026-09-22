@@ -34,6 +34,7 @@ internal sealed partial class OAuthRefreshLock
     private readonly string _lockDirectory;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _heartbeatInterval;
+    private readonly Action? _betweenStaleChecks;
 
     public OAuthRefreshLock(string liveConfigDirectory, TimeProvider timeProvider)
         : this(liveConfigDirectory, timeProvider, HeartbeatInterval)
@@ -41,6 +42,21 @@ internal sealed partial class OAuthRefreshLock
     }
 
     internal OAuthRefreshLock(string liveConfigDirectory, TimeProvider timeProvider, TimeSpan heartbeatInterval)
+        : this(liveConfigDirectory, timeProvider, heartbeatInterval, betweenStaleChecks: null)
+    {
+    }
+
+    /// <summary>
+    /// <paramref name="betweenStaleChecks"/> runs after the first staleness read
+    /// and before the second, the window in which a stale directory can be
+    /// replaced by a fresh one. Tests use it to force that window. Production
+    /// passes null, and a null hook changes nothing.
+    /// </summary>
+    internal OAuthRefreshLock(
+        string liveConfigDirectory,
+        TimeProvider timeProvider,
+        TimeSpan heartbeatInterval,
+        Action? betweenStaleChecks)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(liveConfigDirectory);
         ArgumentNullException.ThrowIfNull(timeProvider);
@@ -48,6 +64,7 @@ internal sealed partial class OAuthRefreshLock
         _lockDirectory = Path.Combine(Path.GetFullPath(liveConfigDirectory), DirectoryName);
         _timeProvider = timeProvider;
         _heartbeatInterval = heartbeatInterval;
+        _betweenStaleChecks = betweenStaleChecks;
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "Ownership of the held lock transfers to the caller through the result; disposing it releases the lock.")]
@@ -118,6 +135,11 @@ internal sealed partial class OAuthRefreshLock
         {
             return false;
         }
+
+        // Between the two staleness reads, and not after the second: a test
+        // replaces the directory here, and the read below decides from what is
+        // on disk now. A fresh directory must be left in place.
+        _betweenStaleChecks?.Invoke();
 
         try
         {

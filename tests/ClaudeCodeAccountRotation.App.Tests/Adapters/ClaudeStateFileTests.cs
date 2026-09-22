@@ -263,6 +263,36 @@ public sealed class ClaudeStateFileTests : IDisposable
     }
 
     [Fact]
+    public async Task PatchGivesUpWhenTheFileChangesOnEveryAttempt()
+    {
+        // Five is MaxPatchAttempts. A rewrite on every attempt exhausts the
+        // compare-and-swap. The file must stay the last whole document the hook
+        // wrote, not a splice of the staged patch into a document that moved.
+        await File.WriteAllTextAsync(_path, LargeStateFile("a@example.com"), TestContext.Current.CancellationToken);
+        int rewrites = 0;
+        byte[] lastRewrite = [];
+        ClaudeStateFile stateFile = new(_path, beforeReplace: async cancellationToken =>
+        {
+            rewrites++;
+            lastRewrite = Encoding.UTF8.GetBytes(
+                "{\n  \"numStartups\": " + rewrites.ToString(System.Globalization.CultureInfo.InvariantCulture) + "\n}\n");
+            await File.WriteAllBytesAsync(_path, lastRewrite, cancellationToken);
+        });
+
+        IOException error = await Should.ThrowAsync<IOException>(() =>
+            stateFile.PatchAccountBlockAsync(Account("b@example.com"), TestContext.Current.CancellationToken));
+
+        error.Message.ShouldContain("kept changing while the account block was being patched; the switch is journaled and completes at the next startup.");
+        rewrites.ShouldBe(5);
+        byte[] onDisk = await File.ReadAllBytesAsync(_path, TestContext.Current.CancellationToken);
+        onDisk.ShouldBe(lastRewrite);
+        JsonNode document = JsonNode.Parse(onDisk)!;
+        document["numStartups"]!.GetValue<int>().ShouldBe(5);
+        document["oauthAccount"].ShouldBeNull();
+        Directory.GetFiles(_directory).ShouldBe([_path]);
+    }
+
+    [Fact]
     public async Task PatchCreatesAMissingFileWithOnlyTheAccountBlock()
     {
         File.Exists(_path).ShouldBeFalse();
