@@ -668,13 +668,27 @@ Review: close-out
 
 Work: the desktop rollout, the same steps as phase 5 with the operator present; filed in the dotfiles
 repository, not here: the follower binary under `~/.local/bin` behind the `isWsl` branch, the follower
-`config.json` template with `mailbox` resolved by `wslpath` at apply time, the leader's `peers[]`
-values derived from the fleet manifest, and the leader's autostart shortcut at logon. No secret is
-delivered by any of these.
+`config.json` template with `mailbox` resolved by `wslpath` at apply time, and the leader's `peers[]`
+values derived from the fleet manifest. No secret is delivered by any of these.
+
+Amended 2026-09-22. The autostart is **not** a dotfiles shortcut. That repository is user-scope
+config and carries no autostart machinery, and its remote-access plan assigns logon and scheduled
+tasks to `provisioning`, where the desktop's Remote Control session already starts from one. The
+leader's logon task is therefore melodic-software/provisioning#552, with a log redirect and
+restart-on-failure. Two findings this phase had priced in are now their own issues rather than work
+hidden inside it: #91, a shutdown route, so replacing the binary stops needing an external process
+kill; and #92, a real follower log, since `wsl.exe`'s stdout is a discarded pty. #92 settles before
+the dotfiles install, which places whichever shape wins.
+
+The install had no asset to fetch: nothing in this repository published an executable, so the
+tag-driven release workflow (#89) landed first and `v1.0.0` now carries
+`claude-code-account-rotation-linux-x64`, `claude-code-account-rotation-win-x64.exe` and
+`SHA256SUMS`. The parent plan's 5.3 scopes release assets to `win-x64` only, which predates this
+chain; the WSL side runs the `linux-x64` build, so the asset set is both.
 
 **Sanity Check:** R1 to R6 on the desktop as in phase 5; a fresh `chezmoi apply` on each machine
 produces a running follower with no hand-typed path; the leader starts at logon and the page answers
-without the operator launching it.
+without the operator launching it, which provisioning#552 delivers rather than this repository.
 
 **Verification:** the desktop's own live acceptance, operator present, one designated account first
 exactly as the laptop's. **Rollback:** as phase 5, per machine. **Depends on:** phase 5; independent
