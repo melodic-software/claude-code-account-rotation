@@ -50,6 +50,14 @@ internal sealed partial class ProfileFolderStore
     public async Task<IReadOnlyList<ParkedProfile>> ListAsync(CancellationToken cancellationToken)
     {
         List<ParkedProfile> profiles = [];
+        // Before Directory.Exists, which follows a link and is false for a
+        // dangling one. A root that is itself a link is not listed through:
+        // enumeration would report the target's children.
+        if (DirectoryLinks.ItselfALink(_profilesRoot))
+        {
+            throw new ArgumentException("The profiles root is a junction or symbolic link; credentials are not stored through one.");
+        }
+
         if (!Directory.Exists(_profilesRoot))
         {
             return profiles;
@@ -58,6 +66,13 @@ internal sealed partial class ProfileFolderStore
         foreach (string folder in Directory.EnumerateDirectories(_profilesRoot))
         {
             cancellationToken.ThrowIfCancellationRequested();
+            // A linked folder is not read. Opening it would follow the link and
+            // could surface a credential file that does not sit under this root.
+            if (DirectoryLinks.ItselfALink(folder))
+            {
+                continue;
+            }
+
             OAuthAccountBlock? account = await ReadAccountInFolderAsync(folder, cancellationToken);
             if (account?.Email is not AccountEmail email)
             {
@@ -77,7 +92,9 @@ internal sealed partial class ProfileFolderStore
 
     public async Task<ParkedProfile> EnsureFolderAsync(AccountEmail email, CancellationToken cancellationToken)
     {
-        string folder = FolderPathFor(email);
+        // UnderRoot refuses a folder that is already a link, so CreateDirectory
+        // cannot open one and write the profile through it.
+        string folder = UnderRoot(FolderPathFor(email));
         Directory.CreateDirectory(folder);
         _discovered[folder] = 0;
         OAuthAccountBlock? account = await ReadAccountInFolderAsync(folder, cancellationToken);
@@ -268,13 +285,12 @@ internal sealed partial class ProfileFolderStore
     private string UnderRoot(string folderPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(folderPath);
-        string full = Path.GetFullPath(folderPath);
-        string relative = Path.GetRelativePath(_profilesRoot, full);
-        if (relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relative) || relative == "." || relative.Contains(Path.DirectorySeparatorChar, StringComparison.Ordinal))
+        Result<string, string> child = DirectoryLinks.DirectChild(_profilesRoot, folderPath);
+        if (child.IsFailure)
         {
-            throw new ArgumentException("A profile folder must sit directly under the profiles root " + _profilesRoot + "; got " + full, nameof(folderPath));
+            throw new ArgumentException(child.Error, nameof(folderPath));
         }
 
-        return full;
+        return child.Value;
     }
 }

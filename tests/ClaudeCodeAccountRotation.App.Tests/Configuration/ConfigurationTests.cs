@@ -15,6 +15,17 @@ public sealed class ConfigurationTests : IDisposable
     private readonly string _root = Path.Combine(Path.GetTempPath(), "claude-code-account-rotation-tests", Guid.NewGuid().ToString("N"));
     private readonly string _home;
 
+    public static bool OnUnix => !OperatingSystem.IsWindows();
+
+    public static bool OnWindows => OperatingSystem.IsWindows();
+
+    /// <summary>Two mounts the real volume resolver can tell apart, so a link onto the second is not a same-volume path.</summary>
+    public static bool HasTwoVolumes =>
+        !OperatingSystem.IsWindows()
+        && Directory.Exists("/dev/shm")
+        && Directory.Exists("/tmp")
+        && ConfigurationValidator.VolumeOf("/dev/shm") != ConfigurationValidator.VolumeOf("/tmp");
+
     public ConfigurationTests()
     {
         _home = Path.Combine(_root, "home");
@@ -335,6 +346,160 @@ public sealed class ConfigurationTests : IDisposable
 
         verdict.IsFailure.ShouldBeTrue();
         verdict.Error.ShouldContain("OneDrive");
+    }
+
+    /// <summary>
+    /// The target is on the same volume and is not a sync folder. The refusal
+    /// is that the profiles root is itself a link, and the reason names no path.
+    /// </summary>
+    [Fact(SkipUnless = nameof(OnUnix), Skip = "Symbolic links are the Unix form of this refusal")]
+    public void ASymlinkedProfilesRootIsRefusedWithoutNamingThePath()
+    {
+        string real = Path.Combine(_root, "real-profiles");
+        string link = Path.Combine(_root, "linked-profiles");
+        Directory.CreateDirectory(real);
+        Directory.CreateSymbolicLink(link, real);
+
+        Result<Unit, string> verdict = ConfigurationValidator.Validate(
+            Defaults() with { ProfilesRoot = link },
+            _home,
+            static _ => "C:",
+            static _ => null);
+
+        verdict.IsFailure.ShouldBeTrue();
+        verdict.Error.ShouldContain("symbolic link");
+        verdict.Error.ShouldNotContain(link);
+        verdict.Error.ShouldNotContain(real);
+    }
+
+    [Fact(SkipUnless = nameof(OnWindows), Skip = "Junctions are a Windows reparse point")]
+    public void AJunctionProfilesRootIsRefusedWithoutNamingThePath()
+    {
+        string real = Path.Combine(_root, "real-profiles");
+        string junction = Path.Combine(_root, "junction-profiles");
+        Directory.CreateDirectory(real);
+        if (!WindowsJunction.TryCreate(junction, real))
+        {
+            Assert.Skip("This process cannot create a directory junction.");
+        }
+
+        Result<Unit, string> verdict = ConfigurationValidator.Validate(
+            Defaults() with { ProfilesRoot = junction },
+            _home,
+            static _ => "C:",
+            static _ => null);
+
+        verdict.IsFailure.ShouldBeTrue();
+        verdict.Error.ShouldContain("junction");
+        verdict.Error.ShouldNotContain(junction);
+        verdict.Error.ShouldNotContain(real);
+    }
+
+    [Fact(SkipUnless = nameof(OnUnix), Skip = "Symbolic links are the Unix form of this refusal")]
+    public void ASymlinkedAppDataDirectoryIsRefusedWithoutNamingThePath()
+    {
+        string real = Path.Combine(_root, "real-app");
+        string link = Path.Combine(_root, "linked-app");
+        Directory.CreateDirectory(real);
+        Directory.CreateSymbolicLink(link, real);
+
+        Result<Unit, string> verdict = ConfigurationValidator.Validate(
+            Defaults() with { AppDataDirectory = link },
+            _home,
+            static _ => "C:",
+            static _ => null);
+
+        verdict.IsFailure.ShouldBeTrue();
+        verdict.Error.ShouldContain("app data directory");
+        verdict.Error.ShouldContain("symbolic link");
+        verdict.Error.ShouldNotContain(link);
+        verdict.Error.ShouldNotContain(real);
+    }
+
+    [Fact(SkipUnless = nameof(OnWindows), Skip = "Junctions are a Windows reparse point")]
+    public void AJunctionAppDataDirectoryIsRefusedWithoutNamingThePath()
+    {
+        string real = Path.Combine(_root, "real-app");
+        string junction = Path.Combine(_root, "junction-app");
+        Directory.CreateDirectory(real);
+        if (!WindowsJunction.TryCreate(junction, real))
+        {
+            Assert.Skip("This process cannot create a directory junction.");
+        }
+
+        Result<Unit, string> verdict = ConfigurationValidator.Validate(
+            Defaults() with { AppDataDirectory = junction },
+            _home,
+            static _ => "C:",
+            static _ => null);
+
+        verdict.IsFailure.ShouldBeTrue();
+        verdict.Error.ShouldContain("app data directory");
+        verdict.Error.ShouldContain("junction");
+        verdict.Error.ShouldNotContain(junction);
+        verdict.Error.ShouldNotContain(real);
+    }
+
+    /// <summary>The profiles directory is not itself a link; an ancestor is, and the target is a sync folder.</summary>
+    [Fact(SkipUnless = nameof(OnUnix), Skip = "Symbolic links are the Unix form of this refusal")]
+    public void AProfilesRootReachedThroughALinkIntoASyncFolderIsRefused()
+    {
+        string dropbox = Path.Combine(_home, "Dropbox", "claude-profiles");
+        Directory.CreateDirectory(dropbox);
+        string via = Path.Combine(_root, "via-home");
+        Directory.CreateSymbolicLink(via, _home);
+
+        Result<Unit, string> verdict = ConfigurationValidator.Validate(
+            Defaults() with { ProfilesRoot = Path.Combine(via, "Dropbox", "claude-profiles") },
+            _home,
+            static _ => "C:",
+            static _ => null);
+
+        verdict.IsFailure.ShouldBeTrue();
+        verdict.Error.ShouldContain("Dropbox");
+    }
+
+    [Fact(SkipUnless = nameof(HasTwoVolumes), Skip = "Needs two mount points, which only the Unix legs have")]
+    public void AProfilesRootReachedThroughALinkOntoAnotherVolumeIsRefused()
+    {
+        string remote = Path.Combine("/dev/shm", "ccar-link-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(remote);
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(remote, "profiles"));
+            string link = Path.Combine(_root, "other-volume");
+            Directory.CreateSymbolicLink(link, remote);
+
+            Result<Unit, string> verdict = ConfigurationValidator.Validate(
+                Defaults() with { ProfilesRoot = Path.Combine(link, "profiles") },
+                _home,
+                ConfigurationValidator.VolumeOf,
+                static _ => null);
+
+            verdict.IsFailure.ShouldBeTrue();
+            verdict.Error.ShouldContain("same volume");
+        }
+        finally
+        {
+            Directory.Delete(remote, recursive: true);
+        }
+    }
+
+    [Fact(SkipUnless = nameof(OnUnix), Skip = "Symbolic links are the Unix form of this refusal")]
+    public void ADanglingProfilesRootIsRefusedWithoutNamingThePath()
+    {
+        string link = Path.Combine(_root, "dangling-profiles");
+        Directory.CreateSymbolicLink(link, Path.Combine(_root, "missing-profiles"));
+
+        Result<Unit, string> verdict = ConfigurationValidator.Validate(
+            Defaults() with { ProfilesRoot = link },
+            _home,
+            static _ => "C:",
+            static _ => null);
+
+        verdict.IsFailure.ShouldBeTrue();
+        verdict.Error.ShouldContain("missing");
+        verdict.Error.ShouldNotContain(link);
     }
 
     [Theory]

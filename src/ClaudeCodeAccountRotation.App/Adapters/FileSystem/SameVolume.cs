@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using ClaudeCodeAccountRotation.Core;
 
 namespace ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 
@@ -21,6 +22,9 @@ namespace ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 /// move itself is <c>renameat2</c> with <c>RENAME_NOREPLACE</c>, and
 /// <c>EXDEV</c> is a refusal. <see cref="File.Move"/> is not used on Linux,
 /// because across volumes it copies the file and then deletes the source.
+/// Both paths are resolved through <see cref="DirectoryLinks"/> first:
+/// <see cref="Path.GetFullPath"/> does not follow a junction, so a Windows
+/// drive-root comparison of the unresolved path would call two volumes one.
 /// </remarks>
 internal static partial class SameVolume
 {
@@ -43,9 +47,17 @@ internal static partial class SameVolume
     public static bool OnOneVolume(string first, string second, Func<string, long?> deviceId)
     {
         ArgumentNullException.ThrowIfNull(deviceId);
+        // A missing link target is not one volume: the move is refused. The
+        // resolved spelling is what the drive root and the device id both see,
+        // so a junction onto another volume cannot match the link's own root.
+        if (!TryCanonical(first, out string left) || !TryCanonical(second, out string right))
+        {
+            return false;
+        }
+
         return OperatingSystem.IsWindows()
-            ? WindowsPathsOnOneVolume(first, second)
-            : UnixDevicesMatch(first, second, deviceId);
+            ? WindowsPathRootsMatch(Path.GetPathRoot(left), Path.GetPathRoot(right))
+            : UnixDevicesMatch(left, right, deviceId);
     }
 
     /// <summary>
@@ -104,8 +116,18 @@ internal static partial class SameVolume
         return rename is null ? RenameNoReplaceLinux(source, destination) : rename(source, destination);
     }
 
-    private static bool WindowsPathsOnOneVolume(string first, string second) =>
-        WindowsPathRootsMatch(Path.GetPathRoot(Path.GetFullPath(first)), Path.GetPathRoot(Path.GetFullPath(second)));
+    private static bool TryCanonical(string path, out string canonical)
+    {
+        Result<DirectoryLinks.CanonicalPath, string> resolved = DirectoryLinks.Canonicalize(path);
+        if (resolved.IsFailure || resolved.Value.TargetMissing)
+        {
+            canonical = string.Empty;
+            return false;
+        }
+
+        canonical = resolved.Value.Path;
+        return true;
+    }
 
     private static bool UnixDevicesMatch(string first, string second, Func<string, long?> deviceId)
     {

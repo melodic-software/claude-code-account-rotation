@@ -179,6 +179,38 @@ public sealed class FollowerConfigurationTests : IDisposable
         }
     }
 
+    [Fact(SkipUnless = nameof(OnUnix), Skip = "Symbolic links are the Unix form of this refusal")]
+    public void AFollowerLiveDirectoryThatIsALinkOnItsOwnVolumeIsAccepted()
+    {
+        // The live directory is not refused for being a link. The mount and
+        // volume rules still see the target, which here is the test directory.
+        string real = Path.Combine(_root, "real-live");
+        string link = Path.Combine(_root, "live-link");
+        Directory.CreateDirectory(real);
+        Directory.CreateSymbolicLink(link, real);
+
+        Result<Unit, string> verdict = Validate(Follower(liveDirectory: link));
+
+        verdict.IsSuccess.ShouldBeTrue(verdict.IsFailure ? verdict.Error : null);
+    }
+
+    [Fact(SkipUnless = nameof(OnUnix), Skip = "Symbolic links are the Unix form of this refusal")]
+    public void AFollowerAppDataDirectoryThatIsALinkIsRefusedWithoutNamingThePath()
+    {
+        string real = Path.Combine(_root, "real-app");
+        string link = Path.Combine(_root, "app-link");
+        Directory.CreateDirectory(real);
+        Directory.CreateSymbolicLink(link, real);
+
+        Result<Unit, string> verdict = Validate(Follower() with { AppDataDirectory = link });
+
+        verdict.IsFailure.ShouldBeTrue();
+        verdict.Error.ShouldContain("app data directory");
+        verdict.Error.ShouldContain("symbolic link");
+        verdict.Error.ShouldNotContain(link);
+        verdict.Error.ShouldNotContain(real);
+    }
+
     [Fact]
     public void AFollowerIsNotHeldToTheLeadersProfilesRootRules()
     {
