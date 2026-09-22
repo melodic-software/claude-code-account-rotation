@@ -1,0 +1,329 @@
+#!/bin/sh
+# The leader execs this instead of the follower binary. wsl.exe's stdout is a
+# discarded pty, so the child's stdout and stderr go to
+# <appDataDirectory>/follower.log, truncated on every start. This script
+# writes nothing to that file: it only redirects the child.
+#
+# POSIX sh, because Ubuntu's /bin/sh is dash. The leader passes the configured
+# executable as --follower. Without that flag, the sibling binary is
+# claude-code-account-rotation-linux-x64 when that file sits beside this
+# script, otherwise claude-code-account-rotation for a local build.
+#
+# appDataDirectory is read the way ConfigurationFile.Merge reads it: a missing
+# file, or a missing, null, blank, or non-string value, keeps the platform
+# default (XDG_DATA_HOME when that is absolute, otherwise ~/.local/share). A
+# JSON string is decoded, including the \u escapes the default serializer
+# writes. Comments and trailing commas are skipped, matching the application's
+# parser.
+
+set -eu
+
+shell_quote() {
+  printf "'"
+  printf '%s' "$1" | sed "s/'/'\\\\''/g"
+  printf "'"
+}
+
+binary=""
+explicit_binary=0
+config=""
+saw_config=0
+take_config=0
+take_follower=0
+quoted=""
+for argument in "$@"; do
+  if [ "$take_follower" -eq 1 ]; then
+    binary=$argument
+    explicit_binary=1
+    take_follower=0
+    continue
+  fi
+  if [ "$take_config" -eq 1 ]; then
+    config=$argument
+    take_config=0
+    quoted="$quoted $(shell_quote --config) $(shell_quote "$argument")"
+    continue
+  fi
+  if [ "$argument" = "--follower" ]; then
+    take_follower=1
+    continue
+  fi
+  if [ "$argument" = "--config" ]; then
+    saw_config=1
+    take_config=1
+    continue
+  fi
+  quoted="$quoted $(shell_quote "$argument")"
+done
+
+if [ "$take_follower" -eq 1 ]; then
+  printf '%s\n' "follower-log: --follower needs a path" >&2
+  exit 1
+fi
+if [ "$take_config" -eq 1 ]; then
+  printf '%s\n' "follower-log: --config needs a path" >&2
+  exit 1
+fi
+if [ "$explicit_binary" -eq 1 ] && [ -z "$binary" ]; then
+  printf '%s\n' "follower-log: --follower needs a path" >&2
+  exit 1
+fi
+
+# shellcheck disable=SC2086
+eval "set -- $quoted"
+
+if [ "$explicit_binary" -eq 0 ]; then
+  script_dir=$(dirname -- "$0")
+  if [ -f "$script_dir/claude-code-account-rotation-linux-x64" ]; then
+    binary="$script_dir/claude-code-account-rotation-linux-x64"
+  else
+    binary="$script_dir/claude-code-account-rotation"
+  fi
+fi
+
+default_app_data() {
+  xdg=${XDG_DATA_HOME-}
+  case "$xdg" in
+    /*)
+      printf '%s' "$xdg/claude-code-account-rotation"
+      ;;
+    *)
+      printf '%s' "${HOME:?}/.local/share/claude-code-account-rotation"
+      ;;
+  esac
+}
+
+if [ "$saw_config" -eq 1 ]; then
+  if [ ! -f "$config" ]; then
+    # First run: the application creates the file from the template and fills
+    # app data from the same default.
+    app_data=$(default_app_data)
+  elif [ ! -r "$config" ]; then
+    printf '%s\n' "follower-log: the configuration file could not be read" >&2
+    exit 1
+  else
+    status=0
+    app_data=$(awk '
+  # Root appDataDirectory, decoded the way System.Text.Json reads a string.
+  # Exit 0 and print the path, 2 when the key is absent, null, blank, or not a
+  # string (the application keeps its default), 1 when the document will not parse.
+  function is_ws(c) {
+    return c == " " || c == "\t" || c == "\n" || c == "\r" || c == "\f" || c == "\v"
+  }
+
+  function hex4(h,    i, c, n, d) {
+    if (length(h) != 4) return -1
+    n = 0
+    for (i = 1; i <= 4; i++) {
+      c = substr(h, i, 1)
+      if (c >= "0" && c <= "9") d = index("0123456789", c) - 1
+      else if (c >= "a" && c <= "f") d = index("abcdef", c) + 9
+      else if (c >= "A" && c <= "F") d = index("ABCDEF", c) + 9
+      else return -1
+      n = n * 16 + d
+    }
+    return n
+  }
+
+  function utf8(cp,    b1, b2, b3, b4) {
+    if (cp < 128) return sprintf("%c", cp)
+    if (cp < 2048) {
+      b1 = 192 + int(cp / 64)
+      b2 = 128 + (cp % 64)
+      return sprintf("%c%c", b1, b2)
+    }
+    if (cp < 65536) {
+      b1 = 224 + int(cp / 4096)
+      b2 = 128 + int((cp % 4096) / 64)
+      b3 = 128 + (cp % 64)
+      return sprintf("%c%c%c", b1, b2, b3)
+    }
+    b1 = 240 + int(cp / 262144)
+    b2 = 128 + int((cp % 262144) / 4096)
+    b3 = 128 + int((cp % 4096) / 64)
+    b4 = 128 + (cp % 64)
+    return sprintf("%c%c%c%c", b1, b2, b3, b4)
+  }
+
+  function fail() { exit 1 }
+
+  function skip_ws(    c) {
+    while (i <= n) {
+      c = substr(s, i, 1)
+      if (is_ws(c)) { i++; continue }
+      if (c == "/" && substr(s, i + 1, 1) == "/") {
+        i += 2
+        while (i <= n && substr(s, i, 1) != "\n") i++
+        continue
+      }
+      if (c == "/" && substr(s, i + 1, 1) == "*") {
+        i += 2
+        while (i + 1 <= n && !(substr(s, i, 1) == "*" && substr(s, i + 1, 1) == "/")) i++
+        if (i + 1 > n) fail()
+        i += 2
+        continue
+      }
+      return
+    }
+  }
+
+  function decode_string(    c, esc, cp, low) {
+    i++
+    decoded = ""
+    while (i <= n) {
+      c = substr(s, i, 1)
+      if (c == "\"") { i++; return }
+      if (c == "\\") {
+        if (i + 1 > n) fail()
+        esc = substr(s, i + 1, 1)
+        if (esc == "\"" || esc == "\\" || esc == "/") { decoded = decoded esc; i += 2; continue }
+        if (esc == "b") { decoded = decoded sprintf("%c", 8); i += 2; continue }
+        if (esc == "f") { decoded = decoded sprintf("%c", 12); i += 2; continue }
+        if (esc == "n") { decoded = decoded "\n"; i += 2; continue }
+        if (esc == "r") { decoded = decoded "\r"; i += 2; continue }
+        if (esc == "t") { decoded = decoded "\t"; i += 2; continue }
+        if (esc == "u") {
+          if (i + 5 > n) fail()
+          cp = hex4(substr(s, i + 2, 4))
+          if (cp < 0) fail()
+          i += 6
+          if (cp >= 55296 && cp <= 56319) {
+            if (substr(s, i, 2) != "\\u") fail()
+            low = hex4(substr(s, i + 2, 4))
+            if (low < 56320 || low > 57343) fail()
+            cp = 65536 + (cp - 55296) * 1024 + (low - 56320)
+            i += 6
+          } else if (cp >= 56320 && cp <= 57343) {
+            fail()
+          }
+          decoded = decoded utf8(cp)
+          continue
+        }
+        fail()
+      }
+      if (c < " ") fail()
+      decoded = decoded c
+      i++
+    }
+    fail()
+  }
+
+  function skip_value(    c) {
+    skip_ws()
+    if (i > n) fail()
+    c = substr(s, i, 1)
+    if (c == "\"") { decode_string(); return }
+    if (c == "{" || c == "[") { skip_container(c); return }
+    if (substr(s, i, 4) == "true") { i += 4; return }
+    if (substr(s, i, 5) == "false") { i += 5; return }
+    if (substr(s, i, 4) == "null") { i += 4; return }
+    if (c == "-" || (c >= "0" && c <= "9")) {
+      if (c == "-") i++
+      if (i > n || substr(s, i, 1) < "0" || substr(s, i, 1) > "9") fail()
+      while (i <= n && substr(s, i, 1) ~ /^[0-9eE+.-]$/) i++
+      return
+    }
+    fail()
+  }
+
+  function skip_container(opener,    ender, c) {
+    if (opener == "{") ender = "}"
+    else ender = "]"
+    i++
+    skip_ws()
+    if (substr(s, i, 1) == ender) { i++; return }
+    while (1) {
+      if (opener == "{") {
+        skip_ws()
+        if (substr(s, i, 1) != "\"") fail()
+        decode_string()
+        skip_ws()
+        if (substr(s, i, 1) != ":") fail()
+        i++
+      }
+      skip_value()
+      skip_ws()
+      c = substr(s, i, 1)
+      if (c == ",") { i++; continue }
+      if (c == ender) { i++; return }
+      fail()
+    }
+  }
+
+  function blank(text) { return text ~ /^[[:space:]]*$/ }
+
+  {
+    s = s $0 "\n"
+  }
+
+  END {
+    n = length(s)
+    i = 1
+    if (substr(s, 1, 3) == sprintf("%c%c%c", 239, 187, 191)) i = 4
+    skip_ws()
+    if (substr(s, i, 1) != "{") fail()
+    i++
+    found = 0
+    kind = ""
+    value = ""
+    while (1) {
+      skip_ws()
+      if (substr(s, i, 1) == "}") { i++; break }
+      if (substr(s, i, 1) != "\"") fail()
+      decode_string()
+      key = decoded
+      skip_ws()
+      if (substr(s, i, 1) != ":") fail()
+      i++
+      skip_ws()
+      if (key == "appDataDirectory" && !found) {
+        found = 1
+        if (substr(s, i, 1) == "\"") {
+          decode_string()
+          kind = "string"
+          value = decoded
+        } else {
+          kind = "other"
+          skip_value()
+        }
+      } else {
+        skip_value()
+      }
+      skip_ws()
+      if (substr(s, i, 1) == ",") { i++; continue }
+      if (substr(s, i, 1) == "}") { i++; break }
+      fail()
+    }
+    skip_ws()
+    if (i <= n) fail()
+    if (kind == "string" && !blank(value)) {
+      printf "%s", value
+      exit 0
+    }
+    exit 2
+  }
+' "$config") || status=$?
+    if [ "$status" -eq 2 ] || { [ "$status" -eq 0 ] && [ -z "$app_data" ]; }; then
+      app_data=$(default_app_data)
+    elif [ "$status" -ne 0 ]; then
+      printf '%s\n' "follower-log: the configuration file could not be read" >&2
+      exit 1
+    fi
+  fi
+else
+  app_data=$(default_app_data)
+fi
+
+if [ -z "$app_data" ]; then
+  printf '%s\n' "follower-log: appDataDirectory is not a string" >&2
+  exit 1
+fi
+
+mkdir -p -- "$app_data"
+log="$app_data/follower.log"
+if [ -L "$log" ]; then
+  printf '%s\n' "follower-log: refusing to follow a symlink at follower.log" >&2
+  exit 1
+fi
+
+exec "$binary" "$@" >"$log" 2>&1

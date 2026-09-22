@@ -4,9 +4,13 @@ namespace ClaudeCodeAccountRotation.Core.Configuration;
 
 /// <summary>
 /// How the leader starts the follower: <c>wsl.exe -d &lt;distribution&gt; -u
-/// &lt;user&gt; --exec &lt;executablePath&gt; --port &lt;port&gt;</c>. Absent when
-/// the operator runs the follower themselves; a side with no launch can still
-/// be talked to, it just cannot be started from the page.
+/// &lt;user&gt; --exec &lt;wrapper&gt; --follower &lt;executablePath&gt; --port &lt;port&gt; [--config &lt;path&gt;]</c>.
+/// The wrapper is the sibling <c>claude-code-account-rotation-follower-log</c>
+/// of <paramref name="ExecutablePath"/>. <c>--exec</c> is the wrapper;
+/// <paramref name="ExecutablePath"/> is passed through as <c>--follower</c> so
+/// the process that starts is the binary this record names.
+/// This record is absent when the operator runs the follower themselves; a side
+/// with no launch can still be talked to, it just cannot be started from the page.
 /// <para>
 /// <paramref name="ConfigPath"/> is optional and is the follower's own
 /// configuration file, spelled in its namespace. A follower installed where
