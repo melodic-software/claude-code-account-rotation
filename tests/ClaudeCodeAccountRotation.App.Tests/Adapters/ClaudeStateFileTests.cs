@@ -351,6 +351,42 @@ public sealed class ClaudeStateFileTests : IDisposable
         Directory.GetFiles(_directory).ShouldBe([_path]);
     }
 
+    [Theory]
+    [InlineData("{\"oauthAccount\": {\"emailAddress\": \"a@example.com\"},}")]
+    [InlineData("{\"oauthAccount\": {\"emailAddress\": \"a@example.com\"}, }")]
+    [InlineData("{\n  \"oauthAccount\": {\"emailAddress\": \"a@example.com\"},\n}\n")]
+    public async Task PatchRecordingOnboardingReusesARootTrailingComma(string original)
+    {
+        // The reader allows a comma between the last value and the root brace.
+        // Inserting another one there writes ", ," and the file no longer parses.
+        await File.WriteAllTextAsync(_path, original, TestContext.Current.CancellationToken);
+
+        await new ClaudeStateFile(_path).PatchAccountBlockAndOnboardingAsync(Account("b@example.com"), TestContext.Current.CancellationToken);
+
+        string patched = await File.ReadAllTextAsync(_path, TestContext.Current.CancellationToken);
+        patched.Contains(",,", StringComparison.Ordinal).ShouldBeFalse();
+        JsonObject result = JsonNode.Parse(patched)!.AsObject();
+        result["oauthAccount"]!["emailAddress"]!.GetValue<string>().ShouldBe("b@example.com");
+        result["hasCompletedOnboarding"]!.GetValue<bool>().ShouldBeTrue();
+        result.ContainsKey("lastOnboardingVersion").ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task PatchRecordingOnboardingAppendsBothPropertiesAfterARootTrailingComma()
+    {
+        await File.WriteAllTextAsync(_path, "{\n  \"numStartups\": 1,\n}\n", TestContext.Current.CancellationToken);
+
+        await new ClaudeStateFile(_path).PatchAccountBlockAndOnboardingAsync(Account("b@example.com"), TestContext.Current.CancellationToken);
+
+        string patched = await File.ReadAllTextAsync(_path, TestContext.Current.CancellationToken);
+        patched.Contains(",,", StringComparison.Ordinal).ShouldBeFalse();
+        JsonObject result = JsonNode.Parse(patched)!.AsObject();
+        result["numStartups"]!.GetValue<int>().ShouldBe(1);
+        result["oauthAccount"]!["emailAddress"]!.GetValue<string>().ShouldBe("b@example.com");
+        result["hasCompletedOnboarding"]!.GetValue<bool>().ShouldBeTrue();
+        result.ContainsKey("lastOnboardingVersion").ShouldBeFalse();
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_directory))

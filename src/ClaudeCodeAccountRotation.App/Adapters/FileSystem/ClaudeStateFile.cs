@@ -287,7 +287,10 @@ internal sealed class ClaudeStateFile
     /// <summary>
     /// Inserts each <c>"name": value</c> before the root object's closing brace.
     /// A comma separates a new property from one already in the object, and from
-    /// a property inserted just before it.
+    /// a property inserted just before it. A comma already sitting between the
+    /// last value and that brace is the separator, so it is not written again:
+    /// the reader accepts that trailing comma, and a second one would make the
+    /// document unreadable.
     /// </summary>
     private static byte[] AppendProperties(byte[] original, List<(string Name, byte[] Value)> properties)
     {
@@ -298,17 +301,39 @@ internal sealed class ClaudeStateFile
         }
 
         bool hasProperties = original.AsSpan(0, closingBrace).IndexOf((byte)':') >= 0;
+        bool separatorAlreadyPresent = HasTrailingComma(original, closingBrace);
         byte[] insertion = [];
         foreach ((string name, byte[] value) in properties)
         {
-            byte[] prefix = Encoding.UTF8.GetBytes((hasProperties ? "," : string.Empty) + "\n  \"" + name + "\": ");
+            bool needsComma = hasProperties && !separatorAlreadyPresent;
+            byte[] prefix = Encoding.UTF8.GetBytes((needsComma ? "," : string.Empty) + "\n  \"" + name + "\": ");
             insertion = [.. insertion, .. prefix, .. value];
             hasProperties = true;
+            separatorAlreadyPresent = false;
         }
 
         insertion = [.. insertion, (byte)'\n'];
         return Splice(original, closingBrace, 0, insertion);
     }
+
+    /// <summary>
+    /// True when the last non-whitespace byte before the root object's closing
+    /// brace is a comma. JSON whitespace is space, tab, line feed, and carriage
+    /// return; anything else, including a comma inside a string, stays put.
+    /// </summary>
+    private static bool HasTrailingComma(byte[] original, int closingBrace)
+    {
+        int index = closingBrace - 1;
+        while (index >= 0 && IsJsonWhitespace(original[index]))
+        {
+            index--;
+        }
+
+        return index >= 0 && original[index] == (byte)',';
+    }
+
+    private static bool IsJsonWhitespace(byte value) =>
+        value is (byte)' ' or (byte)'\t' or (byte)'\n' or (byte)'\r';
 
     private readonly record struct ValueSpan(int Start, int Length, JsonTokenType TokenType);
 }
