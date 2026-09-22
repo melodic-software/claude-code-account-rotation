@@ -236,6 +236,33 @@ All notable changes to this project are documented in this file. The format foll
   bounded time for the reader to leave the child process before disposing it. A finished session
   stays readable for ten minutes, the same window the login itself is given, so a reload can still
   see how it ended, and is then dropped.
+- A side row names the account that side holds, alias first the way a card does (#86): `holding`
+  plus the alias and the address when the roster has an alias, the address alone when it does not,
+  and `holding nothing` only when that side answered and holds none. An offline side whose
+  dashboard could not be read does not claim to hold nothing.
+- After a side hands its account back, its picker returns to `choose an account` instead of the
+  first account in the list, including the account just released. Switch is disabled in that same
+  turn, and the request's re-enable does not turn it back on while the picker is empty (#85).
+- A failing `claude` command no longer hands the page the CLI's own text (#11).
+  The string a switch toast can show stays a short classified sentence: the command
+  timed out, it exited with a code, or `auth status` printed no JSON object. The
+  parser's message is left out, because for an invalid literal it quotes the
+  document. What the child printed is logged and cut off at 400 characters with an
+  explicit truncation marker. After a timeout kill, both pipes are awaited for up
+  to two seconds on a fresh cancellation source, so a partial print is logged and
+  the reads are not abandoned. A status JSON with `loggedIn` false stays a normal
+  logged-out status.
+- The usage and token clients no longer follow redirects (#16). A 307 or 308 would resend the
+  request, including the refresh-token POST body, to the host the endpoint named. Both clients now
+  install a primary handler that refuses redirects, and any 3xx stays the transport failure the
+  status mapping already returns. The handler keeps the two-minute pooled connection lifetime the
+  factory's default primary handler sets, so DNS changes are still respected (Microsoft Learn,
+  IHttpClientFactory, HTTP handler lifetime).
+- When `config.json` sets `liveConfigDirectory` and leaves `stateFilePath` unset, the state file is
+  `<dir>/.claude.json`, the same place the defaults put it when `CLAUDE_CONFIG_DIR` is set. It used
+  to stay at the home default, so the watcher and the stale-identity repair patched `~/.claude.json`
+  instead of the file beside the overridden live directory (#19). An explicit `stateFilePath` is
+  still kept.
 - A login opens one browser, the profile the roster maps to the account. The CLI's own OAuth flow
   was opening its callback URL in the machine's default browser at the same time, so the operator
   got two windows on two URLs and could sign in through the wrong one. Every CLI command now runs

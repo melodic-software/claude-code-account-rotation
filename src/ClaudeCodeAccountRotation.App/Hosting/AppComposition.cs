@@ -301,8 +301,10 @@ internal static class AppComposition
     /// The factory's logging handler names every header at Trace and redacts
     /// every value unless told otherwise, which is what keeps a bearer token out
     /// of a log file. Naming headers to redact would *narrow* that default, so
-    /// this deliberately names none. Registered here rather than inline so a
-    /// test exercises the same wiring the app runs.
+    /// this deliberately names none. Each client gets its own primary handler
+    /// from <see cref="OutboundPrimaryHandler"/>, which refuses redirects so a
+    /// 307 or 308 cannot replay a refresh-token POST. Registered here rather
+    /// than inline so a test exercises the same wiring the app runs.
     /// </summary>
     internal static void AddOutboundClients(IServiceCollection services, string userAgent)
     {
@@ -314,8 +316,10 @@ internal static class AppComposition
         // it) stands and a caller wiring only these two clients still gets a clock.
         services.TryAddSingleton(TimeProvider.System);
         services.AddHttpClient(nameof(AnthropicUsageEndpointClient))
+            .ConfigurePrimaryHttpMessageHandler(static () => OutboundPrimaryHandler.Create())
             .AddTypedClient<IUsageEndpointClient>((http, provider) => new AnthropicUsageEndpointClient(http, userAgent, provider.GetRequiredService<TimeProvider>()));
         services.AddHttpClient(nameof(ClaudeOAuthTokenRefreshClient))
+            .ConfigurePrimaryHttpMessageHandler(static () => OutboundPrimaryHandler.Create())
             .AddTypedClient<ITokenRefreshClient>((http, provider) => new ClaudeOAuthTokenRefreshClient(http, userAgent, provider.GetRequiredService<TimeProvider>()));
     }
 

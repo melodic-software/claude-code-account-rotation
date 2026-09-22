@@ -106,10 +106,19 @@ internal static class ConfigurationFile
 
     private static ClaudeCodeAccountRotationConfiguration Merge(ClaudeCodeAccountRotationConfiguration defaults, JsonObject raw)
     {
-        string liveConfigDirectory = Text(raw, "liveConfigDirectory") ?? defaults.LiveConfigDirectory;
+        // A live directory named in this file moves the state file with it, the
+        // same way CLAUDE_CONFIG_DIR does in the defaults: <dir>/.claude.json.
+        // An explicit stateFilePath still wins. A file that leaves the directory
+        // unset keeps the default path, which already follows the environment.
+        string? configuredLive = Text(raw, "liveConfigDirectory");
+        string liveConfigDirectory = configuredLive ?? defaults.LiveConfigDirectory;
+        string stateFilePath = Text(raw, "stateFilePath")
+            ?? (configuredLive is not null
+                ? Path.Combine(liveConfigDirectory, ".claude.json")
+                : defaults.StateFilePath);
         return new ClaudeCodeAccountRotationConfiguration(
             liveConfigDirectory,
-            Text(raw, "stateFilePath") ?? defaults.StateFilePath,
+            stateFilePath,
             Text(raw, "profilesRoot") ?? defaults.ProfilesRoot,
             Text(raw, "appDataDirectory") ?? defaults.AppDataDirectory,
             // Always derived: the tee lives inside the live directory, so a file that
