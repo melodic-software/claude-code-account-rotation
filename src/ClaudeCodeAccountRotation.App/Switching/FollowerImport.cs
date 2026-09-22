@@ -717,10 +717,20 @@ internal sealed partial class FollowerImport : IDisposable
             // this side's own dashboard reads to answer "holding nothing". A
             // state file still naming the account whose pair has left would
             // have the leader's next L1 refuse with LiveIdentityUnverified, an
-            // account named beside no fingerprint.
-            await stateFile.PatchAccountBlockAsync(
-                OAuthAccountBlock.FromJson(entry.IncomingAccount ?? []),
-                cancellationToken);
+            // account named beside no fingerprint. Applying an account also
+            // records that onboarding is done when the file does not already
+            // say so. A fresh distro otherwise opens the first-run wizard over
+            // credentials that are already valid. A release clears the account
+            // and does not add that key.
+            var account = OAuthAccountBlock.FromJson(entry.IncomingAccount ?? []);
+            if (entry.IsRelease)
+            {
+                await stateFile.PatchAccountBlockAsync(account, cancellationToken);
+            }
+            else
+            {
+                await stateFile.PatchAccountBlockAndOnboardingAsync(account, cancellationToken);
+            }
             if (entry.Incoming is AccountEmail incoming && entry.IncomingFingerprint is RefreshTokenFingerprint arriving)
             {
                 await WriteLiveOwnerAsync(liveOwnerPath, arriving, incoming, timeProvider, cancellationToken);

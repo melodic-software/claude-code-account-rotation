@@ -6,6 +6,18 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Fixed
+
+- A fresh distro that received a hand-off opened Claude Code's first-run login wizard
+  even though its credentials and `oauthAccount` block were already valid (#119). The
+  follower now sets `hasCompletedOnboarding` to true when it applies an incoming account
+  and that flag is absent or not already true. The write shares the state-file splice
+  with the account block, so other keys stay as they are and a concurrent rewrite is
+  retried the same way. A root object that already ends with a trailing comma keeps
+  that comma instead of gaining a second one. A flag that is already true is left untouched,
+  `lastOnboardingVersion` is not written, and a release does not add the flag. A switch
+  on the leader still patches only the account block.
+
 ## [1.0.1] - 2026-09-22
 
 ### Changed

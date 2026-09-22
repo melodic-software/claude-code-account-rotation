@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core;
@@ -70,6 +71,58 @@ public sealed class FollowerImportTests : IDisposable
         (await FollowerRoots.FingerprintOfAsync(_roots.ExportPath(OutgoingEmail), Token)).ShouldBe(fa);
         (await _roots.Journal().ReadOpenAsync(Token)).ShouldBeNull();
         (await _roots.StateFile().ReadAccountBlockAsync(Token))!.Email!.Value.Value.ShouldBe(IncomingEmail);
+    }
+
+    [Fact]
+    public async Task AFinishThatAppliesAnAccountRecordsOnboardingAndKeepsEveryOtherKey()
+    {
+        (_, RefreshTokenFingerprint fb) = await SeedAsync();
+        string prefix = "{\n  \"numStartups\": 4,\n  \"userID\": \"kept-user\",\n  \"oauthAccount\": ";
+        string accountValue = "{\"accountUuid\": \"uuid-a@example.com\", \"emailAddress\": \"a@example.com\"}";
+        string afterAccount = ",\n  \"cachedChangelog\": \"kept\"\n";
+        await File.WriteAllTextAsync(_roots.StateFilePath, prefix + accountValue + afterAccount + "}\n", Token);
+        using FollowerImport follower = _roots.Follower();
+        await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
+
+        Result<ImportResult, string> result = await follower.CommitAsync(new AccountEmail(IncomingEmail), Token);
+
+        result.IsSuccess.ShouldBeTrue(result.IsFailure ? result.Error : null);
+        string patched = await File.ReadAllTextAsync(_roots.StateFilePath, Token);
+        string expectedTail = afterAccount + ",\n  \"hasCompletedOnboarding\": true\n}\n";
+        patched.StartsWith(prefix, StringComparison.Ordinal).ShouldBeTrue();
+        patched.EndsWith(expectedTail, StringComparison.Ordinal).ShouldBeTrue();
+        JsonNode.Parse(patched[prefix.Length..^expectedTail.Length])!["emailAddress"]!.GetValue<string>().ShouldBe(IncomingEmail);
+        JsonObject state = JsonNode.Parse(patched)!.AsObject();
+        state.Count.ShouldBe(5);
+        state["hasCompletedOnboarding"]!.GetValue<bool>().ShouldBeTrue();
+        state["numStartups"]!.GetValue<int>().ShouldBe(4);
+        state["userID"]!.GetValue<string>().ShouldBe("kept-user");
+        state["cachedChangelog"]!.GetValue<string>().ShouldBe("kept");
+        state.ContainsKey("lastOnboardingVersion").ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task AFinishLeavesOnboardingAndItsVersionByteForByteWhenAlreadyDone()
+    {
+        (_, RefreshTokenFingerprint fb) = await SeedAsync();
+        string prefix = "{\n  \"oauthAccount\": ";
+        string accountValue = "{\"accountUuid\": \"uuid-a@example.com\", \"emailAddress\": \"a@example.com\"}";
+        string suffix = ",\n  \"hasCompletedOnboarding\" : true,\n  \"lastOnboardingVersion\" : \"2.1.278-kept\",\n  \"userID\": \"kept\"\n}\n";
+        await File.WriteAllTextAsync(_roots.StateFilePath, prefix + accountValue + suffix, Token);
+        using FollowerImport follower = _roots.Follower();
+        await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
+
+        Result<ImportResult, string> result = await follower.CommitAsync(new AccountEmail(IncomingEmail), Token);
+
+        result.IsSuccess.ShouldBeTrue(result.IsFailure ? result.Error : null);
+        string patched = await File.ReadAllTextAsync(_roots.StateFilePath, Token);
+        patched.StartsWith(prefix, StringComparison.Ordinal).ShouldBeTrue();
+        patched.EndsWith(suffix, StringComparison.Ordinal).ShouldBeTrue();
+        JsonNode.Parse(patched[prefix.Length..^suffix.Length])!["emailAddress"]!.GetValue<string>().ShouldBe(IncomingEmail);
+        JsonObject state = JsonNode.Parse(patched)!.AsObject();
+        state["hasCompletedOnboarding"]!.GetValue<bool>().ShouldBeTrue();
+        state["lastOnboardingVersion"]!.GetValue<string>().ShouldBe("2.1.278-kept");
+        state["userID"]!.GetValue<string>().ShouldBe("kept");
     }
 
     [Fact]

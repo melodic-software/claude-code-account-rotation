@@ -110,7 +110,10 @@ public sealed class LiveDirectorySwitchTests : IDisposable
         (await CredentialFiles.FingerprintAsync(Path.Combine(_profilesRoot, "a@example.com"), TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
         File.Exists(Path.Combine(_profilesRoot, "a@example.com", "profile.json")).ShouldBeTrue();
         (await StateFileEmailAsync()).ShouldBe("b@example.com");
-        JsonNode.Parse(await File.ReadAllTextAsync(_stateFilePath, TestContext.Current.CancellationToken))!["trailing"]!.GetValue<string>().ShouldBe("kept");
+        JsonNode patchedState = JsonNode.Parse(await File.ReadAllTextAsync(_stateFilePath, TestContext.Current.CancellationToken))!;
+        patchedState["trailing"]!.GetValue<string>().ShouldBe("kept");
+        // Onboarding is recorded by the follower when a hand-off lands, not by a leader switch.
+        patchedState["hasCompletedOnboarding"].ShouldBeNull();
         File.Exists(Path.Combine(_appData, "state", "switch-journal.json")).ShouldBeFalse();
         Directory.Exists(Path.Combine(_liveDirectory, OAuthRefreshLock.DirectoryName)).ShouldBeFalse();
     }
@@ -742,7 +745,9 @@ public sealed class LiveDirectorySwitchTests : IDisposable
 
         outcome.ShouldBe(IdentityRepair.Repatched);
         (await StateFileEmailAsync()).ShouldBe("b@example.com");
-        JsonNode.Parse(await File.ReadAllTextAsync(_stateFilePath, TestContext.Current.CancellationToken))!["numStartups"]!.GetValue<int>().ShouldBe(8);
+        JsonNode repaired = JsonNode.Parse(await File.ReadAllTextAsync(_stateFilePath, TestContext.Current.CancellationToken))!;
+        repaired["numStartups"]!.GetValue<int>().ShouldBe(8);
+        repaired["hasCompletedOnboarding"].ShouldBeNull();
         (await Switch().RepairStaleIdentityAsync(TestContext.Current.CancellationToken)).ShouldBe(IdentityRepair.NotNeeded);
     }
 
@@ -813,6 +818,7 @@ public sealed class LiveDirectorySwitchTests : IDisposable
         report.JournalOutcome.ShouldContain("completed");
         report.SwitchingBlocked.ShouldBeFalse();
         (await StateFileEmailAsync()).ShouldBe("b@example.com");
+        JsonNode.Parse(await File.ReadAllTextAsync(_stateFilePath, TestContext.Current.CancellationToken))!["hasCompletedOnboarding"].ShouldBeNull();
         (await journal.ReadOpenAsync(TestContext.Current.CancellationToken)).ShouldBeNull();
         JsonObject record = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(_appData, "state", "live-owner.json"), TestContext.Current.CancellationToken))!.AsObject();
         record["fingerprint"]!.GetValue<string>().ShouldBe(CredentialFiles.Pair("refresh-b-rotated").Fingerprint.Sha256Hex);
