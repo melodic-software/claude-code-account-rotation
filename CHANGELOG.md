@@ -99,7 +99,8 @@ All notable changes to this project are documented in this file. The format foll
 - A tag matching `v*` uploads `config.template.json` with the two executables and `SHA256SUMS`
   (#31). The README install section says how to download that release, place the executable on
   `PATH` or make a shortcut, run it once so a missing config is written from the embedded
-  template, and add accounts. The process prints `Dashboard:` and the bound URL and opens no
+  template, and add accounts: Adopt when the live card is not on the roster, otherwise Add
+  and then Login. The process prints `Dashboard:` and the bound URL and opens no
   browser. The default port is 48211, and `--port 0` asks the operating system for a free port.
 - A machine with nothing configured writes `config.json` on first run from the embedded
   `config.template.json`, filling every path from the user profile at runtime, and prints
