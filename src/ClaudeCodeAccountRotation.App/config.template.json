@@ -1,0 +1,17 @@
+{
+  "liveConfigDirectory": null,
+  "stateFilePath": null,
+  "profilesRoot": null,
+  "appDataDirectory": null,
+  "listenPort": 48211,
+  "refreshLockWaitSeconds": 10,
+  "claudeExecutable": null,
+  "userAgentProductToken": "claude-code-account-rotation",
+  "browserExecutables": null,
+  "store": {
+    "shared": false
+  },
+  "role": "leader",
+  "mailbox": null,
+  "peers": null
+}

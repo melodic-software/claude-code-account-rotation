@@ -1,3 +1,4 @@
+using System.Net;
 using System.Reflection;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Adapters.Http;
@@ -16,6 +17,8 @@ using ClaudeCodeAccountRotation.Core.Quota;
 using ClaudeCodeAccountRotation.Core.Switching;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.HostFiltering;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
@@ -49,6 +52,8 @@ internal static class AppComposition
         string configPath = arguments.ConfigPath
             ?? builder.Configuration[ConfigPathSettingKey]
             ?? Path.Combine(defaults.AppDataDirectory, ConfigFileName);
+        string fullConfigPath = Path.GetFullPath(configPath);
+        bool created = !File.Exists(fullConfigPath);
 
         Result<ClaudeCodeAccountRotationConfiguration, string> loaded = await ConfigurationFile.LoadOrCreateAsync(configPath, defaults, cancellationToken);
         if (loaded.IsFailure)
@@ -56,7 +61,16 @@ internal static class AppComposition
             return Result<Unit, string>.Failure(loaded.Error);
         }
 
-        ClaudeCodeAccountRotationConfiguration configuration = arguments.Port is int port ? loaded.Value with { ListenPort = port } : loaded.Value;
+        if (created)
+        {
+            await Console.Out.WriteLineAsync("Created configuration at " + fullConfigPath);
+        }
+
+        // Port 0 is this launch only: the file keeps a real listenPort, which is
+        // what validation checks, and the socket asks the operating system for one.
+        ClaudeCodeAccountRotationConfiguration configuration = arguments.Port is int port && port != 0
+            ? loaded.Value with { ListenPort = port }
+            : loaded.Value;
         Result<Unit, string> verdict = ConfigurationValidator.Validate(
             configuration,
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
@@ -67,7 +81,8 @@ internal static class AppComposition
             return Result<Unit, string>.Failure("configuration refused (" + configPath + "): " + verdict.Error);
         }
 
-        string listenUrl = "http://127.0.0.1:" + configuration.ListenPort.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        int bindPort = arguments.Port == 0 ? 0 : configuration.ListenPort;
+        string listenUrl = "http://127.0.0.1:" + bindPort.ToString(System.Globalization.CultureInfo.InvariantCulture);
         Result<InstanceLock, string> instance = InstanceLock.TryAcquire(configuration.AppDataDirectory, listenUrl);
         if (instance.IsFailure)
         {
@@ -79,6 +94,7 @@ internal static class AppComposition
         InstanceLock acquired = instance.Value;
         services.AddSingleton(_ => acquired);
         services.AddSingleton(configuration);
+        services.AddSingleton(new LoopbackOrigins(configuration.ListenPort));
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton(new SwitchOptions(
             configuration.LiveConfigDirectory,
@@ -97,7 +113,7 @@ internal static class AppComposition
         if (configuration.Role == RotationRole.Follower)
         {
             ComposeFollower(services, configuration);
-            builder.WebHost.ConfigureKestrel(kestrel => kestrel.ListenLocalhost(configuration.ListenPort));
+            ListenOn(builder, bindPort);
             services.Configure<HostFilteringOptions>(static options => options.AllowedHosts = ["localhost", "127.0.0.1", "[::1]"]);
             return Result<Unit, string>.Success(Unit.Value);
         }
@@ -143,7 +159,8 @@ internal static class AppComposition
             provider.GetRequiredService<CredentialMutationGate>(),
             provider.GetRequiredService<IClaudeCliAuthStatus>(),
             provider.GetRequiredService<IClaudeCliLogout>(),
-            provider.GetRequiredService<TimeProvider>()));
+            provider.GetRequiredService<TimeProvider>(),
+            provider.GetRequiredService<ILogger<ClaudeCliLoginSessionRunner>>()));
         services.AddSingleton<LiveDirectorySwitch>();
         ComposePeers(services, configuration);
         services.AddSingleton(new WslSwitchJournal(configuration.AppDataDirectory));
@@ -173,12 +190,41 @@ internal static class AppComposition
         services.AddHealthChecks();
 
         // Loopback only: the page is a local control surface, never a network service.
-        builder.WebHost.ConfigureKestrel(kestrel => kestrel.ListenLocalhost(configuration.ListenPort));
+        ListenOn(builder, bindPort);
         // The framework's own host filter, ahead of everything of ours: a request
         // carrying a rebound name is refused before the pipeline reaches a route.
         // Set here rather than left to configuration, whose default is "*".
         services.Configure<HostFilteringOptions>(static options => options.AllowedHosts = ["localhost", "127.0.0.1", "[::1]"]);
         return Result<Unit, string>.Success(Unit.Value);
+    }
+
+    /// <summary>
+    /// Prints the dashboard URL once Kestrel has bound, and opens nothing.
+    /// Port 0 has no number until then; the instance file is rewritten with
+    /// the address that was actually taken.
+    /// </summary>
+    public static void AnnounceDashboard(WebApplication app)
+    {
+        ArgumentNullException.ThrowIfNull(app);
+        app.Lifetime.ApplicationStarted.Register(() =>
+        {
+            string? url = LoopbackDashboardUrl(app);
+            if (url is null)
+            {
+                return;
+            }
+
+            if (Uri.TryCreate(url, UriKind.Absolute, out Uri? bound) && bound.Port > 0)
+            {
+                // Before the URL is printed, so a page opened from that line posts
+                // to the port that was bound, including a launch that asked for 0.
+                app.Services.GetRequiredService<LoopbackOrigins>().UseBoundPort(bound.Port);
+            }
+
+            app.Services.GetRequiredService<InstanceLock>().PublishListenUrl(url);
+            // Printed and not opened. The operator chooses when to visit the page.
+            Console.Out.WriteLine("Dashboard: " + url);
+        });
     }
 
     public static void MapRoutes(WebApplication app)
@@ -212,6 +258,44 @@ internal static class AppComposition
         RosterEndpoints.Map(app);
         RefreshEndpoints.Map(app);
         LoginEndpoints.Map(app);
+    }
+
+    /// <summary>
+    /// Loopback only. Port 0 is a dynamic bind, which <c>ListenLocalhost</c> refuses,
+    /// so that launch takes one IPv4 loopback socket and the printed URL is its port.
+    /// </summary>
+    private static void ListenOn(WebApplicationBuilder builder, int port)
+    {
+        builder.WebHost.ConfigureKestrel(kestrel =>
+        {
+            if (port == 0)
+            {
+                kestrel.Listen(IPAddress.Loopback, 0);
+                return;
+            }
+
+            kestrel.ListenLocalhost(port);
+        });
+    }
+
+    private static string? LoopbackDashboardUrl(WebApplication app)
+    {
+        IServer server = app.Services.GetRequiredService<IServer>();
+        IServerAddressesFeature? addresses = server.Features.Get<IServerAddressesFeature>();
+        if (addresses is null)
+        {
+            return null;
+        }
+
+        foreach (string address in addresses.Addresses)
+        {
+            if (address.StartsWith("http://127.0.0.1:", StringComparison.Ordinal))
+            {
+                return address;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

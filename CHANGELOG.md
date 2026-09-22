@@ -80,6 +80,13 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- A machine with nothing configured writes `config.json` on first run from the embedded
+  `config.template.json`, filling every path from the user profile at runtime, and prints
+  that path (#30). The template itself carries no drive letter and no user path.
+  `--help` lists every flag, including `-h` and `/?`. The process prints the dashboard
+  URL and opens nothing. `--port 0` asks the operating system for a free port, and the
+  printed URL is the address that was bound. Mutations accept that bound port as their
+  own origin; the port written in the file stays the configured one.
 - The other side can hand an account back to the store without taking another one
   (`POST /api/sides/{side}/release`), and the side panel carries `Hand back` beside `Switch` for it.
   Until now a pair only came back as the outgoing half of a switch to a different account, so a
@@ -234,6 +241,13 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- A login whose reader failed unexpectedly stayed pending for the whole ten minutes, and the
+  failure never reached the log (#41). The session now reports that failure at once, and the
+  exception is written to the log without being copied onto the page. Shutdown waits a short,
+  bounded time for the reader to leave the child process before disposing it. A finished session
+  stays readable for ten minutes, the same window the login itself is given, so a reload can still
+  see how it ended, and is then dropped. That drop is armed when the login leaves pending, so it
+  happens even when nothing asks about the session again.
 - The dashboard publishes its reconciliation report, hand-off line, and pre-switch windows as one
   snapshot, swapped in as a single reference. A poll can no longer show a report from one
   publication beside windows or a hand-off line from another (#18). Clearing the pre-switch

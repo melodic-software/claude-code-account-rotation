@@ -45,5 +45,6 @@ if (composed.IsFailure)
 
 WebApplication app = builder.Build();
 AppComposition.MapRoutes(app);
+AppComposition.AnnounceDashboard(app);
 await app.RunAsync();
 return 0;
