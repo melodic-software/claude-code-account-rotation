@@ -6,6 +6,13 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Changed
+
+- A follower restart keeps the previous log by renaming `follower.log` to `follower.log.1`
+  (and shifting `.1` and `.2`), drops older files so at most three previous files remain and
+  their total stays within 1 MiB except that the log just rotated is kept for that one start,
+  and the R2 grep covers that set (#123).
+
 ### Fixed
 
 - A fresh distro that received a hand-off opened Claude Code's first-run login wizard

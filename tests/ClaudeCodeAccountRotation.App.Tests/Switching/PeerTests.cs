@@ -88,11 +88,12 @@ public sealed class PeerTests
 
     /// <summary>
     /// The wrapper is what a discarded <c>wsl.exe</c> pty cannot be: a place the
-    /// follower's own line survives. A second start truncates, and a symlink at
-    /// the log path is not a place that line may go.
+    /// follower's own line survives. A second start keeps that line in
+    /// <c>follower.log.1</c> and writes the new line to <c>follower.log</c>. A
+    /// symlink at the log path is not a place that line may go.
     /// </summary>
     [Fact(SkipUnless = nameof(OnLinux), Skip = "The wrapper runs under /bin/sh")]
-    public async Task TheWrapperTruncatesFollowerLogAndRefusesASymlink()
+    public async Task TheWrapperKeepsThePreviousFollowerLogAndRefusesASymlink()
     {
         if (!OperatingSystem.IsLinux())
         {
@@ -143,7 +144,8 @@ public sealed class PeerTests
 
             second.ExitCode.ShouldBe(0);
             secondLog.ShouldBe("second line\n");
-            secondLog.ShouldNotContain("first line");
+            (await File.ReadAllTextAsync(logPath + ".1", TestContext.Current.CancellationToken))
+                .ShouldBe("first line\n");
 
             File.Delete(logPath);
             string secret = Path.Combine(root, "secret");
@@ -154,6 +156,7 @@ public sealed class PeerTests
             WrapperRun refused = await RunWrapperAsync(wrapper, configPath, TestContext.Current.CancellationToken);
 
             refused.ExitCode.ShouldNotBe(0);
+            refused.Output.ShouldBe("follower-log: refusing to follow a symlink at follower.log\n");
             (await File.ReadAllTextAsync(secret, TestContext.Current.CancellationToken)).ShouldBe("untouched\n");
             new FileInfo(logPath).LinkTarget.ShouldNotBeNull();
             WitnessRuns(witnessPath).ShouldBe(runsBefore);
@@ -318,6 +321,285 @@ public sealed class PeerTests
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    /// <summary>
+    /// A second start leaves the first start's bytes in <c>follower.log.1</c>
+    /// and a new <c>follower.log</c>. The new file is not an append.
+    /// </summary>
+    [Fact(SkipUnless = nameof(OnLinux), Skip = "The wrapper runs under /bin/sh")]
+    public async Task ASecondStartLeavesTheFirstLogsBytesInThePreviousFile()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        PreparedWrapper prepared = await PrepareWrapperAsync(TestContext.Current.CancellationToken);
+        try
+        {
+            string logPath = Path.Combine(prepared.AppData, "follower.log");
+            await WriteSiblingBinaryAsync(prepared.Binary, "first line", prepared.ArgvPath, prepared.WitnessPath, TestContext.Current.CancellationToken);
+            WrapperRun first = await RunWrapperAsync(prepared.Wrapper, prepared.ConfigPath, TestContext.Current.CancellationToken);
+
+            first.ExitCode.ShouldBe(0);
+            (await File.ReadAllTextAsync(logPath, TestContext.Current.CancellationToken)).ShouldBe("first line\n");
+
+            await WriteSiblingBinaryAsync(prepared.Binary, "second line", prepared.ArgvPath, prepared.WitnessPath, TestContext.Current.CancellationToken);
+            WrapperRun second = await RunWrapperAsync(prepared.Wrapper, prepared.ConfigPath, TestContext.Current.CancellationToken);
+
+            second.ExitCode.ShouldBe(0);
+            second.Output.ShouldBe(string.Empty);
+            (await File.ReadAllTextAsync(logPath, TestContext.Current.CancellationToken)).ShouldBe("second line\n");
+            (await File.ReadAllTextAsync(logPath + ".1", TestContext.Current.CancellationToken)).ShouldBe("first line\n");
+            File.Exists(logPath + ".2").ShouldBeFalse();
+        }
+        finally
+        {
+            Directory.Delete(prepared.Root, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Shifting drops the oldest once <c>follower.log.3</c> would be pushed off.
+    /// A generation that does not exist is skipped.
+    /// </summary>
+    [Fact(SkipUnless = nameof(OnLinux), Skip = "The wrapper runs under /bin/sh")]
+    public async Task ShiftingDropsTheOldestOnceThePreviousChainIsFull()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        PreparedWrapper prepared = await PrepareWrapperAsync(TestContext.Current.CancellationToken);
+        try
+        {
+            string logPath = Path.Combine(prepared.AppData, "follower.log");
+            await File.WriteAllTextAsync(logPath, "gen0\n", TestContext.Current.CancellationToken);
+            await File.WriteAllTextAsync(logPath + ".1", "gen1\n", TestContext.Current.CancellationToken);
+            await File.WriteAllTextAsync(logPath + ".2", "gen2\n", TestContext.Current.CancellationToken);
+            await File.WriteAllTextAsync(logPath + ".3", "gen3\n", TestContext.Current.CancellationToken);
+            await WriteSiblingBinaryAsync(prepared.Binary, "live", prepared.ArgvPath, prepared.WitnessPath, TestContext.Current.CancellationToken);
+
+            WrapperRun full = await RunWrapperAsync(prepared.Wrapper, prepared.ConfigPath, TestContext.Current.CancellationToken);
+
+            full.ExitCode.ShouldBe(0);
+            (await File.ReadAllTextAsync(logPath, TestContext.Current.CancellationToken)).ShouldBe("live\n");
+            (await File.ReadAllTextAsync(logPath + ".1", TestContext.Current.CancellationToken)).ShouldBe("gen0\n");
+            (await File.ReadAllTextAsync(logPath + ".2", TestContext.Current.CancellationToken)).ShouldBe("gen1\n");
+            (await File.ReadAllTextAsync(logPath + ".3", TestContext.Current.CancellationToken)).ShouldBe("gen2\n");
+            foreach (string path in Directory.GetFiles(prepared.AppData))
+            {
+                (await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken)).ShouldNotContain("gen3");
+            }
+
+            foreach (string name in _logNames)
+            {
+                File.Delete(Path.Combine(prepared.AppData, name));
+            }
+
+            await File.WriteAllTextAsync(logPath, "current\n", TestContext.Current.CancellationToken);
+            await File.WriteAllTextAsync(logPath + ".1", "one\n", TestContext.Current.CancellationToken);
+            await File.WriteAllTextAsync(logPath + ".3", "three\n", TestContext.Current.CancellationToken);
+            await WriteSiblingBinaryAsync(prepared.Binary, "fresh", prepared.ArgvPath, prepared.WitnessPath, TestContext.Current.CancellationToken);
+
+            WrapperRun hole = await RunWrapperAsync(prepared.Wrapper, prepared.ConfigPath, TestContext.Current.CancellationToken);
+
+            hole.ExitCode.ShouldBe(0);
+            (await File.ReadAllTextAsync(logPath, TestContext.Current.CancellationToken)).ShouldBe("fresh\n");
+            (await File.ReadAllTextAsync(logPath + ".1", TestContext.Current.CancellationToken)).ShouldBe("current\n");
+            (await File.ReadAllTextAsync(logPath + ".2", TestContext.Current.CancellationToken)).ShouldBe("one\n");
+            File.Exists(logPath + ".3").ShouldBeFalse();
+        }
+        finally
+        {
+            Directory.Delete(prepared.Root, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// A previous file that is already <c>follower.log.2</c> and larger than 1 MiB
+    /// is removed. The log just rotated to <c>follower.log.1</c> remains, including
+    /// when that file alone is larger than 1 MiB. A younger previous file stays
+    /// when dropping the oldest brings the sum back within the cap.
+    /// </summary>
+    [Fact(SkipUnless = nameof(OnLinux), Skip = "The wrapper runs under /bin/sh")]
+    public async Task AnOversizedPreviousFileIsRemovedWhileTheLogJustRotatedRemains()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        const int OneMebibyte = 1048576;
+        PreparedWrapper prepared = await PrepareWrapperAsync(TestContext.Current.CancellationToken);
+        try
+        {
+            string logPath = Path.Combine(prepared.AppData, "follower.log");
+            var justEnded = new byte[OneMebibyte + 1];
+            Array.Fill(justEnded, (byte)'J');
+            var oversized = new byte[OneMebibyte + 1];
+            Array.Fill(oversized, (byte)'Q');
+            await File.WriteAllBytesAsync(logPath, justEnded, TestContext.Current.CancellationToken);
+            await File.WriteAllBytesAsync(logPath + ".2", oversized, TestContext.Current.CancellationToken);
+            await WriteSiblingBinaryAsync(prepared.Binary, "live", prepared.ArgvPath, prepared.WitnessPath, TestContext.Current.CancellationToken);
+
+            WrapperRun kept = await RunWrapperAsync(prepared.Wrapper, prepared.ConfigPath, TestContext.Current.CancellationToken);
+
+            kept.ExitCode.ShouldBe(0);
+            (await File.ReadAllTextAsync(logPath, TestContext.Current.CancellationToken)).ShouldBe("live\n");
+            byte[] rotated = await File.ReadAllBytesAsync(logPath + ".1", TestContext.Current.CancellationToken);
+            rotated.AsSpan().SequenceEqual(justEnded).ShouldBeTrue();
+            File.Exists(logPath + ".2").ShouldBeFalse();
+            File.Exists(logPath + ".3").ShouldBeFalse();
+
+            foreach (string name in _logNames)
+            {
+                File.Delete(Path.Combine(prepared.AppData, name));
+            }
+
+            await File.WriteAllTextAsync(logPath, "just-ended\n", TestContext.Current.CancellationToken);
+            await File.WriteAllTextAsync(logPath + ".1", "middle\n", TestContext.Current.CancellationToken);
+            await File.WriteAllBytesAsync(logPath + ".2", oversized, TestContext.Current.CancellationToken);
+            await WriteSiblingBinaryAsync(prepared.Binary, "again", prepared.ArgvPath, prepared.WitnessPath, TestContext.Current.CancellationToken);
+
+            WrapperRun partial = await RunWrapperAsync(prepared.Wrapper, prepared.ConfigPath, TestContext.Current.CancellationToken);
+
+            partial.ExitCode.ShouldBe(0);
+            (await File.ReadAllTextAsync(logPath, TestContext.Current.CancellationToken)).ShouldBe("again\n");
+            (await File.ReadAllTextAsync(logPath + ".1", TestContext.Current.CancellationToken)).ShouldBe("just-ended\n");
+            (await File.ReadAllTextAsync(logPath + ".2", TestContext.Current.CancellationToken)).ShouldBe("middle\n");
+            File.Exists(logPath + ".3").ShouldBeFalse();
+
+            foreach (string name in _logNames)
+            {
+                File.Delete(Path.Combine(prepared.AppData, name));
+            }
+
+            byte[] oneByte = [(byte)'Z'];
+            var underTheCap = new byte[OneMebibyte - 1];
+            Array.Fill(underTheCap, (byte)'A');
+            await File.WriteAllBytesAsync(logPath + ".1", oneByte, TestContext.Current.CancellationToken);
+            await File.WriteAllBytesAsync(logPath + ".2", underTheCap, TestContext.Current.CancellationToken);
+            await WriteSiblingBinaryAsync(prepared.Binary, "at-cap", prepared.ArgvPath, prepared.WitnessPath, TestContext.Current.CancellationToken);
+
+            WrapperRun atCap = await RunWrapperAsync(prepared.Wrapper, prepared.ConfigPath, TestContext.Current.CancellationToken);
+
+            atCap.ExitCode.ShouldBe(0);
+            (await File.ReadAllBytesAsync(logPath + ".1", TestContext.Current.CancellationToken)).AsSpan().SequenceEqual(oneByte).ShouldBeTrue();
+            (await File.ReadAllBytesAsync(logPath + ".2", TestContext.Current.CancellationToken)).AsSpan().SequenceEqual(underTheCap).ShouldBeTrue();
+
+            foreach (string name in _logNames)
+            {
+                File.Delete(Path.Combine(prepared.AppData, name));
+            }
+
+            var oneByteOver = new byte[OneMebibyte];
+            Array.Fill(oneByteOver, (byte)'B');
+            await File.WriteAllBytesAsync(logPath + ".1", oneByte, TestContext.Current.CancellationToken);
+            await File.WriteAllBytesAsync(logPath + ".2", oneByteOver, TestContext.Current.CancellationToken);
+            await WriteSiblingBinaryAsync(prepared.Binary, "over-cap", prepared.ArgvPath, prepared.WitnessPath, TestContext.Current.CancellationToken);
+
+            WrapperRun overCap = await RunWrapperAsync(prepared.Wrapper, prepared.ConfigPath, TestContext.Current.CancellationToken);
+
+            overCap.ExitCode.ShouldBe(0);
+            (await File.ReadAllBytesAsync(logPath + ".1", TestContext.Current.CancellationToken)).AsSpan().SequenceEqual(oneByte).ShouldBeTrue();
+            File.Exists(logPath + ".2").ShouldBeFalse();
+            File.Exists(logPath + ".3").ShouldBeFalse();
+        }
+        finally
+        {
+            Directory.Delete(prepared.Root, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// A symlink at <c>follower.log</c> is still refused. A symlink at
+    /// <c>follower.log.1</c>, <c>follower.log.2</c>, or <c>follower.log.3</c> is
+    /// refused the same way, and the target is not written.
+    /// </summary>
+    [Fact(SkipUnless = nameof(OnLinux), Skip = "The wrapper runs under /bin/sh")]
+    public async Task ASymlinkAtFollowerLogOrAPreviousGenerationIsRefused()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        PreparedWrapper prepared = await PrepareWrapperAsync(TestContext.Current.CancellationToken);
+        try
+        {
+            await File.WriteAllTextAsync(prepared.WitnessPath, string.Empty, TestContext.Current.CancellationToken);
+            await WriteSiblingBinaryAsync(prepared.Binary, "should-not-run", prepared.ArgvPath, prepared.WitnessPath, TestContext.Current.CancellationToken);
+            foreach (string name in _logNames)
+            {
+                foreach (string existing in _logNames)
+                {
+                    File.Delete(Path.Combine(prepared.AppData, existing));
+                }
+
+                string secret = Path.Combine(prepared.Root, "secret");
+                await File.WriteAllTextAsync(secret, "untouched\n", TestContext.Current.CancellationToken);
+                string linkPath = Path.Combine(prepared.AppData, name);
+                if (name != "follower.log")
+                {
+                    await File.WriteAllTextAsync(Path.Combine(prepared.AppData, "follower.log"), "would-rotate\n", TestContext.Current.CancellationToken);
+                }
+
+                File.CreateSymbolicLink(linkPath, secret);
+                int runsBefore = WitnessRuns(prepared.WitnessPath);
+                WrapperRun refused = await RunWrapperAsync(prepared.Wrapper, prepared.ConfigPath, TestContext.Current.CancellationToken);
+
+                refused.ExitCode.ShouldNotBe(0);
+                refused.Output.ShouldBe("follower-log: refusing to follow a symlink at " + name + "\n");
+                refused.Output.ShouldNotContain(prepared.Root);
+                (await File.ReadAllTextAsync(secret, TestContext.Current.CancellationToken)).ShouldBe("untouched\n");
+                new FileInfo(linkPath).LinkTarget.ShouldNotBeNull();
+                WitnessRuns(prepared.WitnessPath).ShouldBe(runsBefore);
+                if (name != "follower.log")
+                {
+                    (await File.ReadAllTextAsync(Path.Combine(prepared.AppData, "follower.log"), TestContext.Current.CancellationToken))
+                        .ShouldBe("would-rotate\n");
+                }
+            }
+        }
+        finally
+        {
+            Directory.Delete(prepared.Root, recursive: true);
+        }
+    }
+
+    private static readonly string[] _logNames = ["follower.log", "follower.log.1", "follower.log.2", "follower.log.3"];
+
+    private readonly record struct PreparedWrapper(
+        string Root,
+        string AppData,
+        string Wrapper,
+        string Binary,
+        string ArgvPath,
+        string WitnessPath,
+        string ConfigPath);
+
+    private static async Task<PreparedWrapper> PrepareWrapperAsync(CancellationToken cancellationToken)
+    {
+        string root = Path.Combine(Path.GetTempPath(), "claude-code-account-rotation-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string install = Path.Combine(root, "install");
+        string appData = Path.Combine(root, "appdata");
+        Directory.CreateDirectory(install);
+        Directory.CreateDirectory(appData);
+        string wrapper = Path.Combine(install, "claude-code-account-rotation-follower-log");
+        File.Copy(WrapperSource(), wrapper);
+        string binary = Path.Combine(install, "claude-code-account-rotation-linux-x64");
+        string argvPath = Path.Combine(root, "argv");
+        string witnessPath = Path.Combine(root, "witness");
+        string configPath = Path.Combine(root, "follower.json");
+        await File.WriteAllTextAsync(
+            configPath,
+            "{\"appDataDirectory\":\"" + appData + "\"}",
+            cancellationToken);
+        return new PreparedWrapper(root, appData, wrapper, binary, argvPath, witnessPath, configPath);
     }
 
     private static int WitnessRuns(string witnessPath) =>

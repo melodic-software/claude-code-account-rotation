@@ -1,8 +1,21 @@
 #!/bin/sh
 # The leader execs this instead of the follower binary. wsl.exe's stdout is a
 # discarded pty, so the child's stdout and stderr go to
-# <appDataDirectory>/follower.log, truncated on every start. This script
-# writes nothing to that file: it only redirects the child.
+# <appDataDirectory>/follower.log. On every start a regular follower.log is
+# renamed to follower.log.1, and an existing follower.log.1 and follower.log.2
+# shift with it. A regular follower.log.3 is removed first, so a restart keeps
+# the invocation that just ended and at most three previous files remain.
+# After that shift, follower.log.1, follower.log.2, and follower.log.3 stay
+# within 1 MiB together: the oldest is deleted until the sum fits, except the
+# log just rotated is kept for this start even when it alone is larger. The
+# next start may drop it once it has become follower.log.2. The redirect below
+# creates a new empty follower.log. This script writes nothing to that file:
+# it only rotates and redirects the child.
+#
+# R2's check is grep -F -c "auth login" over follower.log and whichever of
+# follower.log.1, follower.log.2, and follower.log.3 exist. With one file,
+# grep prints 0. With more than one, each line is path:0. The check passes
+# when every count is 0.
 #
 # POSIX sh, because Ubuntu's /bin/sh is dash. The leader passes the configured
 # executable as --follower. Without that flag, the sibling binary is
@@ -319,11 +332,60 @@ if [ -z "$app_data" ]; then
   exit 1
 fi
 
+# Rename the previous invocation aside, then keep follower.log.1, follower.log.2,
+# and follower.log.3 within 1048576 bytes. A symlink at any of those names is
+# refused before the first mv, so rotation never follows a link. The file just
+# rotated (follower.log.1) is not deleted on this start.
+rotate_follower_log() {
+  current=$1
+  previous1=$1.1
+  previous2=$1.2
+  previous3=$1.3
+
+  for candidate in "$current" "$previous1" "$previous2" "$previous3"; do
+    if [ -L "$candidate" ]; then
+      printf '%s\n' "follower-log: refusing to follow a symlink at ${candidate##*/}" >&2
+      exit 1
+    fi
+  done
+
+  if [ -f "$current" ]; then
+    if [ -f "$previous3" ]; then
+      rm -f -- "$previous3"
+    fi
+    if [ -f "$previous2" ]; then
+      mv -- "$previous2" "$previous3"
+    fi
+    if [ -f "$previous1" ]; then
+      mv -- "$previous1" "$previous2"
+    fi
+    mv -- "$current" "$previous1"
+  fi
+
+  cap=1048576
+  while :; do
+    total=0
+    for candidate in "$previous1" "$previous2" "$previous3"; do
+      if [ ! -L "$candidate" ] && [ -f "$candidate" ]; then
+        bytes=$(wc -c < "$candidate")
+        total=$((total + bytes))
+      fi
+    done
+    if [ "$total" -le "$cap" ]; then
+      break
+    fi
+    if [ ! -L "$previous3" ] && [ -f "$previous3" ]; then
+      rm -f -- "$previous3"
+    elif [ ! -L "$previous2" ] && [ -f "$previous2" ]; then
+      rm -f -- "$previous2"
+    else
+      break
+    fi
+  done
+}
+
 mkdir -p -- "$app_data"
 log="$app_data/follower.log"
-if [ -L "$log" ]; then
-  printf '%s\n' "follower-log: refusing to follow a symlink at follower.log" >&2
-  exit 1
-fi
+rotate_follower_log "$log"
 
 exec "$binary" "$@" >"$log" 2>&1
