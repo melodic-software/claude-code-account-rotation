@@ -4,6 +4,7 @@ using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Adapters.Process;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.App.Tests.Adapters;
+using ClaudeCodeAccountRotation.App.Tests.Hosting;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Ports;
@@ -191,11 +192,10 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
         builder.ConfigureTestServices(services =>
         {
             // Nothing reaches the network: the factory's own handler chain stays
-            // and only the socket underneath it is replaced. The lambda captures
-            // the one instance rather than minting one per client, or the two
-            // named clients would each hold a script of their own and a test
-            // could not say what order the pass sent its requests in.
-            services.ConfigureHttpClientDefaults(client => client.ConfigurePrimaryHttpMessageHandler(() => Outbound));
+            // and only the socket underneath it is replaced. The composition root
+            // installs that socket itself, after any ConfigureHttpClientDefaults,
+            // so the stub has to be named too or it would be overwritten.
+            OutboundHandlerStub.Install(services, Outbound);
             // The clock the login runner already reads, now for everything the
             // container hands a TimeProvider. A refresh pass decides whether an
             // access token has expired and how long a lockout still has to run

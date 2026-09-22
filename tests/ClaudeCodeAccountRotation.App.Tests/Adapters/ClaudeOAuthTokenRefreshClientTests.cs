@@ -134,6 +134,24 @@ public sealed class ClaudeOAuthTokenRefreshClientTests
     }
 
     [Fact]
+    public async Task ARedirectIsATransportFailureAndIsNotFollowed()
+    {
+        using HttpResponseMessage redirect = new(HttpStatusCode.TemporaryRedirect);
+        redirect.Headers.Location = new Uri("https://redirect.example/token");
+        using RecordingHandler handler = new(redirect);
+        using HttpClient http = new(handler);
+        ClaudeOAuthTokenRefreshClient client = new(http, UserAgent, new FixedClock(_now));
+
+        Result<RefreshedTokens, UsageReadFailure> refreshed = await client.RefreshAsync("refresh-old", TestContext.Current.CancellationToken);
+
+        refreshed.IsFailure.ShouldBeTrue();
+        refreshed.Error.Kind.ShouldBe(UsageReadFailureKind.Transport);
+        refreshed.Error.Detail.ShouldBe("the endpoint answered 307");
+        handler.Requests.Count.ShouldBe(1);
+        handler.Requests.Single().RequestUri!.ToString().ShouldBe("https://platform.claude.com/v1/oauth/token");
+    }
+
+    [Fact]
     public async Task ARefusedRefreshTokenIsUnauthorized()
     {
         using RecordingHandler handler = new(new HttpResponseMessage(HttpStatusCode.Unauthorized));
