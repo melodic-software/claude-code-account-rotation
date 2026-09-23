@@ -47,8 +47,13 @@ somewhere else. That directory is `%LOCALAPPDATA%\claude-code-account-rotation` 
 `claude-code-account-rotation` under the local application data directory (`~/.local/share` unless
 `XDG_DATA_HOME` is set) on Linux and macOS.
 
-The process prints `Dashboard:` and the bound URL, and it opens no browser. The default port is
-48211. `--port 0` asks the operating system for a free port for that launch. Open the printed URL.
+The process prints `Dashboard:` and the bound URL. The default port is 48211. `--port 0` asks the
+operating system for a free port for that launch. Without `--open` no browser opens: open the
+printed URL, and paste line 2 of `instance.url` when the page asks for the instance token.
+
+With `--open`, the dashboard opens in the default browser already signed in. If an instance is
+already running, `--open` opens that instance's dashboard and exits. Otherwise the process starts
+as usual and opens its own dashboard once it is listening.
 
 If a card says it is not on the roster, click Adopt. Adopt is only offered for a Max account
 that is already logged in on this machine. Otherwise use Add an account, then Login on the card

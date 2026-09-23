@@ -36,15 +36,20 @@ WebApplicationBuilder builder = WebApplication.CreateBuilder(new WebApplicationO
     Args = args,
     ContentRootPath = AppContext.BaseDirectory,
 });
-Result<Unit, string> composed = await AppComposition.ComposeAsync(builder, parsed.Value, CancellationToken.None);
+Result<bool, string> composed = await AppComposition.ComposeAsync(builder, parsed.Value, CancellationToken.None);
 if (composed.IsFailure)
 {
     await Console.Error.WriteLineAsync(composed.Error);
     return 1;
 }
 
+if (!composed.Value)
+{
+    return 0;
+}
+
 WebApplication app = builder.Build();
 AppComposition.MapRoutes(app);
-AppComposition.AnnounceDashboard(app);
+AppComposition.AnnounceDashboard(app, parsed.Value.Open);
 await app.RunAsync();
 return 0;

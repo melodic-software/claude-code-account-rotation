@@ -679,7 +679,9 @@ public sealed class ConfigurationTests : IDisposable
         StartupArguments parsed = StartupArguments.Parse(["--config", "x.json", "--port", "5001"]).Value;
         parsed.ConfigPath.ShouldBe("x.json");
         parsed.Port.ShouldBe(5001);
+        parsed.Open.ShouldBeFalse();
 
+        StartupArguments.Parse(["--open"]).Value.Open.ShouldBeTrue();
         StartupArguments.Parse(["--version"]).Value.ShowVersion.ShouldBeTrue();
         StartupArguments.Parse(["--help"]).Value.ShowHelp.ShouldBeTrue();
         StartupArguments.Parse(["-h"]).Value.ShowHelp.ShouldBeTrue();

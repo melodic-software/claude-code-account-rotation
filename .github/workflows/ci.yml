@@ -108,6 +108,10 @@ jobs:
         run: shellcheck eng/*.sh
       - name: No machine paths in shipped surfaces
         run: bash eng/check-no-machine-paths.sh
+      # node is preinstalled on the ubuntu-24.04 image. The shell expands the
+      # glob, since `node --test <directory>` does not search a directory.
+      - name: Page script tests
+        run: node --test tests/js/*.test.js
 
   ci-status:
     name: ci-status
