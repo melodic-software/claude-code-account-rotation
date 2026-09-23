@@ -139,6 +139,23 @@ public sealed class CliLogoutTests
     }
 
     [Fact]
+    public async Task ATokenlessFileThatWasNeverAPairDoesNotRefuseSwitchAsALogout()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await using AppFactory factory = new();
+        await WriteTokenlessAsync(factory, cancellationToken);
+        await factory.WriteStateFileAsync(LiveEmail, cancellationToken);
+        await factory.ParkedProfileAsync(ParkedEmail, "refresh-b", cancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage refused = await client.PostAsync(SwitchUri(ParkedEmail), content: null, cancellationToken);
+        string body = await refused.Content.ReadAsStringAsync(cancellationToken);
+        body.ShouldNotContain("CliLoggedOut");
+        refused.StatusCode.ShouldNotBe(HttpStatusCode.OK);
+        LogoutLines(factory).ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task ALogoutNamesTheOwnerWhenTheStateFileHasNoAddress()
     {
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;

@@ -55,6 +55,7 @@ internal sealed partial class LiveDirectorySwitch
     private readonly ILogger<LiveDirectorySwitch> _logger;
     private readonly Func<string, long?> _deviceId;
     private readonly Func<string, string, int>? _rename;
+    private readonly CliLogoutMonitor? _cliLogout;
     private readonly string _quarantineDirectory;
     private readonly string _liveOwnerPath;
 
@@ -72,7 +73,8 @@ internal sealed partial class LiveDirectorySwitch
         SharedStoreSlots slots,
         SwitchOptions options,
         TimeProvider timeProvider,
-        ILogger<LiveDirectorySwitch> logger)
+        ILogger<LiveDirectorySwitch> logger,
+        CliLogoutMonitor? cliLogout = null)
         : this(
             pairs,
             stateFile,
@@ -89,7 +91,8 @@ internal sealed partial class LiveDirectorySwitch
             timeProvider,
             logger,
             deviceId: null,
-            rename: null)
+            rename: null,
+            cliLogout: cliLogout)
     {
     }
 
@@ -109,7 +112,8 @@ internal sealed partial class LiveDirectorySwitch
         TimeProvider timeProvider,
         ILogger<LiveDirectorySwitch> logger,
         Func<string, long?>? deviceId,
-        Func<string, string, int>? rename = null)
+        Func<string, string, int>? rename = null,
+        CliLogoutMonitor? cliLogout = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         _pairs = pairs;
@@ -128,6 +132,7 @@ internal sealed partial class LiveDirectorySwitch
         _logger = logger;
         _deviceId = deviceId ?? SameVolume.DeviceId;
         _rename = rename;
+        _cliLogout = cliLogout;
         _quarantineDirectory = options.QuarantineDirectory;
         _liveOwnerPath = Path.Combine(options.AppDataDirectory, "state", LiveOwnerFileName);
     }
@@ -241,10 +246,18 @@ internal sealed partial class LiveDirectorySwitch
         }
         catch (InvalidDataException exception) when (CliLogoutMonitor.IsTokenAbsence(exception))
         {
-            // The read recorded the logout. Parking this file would journal a
-            // pair the file no longer holds.
-            LogRefused(target.Value, SwitchRefusal.CliLoggedOut);
-            return Result<SwitchOutcome, SwitchRefusal>.Failure(SwitchRefusal.CliLoggedOut);
+            // The read records a logout only after a pair was parsed. Parking
+            // this file would journal a pair the file no longer holds, so that
+            // recorded transition refuses the switch. A file that never parsed
+            // is not a logout; the exception still names the path, and it is
+            // not turned into that sentence.
+            if (_cliLogout?.LoggedOutAt is not null)
+            {
+                LogRefused(target.Value, SwitchRefusal.CliLoggedOut);
+                return Result<SwitchOutcome, SwitchRefusal>.Failure(SwitchRefusal.CliLoggedOut);
+            }
+
+            throw;
         }
         IReadOnlyList<ParkedProfile> profiles = await _profiles.ListAsync(cancellationToken);
         ParkedProfile? targetProfile = profiles.FirstOrDefault(profile => profile.Email == target);
