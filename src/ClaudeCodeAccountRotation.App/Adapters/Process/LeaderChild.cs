@@ -50,6 +50,12 @@ internal sealed partial class ProcessLeaderChild(System.Diagnostics.Process proc
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        // Under `dotnet <app>.dll` the process is the host, and the app is its first argument.
+        if (string.Equals(Path.GetFileNameWithoutExtension(executable), "dotnet", StringComparison.OrdinalIgnoreCase))
+        {
+            start.ArgumentList.Add(Environment.GetCommandLineArgs()[0]);
+        }
+
         foreach (string argument in arguments)
         {
             start.ArgumentList.Add(argument);
