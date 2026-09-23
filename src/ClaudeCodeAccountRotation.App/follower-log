@@ -1,8 +1,28 @@
 #!/bin/sh
 # The leader execs this instead of the follower binary. wsl.exe's stdout is a
 # discarded pty, so the child's stdout and stderr go to
-# <appDataDirectory>/follower.log, truncated on every start. This script
-# writes nothing to that file: it only redirects the child.
+# <appDataDirectory>/follower.log. On every start a regular follower.log is
+# renamed to follower.log.1, and an existing follower.log.1 and follower.log.2
+# shift with it. A regular follower.log.3 is removed first, so a restart keeps
+# the invocation that just ended and at most three previous files remain.
+# After that shift, follower.log.1, follower.log.2, and follower.log.3 stay
+# within 1 MiB together: the oldest is deleted until the sum fits, except the
+# log just rotated is kept for this start even when it alone is larger. The
+# next start may drop it once it has become follower.log.2. The redirect below
+# creates a new empty follower.log. This script writes nothing to that file:
+# it only rotates and redirects the child.
+#
+# A follower can outlive the leader. Renaming the log it still has open would
+# leave it writing under a later name, and the size cap would then remove that
+# name. follower.lock records this process's id before the rename. exec keeps
+# that id, so the next start can see the process is alive, leave the log where
+# it is, and not start a second follower. A lock whose process is gone is taken
+# again, so a crashed follower does not stick.
+#
+# R2's check is grep -F -c "auth login" over follower.log and whichever of
+# follower.log.1, follower.log.2, and follower.log.3 exist. With one file,
+# grep prints 0. With more than one, each line is path:0. The check passes
+# when every count is 0.
 #
 # POSIX sh, because Ubuntu's /bin/sh is dash. The leader passes the configured
 # executable as --follower. Without that flag, the sibling binary is
@@ -319,11 +339,105 @@ if [ -z "$app_data" ]; then
   exit 1
 fi
 
+# Rename the previous invocation aside, then keep follower.log.1, follower.log.2,
+# and follower.log.3 within 1048576 bytes. A symlink at any of those names is
+# refused before the first mv, so rotation never follows a link. The file just
+# rotated (follower.log.1) is not deleted on this start.
+rotate_follower_log() {
+  current=$1
+  previous1=$1.1
+  previous2=$1.2
+  previous3=$1.3
+
+  for candidate in "$current" "$previous1" "$previous2" "$previous3"; do
+    if [ -L "$candidate" ]; then
+      printf '%s\n' "follower-log: refusing to follow a symlink at ${candidate##*/}" >&2
+      exit 1
+    fi
+  done
+
+  if [ -f "$current" ]; then
+    if [ -f "$previous3" ]; then
+      rm -f -- "$previous3"
+    fi
+    if [ -f "$previous2" ]; then
+      mv -- "$previous2" "$previous3"
+    fi
+    if [ -f "$previous1" ]; then
+      mv -- "$previous1" "$previous2"
+    fi
+    mv -- "$current" "$previous1"
+  fi
+
+  cap=1048576
+  while :; do
+    total=0
+    for candidate in "$previous1" "$previous2" "$previous3"; do
+      if [ ! -L "$candidate" ] && [ -f "$candidate" ]; then
+        bytes=$(wc -c < "$candidate")
+        total=$((total + bytes))
+      fi
+    done
+    if [ "$total" -le "$cap" ]; then
+      break
+    fi
+    if [ ! -L "$previous3" ] && [ -f "$previous3" ]; then
+      rm -f -- "$previous3"
+    elif [ ! -L "$previous2" ] && [ -f "$previous2" ]; then
+      rm -f -- "$previous2"
+    else
+      break
+    fi
+  done
+}
+
+# follower.lock is a directory whose pid file is this process. mkdir is the
+# atomic claim. A live id means a follower still holds the current log, so
+# this start does not rename it and does not exec. An empty pid file is a
+# start that has not recorded its id yet, or one that died in that window;
+# one second distinguishes them. A dead id is moved aside and the claim is
+# retried, so two starters cannot both delete a lock the other just took.
+claim_follower_lock() {
+  lock=$1
+  attempt=0
+  while [ "$attempt" -lt 5 ]; do
+    attempt=$((attempt + 1))
+    if [ -L "$lock" ]; then
+      printf '%s\n' "follower-log: refusing to follow a symlink at follower.lock" >&2
+      exit 1
+    fi
+    if [ -e "$lock" ] && [ ! -d "$lock" ]; then
+      printf '%s\n' "follower-log: follower.lock is not a directory" >&2
+      exit 1
+    fi
+    if mkdir -- "$lock" 2>/dev/null; then
+      printf '%s\n' "$$" > "$lock/pid" || exit 1
+      return
+    fi
+
+    holder=$(cat "$lock/pid" 2>/dev/null || true)
+    if [ -z "$holder" ]; then
+      sleep 1
+      holder=$(cat "$lock/pid" 2>/dev/null || true)
+    fi
+    if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+      printf '%s\n' "follower-log: a follower is already running" >&2
+      exit 1
+    fi
+
+    stale="$lock.stale.$$"
+    if mv -- "$lock" "$stale" 2>/dev/null; then
+      rm -f -- "$stale/pid"
+      rmdir -- "$stale" 2>/dev/null || rm -f -- "$stale/pid"
+    fi
+  done
+  printf '%s\n' "follower-log: a follower is already running" >&2
+  exit 1
+}
+
 mkdir -p -- "$app_data"
 log="$app_data/follower.log"
-if [ -L "$log" ]; then
-  printf '%s\n' "follower-log: refusing to follow a symlink at follower.log" >&2
-  exit 1
-fi
+claim_follower_lock "$app_data/follower.lock"
+rotate_follower_log "$log"
 
 exec "$binary" "$@" >"$log" 2>&1

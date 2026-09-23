@@ -84,9 +84,11 @@ observation, not a phase gate.
 1. **R1** every add, alias, browser mapping, login, and switch for either side is a click on the
    Windows loopback page; the WSL side exposes no add, no login, and no roster write (404).
 2. **R2** the WSL side has performed **zero** `claude auth login`, and logins per machine per 28 days
-   are at most one per account. The zero-logins half is checkable at any moment (`grep -c "auth
-   login"` over the follower log is `0`); the per-28-days half is a real-world observation over a
-   full window and is tracked, not gated.
+   are at most one per account. The zero-logins half is checkable at any moment with
+   `grep -F -c "auth login"` over `follower.log` and whichever of `follower.log.1`,
+   `follower.log.2`, and `follower.log.3` exist. With one file, grep prints `0`. With more than
+   one, each line is `path:0`. The check passes when every count is 0. The per-28-days half is a
+   real-world observation over a full window and is tracked, not gated.
 3. **R3** switching Windows to B leaves WSL on A and the reverse; three open sessions per side follow
    their own side's switch on their next request.
 4. **R4** the `linux-x64` build serves `/api/dashboard` inside the distro.
@@ -501,7 +503,7 @@ Work items, in order.
 - Stopping the follower flips its side to `offline` within 15 s; the leader restarting it reports
   `online` within 60 s.
 - A mutating route sent from Windows with the custom header and no `Origin` is neither 400 nor 403.
-- `grep -c "auth login" <follower log fixture>` prints `0`.
+- `grep -F -c "auth login"` over `follower.log` and whichever of `follower.log.1`, `follower.log.2`, and `follower.log.3` exist prints `0` when one file is present, and a `path:0` line for each file when more than one is present. The check passes when every count is 0.
 - Build, format, typos, markdownlint, shellcheck, `check-no-machine-paths.sh` clean.
 
 **Verification without risking a live login:** entirely temp roots and fake pairs. The operator's real
@@ -549,7 +551,7 @@ Work items, in order.
 
 - R1: the follower answers 404 for every add, login and roster route; every mutation the operator
   performs is a click on the Windows page.
-- R2 (checkable half): `grep -c "auth login" <follower log>` prints `0`.
+- R2 (checkable half): `grep -F -c "auth login"` over `follower.log` and whichever of `follower.log.1`, `follower.log.2`, and `follower.log.3` exist. With one file, grep prints `0`. With more than one, each line is `path:0`. The check passes when every count is 0.
 - R3: with three sessions open on each side, a Windows switch to B and a WSL switch to C leave each
   side's three sessions reporting their own side's account on the next message.
 - R4: `curl` inside the distro against the follower's port returns a dashboard payload.
