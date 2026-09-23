@@ -353,16 +353,25 @@ internal static class AppComposition
     {
         IServer server = app.Services.GetRequiredService<IServer>();
         IServerAddressesFeature? addresses = server.Features.Get<IServerAddressesFeature>();
-        if (addresses is null)
-        {
-            return null;
-        }
+        return addresses is null ? null : LoopbackDashboardUrl(addresses.Addresses);
+    }
 
-        foreach (string address in addresses.Addresses)
+    /// <summary>
+    /// The IPv4 loopback address among the bound ones. <c>ListenLocalhost</c>
+    /// reports <c>http://localhost:&lt;port&gt;</c>, which is read as 127.0.0.1.
+    /// </summary>
+    internal static string? LoopbackDashboardUrl(IEnumerable<string> addresses)
+    {
+        foreach (string address in addresses)
         {
             if (address.StartsWith("http://127.0.0.1:", StringComparison.Ordinal))
             {
                 return address;
+            }
+
+            if (address.StartsWith("http://localhost:", StringComparison.Ordinal))
+            {
+                return "http://127.0.0.1:" + address["http://localhost:".Length..];
             }
         }
 
