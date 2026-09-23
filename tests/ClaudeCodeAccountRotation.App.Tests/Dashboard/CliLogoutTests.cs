@@ -236,8 +236,13 @@ public sealed class CliLogoutTests
     [Fact]
     public async Task ASideSwitchIsRefusedWhileALogoutStands()
     {
-        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
-        await using AppFactory factory = new(sharedStore: true, peerStorePath: "/mnt/c/store");
+        // No peer is configured. The refusal is decided from the local logout
+        // record, before any side is contacted, and a peer at a closed port
+        // would hold the Windows lane on a connection that does not refuse.
+        using var bound = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        bound.CancelAfter(TimeSpan.FromSeconds(20));
+        CancellationToken cancellationToken = bound.Token;
+        await using AppFactory factory = new(sharedStore: true);
         await CredentialFiles.WriteAsync(factory.LiveDirectory, "refresh-a", cancellationToken);
         await factory.WriteStateFileAsync(LiveEmail, cancellationToken);
         await factory.ParkedProfileAsync(ParkedEmail, "refresh-b", cancellationToken);
