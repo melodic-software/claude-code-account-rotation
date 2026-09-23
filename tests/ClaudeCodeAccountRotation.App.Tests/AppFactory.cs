@@ -317,7 +317,7 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
             public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
             {
                 ArgumentNullException.ThrowIfNull(formatter);
-                lines.Enqueue(formatter(state, exception) + " " + exception);
+                lines.Enqueue(logLevel.ToString() + " " + formatter(state, exception) + " " + exception);
             }
         }
     }

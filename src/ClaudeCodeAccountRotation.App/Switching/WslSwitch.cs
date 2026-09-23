@@ -1,5 +1,6 @@
 using System.Globalization;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
+using ClaudeCodeAccountRotation.App.Dashboard;
 using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
@@ -118,6 +119,7 @@ internal sealed partial class WslSwitch : IDisposable
     private readonly SwitchOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<WslSwitch> _logger;
+    private readonly CliLogoutMonitor? _cliLogout;
 
     public WslSwitch(
         PeerRegistry peers,
@@ -134,7 +136,8 @@ internal sealed partial class WslSwitch : IDisposable
         CredentialMutationGate gate,
         SwitchOptions options,
         TimeProvider timeProvider,
-        ILogger<WslSwitch> logger)
+        ILogger<WslSwitch> logger,
+        CliLogoutMonitor? cliLogout = null)
     {
         ArgumentNullException.ThrowIfNull(peers);
         ArgumentNullException.ThrowIfNull(pairs);
@@ -161,6 +164,7 @@ internal sealed partial class WslSwitch : IDisposable
         _options = options;
         _timeProvider = timeProvider;
         _logger = logger;
+        _cliLogout = cliLogout;
     }
 
     public void Dispose() => _handOff.Dispose();
@@ -253,6 +257,16 @@ internal sealed partial class WslSwitch : IDisposable
         CancellationToken cancellationToken)
     {
         string named = target?.Value ?? "nothing";
+        // A release does not park the live file, so the logout latch does not
+        // apply to it. A switch onto the other side does: the page already
+        // withholds that offer, and a stale page must get the same refusal the
+        // local switch does, including after the live file has been removed.
+        if (target is not null && await CliLogoutStandsAsync(cancellationToken))
+        {
+            LogRefused(side.Value, named, SwitchRefusal.CliLoggedOut);
+            return Result<WslSwitchOutcome, SwitchRefusal>.Failure(SwitchRefusal.CliLoggedOut);
+        }
+
         if (_peers.For(side) is not Peer peer)
         {
             LogRefused(side.Value, named, SwitchRefusal.SideOffline);
@@ -1349,9 +1363,45 @@ internal sealed partial class WslSwitch : IDisposable
         await _slots.ReadSupersededAsync(account, folderPath, slotHoldsPair, hold, cancellationToken)
             is { Stale: false } superseded && superseded.Record.Side == side;
 
+    /// <summary>
+    /// Whether a recorded CLI logout still stands, after one live read so a
+    /// pair that has come back clears it first. A file that lacks tokens and
+    /// was never a pair still throws: that is not a logout.
+    /// </summary>
+    private async Task<bool> CliLogoutStandsAsync(CancellationToken cancellationToken)
+    {
+        if (_cliLogout is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            _ = await _pairs.ReadLiveAsync(cancellationToken);
+        }
+        catch (InvalidDataException exception) when (CliLogoutMonitor.IsTokenAbsence(exception) && _cliLogout.LoggedOutAt is not null)
+        {
+            // Recorded on the read. The exception names the path, so it stops here.
+        }
+
+        return _cliLogout.LoggedOutAt is not null;
+    }
+
     private async Task<WindowsHold> WindowsHoldAsync(CancellationToken cancellationToken)
     {
-        CredentialPair? live = await _pairs.ReadLiveAsync(cancellationToken);
+        CredentialPair? live;
+        try
+        {
+            live = await _pairs.ReadLiveAsync(cancellationToken);
+        }
+        catch (InvalidDataException exception) when (CliLogoutMonitor.IsTokenAbsence(exception) && _cliLogout?.LoggedOutAt is not null)
+        {
+            // A release and a hand-off already in progress also read the live
+            // file. The logout is already recorded; this read must not turn
+            // that into an unhandled failure that names the path.
+            live = null;
+        }
+
         OAuthAccountBlock? account = await _stateFile.ReadAccountBlockAsync(cancellationToken);
         return new WindowsHold(account?.Email, live?.Fingerprint);
     }

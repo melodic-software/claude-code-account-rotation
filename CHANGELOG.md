@@ -41,6 +41,15 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- A live credential file that had a parsed pair and then lacks an access token or a refresh
+  token is recorded once, at Error, as the CLI logging out (#21). The line names the account
+  when the state file or the last known owner still has an address. A later read that still
+  lacks those tokens does not log again and does not move the time. The live card says the CLI
+  logged out at that UTC time, and Switch is not offered while that stands, including a
+  switch onto another side and a switch attempted after the live file is removed. When the
+  state file names no account, that same sentence is a warning. A missing file and a
+  half-written file do not record a logout. A later pair clears the record, so a following
+  disappearance is recorded once more.
 - A fresh distro that received a hand-off opened Claude Code's first-run login wizard
   even though its credentials and `oauthAccount` block were already valid (#119). The
   follower now sets `hasCompletedOnboarding` to true when it applies an incoming account

@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
+using ClaudeCodeAccountRotation.App.Dashboard;
 using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
@@ -54,6 +55,7 @@ internal sealed partial class LiveDirectorySwitch
     private readonly ILogger<LiveDirectorySwitch> _logger;
     private readonly Func<string, long?> _deviceId;
     private readonly Func<string, string, int>? _rename;
+    private readonly CliLogoutMonitor? _cliLogout;
     private readonly string _quarantineDirectory;
     private readonly string _liveOwnerPath;
 
@@ -71,7 +73,8 @@ internal sealed partial class LiveDirectorySwitch
         SharedStoreSlots slots,
         SwitchOptions options,
         TimeProvider timeProvider,
-        ILogger<LiveDirectorySwitch> logger)
+        ILogger<LiveDirectorySwitch> logger,
+        CliLogoutMonitor? cliLogout = null)
         : this(
             pairs,
             stateFile,
@@ -88,7 +91,8 @@ internal sealed partial class LiveDirectorySwitch
             timeProvider,
             logger,
             deviceId: null,
-            rename: null)
+            rename: null,
+            cliLogout: cliLogout)
     {
     }
 
@@ -108,7 +112,8 @@ internal sealed partial class LiveDirectorySwitch
         TimeProvider timeProvider,
         ILogger<LiveDirectorySwitch> logger,
         Func<string, long?>? deviceId,
-        Func<string, string, int>? rename = null)
+        Func<string, string, int>? rename = null,
+        CliLogoutMonitor? cliLogout = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         _pairs = pairs;
@@ -127,6 +132,7 @@ internal sealed partial class LiveDirectorySwitch
         _logger = logger;
         _deviceId = deviceId ?? SameVolume.DeviceId;
         _rename = rename;
+        _cliLogout = cliLogout;
         _quarantineDirectory = options.QuarantineDirectory;
         _liveOwnerPath = Path.Combine(options.AppDataDirectory, "state", LiveOwnerFileName);
     }
@@ -233,7 +239,36 @@ internal sealed partial class LiveDirectorySwitch
 
     private async Task<Result<SwitchOutcome, SwitchRefusal>> SwitchUnderGateAsync(AccountEmail target, CancellationToken cancellationToken)
     {
-        LiveAccountState live = await SnapshotLiveAsync(cancellationToken);
+        LiveAccountState live;
+        try
+        {
+            live = await SnapshotLiveAsync(cancellationToken);
+        }
+        catch (InvalidDataException exception) when (CliLogoutMonitor.IsTokenAbsence(exception))
+        {
+            // The read records a logout only after a pair was parsed. Parking
+            // this file would journal a pair the file no longer holds, so that
+            // recorded transition refuses the switch. A file that never parsed
+            // is not a logout; the exception still names the path, and it is
+            // not turned into that sentence.
+            if (_cliLogout?.LoggedOutAt is not null)
+            {
+                LogRefused(target.Value, SwitchRefusal.CliLoggedOut);
+                return Result<SwitchOutcome, SwitchRefusal>.Failure(SwitchRefusal.CliLoggedOut);
+            }
+
+            throw;
+        }
+
+        // A missing file does not throw and does not clear the record. The
+        // switch is still refused while that record stands: there is no pair
+        // to park, and the page is still showing the logout.
+        if (_cliLogout?.LoggedOutAt is not null)
+        {
+            LogRefused(target.Value, SwitchRefusal.CliLoggedOut);
+            return Result<SwitchOutcome, SwitchRefusal>.Failure(SwitchRefusal.CliLoggedOut);
+        }
+
         IReadOnlyList<ParkedProfile> profiles = await _profiles.ListAsync(cancellationToken);
         ParkedProfile? targetProfile = profiles.FirstOrDefault(profile => profile.Email == target);
         if (targetProfile is null)
@@ -663,7 +698,13 @@ internal sealed partial class LiveDirectorySwitch
         catch (Exception exception) when (exception is not OperationCanceledException)
 #pragma warning restore CA1031
         {
-            LogUnreadableCredential(Path.GetFileName(Path.TrimEndingDirectorySeparator(folder)), exception.Message);
+            // A live file that lacks tokens is the logout record, already written
+            // on the read. The exception names the path, so it is not logged here.
+            if (!live || !CliLogoutMonitor.IsTokenAbsence(exception))
+            {
+                LogUnreadableCredential(Path.GetFileName(Path.TrimEndingDirectorySeparator(folder)), exception.Message);
+            }
+
             return null;
         }
     }

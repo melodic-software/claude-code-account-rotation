@@ -1390,6 +1390,11 @@ public sealed class DashboardAssemblerTests
                     {
                         yield return message.GetValue<string>();
                     }
+
+                    if (card["cliLoggedOut"] is JsonNode loggedOut)
+                    {
+                        yield return loggedOut.GetValue<string>();
+                    }
                 }
 
                 if (Raw["refresh"]!["summary"] is JsonNode summary)

@@ -42,6 +42,13 @@ public sealed record CredentialPair
     public IReadOnlyList<string> Scopes { get; }
 
     /// <summary>
+    /// The failure a file returns when <c>accessToken</c> or <c>refreshToken</c>
+    /// is absent or empty. Callers treat this string as the logout signal and
+    /// do not log it back.
+    /// </summary>
+    public const string LacksTokensReason = "credential file lacks accessToken or refreshToken";
+
+    /// <summary>
     /// Reads the file shape <c>{ "claudeAiOauth": { accessToken, refreshToken,
     /// expiresAt, refreshTokenExpiresAt?, scopes? } }</c>; epoch milliseconds for
     /// both instants, as the CLI writes them.
@@ -58,7 +65,7 @@ public sealed record CredentialPair
         string? refreshToken = oauth["refreshToken"]?.GetValue<string>();
         if (string.IsNullOrEmpty(accessToken) || string.IsNullOrEmpty(refreshToken))
         {
-            return Result<CredentialPair, string>.Failure("credential file lacks accessToken or refreshToken");
+            return Result<CredentialPair, string>.Failure(LacksTokensReason);
         }
 
         if (oauth["expiresAt"] is not JsonValue expiresAtValue || !expiresAtValue.TryGetValue(out long expiresAtMilliseconds))
