@@ -52,8 +52,30 @@ operating system for a free port for that launch. Without `--open` no browser op
 printed URL, and paste line 2 of `instance.url` when the page asks for the instance token.
 
 With `--open`, the dashboard opens in the default browser already signed in. If an instance is
-already running, `--open` opens that instance's dashboard and exits. Otherwise the process starts
-as usual and opens its own dashboard once it is listening.
+already running, `--open` opens that instance's dashboard and exits. Otherwise, on Windows,
+`--open` starts the leader as a separate process with no window, waits up to 30 seconds for it
+to listen, opens its dashboard, and exits. If it does not come up, `--open` exits non-zero and
+says why; run the same command without `--open` to watch it start in the console. On Linux and
+macOS, `--open` with no instance running starts the process in the foreground as usual and opens
+its own dashboard once it is listening.
+
+The leader `--open` starts has its own hidden console, so closing an ordinary terminal window
+does not stop it. A launcher running inside a job object that kills its processes on close still
+takes the leader down with it; some IDE terminals and Win32-OpenSSH sessions do that. The
+Start-menu shortcut and the logon task are not affected.
+
+The dashboard has no stop control. Stop the leader with its shutdown route, which lets a
+rotation in flight finish and answers 409 while a switch or import is in progress:
+
+```powershell
+$instance = Get-Content "$env:LOCALAPPDATA\claude-code-account-rotation\instance.url"
+Invoke-RestMethod -Method Post -Uri "$($instance[0])/api/shutdown" `
+  -Headers @{ Authorization = "Bearer $($instance[1])"; 'X-Claude-Code-Account-Rotation' = '1' }
+```
+
+`Stop-Process -Name claude-code-account-rotation` or Task Manager is a last resort: a hard kill
+skips that drain, and a token refresh cut off mid-write can leave an account's rotated
+credentials stranded.
 
 If a card says it is not on the roster, click Adopt. Adopt is only offered for a Max account
 that is already logged in on this machine. Otherwise use Add an account, then Login on the card

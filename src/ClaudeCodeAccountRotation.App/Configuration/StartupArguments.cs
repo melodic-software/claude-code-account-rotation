@@ -11,7 +11,8 @@ internal sealed record StartupArguments(string? ConfigPath, int? Port, bool Open
 
           --config <path>   configuration file (default: <app data>/claude-code-account-rotation/config.json)
           --port <n>        listen port for this launch (overrides the configured port; 0 lets the operating system choose a free port)
-          --open            open the dashboard in the default browser, signed in; if an instance is already running, open that one and exit
+          --open            open the dashboard in the default browser, signed in; if an instance is already running, open that one and exit;
+                            on Windows with none running, start one in the background with no window, open it, and exit
           --version         print the version and exit
           --help, -h, /?    print this text and exit
         """;

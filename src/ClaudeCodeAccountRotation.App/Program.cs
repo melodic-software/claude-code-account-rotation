@@ -36,7 +36,7 @@ WebApplicationBuilder builder = WebApplication.CreateBuilder(new WebApplicationO
     Args = args,
     ContentRootPath = AppContext.BaseDirectory,
 });
-Result<bool, string> composed = await AppComposition.ComposeAsync(builder, parsed.Value, CancellationToken.None);
+Result<bool, string> composed = await AppComposition.ComposeAsync(builder, parsed.Value, args, CancellationToken.None);
 if (composed.IsFailure)
 {
     await Console.Error.WriteLineAsync(composed.Error);
