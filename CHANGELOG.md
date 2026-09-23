@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-23
+
 ### Changed
 
 - On Windows, `--open` with no instance running starts the leader as a separate process with
