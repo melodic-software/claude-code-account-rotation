@@ -129,8 +129,9 @@ internal static class AppComposition
 
         if (DetachedLeader.Applies(arguments.Open, OperatingSystem.IsWindows(), configuration.Role))
         {
-            // Released first, which also deletes instance.url, so the file the wait
-            // reads can only be the child's.
+            // Released first, which also deletes instance.url. A file the wait reads
+            // afterwards is the child's, or that of a leader another launch started
+            // in the gap; the token probe accepts either, and both are the running leader.
             instance.Value.Dispose();
             if (DetachedLeader.PortInUse(bindPort) is string busy)
             {

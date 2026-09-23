@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
@@ -22,6 +23,7 @@ internal static class DetachedLeader
     public static readonly TimeSpan StartBound = TimeSpan.FromSeconds(30);
 
     private static readonly TimeSpan _pollInterval = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan _stopWait = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// Windows only, where the console window is the problem. Elsewhere the
@@ -49,7 +51,7 @@ internal static class DetachedLeader
         }
         catch (SocketException)
         {
-            return "port " + port.ToString(System.Globalization.CultureInfo.InvariantCulture) + " is in use; free it, or pass --port with another number";
+            return "port " + port.ToString(CultureInfo.InvariantCulture) + " is in use; free it, or pass --port with another number";
         }
         finally
         {
@@ -86,17 +88,20 @@ internal static class DetachedLeader
         {
             while (true)
             {
-                if (child.ExitCode is int code)
-                {
-                    return Result<(string, string), string>.Failure(Exited(code));
-                }
-
+                // Read before the probe, so an exit is only reported after one more
+                // look. Another launch can take the lock in the moment between this
+                // process releasing it and the child starting; the child then exits,
+                // and the leader that won answers with its own file's token instead.
+                int? exitCode = child.ExitCode;
                 if (InstanceLock.ReadRunning(appDataDirectory) is var (url, token) && await probe(url, token, linked.Token))
                 {
-                    // Checked again: a probe that answered as the child exited was not the child.
-                    return child.ExitCode is int late
-                        ? Result<(string, string), string>.Failure(Exited(late))
-                        : Result<(string, string), string>.Success((url, token));
+                    return Result<(string, string), string>.Success((url, token));
+                }
+
+                if (exitCode is int code)
+                {
+                    return Result<(string, string), string>.Failure(
+                        "the leader exited with code " + code.ToString(CultureInfo.InvariantCulture) + " before it was listening; run without --open to see why");
                 }
 
                 await Task.Delay(_pollInterval, linked.Token);
@@ -104,9 +109,11 @@ internal static class DetachedLeader
         }
         catch (OperationCanceledException) when (timeout.IsCancellationRequested)
         {
-            child.Kill();
+            string outcome = child.Stop(_stopWait)
+                ? "was stopped"
+                : "is still running as process " + child.Id.ToString(CultureInfo.InvariantCulture);
             return Result<(string, string), string>.Failure(
-                "the leader did not start listening within " + bound.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture) + " s and was stopped; run without --open to see its output");
+                "the leader did not start listening within " + bound.TotalSeconds.ToString(CultureInfo.InvariantCulture) + " s and " + outcome + "; run without --open to see its output");
         }
     }
 
@@ -134,7 +141,4 @@ internal static class DetachedLeader
             return false;
         }
     }
-
-    private static string Exited(int code) =>
-        "the leader exited with code " + code.ToString(System.Globalization.CultureInfo.InvariantCulture) + " before it was listening; run without --open to see why";
 }

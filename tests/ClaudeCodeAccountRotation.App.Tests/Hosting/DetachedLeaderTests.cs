@@ -1,5 +1,7 @@
+using System.IO.Pipes;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.Versioning;
 using ClaudeCodeAccountRotation.App.Adapters.Process;
 using ClaudeCodeAccountRotation.App.Hosting;
 using ClaudeCodeAccountRotation.Core;
@@ -16,6 +18,8 @@ public sealed class DetachedLeaderTests : IDisposable
     private IReadOnlyList<string>? _started;
 
     public DetachedLeaderTests() => Directory.CreateDirectory(_appData);
+
+    public static bool OnWindows => OperatingSystem.IsWindows();
 
     public void Dispose()
     {
@@ -55,7 +59,7 @@ public sealed class DetachedLeaderTests : IDisposable
         result.IsSuccess.ShouldBeTrue();
         result.Value.ShouldBe(("http://127.0.0.1:50123", Token));
         _started.ShouldBe(["--config", "c.json"]);
-        _child.Killed.ShouldBeFalse();
+        _child.StopRequested.ShouldBeFalse();
         _child.Disposed.ShouldBeTrue();
     }
 
@@ -70,31 +74,63 @@ public sealed class DetachedLeaderTests : IDisposable
     }
 
     [Fact]
-    public async Task AnAnswerAfterTheChildExitedIsNotTheChild()
+    public async Task AChildThatLostTheLockToAnotherLaunchOpensTheLeaderThatWon()
+    {
+        // The other launch's leader holds the lock and wrote the file; the child exited 1 on it.
+        _child.Code = 1;
+        WriteInstanceFile("http://127.0.0.1:50123");
+
+        Result<(string Url, string Token), string> result = await StartAsync(static (_, token, _) => Task.FromResult(token == Token));
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value.ShouldBe(("http://127.0.0.1:50123", Token));
+    }
+
+    [Fact]
+    public async Task AnExitIsReportedOnlyAfterOneMoreProbe()
     {
         WriteInstanceFile("http://127.0.0.1:50123");
+        int probes = 0;
         Result<(string Url, string Token), string> result = await StartAsync((_, _, _) =>
         {
+            probes++;
             _child.Code = 3;
-            return Task.FromResult(true);
+            return Task.FromResult(false);
         });
 
-        result.IsFailure.ShouldBeTrue();
+        probes.ShouldBe(2);
         result.Error.ShouldContain("exited with code 3");
         result.Error.ShouldNotContain(Token);
     }
 
-    [Fact]
-    public async Task ATimeoutFailsAndStopsTheChild()
+    [Theory]
+    [InlineData(true, "was stopped")]
+    [InlineData(false, "is still running as process 4242")]
+    public async Task ATimeoutStopsTheChildAndSaysWhetherItDid(bool stops, string expected)
     {
+        _child.Stops = stops;
         WriteInstanceFile("http://127.0.0.1:50123");
         Result<(string Url, string Token), string> result = await DetachedLeader.StartAsync(
             Start, ["--open"], _appData, static (_, _, _) => Task.FromResult(false), TimeSpan.FromMilliseconds(300), TestContext.Current.CancellationToken);
 
         result.IsFailure.ShouldBeTrue();
         result.Error.ShouldContain("did not start listening");
+        result.Error.ShouldContain(expected);
         result.Error.ShouldNotContain(Token);
-        _child.Killed.ShouldBeTrue();
+        _child.StopRequested.ShouldBeTrue();
+    }
+
+    [Fact(SkipUnless = nameof(OnWindows), Skip = "Handle inheritance is a Windows behavior")]
+    [SupportedOSPlatform("windows")]
+    public void AnInheritableHandleStopsBeingInherited()
+    {
+        using AnonymousPipeServerStream pipe = new(PipeDirection.Out, HandleInheritability.Inheritable);
+        nint handle = pipe.SafePipeHandle.DangerousGetHandle();
+        ProcessLeaderChild.IsInheritable(handle).ShouldBeTrue();
+
+        ProcessLeaderChild.StopInheriting(handle).ShouldBeTrue();
+
+        ProcessLeaderChild.IsInheritable(handle).ShouldBeFalse();
     }
 
     [Fact]
@@ -133,13 +169,21 @@ public sealed class DetachedLeaderTests : IDisposable
     {
         public int? Code { get; set; }
 
-        public bool Killed { get; private set; }
+        public bool Stops { get; set; } = true;
+
+        public bool StopRequested { get; private set; }
 
         public bool Disposed { get; private set; }
 
         public int? ExitCode => Code;
 
-        public void Kill() => Killed = true;
+        public int Id => 4242;
+
+        public bool Stop(TimeSpan wait)
+        {
+            StopRequested = true;
+            return Stops;
+        }
 
         public void Dispose() => Disposed = true;
     }
