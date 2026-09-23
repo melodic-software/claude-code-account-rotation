@@ -570,6 +570,77 @@ public sealed class PeerTests
         }
     }
 
+    /// <summary>
+    /// A follower that is still running holds <c>follower.log</c>. A second start
+    /// must not rename that file, and a lock whose process has exited is taken
+    /// so the next start rotates again.
+    /// </summary>
+    [Fact(SkipUnless = nameof(OnLinux), Skip = "The wrapper runs under /bin/sh")]
+    public async Task ALiveFollowerKeepsItsLogAndADeadLockIsTaken()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        PreparedWrapper prepared = await PrepareWrapperAsync(TestContext.Current.CancellationToken);
+        Process? holding = null;
+        try
+        {
+            string logPath = Path.Combine(prepared.AppData, "follower.log");
+            string lockPid = Path.Combine(prepared.AppData, "follower.lock", "pid");
+            await WriteHoldingBinaryAsync(prepared.Binary, prepared.WitnessPath, TestContext.Current.CancellationToken);
+            holding = StartWrapper(prepared.Wrapper, prepared.ConfigPath);
+            await WaitUntilFileContainsAsync(logPath, "held\n", TestContext.Current.CancellationToken);
+
+            string pid = (await File.ReadAllTextAsync(lockPid, TestContext.Current.CancellationToken)).Trim();
+            pid.ShouldBe(holding.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            int runsWhileHeld = WitnessRuns(prepared.WitnessPath);
+
+            WrapperRun second = await RunWrapperAsync(prepared.Wrapper, prepared.ConfigPath, TestContext.Current.CancellationToken);
+
+            second.ExitCode.ShouldNotBe(0);
+            second.Output.ShouldBe("follower-log: a follower is already running\n");
+            second.Output.ShouldNotContain(prepared.Root);
+            (await File.ReadAllTextAsync(logPath, TestContext.Current.CancellationToken)).ShouldBe("held\n");
+            File.Exists(logPath + ".1").ShouldBeFalse();
+            WitnessRuns(prepared.WitnessPath).ShouldBe(runsWhileHeld);
+
+            holding.Kill(entireProcessTree: true);
+            await holding.WaitForExitAsync(TestContext.Current.CancellationToken);
+            holding.Dispose();
+            holding = null;
+
+            await WriteSiblingBinaryAsync(prepared.Binary, "next", prepared.ArgvPath, prepared.WitnessPath, TestContext.Current.CancellationToken);
+            WrapperRun afterExit = await RunWrapperAsync(prepared.Wrapper, prepared.ConfigPath, TestContext.Current.CancellationToken);
+
+            afterExit.ExitCode.ShouldBe(0);
+            (await File.ReadAllTextAsync(logPath, TestContext.Current.CancellationToken)).ShouldBe("next\n");
+            (await File.ReadAllTextAsync(logPath + ".1", TestContext.Current.CancellationToken)).ShouldBe("held\n");
+        }
+        finally
+        {
+            if (holding is not null)
+            {
+                try
+                {
+                    if (!holding.HasExited)
+                    {
+                        holding.Kill(entireProcessTree: true);
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                    // The process already exited.
+                }
+
+                holding.Dispose();
+            }
+
+            Directory.Delete(prepared.Root, recursive: true);
+        }
+    }
+
     private static readonly string[] _logNames = ["follower.log", "follower.log.1", "follower.log.2", "follower.log.3"];
 
     private readonly record struct PreparedWrapper(
@@ -604,6 +675,65 @@ public sealed class PeerTests
 
     private static int WitnessRuns(string witnessPath) =>
         File.ReadAllText(witnessPath).Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
+
+    private static async Task WriteHoldingBinaryAsync(string path, string witnessPath, CancellationToken cancellationToken)
+    {
+        string script = string.Join(
+            '\n',
+            [
+                "#!/bin/sh",
+                "printf '%s\\n' ran >> " + QuoteForSh(witnessPath),
+                "printf '%s\\n' held",
+                "exec sleep 300",
+                "",
+            ]);
+        await File.WriteAllTextAsync(path, script, cancellationToken);
+        if (OperatingSystem.IsLinux())
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    private static Process StartWrapper(string wrapper, string configPath)
+    {
+        ProcessStartInfo start = new("/bin/sh")
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            WorkingDirectory = Path.GetDirectoryName(wrapper)!,
+        };
+        start.ArgumentList.Add(wrapper);
+        start.ArgumentList.Add("--port");
+        start.ArgumentList.Add("48212");
+        start.ArgumentList.Add("--config");
+        start.ArgumentList.Add(configPath);
+        Process process = Process.Start(start) ?? throw new InvalidOperationException("/bin/sh did not start");
+        _ = process.StandardOutput.ReadToEndAsync();
+        _ = process.StandardError.ReadToEndAsync();
+        return process;
+    }
+
+    private static async Task WaitUntilFileContainsAsync(string path, string text, CancellationToken cancellationToken)
+    {
+        var started = Stopwatch.StartNew();
+        while (started.Elapsed < TimeSpan.FromSeconds(5))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (File.Exists(path))
+            {
+                string body = await File.ReadAllTextAsync(path, cancellationToken);
+                if (body.Contains(text, StringComparison.Ordinal))
+                {
+                    return;
+                }
+            }
+
+            await Task.Delay(50, cancellationToken);
+        }
+
+        throw new TimeoutException("the follower log did not contain the expected line");
+    }
 
     private static async Task WriteSiblingBinaryAsync(string path, string line, string argvPath, string witnessPath, CancellationToken cancellationToken)
     {

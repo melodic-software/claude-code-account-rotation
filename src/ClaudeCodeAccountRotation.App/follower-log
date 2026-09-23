@@ -12,6 +12,13 @@
 # creates a new empty follower.log. This script writes nothing to that file:
 # it only rotates and redirects the child.
 #
+# A follower can outlive the leader. Renaming the log it still has open would
+# leave it writing under a later name, and the size cap would then remove that
+# name. follower.lock records this process's id before the rename. exec keeps
+# that id, so the next start can see the process is alive, leave the log where
+# it is, and not start a second follower. A lock whose process is gone is taken
+# again, so a crashed follower does not stick.
+#
 # R2's check is grep -F -c "auth login" over follower.log and whichever of
 # follower.log.1, follower.log.2, and follower.log.3 exist. With one file,
 # grep prints 0. With more than one, each line is path:0. The check passes
@@ -384,8 +391,53 @@ rotate_follower_log() {
   done
 }
 
+# follower.lock is a directory whose pid file is this process. mkdir is the
+# atomic claim. A live id means a follower still holds the current log, so
+# this start does not rename it and does not exec. An empty pid file is a
+# start that has not recorded its id yet, or one that died in that window;
+# one second distinguishes them. A dead id is moved aside and the claim is
+# retried, so two starters cannot both delete a lock the other just took.
+claim_follower_lock() {
+  lock=$1
+  attempt=0
+  while [ "$attempt" -lt 5 ]; do
+    attempt=$((attempt + 1))
+    if [ -L "$lock" ]; then
+      printf '%s\n' "follower-log: refusing to follow a symlink at follower.lock" >&2
+      exit 1
+    fi
+    if [ -e "$lock" ] && [ ! -d "$lock" ]; then
+      printf '%s\n' "follower-log: follower.lock is not a directory" >&2
+      exit 1
+    fi
+    if mkdir -- "$lock" 2>/dev/null; then
+      printf '%s\n' "$$" > "$lock/pid" || exit 1
+      return
+    fi
+
+    holder=$(cat "$lock/pid" 2>/dev/null || true)
+    if [ -z "$holder" ]; then
+      sleep 1
+      holder=$(cat "$lock/pid" 2>/dev/null || true)
+    fi
+    if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+      printf '%s\n' "follower-log: a follower is already running" >&2
+      exit 1
+    fi
+
+    stale="$lock.stale.$$"
+    if mv -- "$lock" "$stale" 2>/dev/null; then
+      rm -f -- "$stale/pid"
+      rmdir -- "$stale" 2>/dev/null || rm -f -- "$stale/pid"
+    fi
+  done
+  printf '%s\n' "follower-log: a follower is already running" >&2
+  exit 1
+}
+
 mkdir -p -- "$app_data"
 log="$app_data/follower.log"
+claim_follower_lock "$app_data/follower.lock"
 rotate_follower_log "$log"
 
 exec "$binary" "$@" >"$log" 2>&1

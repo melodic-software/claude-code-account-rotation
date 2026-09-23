@@ -11,7 +11,9 @@ All notable changes to this project are documented in this file. The format foll
 - A follower restart keeps the previous log by renaming `follower.log` to `follower.log.1`
   (and shifting `.1` and `.2`), drops older files so at most three previous files remain and
   their total stays within 1 MiB except that the log just rotated is kept for that one start,
-  and the R2 grep covers that set (#123).
+  and the R2 grep covers that set (#123). A start whose `follower.lock` names a process
+  that is still running does not rotate and does not start a second follower. A lock whose
+  process is gone is taken, so a crashed follower does not stick.
 
 ### Fixed
 
