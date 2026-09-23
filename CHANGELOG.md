@@ -6,6 +6,13 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Added
+
+- `--open` opens the dashboard in the default browser already signed in (#129). With an
+  instance already running it opens that one and exits; otherwise the process starts as usual
+  and opens its own page once listening. The token travels in a `#t=` fragment, which the
+  browser never sends and the page removes from the address bar once read.
+
 ### Changed
 
 - A follower restart keeps the previous log by renaming `follower.log` to `follower.log.1`
