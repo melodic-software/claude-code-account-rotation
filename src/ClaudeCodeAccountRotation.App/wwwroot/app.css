@@ -74,6 +74,8 @@ header h1 { margin: 0; font-size: 1.6rem; letter-spacing: 0.01em; }
 }
 
 .card.live { border-color: var(--live); box-shadow: 0 0 0 2px color-mix(in srgb, var(--live) 30%, transparent); }
+.card.logged-out { border-color: var(--error); box-shadow: 0 0 0 2px color-mix(in srgb, var(--error) 30%, transparent); }
+.cli-logout { margin: 0; color: var(--error); }
 .card h2 { margin: 0; font-size: 1.05rem; word-break: break-all; }
 /* The heading is the display name and the control that renames it, so it must
    not pick up the accent button chrome. The word sits beside the name, on the
@@ -131,7 +133,7 @@ header h1 { margin: 0; font-size: 1.6rem; letter-spacing: 0.01em; }
 .badge.needs-login { color: var(--warn); }
 .badge.paused { color: var(--muted); }
 .badge.off-roster { color: var(--accent); }
-.badge.login-expired, .badge.error { color: var(--error); }
+.badge.login-expired, .badge.error, .badge.logged-out { color: var(--error); }
 .badge.ready { color: var(--ink); }
 /* The store axis: where this account's one pair is. One class whatever the
    chip says, because the words carry spaces and parentheses. */

@@ -41,6 +41,7 @@ internal sealed partial class DashboardAssembler(
     SwitchOptions options,
     TimeProvider timeProvider,
     IClaudeCliAuthStatus authStatus,
+    CliLogoutMonitor cliLogout,
     ILogger<DashboardAssembler> logger)
 {
     /// <summary>
@@ -100,7 +101,11 @@ internal sealed partial class DashboardAssembler(
         catch (Exception exception) when (exception is not OperationCanceledException)
 #pragma warning restore CA1031
         {
-            WarnUnreadableOnce(options.LiveConfigDirectory, exception.Message, live: true);
+            // Token absence is recorded on the read. The exception names the path.
+            if (!CliLogoutMonitor.IsTokenAbsence(exception))
+            {
+                WarnUnreadableOnce(options.LiveConfigDirectory, exception.Message, live: true);
+            }
         }
 
         OAuthAccountBlock? liveAccount = await stateFile.ReadAccountBlockAsync(cancellationToken);
@@ -110,6 +115,8 @@ internal sealed partial class DashboardAssembler(
         Roster roster = await rosterFile.ReadAsync(cancellationToken);
         AccountEmail? liveEmail = liveAccount?.Email;
         DateTimeOffset capturedAt = timeProvider.GetUtcNow();
+        string? cliLoggedOutSentence = cliLogout.Sentence(capturedAt);
+        bool cliLoggedOut = cliLoggedOutSentence is not null;
         // One read of the other sides per poll, shared by every card: the chip
         // for a held account needs to know whether that side is answering, and
         // its figures can only come from that side's own tee.
@@ -144,7 +151,9 @@ internal sealed partial class DashboardAssembler(
                 livePair?.LoginExpiresAt,
                 liveAccount?.ProfileFetchedAt,
                 await SlotAsync(live, liveFolder, ownFolder?.HasCredentials ?? false, hold, warnings, cancellationToken),
-                sides));
+                sides,
+                cliLoggedOut,
+                cliLoggedOutSentence));
         }
 
         // A read per parked folder rather than a projection, because the expiry
@@ -163,7 +172,8 @@ internal sealed partial class DashboardAssembler(
                 await ReadLoginExpiryAsync(profile, cancellationToken),
                 profile.Account?.ProfileFetchedAt,
                 await SlotAsync(profile.Email, profile.FolderPath, profile.HasCredentials, hold, warnings, cancellationToken),
-                sides));
+                sides,
+                cliLoggedOut));
         }
 
         // A roster entry the operator added but has not logged in yet owns no
@@ -178,7 +188,8 @@ internal sealed partial class DashboardAssembler(
                 loginExpiresAt: null,
                 loggedInAt: null,
                 slot: await SlotAsync(entry.Email, folder, slotHoldsPair: false, hold, warnings, cancellationToken),
-                sides));
+                sides,
+                cliLoggedOut));
         }
 
         // One arrangement for the whole payload, and the cards go out in the
@@ -336,7 +347,9 @@ internal sealed partial class DashboardAssembler(
         DateTimeOffset? loginExpiresAt,
         DateTimeOffset? loggedInAt,
         SlotSnapshot? slot,
-        IReadOnlyList<WslSideState> sides)
+        IReadOnlyList<WslSideState> sides,
+        bool cliLoggedOut = false,
+        string? cliLoggedOutSentence = null)
     {
         WslSideState? holder = Holder(slot, sides);
         bool heldAway = slot?.State is SlotState.HeldElsewhere or SlotState.InTransit;
@@ -383,8 +396,11 @@ internal sealed partial class DashboardAssembler(
         // both sides go through refuses a stranded folder and an expired login
         // whichever side asked, so the two controls below share one verdict
         // rather than the page offering a side an account its own switch would
-        // then refuse.
+        // then refuse. A recorded CLI logout is the same kind of block: the live
+        // file is not a pair that can be parked, so no card offers Switch while
+        // it stands. Refresh and Pause stay as they are.
         bool usable = hasCredentials
+            && !cliLoggedOut
             && refresh.State != Kebab(RefreshOutcomeKind.Stranded)
             && !(loginExpiresAt <= capturedAt);
         return (
@@ -405,7 +421,8 @@ internal sealed partial class DashboardAssembler(
                 HeldAway: heldAway,
                 OfferedTo: [.. sides
                     .Where(side => usable && side.Online && slot?.State == SlotState.Parked && side.LiveAccount != email)
-                    .Select(static side => side.Side.Value)]),
+                    .Select(static side => side.Side.Value)],
+                CliLoggedOut: isLive ? cliLoggedOutSentence : null),
             new AccountStanding(email, isLive, entry?.Paused ?? false, hasCredentials, merged?.Merged, loginExpiresAt));
     }
 
@@ -559,7 +576,9 @@ internal sealed partial class DashboardAssembler(
     /// The live pair, or an unreadable flag when the file is there and cannot
     /// be parsed. Absence is a null pair and a clear flag: the card then says
     /// the account needs a login. A torn file keeps the card and drops the
-    /// expiry, which is the same degradation a parked folder already has.
+    /// expiry, which is the same degradation a parked folder already has. A
+    /// file that lacks tokens is neither of those: the logout monitor already
+    /// recorded it, and the exception is not logged because it names the path.
     /// </summary>
     private async Task<(CredentialPair? Pair, bool Unreadable)> ReadLivePairAsync(CancellationToken cancellationToken)
     {
@@ -568,6 +587,10 @@ internal sealed partial class DashboardAssembler(
             CredentialPair? pair = await pairs.ReadLiveAsync(cancellationToken);
             ForgetUnreadable(options.LiveConfigDirectory);
             return (pair, false);
+        }
+        catch (InvalidDataException exception) when (CliLogoutMonitor.IsTokenAbsence(exception))
+        {
+            return (null, false);
         }
 #pragma warning disable CA1031 // Do not catch general exception types
         catch (Exception exception) when (exception is not OperationCanceledException)

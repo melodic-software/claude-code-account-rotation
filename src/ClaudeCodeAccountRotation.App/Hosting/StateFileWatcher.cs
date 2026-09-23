@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Threading.Channels;
+using ClaudeCodeAccountRotation.App.Dashboard;
 using ClaudeCodeAccountRotation.App.Switching;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -68,6 +69,11 @@ internal sealed partial class StateFileWatcher : BackgroundService
             catch (IOException exception)
             {
                 LogRepairFailed(exception.Message);
+            }
+            catch (InvalidDataException exception) when (CliLogoutMonitor.IsTokenAbsence(exception))
+            {
+                // Recorded once, on the read. Logging the exception would repeat
+                // the credential path on every wake.
             }
             catch (InvalidDataException exception)
             {

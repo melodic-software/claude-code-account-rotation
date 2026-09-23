@@ -738,6 +738,9 @@
   // account at all. The standing line under the usage rows is the quota axis,
   // so a card reading "ready" with "usable in 2 h" beneath it states two facts.
   function stateChip(account, at) {
+    // Ahead of "live": a logged-out card is a blocking state, and the green
+    // live chip would read as a healthy session.
+    if (account.cliLoggedOut) { return "logged out"; }
     if (account.isLive) { return "live"; }
     if (account.roster && account.roster.paused) { return "paused"; }
     // A slot the other side holds is empty on purpose, so its emptiness is not
@@ -1068,7 +1071,7 @@
     dashboard.accounts.forEach(function (account) {
       var roster = account.roster;
       var paused = !!(roster && roster.paused);
-      var card = element("section", "card" + (account.isLive ? " live" : "") + (paused ? " paused" : ""));
+      var card = element("section", "card" + (account.isLive && !account.cliLoggedOut ? " live" : "") + (account.cliLoggedOut ? " logged-out" : "") + (paused ? " paused" : ""));
       var at = new Date(dashboard.capturedAt).getTime();
       var chip = stateChip(account, at);
       card.appendChild(cardHeading(account));
@@ -1091,6 +1094,9 @@
       }
       if (!roster) { badges.appendChild(element("span", "badge off-roster", "not on roster")); }
       card.appendChild(badges);
+      if (account.cliLoggedOut) {
+        card.appendChild(element("p", "cli-logout", account.cliLoggedOut));
+      }
 
       card.appendChild(usage(account, dashboard));
 
@@ -1099,7 +1105,7 @@
       }
 
       var actions = element("div", "actions");
-      var switchButton = actionButton(account.isLive ? "Live now" : "Switch", "switch", function () { switchTo(account.email); });
+      var switchButton = actionButton(account.isLive && !account.cliLoggedOut ? "Live now" : "Switch", "switch", function () { switchTo(account.email); });
       // Whether this account can come live on this side is the server's verdict,
       // which is where the slot, the strand and the expiry are all known: a
       // paused account can still be switched to by hand, a stranded or expired

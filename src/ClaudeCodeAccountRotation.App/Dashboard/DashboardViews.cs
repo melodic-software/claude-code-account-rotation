@@ -66,6 +66,13 @@ internal sealed record LiveAccountView(string? Email, bool HasCredentials, strin
 /// pair is on the other side has no login to renew and nothing to remove here.
 /// </para>
 /// <para>
+/// <c>CliLoggedOut</c> is the live card's blocking sentence when the live
+/// credential file went from a parsed pair to one that lacks tokens, or null.
+/// The sentence carries the UTC time of that read. While a logout stands, no
+/// card offers Switch: <c>CanSwitchHere</c> is false and <c>OfferedTo</c> is
+/// empty. Refresh and Pause are left as they are for every other blocking state.
+/// </para>
+/// <para>
 /// Every optional member carries a default, so a route that hands back a card
 /// for an account nothing has read constructs one unchanged.
 /// </para>
@@ -87,7 +94,8 @@ internal sealed record AccountCardView(
     string? Chip = null,
     bool CanSwitchHere = false,
     bool HeldAway = false,
-    IReadOnlyList<string>? OfferedTo = null);
+    IReadOnlyList<string>? OfferedTo = null,
+    string? CliLoggedOut = null);
 
 /// <summary>
 /// The roster entry behind a card, or null when the account is on the machine
@@ -270,6 +278,7 @@ internal sealed record SwitchRefusalView(string Refusal, string Message)
         SwitchRefusal.SwitchingBlockedByManagedPolicy => "A device-managed login policy pins this machine to one organization.",
         SwitchRefusal.ManagedPolicyUnreadable => "A device-managed login policy exists but could not be read; switching stays off until it can be.",
         SwitchRefusal.LiveIdentityUnverified => "The live identity could not be verified; see the banner.",
+        SwitchRefusal.CliLoggedOut => "The CLI logged out of the live account. Log in again before switching.",
         SwitchRefusal.HeldByOtherSide => "The other side of this machine has that account's pair in its own live directory. Switch that side off it first: one account holds one pair per machine, and it is moved rather than copied.",
         // Raised for a mailbox file naming the target and for one naming the
         // account this side would park, which is the planner's

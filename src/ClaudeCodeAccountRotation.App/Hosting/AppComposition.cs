@@ -158,9 +158,14 @@ internal static class AppComposition
         // Registered as itself as well as behind the port: the coordinator needs
         // the mailbox operations, which are the leader's alone and deliberately
         // not on ICredentialPairStore, since a follower has no store to claim in.
-        services.AddSingleton(new FileSystemCredentialPairStore(configuration.LiveConfigDirectory, configuration.ProfilesRoot, TimeProvider.System));
-        services.AddSingleton<ICredentialPairStore>(static provider => provider.GetRequiredService<FileSystemCredentialPairStore>());
         services.AddSingleton(new ClaudeStateFile(configuration.StateFilePath));
+        services.AddSingleton<CliLogoutMonitor>();
+        services.AddSingleton(provider => new FileSystemCredentialPairStore(
+            configuration.LiveConfigDirectory,
+            configuration.ProfilesRoot,
+            TimeProvider.System,
+            cliLogout: provider.GetRequiredService<CliLogoutMonitor>()));
+        services.AddSingleton<ICredentialPairStore>(static provider => provider.GetRequiredService<FileSystemCredentialPairStore>());
         services.AddSingleton(provider => new ProfileFolderStore(
             configuration.ProfilesRoot,
             provider.GetRequiredService<ILogger<ProfileFolderStore>>()));

@@ -4,10 +4,10 @@ namespace ClaudeCodeAccountRotation.Core.Switching;
 /// Why a switch is not planned or not executed. Ordered as the planner checks
 /// them: the spike's guards first, then the three the plan review added and the
 /// one the refresh pass needs for a folder it stranded; then the three the
-/// shared store adds, for a slot this side does not hold; the last three are the
+/// shared store adds, for a slot this side does not hold; the last are the
 /// executor's own, for a second mutation arriving while one runs, for a usage
-/// refresh reading this machine's accounts, and for a login that owns one of the
-/// folders the switch would move.
+/// refresh reading this machine's accounts, for a login that owns one of the
+/// folders the switch would move, and for a live file whose tokens disappeared.
 /// </summary>
 public enum SwitchRefusal
 {
@@ -108,4 +108,12 @@ public enum SwitchRefusal
     /// </summary>
     RefreshInProgress,
     LoginInProgress,
+
+    /// <summary>
+    /// The live credential file had a parsed pair and now lacks its tokens. The
+    /// live card says when. A switch would park that file, and it is not a pair,
+    /// so the page does not offer Switch while this stands. This refusal is what
+    /// answers when the button is bypassed.
+    /// </summary>
+    CliLoggedOut,
 }

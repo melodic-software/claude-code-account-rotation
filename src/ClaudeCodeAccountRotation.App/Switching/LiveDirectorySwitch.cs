@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
+using ClaudeCodeAccountRotation.App.Dashboard;
 using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
@@ -233,7 +234,18 @@ internal sealed partial class LiveDirectorySwitch
 
     private async Task<Result<SwitchOutcome, SwitchRefusal>> SwitchUnderGateAsync(AccountEmail target, CancellationToken cancellationToken)
     {
-        LiveAccountState live = await SnapshotLiveAsync(cancellationToken);
+        LiveAccountState live;
+        try
+        {
+            live = await SnapshotLiveAsync(cancellationToken);
+        }
+        catch (InvalidDataException exception) when (CliLogoutMonitor.IsTokenAbsence(exception))
+        {
+            // The read recorded the logout. Parking this file would journal a
+            // pair the file no longer holds.
+            LogRefused(target.Value, SwitchRefusal.CliLoggedOut);
+            return Result<SwitchOutcome, SwitchRefusal>.Failure(SwitchRefusal.CliLoggedOut);
+        }
         IReadOnlyList<ParkedProfile> profiles = await _profiles.ListAsync(cancellationToken);
         ParkedProfile? targetProfile = profiles.FirstOrDefault(profile => profile.Email == target);
         if (targetProfile is null)
@@ -663,7 +675,13 @@ internal sealed partial class LiveDirectorySwitch
         catch (Exception exception) when (exception is not OperationCanceledException)
 #pragma warning restore CA1031
         {
-            LogUnreadableCredential(Path.GetFileName(Path.TrimEndingDirectorySeparator(folder)), exception.Message);
+            // A live file that lacks tokens is the logout record, already written
+            // on the read. The exception names the path, so it is not logged here.
+            if (!live || !CliLogoutMonitor.IsTokenAbsence(exception))
+            {
+                LogUnreadableCredential(Path.GetFileName(Path.TrimEndingDirectorySeparator(folder)), exception.Message);
+            }
+
             return null;
         }
     }

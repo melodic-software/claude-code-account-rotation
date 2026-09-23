@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ClaudeCodeAccountRotation.App.Dashboard;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Ports;
@@ -37,13 +38,15 @@ internal sealed class FileSystemCredentialPairStore : ICredentialPairStore
     private readonly OAuthRefreshLock _refreshLock;
     private readonly Func<string, long?> _deviceId;
     private readonly Func<string, string, int>? _rename;
+    private readonly CliLogoutMonitor? _cliLogout;
 
     public FileSystemCredentialPairStore(
         string liveConfigDirectory,
         string profilesRoot,
         TimeProvider timeProvider,
         Func<string, long?>? deviceId = null,
-        Func<string, string, int>? rename = null)
+        Func<string, string, int>? rename = null,
+        CliLogoutMonitor? cliLogout = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(liveConfigDirectory);
         ArgumentException.ThrowIfNullOrWhiteSpace(profilesRoot);
@@ -55,10 +58,33 @@ internal sealed class FileSystemCredentialPairStore : ICredentialPairStore
         _refreshLock = new OAuthRefreshLock(_liveConfigDirectory, timeProvider);
         _deviceId = deviceId ?? SameVolume.DeviceId;
         _rename = rename;
+        _cliLogout = cliLogout;
     }
 
-    public Task<CredentialPair?> ReadLiveAsync(CancellationToken cancellationToken) =>
-        ReadPairAsync(_livePath, cancellationToken);
+    public async Task<CredentialPair?> ReadLiveAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            CredentialPair? pair = await ReadPairAsync(_livePath, cancellationToken);
+            if (pair is not null)
+            {
+                // A parsed pair ends a recorded logout. A missing file returns
+                // null and leaves that record where it is.
+                _cliLogout?.ObservePair();
+            }
+
+            return pair;
+        }
+        catch (InvalidDataException exception) when (CliLogoutMonitor.IsTokenAbsence(exception))
+        {
+            if (_cliLogout is not null)
+            {
+                await _cliLogout.ObserveTokenAbsenceAsync(cancellationToken);
+            }
+
+            throw;
+        }
+    }
 
     public Task<CredentialPair?> ReadParkedAsync(string folderPath, CancellationToken cancellationToken) =>
         ReadPairAsync(Path.Combine(ProfileFolder(folderPath), FileName), cancellationToken);
