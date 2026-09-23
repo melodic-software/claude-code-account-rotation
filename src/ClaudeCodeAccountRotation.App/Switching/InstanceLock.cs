@@ -147,6 +147,27 @@ internal sealed class InstanceLock : IDisposable
         return status == OperationStatus.Done && bytesWritten == destination.Length && charsConsumed == presented.Length;
     }
 
+    /// <summary>The running instance's URL and token from its instance file, or null when either is missing.</summary>
+    public static (string Url, string Token)? ReadRunning(string appDataDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(appDataDirectory);
+        try
+        {
+            string[] lines = File.ReadAllText(Path.Combine(appDataDirectory, UrlFileName)).Split('\n');
+            string url = lines[0].Trim('\r', ' ', '\t');
+            string token = lines.Length > 1 ? lines[1].Trim('\r', ' ', '\t') : string.Empty;
+            return Uri.TryCreate(url, UriKind.Absolute, out Uri? uri) && uri.Scheme == Uri.UriSchemeHttp && token.Length > 0 ? (url, token) : null;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
     private static string ReadRunningUrl(string urlFilePath)
     {
         try

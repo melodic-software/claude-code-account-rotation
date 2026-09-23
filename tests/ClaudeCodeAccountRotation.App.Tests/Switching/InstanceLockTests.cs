@@ -102,6 +102,22 @@ public sealed class InstanceLockTests : IDisposable
         }
     }
 
+    [Fact]
+    public void ReadRunningReturnsThePublishedUrlAndTokenAndNullOnceReleased()
+    {
+        Result<InstanceLock, string> acquired = InstanceLock.TryAcquire(_appData, "http://127.0.0.1:48211");
+        acquired.IsSuccess.ShouldBeTrue();
+        using (acquired.Value)
+        {
+            acquired.Value.PublishListenUrl("http://127.0.0.1:48299");
+            InstanceLock.ReadRunning(_appData).ShouldBe(("http://127.0.0.1:48299", acquired.Value.Token));
+        }
+
+        InstanceLock.ReadRunning(_appData).ShouldBeNull();
+        File.WriteAllText(Path.Combine(_appData, InstanceLock.UrlFileName), "http://127.0.0.1:48211\n");
+        InstanceLock.ReadRunning(_appData).ShouldBeNull();
+    }
+
     [Fact(SkipUnless = nameof(OnWindows), Skip = "Access control lists are a Windows behavior")]
     public void TheInstanceUrlGrantsOnlyTheCurrentUserOnWindows()
     {

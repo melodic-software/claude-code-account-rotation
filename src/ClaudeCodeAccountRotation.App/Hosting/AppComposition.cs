@@ -68,7 +68,11 @@ internal static class AppComposition
         ?? typeof(AppComposition).Assembly.GetName().Version?.ToString()
         ?? "unknown";
 
-    public static async Task<Result<Unit, string>> ComposeAsync(WebApplicationBuilder builder, StartupArguments arguments, CancellationToken cancellationToken)
+    /// <summary>
+    /// Composes the host. False, not a failure, when <c>--open</c> found an
+    /// instance already running and opened its page instead: there is nothing to run.
+    /// </summary>
+    public static async Task<Result<bool, string>> ComposeAsync(WebApplicationBuilder builder, StartupArguments arguments, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(arguments);
@@ -84,7 +88,7 @@ internal static class AppComposition
         Result<ClaudeCodeAccountRotationConfiguration, string> loaded = await ConfigurationFile.LoadOrCreateAsync(configPath, defaults, cancellationToken);
         if (loaded.IsFailure)
         {
-            return Result<Unit, string>.Failure(loaded.Error);
+            return Result<bool, string>.Failure(loaded.Error);
         }
 
         if (created)
@@ -104,7 +108,7 @@ internal static class AppComposition
             Environment.GetEnvironmentVariable);
         if (verdict.IsFailure)
         {
-            return Result<Unit, string>.Failure("configuration refused (" + configPath + "): " + verdict.Error);
+            return Result<bool, string>.Failure("configuration refused (" + configPath + "): " + verdict.Error);
         }
 
         int bindPort = arguments.Port == 0 ? 0 : configuration.ListenPort;
@@ -112,7 +116,13 @@ internal static class AppComposition
         Result<InstanceLock, string> instance = InstanceLock.TryAcquire(configuration.AppDataDirectory, listenUrl);
         if (instance.IsFailure)
         {
-            return Result<Unit, string>.Failure(instance.Error);
+            if (arguments.Open && InstanceLock.ReadRunning(configuration.AppDataDirectory) is var (runningUrl, runningToken))
+            {
+                OpenDashboard(runningUrl, runningToken);
+                return Result<bool, string>.Success(false);
+            }
+
+            return Result<bool, string>.Failure(instance.Error);
         }
 
         IServiceCollection services = builder.Services;
@@ -152,7 +162,7 @@ internal static class AppComposition
             ComposeFollower(services, configuration);
             ListenOn(builder, bindPort);
             services.Configure<HostFilteringOptions>(static options => options.AllowedHosts = ["localhost", "127.0.0.1", "[::1]"]);
-            return Result<Unit, string>.Success(Unit.Value);
+            return Result<bool, string>.Success(true);
         }
 
         // Registered as itself as well as behind the port: the coordinator needs
@@ -225,15 +235,16 @@ internal static class AppComposition
         // carrying a rebound name is refused before the pipeline reaches a route.
         // Set here rather than left to configuration, whose default is "*".
         services.Configure<HostFilteringOptions>(static options => options.AllowedHosts = ["localhost", "127.0.0.1", "[::1]"]);
-        return Result<Unit, string>.Success(Unit.Value);
+        return Result<bool, string>.Success(true);
     }
 
     /// <summary>
-    /// Prints the dashboard URL once Kestrel has bound, and opens nothing.
+    /// Prints the dashboard URL once Kestrel has bound, and opens it in the
+    /// default browser only when <paramref name="open"/> is set.
     /// Port 0 has no number until then; the instance file is rewritten with
     /// the address that was actually taken.
     /// </summary>
-    public static void AnnounceDashboard(WebApplication app)
+    public static void AnnounceDashboard(WebApplication app, bool open)
     {
         ArgumentNullException.ThrowIfNull(app);
         app.Lifetime.ApplicationStarted.Register(() =>
@@ -253,12 +264,33 @@ internal static class AppComposition
 
             InstanceLock instanceLock = app.Services.GetRequiredService<InstanceLock>();
             instanceLock.PublishListenUrl(url);
-            // Printed and not opened. The operator chooses when to visit the page.
+            // Opened only with --open; otherwise the operator chooses when to visit.
             // The instance file's path is printed so the operator can read its
             // second line. The token itself is not printed.
             Console.Out.WriteLine("Dashboard: " + url);
             Console.Out.WriteLine("Instance file: " + instanceLock.UrlFilePath);
+            if (open)
+            {
+                OpenDashboard(url, instanceLock.Token);
+            }
         });
+    }
+
+    /// <summary>
+    /// Opens the page in the default browser with the token in the fragment,
+    /// which the browser never sends and the page removes once read.
+    /// </summary>
+    private static void OpenDashboard(string url, string token)
+    {
+        try
+        {
+            using var browser = System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo(url + "/#t=" + Uri.EscapeDataString(token)) { UseShellExecute = true });
+        }
+        catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or InvalidOperationException or PlatformNotSupportedException)
+        {
+            Console.Error.WriteLine("Could not open a browser (" + exception.GetType().Name + "); visit " + url);
+        }
     }
 
     public static void MapRoutes(WebApplication app)
@@ -321,16 +353,25 @@ internal static class AppComposition
     {
         IServer server = app.Services.GetRequiredService<IServer>();
         IServerAddressesFeature? addresses = server.Features.Get<IServerAddressesFeature>();
-        if (addresses is null)
-        {
-            return null;
-        }
+        return addresses is null ? null : LoopbackDashboardUrl(addresses.Addresses);
+    }
 
-        foreach (string address in addresses.Addresses)
+    /// <summary>
+    /// The IPv4 loopback address among the bound ones. <c>ListenLocalhost</c>
+    /// reports <c>http://localhost:&lt;port&gt;</c>, which is read as 127.0.0.1.
+    /// </summary>
+    internal static string? LoopbackDashboardUrl(IEnumerable<string> addresses)
+    {
+        foreach (string address in addresses)
         {
             if (address.StartsWith("http://127.0.0.1:", StringComparison.Ordinal))
             {
                 return address;
+            }
+
+            if (address.StartsWith("http://localhost:", StringComparison.Ordinal))
+            {
+                return "http://127.0.0.1:" + address["http://localhost:".Length..];
             }
         }
 

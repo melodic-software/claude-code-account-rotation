@@ -148,6 +148,29 @@ public sealed class LoopbackTokenTests
     }
 
     [Fact]
+    public async Task AnApiCallWithTheBearerSetsTheCookieThatThenStandsAlone()
+    {
+        await using AppFactory factory = new();
+        string token = factory.Services.GetRequiredService<InstanceLock>().Token;
+        using HttpResponseMessage first = await factory.Server.CreateRequest("/api/dashboard")
+            .AddHeader("Authorization", "Bearer " + token)
+            .GetAsync();
+
+        first.StatusCode.ShouldBe(HttpStatusCode.OK);
+        string setCookie = string.Join('\n', first.Headers.GetValues("Set-Cookie"));
+        string lowered = setCookie.ToLowerInvariant();
+        lowered.ShouldContain("ccar-instance=");
+        lowered.ShouldContain("httponly");
+        lowered.ShouldContain("samesite=strict");
+
+        using HttpResponseMessage followUp = await factory.Server.CreateRequest("/api/dashboard")
+            .AddHeader("Cookie", setCookie.Split(';')[0])
+            .GetAsync();
+
+        followUp.StatusCode.ShouldBe(HttpStatusCode.OK);
+    }
+
+    [Fact]
     public async Task AStaleCookieDoesNotBlockTheDocumentAndIsCleared()
     {
         await using AppFactory factory = new();

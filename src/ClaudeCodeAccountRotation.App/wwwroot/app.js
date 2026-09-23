@@ -1,6 +1,12 @@
 (function () {
   "use strict";
 
+  // Loaded by Node for tests/js, which has no page: export the pure helpers and stop.
+  if (typeof document === "undefined") {
+    module.exports = { takeTokenFromHash: takeTokenFromHash };
+    return;
+  }
+
   // Ten seconds. Each poll reads this machine's own files. It is not the
   // usage-endpoint polling the refresh contract forbids.
   var POLL_MS = 10000;
@@ -42,9 +48,10 @@
   // the same rebuild that fills cardNodes. What an arriving payload is compared
   // against to tell a reorder from an update in place.
   var renderedOrder = [];
-  // The per-process token from the document's meta. Empty until the operator
-  // pastes one. It stays in this closure: the page does not put it in storage
-  // or in a URL.
+  // The per-process token from the document's meta, or from a #t= fragment that
+  // --open put on the URL, or pasted by the operator. It stays in this closure:
+  // the page reads the fragment once and removes it from the address bar, and
+  // puts the token in no storage and no URL of its own.
   var instanceToken = readInstanceToken();
   var polling = false;
 
@@ -52,6 +59,19 @@
     var meta = document.querySelector('meta[name="ccar-instance-token"]');
     var value = meta ? (meta.getAttribute("content") || "") : "";
     return value.trim();
+  }
+
+  // The token from a #t= fragment, with the fragment taken off the address bar
+  // and the history entry; "" when there is none or it does not decode.
+  function takeTokenFromHash(loc, hist) {
+    if (loc.hash.indexOf("#t=") !== 0) { return ""; }
+    var raw = loc.hash.slice(3);
+    hist.replaceState(null, "", loc.pathname + loc.search);
+    try {
+      return decodeURIComponent(raw).trim();
+    } catch (error) {
+      return "";
+    }
   }
 
   function showTokenForm() {
@@ -1249,6 +1269,11 @@
         }
       });
   }
+
+  // Always taken, so the fragment leaves the address bar even when the meta
+  // already carries the token. The first /api call then sets the cookie.
+  var tokenFromHash = takeTokenFromHash(window.location, window.history);
+  if (!instanceToken) { instanceToken = tokenFromHash; }
 
   if (instanceToken) {
     loadProfiles();
