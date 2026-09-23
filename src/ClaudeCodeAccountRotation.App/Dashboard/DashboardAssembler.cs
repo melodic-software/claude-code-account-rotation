@@ -218,6 +218,14 @@ internal sealed partial class DashboardAssembler(
             warnings.Add("The live directory holds a credential pair but the state file names no account.");
         }
 
+        // The sentence normally rides the live card. With no account in the
+        // state file there is no live card, and the parked cards only show
+        // disabled switches. The warning is what still says why.
+        if (liveEmail is null && cliLoggedOutSentence is not null)
+        {
+            warnings.Add(cliLoggedOutSentence);
+        }
+
         if (published.LastReconciliation is { SwitchingBlocked: true } blocked)
         {
             warnings.Add(blocked.JournalOutcome);

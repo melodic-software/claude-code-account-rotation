@@ -259,6 +259,16 @@ internal sealed partial class LiveDirectorySwitch
 
             throw;
         }
+
+        // A missing file does not throw and does not clear the record. The
+        // switch is still refused while that record stands: there is no pair
+        // to park, and the page is still showing the logout.
+        if (_cliLogout?.LoggedOutAt is not null)
+        {
+            LogRefused(target.Value, SwitchRefusal.CliLoggedOut);
+            return Result<SwitchOutcome, SwitchRefusal>.Failure(SwitchRefusal.CliLoggedOut);
+        }
+
         IReadOnlyList<ParkedProfile> profiles = await _profiles.ListAsync(cancellationToken);
         ParkedProfile? targetProfile = profiles.FirstOrDefault(profile => profile.Email == target);
         if (targetProfile is null)

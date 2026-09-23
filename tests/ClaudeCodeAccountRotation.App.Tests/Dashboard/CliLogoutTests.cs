@@ -168,8 +168,12 @@ public sealed class CliLogoutTests
         await File.WriteAllTextAsync(factory.StateFilePath, "{}", cancellationToken);
         await WriteOwnerAsync(factory, "owner@example.com", cancellationToken);
         await StripTokensAsync(factory, cancellationToken);
-        _ = await DashboardAsync(client, cancellationToken);
+        JsonElement dashboard = await DashboardAsync(client, cancellationToken);
 
+        dashboard.GetProperty("warnings").EnumerateArray()
+            .Select(static warning => warning.GetString())
+            .ShouldContain(SameDaySentence);
+        dashboard.GetProperty("accounts").GetArrayLength().ShouldBe(0);
         string[] lines = LogoutLines(factory);
         lines.Length.ShouldBe(1);
         lines[0].ShouldContain("Error the CLI logged out of owner@example.com");
@@ -188,14 +192,72 @@ public sealed class CliLogoutTests
         _ = await DashboardAsync(client, cancellationToken);
 
         await StripTokensAsync(factory, cancellationToken);
-        _ = await DashboardAsync(client, cancellationToken);
+        JsonElement dashboard = await DashboardAsync(client, cancellationToken);
 
+        dashboard.GetProperty("warnings").EnumerateArray()
+            .Select(static warning => warning.GetString())
+            .ShouldContain(SameDaySentence);
         string[] lines = LogoutLines(factory);
         lines.Length.ShouldBe(1);
         lines[0].ShouldContain("Error the CLI logged out");
         lines[0].ShouldNotContain(" of ");
         lines[0].ShouldNotContain("@");
         AssertQuiet(factory);
+    }
+
+    [Fact]
+    public async Task ALogoutStillRefusesSwitchAfterTheLiveFileIsRemoved()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await using AppFactory factory = new();
+        await CredentialFiles.WriteAsync(factory.LiveDirectory, "refresh-a", cancellationToken);
+        await factory.WriteStateFileAsync(LiveEmail, cancellationToken);
+        await factory.ParkedProfileAsync(ParkedEmail, "refresh-b", cancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        _ = await DashboardAsync(client, cancellationToken);
+
+        await StripTokensAsync(factory, cancellationToken);
+        _ = await DashboardAsync(client, cancellationToken);
+        File.Delete(Path.Combine(factory.LiveDirectory, CredentialFiles.FileName));
+
+        JsonElement dashboard = await DashboardAsync(client, cancellationToken);
+        Card(dashboard, LiveEmail).GetProperty("cliLoggedOut").GetString().ShouldBe(SameDaySentence);
+        dashboard.GetProperty("warnings").EnumerateArray()
+            .Select(static warning => warning.GetString())
+            .ShouldNotContain(SameDaySentence);
+
+        using HttpResponseMessage refused = await client.PostAsync(SwitchUri(ParkedEmail), content: null, cancellationToken);
+        refused.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        JsonObject body = (await refused.Content.ReadFromJsonAsync<JsonObject>(cancellationToken))!;
+        body["refusal"]!.GetValue<string>().ShouldBe("CliLoggedOut");
+        AssertLoggedOnce(factory, "the CLI logged out of " + LiveEmail);
+    }
+
+    [Fact]
+    public async Task ASideSwitchIsRefusedWhileALogoutStands()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await using AppFactory factory = new(sharedStore: true, peerStorePath: "/mnt/c/store");
+        await CredentialFiles.WriteAsync(factory.LiveDirectory, "refresh-a", cancellationToken);
+        await factory.WriteStateFileAsync(LiveEmail, cancellationToken);
+        await factory.ParkedProfileAsync(ParkedEmail, "refresh-b", cancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        _ = await DashboardAsync(client, cancellationToken);
+
+        await StripTokensAsync(factory, cancellationToken);
+        _ = await DashboardAsync(client, cancellationToken);
+
+        using HttpResponseMessage refused = await client.PostAsync(SideSwitchUri(ParkedEmail), content: null, cancellationToken);
+        refused.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        JsonObject body = (await refused.Content.ReadFromJsonAsync<JsonObject>(cancellationToken))!;
+        body["refusal"]!.GetValue<string>().ShouldBe("CliLoggedOut");
+
+        File.Delete(Path.Combine(factory.LiveDirectory, CredentialFiles.FileName));
+        using HttpResponseMessage removed = await client.PostAsync(SideSwitchUri(ParkedEmail), content: null, cancellationToken);
+        removed.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        JsonObject removedBody = (await removed.Content.ReadFromJsonAsync<JsonObject>(cancellationToken))!;
+        removedBody["refusal"]!.GetValue<string>().ShouldBe("CliLoggedOut");
+        AssertLoggedOnce(factory, "the CLI logged out of " + LiveEmail);
     }
 
     private static void AssertLoggedOnce(AppFactory factory, string message)
@@ -223,6 +285,9 @@ public sealed class CliLogoutTests
 
     private static Uri SwitchUri(string email) =>
         new("/api/accounts/" + Uri.EscapeDataString(email) + "/switch", UriKind.Relative);
+
+    private static Uri SideSwitchUri(string email) =>
+        new("/api/sides/wsl/accounts/" + Uri.EscapeDataString(email) + "/switch", UriKind.Relative);
 
     private static async Task StripTokensAsync(AppFactory factory, CancellationToken cancellationToken)
     {
