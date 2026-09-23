@@ -125,7 +125,8 @@ public sealed class DetachedLeaderTests : IDisposable
     public void AnInheritableHandleStopsBeingInherited()
     {
         using AnonymousPipeServerStream pipe = new(PipeDirection.Out, HandleInheritability.Inheritable);
-        nint handle = pipe.SafePipeHandle.DangerousGetHandle();
+        // Inheritable applies to the client end; the server keeps its own end non-inheritable.
+        nint handle = pipe.ClientSafePipeHandle.DangerousGetHandle();
         ProcessLeaderChild.IsInheritable(handle).ShouldBeTrue();
 
         ProcessLeaderChild.StopInheriting(handle).ShouldBeTrue();
