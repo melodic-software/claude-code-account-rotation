@@ -70,12 +70,14 @@ internal static class AppComposition
 
     /// <summary>
     /// Composes the host. False, not a failure, when <c>--open</c> found an
-    /// instance already running and opened its page instead: there is nothing to run.
+    /// instance already running, or started a detached leader, and opened its
+    /// page instead: there is nothing to run in this process.
     /// </summary>
-    public static async Task<Result<bool, string>> ComposeAsync(WebApplicationBuilder builder, StartupArguments arguments, CancellationToken cancellationToken)
+    public static async Task<Result<bool, string>> ComposeAsync(WebApplicationBuilder builder, StartupArguments arguments, IReadOnlyList<string> commandLine, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(arguments);
+        ArgumentNullException.ThrowIfNull(commandLine);
         ConfigureConsoleTimestamp(builder.Logging);
 
         ClaudeCodeAccountRotationConfiguration defaults = ConfigurationDefaults.ForCurrentUser();
@@ -123,6 +125,27 @@ internal static class AppComposition
             }
 
             return Result<bool, string>.Failure(instance.Error);
+        }
+
+        if (DetachedLeader.Applies(arguments.Open, OperatingSystem.IsWindows(), configuration.Role))
+        {
+            // Released first, which also deletes instance.url, so the file the wait
+            // reads can only be the child's.
+            instance.Value.Dispose();
+            if (DetachedLeader.PortInUse(bindPort) is string busy)
+            {
+                return Result<bool, string>.Failure(busy);
+            }
+
+            Result<(string Url, string Token), string> leader = await DetachedLeader.StartAsync(
+                ProcessLeaderChild.Start, commandLine, configuration.AppDataDirectory, DetachedLeader.ProbeAsync, DetachedLeader.StartBound, cancellationToken);
+            if (leader.IsFailure)
+            {
+                return Result<bool, string>.Failure(leader.Error);
+            }
+
+            OpenDashboard(leader.Value.Url, leader.Value.Token);
+            return Result<bool, string>.Success(false);
         }
 
         IServiceCollection services = builder.Services;

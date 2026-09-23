@@ -6,6 +6,15 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Changed
+
+- On Windows, `--open` with no instance running starts the leader as a separate process with
+  no window, waits up to 30 seconds for it to accept its own token, opens the signed-in
+  dashboard, and exits (#135). The leader outlives the terminal that started it. If the port is
+  taken, or the leader exits or does not answer in time, `--open` exits non-zero and says so.
+  Every argument except `--open` is passed to the leader. Without `--open`, and on Linux and
+  macOS, the process still runs in the foreground of its console.
+
 ## [1.1.0] - 2026-09-23
 
 ### Added

@@ -52,8 +52,14 @@ operating system for a free port for that launch. Without `--open` no browser op
 printed URL, and paste line 2 of `instance.url` when the page asks for the instance token.
 
 With `--open`, the dashboard opens in the default browser already signed in. If an instance is
-already running, `--open` opens that instance's dashboard and exits. Otherwise the process starts
-as usual and opens its own dashboard once it is listening.
+already running, `--open` opens that instance's dashboard and exits. Otherwise, on Windows,
+`--open` starts the leader as a separate process with no window, waits up to 30 seconds for it
+to listen, opens its dashboard, and exits. The leader keeps running after the terminal that
+started it closes; the dashboard has no stop control, so stop it with
+`Stop-Process -Name claude-code-account-rotation` or Task Manager. If it does not come up, `--open` exits non-zero
+and says why; run the same command without `--open` to watch it start in the console. On Linux
+and macOS, `--open` with no instance running starts the process in the foreground as usual and
+opens its own dashboard once it is listening.
 
 If a card says it is not on the roster, click Adopt. Adopt is only offered for a Max account
 that is already logged in on this machine. Otherwise use Add an account, then Login on the card

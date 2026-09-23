@@ -4,6 +4,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Configuration;
+using ClaudeCodeAccountRotation.App.Hosting;
 using ClaudeCodeAccountRotation.App.Security;
 using ClaudeCodeAccountRotation.App.Tests.Switching;
 using ClaudeCodeAccountRotation.Core;
@@ -790,6 +791,10 @@ public sealed class ConfigurationTests : IDisposable
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
             using HttpResponseMessage response = await client.GetAsync(new Uri(url + "/api/dashboard"), cancellationToken);
             ((int)response.StatusCode).ShouldBe(200, output.ToString());
+
+            // What a detached --open waits on: this instance's own token is accepted, another is not.
+            (await DetachedLeader.ProbeAsync(url, token, cancellationToken)).ShouldBeTrue(output.ToString());
+            (await DetachedLeader.ProbeAsync(url, "not-this-instance", cancellationToken)).ShouldBeFalse();
 
             // The printed port is the origin mutations accept. The file's listenPort
             // is a different number on this launch, and a page opened there is not
