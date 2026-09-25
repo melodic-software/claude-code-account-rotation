@@ -138,6 +138,8 @@ header h1 { margin: 0; font-size: 1.6rem; letter-spacing: 0.01em; }
 /* The store axis: where this account's one pair is. One class whatever the
    chip says, because the words carry spaces and parentheses. */
 .badge.store { color: var(--accent); }
+/* The one account the operator marked as backing the CI org secret. */
+.badge.ci-token { color: var(--accent); }
 
 .card.paused { opacity: 0.75; }
 

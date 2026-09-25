@@ -24,11 +24,25 @@ public sealed class Roster
 
     public RosterEntry? Find(AccountEmail email) => _entries.Find(entry => entry.Email == email);
 
-    /// <summary>Adds <paramref name="entry"/>, replacing any entry for the same account.</summary>
+    /// <summary>
+    /// Adds <paramref name="entry"/>, replacing any entry for the same account.
+    /// One account holds <see cref="RosterEntry.CiTokenGeneratedOn"/> at a time:
+    /// marking <paramref name="entry"/> as the CI token holder clears the marker
+    /// from every other entry, the way adopting a new live account elsewhere
+    /// already leaves only one seat live.
+    /// </summary>
     public Roster With(RosterEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
-        return new Roster(_entries.Where(existing => existing.Email != entry.Email).Append(entry));
+        IEnumerable<RosterEntry> others = _entries.Where(existing => existing.Email != entry.Email);
+        if (entry.CiTokenGeneratedOn is not null)
+        {
+            others = others.Select(static existing => existing.CiTokenGeneratedOn is null
+                ? existing
+                : existing with { CiTokenGeneratedOn = null });
+        }
+
+        return new Roster(others.Append(entry));
     }
 
     public Roster Without(AccountEmail email) => new(_entries.Where(entry => entry.Email != email));

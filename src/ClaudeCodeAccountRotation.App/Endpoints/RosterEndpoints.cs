@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Accounts;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
@@ -143,6 +144,12 @@ internal static partial class RosterEndpoints
                 return Results.BadRequest(new { error = directory.Error });
             }
 
+            Result<DateOnly?, string> ciTokenGeneratedOn = ParseCiTokenGeneratedOn(body);
+            if (ciTokenGeneratedOn.IsFailure)
+            {
+                return Results.BadRequest(new { error = ciTokenGeneratedOn.Error });
+            }
+
             // Presence-based, key by key: a record of nullable fields cannot tell
             // "clear the alias" from "leave the alias alone", and an edit that
             // silently reset the fields it did not mention would be worse than
@@ -154,6 +161,7 @@ internal static partial class RosterEndpoints
                 BrowserProfileDirectory = body.ContainsKey("browserProfileDirectory") ? directory.Value : existing.BrowserProfileDirectory,
                 Paused = Flag(body, "paused") ?? existing.Paused,
                 Notes = body.ContainsKey("notes") ? Text(body, "notes") : existing.Notes,
+                CiTokenGeneratedOn = body.ContainsKey("ciTokenGeneratedOn") ? ciTokenGeneratedOn.Value : existing.CiTokenGeneratedOn,
             };
             await rosterFile.UpdateAsync(roster => roster.With(updated), cancellationToken);
             return Results.Ok(DashboardAssembler.View(updated));
@@ -412,14 +420,21 @@ internal static partial class RosterEndpoints
 
     private static Result<BrowserFamily?, string> ParseBrowser(JsonObject body, string key)
     {
-        if (Text(body, key) is not string value)
+        string invalid = "browser must be one of " + string.Join(", ", Enum.GetNames<BrowserFamily>()).ToLowerInvariant();
+        Result<string?, string> value = RequiredString(body, key, invalid);
+        if (value.IsFailure)
+        {
+            return Result<BrowserFamily?, string>.Failure(value.Error);
+        }
+
+        if (value.Value is not string text)
         {
             return Result<BrowserFamily?, string>.Success(null);
         }
 
-        return Enum.TryParse(value, ignoreCase: true, out BrowserFamily browser)
+        return Enum.TryParse(text, ignoreCase: true, out BrowserFamily browser)
             ? Result<BrowserFamily?, string>.Success(browser)
-            : Result<BrowserFamily?, string>.Failure("browser must be one of " + string.Join(", ", Enum.GetNames<BrowserFamily>()).ToLowerInvariant());
+            : Result<BrowserFamily?, string>.Failure(invalid);
     }
 
     /// <summary>
@@ -431,14 +446,65 @@ internal static partial class RosterEndpoints
     /// </summary>
     private static Result<string?, string> ParseProfileDirectory(JsonObject body)
     {
-        if (Text(body, "browserProfileDirectory") is not string value)
+        Result<string?, string> value = RequiredString(body, "browserProfileDirectory", "browserProfileDirectory must be a string");
+        if (value.IsFailure)
+        {
+            return value;
+        }
+
+        if (value.Value is not string text)
         {
             return Result<string?, string>.Success(null);
         }
 
-        return BrowserProfileDirectory.Parse(value).Match(
+        return BrowserProfileDirectory.Parse(text).Match(
             static directory => Result<string?, string>.Success(directory),
             static error => Result<string?, string>.Failure("browserProfileDirectory: " + error));
+    }
+
+    /// <summary>
+    /// The date the operator names as when they ran <c>claude setup-token</c> for
+    /// this account, or null when the body names none. Nothing here reads
+    /// GitHub or the token itself; the date is the operator's own record.
+    /// </summary>
+    private static Result<DateOnly?, string> ParseCiTokenGeneratedOn(JsonObject body)
+    {
+        const string invalid = "ciTokenGeneratedOn must be a date (yyyy-mm-dd)";
+        Result<string?, string> value = RequiredString(body, "ciTokenGeneratedOn", invalid);
+        if (value.IsFailure)
+        {
+            return Result<DateOnly?, string>.Failure(value.Error);
+        }
+
+        if (value.Value is not string text)
+        {
+            return Result<DateOnly?, string>.Success(null);
+        }
+
+        return DateOnly.TryParseExact(text, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateOnly parsed)
+            ? Result<DateOnly?, string>.Success(parsed)
+            : Result<DateOnly?, string>.Failure(invalid);
+    }
+
+    /// <summary>
+    /// The string a body names for <paramref name="key"/>, or null when the key
+    /// is absent or explicitly JSON null. A key present with a non-string value
+    /// (a number, bool, array, or object) is refused with
+    /// <paramref name="errorMessage"/> rather than read as absent: a nullable
+    /// field's PATCH clears on presence, so treating a malformed value the same
+    /// as "not sent" would silently wipe the field instead of rejecting the
+    /// request.
+    /// </summary>
+    private static Result<string?, string> RequiredString(JsonObject body, string key, string errorMessage)
+    {
+        if (!body.TryGetPropertyValue(key, out JsonNode? node) || node is null)
+        {
+            return Result<string?, string>.Success(null);
+        }
+
+        return node is JsonValue value && value.TryGetValue(out string? text)
+            ? Result<string?, string>.Success(text)
+            : Result<string?, string>.Failure(errorMessage);
     }
 
     private static string? Text(JsonObject body, string key) =>

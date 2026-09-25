@@ -86,7 +86,8 @@ internal sealed partial class DashboardAssembler(
             entry.Browser?.ToString().ToLowerInvariant(),
             entry.BrowserProfileDirectory,
             entry.Paused,
-            entry.Notes);
+            entry.Notes,
+            entry.CiTokenGeneratedOn);
 
     public async Task<DashboardView> AssembleAsync(CancellationToken cancellationToken)
     {

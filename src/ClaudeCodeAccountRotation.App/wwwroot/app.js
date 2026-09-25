@@ -674,6 +674,14 @@
     notes.value = (account.roster && account.roster.notes) || "";
     notes.placeholder = "warnings belong here, not in the name";
     labeled(form, "Notes", notes);
+    // One account at a time: setting this clears it on whichever other card
+    // carried it, the way adopting a live account elsewhere already leaves only
+    // one seat live. The date is the operator's own record of when they ran
+    // `claude setup-token`; nothing here reads GitHub or the token itself.
+    var ciToken = element("input");
+    ciToken.type = "date";
+    ciToken.value = (account.roster && account.roster.ciTokenGeneratedOn) || "";
+    labeled(form, "CI token generated on (this account backs CLAUDE_CODE_OAUTH_TOKEN)", ciToken);
     var save = element("button", null, "Save");
     save.type = "submit";
     form.appendChild(save);
@@ -689,6 +697,7 @@
       // A present key can clear the field. Sending notes on every save, including
       // a blank one, is what lets the operator take a warning back off the card.
       body.notes = notes.value.trim() || null;
+      body.ciTokenGeneratedOn = ciToken.value || null;
       mutate(accountPath(account.email), "PATCH", body, function (result) {
         showToast(result.ok ? account.email + " updated" : refused(result.body), result.ok ? "ok" : "error");
       });
@@ -1113,6 +1122,9 @@
         badges.appendChild(element("span", "badge " + chip.replace(/ /g, "-"), chip));
       }
       if (!roster) { badges.appendChild(element("span", "badge off-roster", "not on roster")); }
+      if (roster && roster.ciTokenGeneratedOn) {
+        badges.appendChild(element("span", "badge ci-token", "CI token · " + roster.ciTokenGeneratedOn));
+      }
       card.appendChild(badges);
       if (account.cliLoggedOut) {
         card.appendChild(element("p", "cli-logout", account.cliLoggedOut));

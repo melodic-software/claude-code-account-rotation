@@ -28,6 +28,30 @@ public sealed class RosterTests
     }
 
     [Fact]
+    public void MarkingOneAccountAsTheCiTokenHolderClearsAnyOtherHolder()
+    {
+        DateOnly first = new(2026, 1, 1);
+        DateOnly second = new(2026, 6, 1);
+        Roster roster = Roster.Empty
+            .With(new RosterEntry(Email("a@example.com"), CiTokenGeneratedOn: first))
+            .With(new RosterEntry(Email("b@example.com"), CiTokenGeneratedOn: second));
+
+        roster.Find(Email("a@example.com"))!.CiTokenGeneratedOn.ShouldBeNull();
+        roster.Find(Email("b@example.com"))!.CiTokenGeneratedOn.ShouldBe(second);
+    }
+
+    [Fact]
+    public void ClearingTheCiTokenMarkerLeavesEveryOtherEntryAlone()
+    {
+        DateOnly marked = new(2026, 1, 1);
+        Roster roster = Roster.Empty
+            .With(new RosterEntry(Email("a@example.com"), CiTokenGeneratedOn: marked))
+            .With(new RosterEntry(Email("a@example.com"), CiTokenGeneratedOn: null));
+
+        roster.Find(Email("a@example.com"))!.CiTokenGeneratedOn.ShouldBeNull();
+    }
+
+    [Fact]
     public void WithoutRemovesOnlyThatAccount()
     {
         Roster roster = Roster.Empty

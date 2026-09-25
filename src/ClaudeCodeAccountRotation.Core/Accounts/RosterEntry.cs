@@ -15,6 +15,12 @@ public enum BrowserFamily
 /// which browser profile signs it in, whether it is out of the rotation, and
 /// whatever the operator wrote about it. No token field exists here; the
 /// credential pair lives in the profile folder, never in the roster.
+/// <para>
+/// <see cref="CiTokenGeneratedOn"/> is the operator's own marker: the date they
+/// ran <c>claude setup-token</c> on this account for the org secret
+/// <c>CLAUDE_CODE_OAUTH_TOKEN</c>, not read or verified against GitHub. At most
+/// one entry on a <see cref="Roster"/> carries it; see <see cref="Roster.With"/>.
+/// </para>
 /// </summary>
 public sealed record RosterEntry(
     AccountEmail Email,
@@ -22,4 +28,5 @@ public sealed record RosterEntry(
     BrowserFamily? Browser = null,
     string? BrowserProfileDirectory = null,
     bool Paused = false,
-    string? Notes = null);
+    string? Notes = null,
+    DateOnly? CiTokenGeneratedOn = null);
