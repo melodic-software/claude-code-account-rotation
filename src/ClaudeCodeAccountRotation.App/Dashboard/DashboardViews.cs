@@ -100,6 +100,11 @@ internal sealed record AccountCardView(
 /// <summary>
 /// The roster entry behind a card, or null when the account is on the machine
 /// but not on the roster: that is the state Adopt exists to end.
+/// <para>
+/// <see cref="CiTokenGeneratedOn"/> is null on every card but the one account the
+/// operator has marked, if any, as backing the org secret
+/// <c>CLAUDE_CODE_OAUTH_TOKEN</c>.
+/// </para>
 /// </summary>
 internal sealed record RosterEntryView(
     string Email,
@@ -107,7 +112,8 @@ internal sealed record RosterEntryView(
     string? Browser,
     string? BrowserProfileDirectory,
     bool Paused,
-    string? Notes);
+    string? Notes,
+    DateOnly? CiTokenGeneratedOn = null);
 
 /// <summary>
 /// One browser profile the machine already has, for the roster's profile

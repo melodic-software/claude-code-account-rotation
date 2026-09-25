@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.Core;
@@ -16,6 +17,8 @@ namespace ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 internal sealed class RosterFile : IDisposable
 {
     public const string FileName = "roster.json";
+
+    private const string CiTokenDateFormat = "yyyy-MM-dd";
 
     // Read-modify-write, so two edits arriving together must not lose one. One
     // process-wide gate is the whole story: the instance lock already makes this
@@ -75,6 +78,7 @@ internal sealed class RosterFile : IDisposable
                 ["browserProfileDirectory"] = entry.BrowserProfileDirectory,
                 ["paused"] = entry.Paused,
                 ["notes"] = entry.Notes,
+                ["ciTokenGeneratedOn"] = entry.CiTokenGeneratedOn?.ToString(CiTokenDateFormat, CultureInfo.InvariantCulture),
             });
         }
 
@@ -97,8 +101,14 @@ internal sealed class RosterFile : IDisposable
                 ParseBrowser(Text(entry, "browser")),
                 Text(entry, "browserProfileDirectory"),
                 entry["paused"] is JsonValue paused && paused.TryGetValue(out bool value) && value,
-                Text(entry, "notes"));
+                Text(entry, "notes"),
+                ParseCiTokenDate(Text(entry, "ciTokenGeneratedOn")));
     }
+
+    private static DateOnly? ParseCiTokenDate(string? value) =>
+        value is not null && DateOnly.TryParseExact(value, CiTokenDateFormat, CultureInfo.InvariantCulture, DateTimeStyles.None, out DateOnly parsed)
+            ? parsed
+            : null;
 
     private static BrowserFamily? ParseBrowser(string? value) =>
         Enum.TryParse(value, ignoreCase: true, out BrowserFamily browser) ? browser : null;

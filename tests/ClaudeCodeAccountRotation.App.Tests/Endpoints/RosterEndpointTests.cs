@@ -271,6 +271,44 @@ public sealed class RosterEndpointTests
     }
 
     [Fact]
+    public async Task PatchMarksTheCiTokenHolderAndClearsAnyOtherHolder()
+    {
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        await client.PostAsJsonAsync(_accounts, new { email = NewEmail }, TestContext.Current.CancellationToken);
+        await client.PostAsJsonAsync(_accounts, new { email = ParkedEmail }, TestContext.Current.CancellationToken);
+        await client.PatchAsJsonAsync(Account(NewEmail), new { ciTokenGeneratedOn = "2026-01-15" }, TestContext.Current.CancellationToken);
+
+        using HttpResponseMessage response = await client.PatchAsJsonAsync(
+            Account(ParkedEmail),
+            new { ciTokenGeneratedOn = "2026-06-01" },
+            TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        Roster stored = await StoredRosterAsync(factory, TestContext.Current.CancellationToken);
+        stored.Find(Email(ParkedEmail))!.CiTokenGeneratedOn.ShouldBe(new DateOnly(2026, 6, 1));
+        stored.Find(Email(NewEmail))!.CiTokenGeneratedOn.ShouldBeNull();
+        JsonObject card = (await CardAsync(client, ParkedEmail, TestContext.Current.CancellationToken))!;
+        card["roster"]!["ciTokenGeneratedOn"]!.GetValue<string>().ShouldBe("2026-06-01");
+    }
+
+    [Fact]
+    public async Task PatchRefusesAnUnparsableCiTokenDate()
+    {
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        await client.PostAsJsonAsync(_accounts, new { email = NewEmail }, TestContext.Current.CancellationToken);
+
+        using HttpResponseMessage response = await client.PatchAsJsonAsync(
+            Account(NewEmail),
+            new { ciTokenGeneratedOn = "not a date" },
+            TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
+        (await StoredRosterAsync(factory, TestContext.Current.CancellationToken)).Find(Email(NewEmail))!.CiTokenGeneratedOn.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task PatchOnAnAccountThatIsNotOnTheRosterIsNotFound()
     {
         await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
@@ -554,6 +592,12 @@ public sealed class RosterEndpointTests
         script.ShouldContain("labeled(form, \"Notes\", notes)");
         script.ShouldContain("body.notes = notes.value.trim() || null");
         script.ShouldContain("labeled(container, \"Display name\", alias)");
+        // The CI token marker: an edit-panel date field, presence-based on save
+        // like every other field, and a badge that shows on whichever one card
+        // carries it.
+        script.ShouldContain("ciToken.type = \"date\"");
+        script.ShouldContain("body.ciTokenGeneratedOn = ciToken.value || null");
+        script.ShouldContain("badge ci-token");
         // Leaving the field by pressing another control must not disable that
         // control before its click runs, and opening Edit must not refresh the card.
         script.ShouldContain("pointerdown");

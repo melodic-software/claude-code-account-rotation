@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Accounts;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
@@ -143,6 +144,12 @@ internal static partial class RosterEndpoints
                 return Results.BadRequest(new { error = directory.Error });
             }
 
+            Result<DateOnly?, string> ciTokenGeneratedOn = ParseCiTokenGeneratedOn(body);
+            if (ciTokenGeneratedOn.IsFailure)
+            {
+                return Results.BadRequest(new { error = ciTokenGeneratedOn.Error });
+            }
+
             // Presence-based, key by key: a record of nullable fields cannot tell
             // "clear the alias" from "leave the alias alone", and an edit that
             // silently reset the fields it did not mention would be worse than
@@ -154,6 +161,7 @@ internal static partial class RosterEndpoints
                 BrowserProfileDirectory = body.ContainsKey("browserProfileDirectory") ? directory.Value : existing.BrowserProfileDirectory,
                 Paused = Flag(body, "paused") ?? existing.Paused,
                 Notes = body.ContainsKey("notes") ? Text(body, "notes") : existing.Notes,
+                CiTokenGeneratedOn = body.ContainsKey("ciTokenGeneratedOn") ? ciTokenGeneratedOn.Value : existing.CiTokenGeneratedOn,
             };
             await rosterFile.UpdateAsync(roster => roster.With(updated), cancellationToken);
             return Results.Ok(DashboardAssembler.View(updated));
@@ -439,6 +447,23 @@ internal static partial class RosterEndpoints
         return BrowserProfileDirectory.Parse(value).Match(
             static directory => Result<string?, string>.Success(directory),
             static error => Result<string?, string>.Failure("browserProfileDirectory: " + error));
+    }
+
+    /// <summary>
+    /// The date the operator names as when they ran <c>claude setup-token</c> for
+    /// this account, or null when the body names none. Nothing here reads
+    /// GitHub or the token itself; the date is the operator's own record.
+    /// </summary>
+    private static Result<DateOnly?, string> ParseCiTokenGeneratedOn(JsonObject body)
+    {
+        if (Text(body, "ciTokenGeneratedOn") is not string value)
+        {
+            return Result<DateOnly?, string>.Success(null);
+        }
+
+        return DateOnly.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out DateOnly parsed)
+            ? Result<DateOnly?, string>.Success(parsed)
+            : Result<DateOnly?, string>.Failure("ciTokenGeneratedOn must be a date (yyyy-mm-dd)");
     }
 
     private static string? Text(JsonObject body, string key) =>

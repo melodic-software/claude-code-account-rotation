@@ -6,6 +6,15 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Added
+
+- The Edit panel marks one enrolled account as the holder of the CI org secret
+  `CLAUDE_CODE_OAUTH_TOKEN`, with the date its token was generated (#145).
+  Marking an account clears the marker from whichever other account carried
+  it, so at most one card shows the "CI token" badge beside its 5h/7d
+  headroom. The date is the operator's own record; nothing here reads GitHub
+  or the token value.
+
 ## [1.2.0] - 2026-09-23
 
 ### Changed

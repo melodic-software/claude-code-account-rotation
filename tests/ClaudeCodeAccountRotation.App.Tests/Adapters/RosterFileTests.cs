@@ -30,12 +30,48 @@ public sealed class RosterFileTests : IDisposable
     public async Task EveryFieldRoundTrips()
     {
         using RosterFile file = new(_appData);
-        RosterEntry entry = new(Email("a@example.com"), "work", BrowserFamily.Brave, "Profile 3", Paused: true, Notes: "the weekly one");
+        RosterEntry entry = new(
+            Email("a@example.com"),
+            "work",
+            BrowserFamily.Brave,
+            "Profile 3",
+            Paused: true,
+            Notes: "the weekly one",
+            CiTokenGeneratedOn: new DateOnly(2026, 1, 15));
 
         await file.UpdateAsync(roster => roster.With(entry), TestContext.Current.CancellationToken);
 
         RosterEntry? stored = (await file.ReadAsync(TestContext.Current.CancellationToken)).Find(Email("a@example.com"));
         stored.ShouldBe(entry);
+    }
+
+    [Fact]
+    public async Task AnEntryWithNoCiTokenDateReadsAsNull()
+    {
+        using RosterFile file = new(_appData);
+        RosterEntry entry = new(Email("a@example.com"));
+
+        await file.UpdateAsync(roster => roster.With(entry), TestContext.Current.CancellationToken);
+
+        RosterEntry? stored = (await file.ReadAsync(TestContext.Current.CancellationToken)).Find(Email("a@example.com"));
+        stored!.CiTokenGeneratedOn.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task ARosterFileWrittenBeforeTheCiTokenFieldExistedStillLoads()
+    {
+        Directory.CreateDirectory(_appData);
+        await File.WriteAllTextAsync(
+            Path.Combine(_appData, RosterFile.FileName),
+            """{ "accounts": [ { "email": "a@example.com", "alias": "work", "paused": false } ] }""",
+            TestContext.Current.CancellationToken);
+        using RosterFile file = new(_appData);
+
+        RosterEntry? stored = (await file.ReadAsync(TestContext.Current.CancellationToken)).Find(Email("a@example.com"));
+
+        stored.ShouldNotBeNull();
+        stored.Alias.ShouldBe("work");
+        stored.CiTokenGeneratedOn.ShouldBeNull();
     }
 
     [Fact]
