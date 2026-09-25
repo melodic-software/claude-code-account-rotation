@@ -461,7 +461,7 @@ internal static partial class RosterEndpoints
             return Result<DateOnly?, string>.Success(null);
         }
 
-        return DateOnly.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out DateOnly parsed)
+        return DateOnly.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateOnly parsed)
             ? Result<DateOnly?, string>.Success(parsed)
             : Result<DateOnly?, string>.Failure("ciTokenGeneratedOn must be a date (yyyy-mm-dd)");
     }
