@@ -211,6 +211,32 @@ public sealed class RosterEndpointTests
     }
 
     [Fact]
+    public async Task PatchRefusesANonStringBrowserInsteadOfClearingIt()
+    {
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        await client.PostAsJsonAsync(_accounts, new { email = NewEmail, browser = "edge" }, TestContext.Current.CancellationToken);
+
+        using HttpResponseMessage response = await client.PatchAsJsonAsync(Account(NewEmail), new { browser = 123 }, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
+        (await StoredRosterAsync(factory, TestContext.Current.CancellationToken)).Find(Email(NewEmail))!.Browser.ShouldBe(BrowserFamily.Edge);
+    }
+
+    [Fact]
+    public async Task PatchRefusesANonStringProfileDirectoryInsteadOfClearingIt()
+    {
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        await client.PostAsJsonAsync(_accounts, new { email = NewEmail, browser = "edge", browserProfileDirectory = "Profile 3" }, TestContext.Current.CancellationToken);
+
+        using HttpResponseMessage response = await client.PatchAsJsonAsync(Account(NewEmail), new { browserProfileDirectory = 123 }, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
+        (await StoredRosterAsync(factory, TestContext.Current.CancellationToken)).Find(Email(NewEmail))!.BrowserProfileDirectory.ShouldBe("Profile 3");
+    }
+
+    [Fact]
     public async Task PatchLeavesTheFieldsItDoesNotMention()
     {
         await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
@@ -305,6 +331,40 @@ public sealed class RosterEndpointTests
             TestContext.Current.CancellationToken);
 
         response.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
+        (await StoredRosterAsync(factory, TestContext.Current.CancellationToken)).Find(Email(NewEmail))!.CiTokenGeneratedOn.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task PatchRefusesANonStringCiTokenDateInsteadOfClearingIt()
+    {
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        await client.PostAsJsonAsync(_accounts, new { email = NewEmail }, TestContext.Current.CancellationToken);
+        await client.PatchAsJsonAsync(Account(NewEmail), new { ciTokenGeneratedOn = "2026-01-15" }, TestContext.Current.CancellationToken);
+
+        using HttpResponseMessage response = await client.PatchAsJsonAsync(
+            Account(NewEmail),
+            new { ciTokenGeneratedOn = 123 },
+            TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
+        (await StoredRosterAsync(factory, TestContext.Current.CancellationToken)).Find(Email(NewEmail))!.CiTokenGeneratedOn.ShouldBe(new DateOnly(2026, 1, 15));
+    }
+
+    [Fact]
+    public async Task PatchClearsTheCiTokenDateWhenTheBodyNamesItNull()
+    {
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        await client.PostAsJsonAsync(_accounts, new { email = NewEmail }, TestContext.Current.CancellationToken);
+        await client.PatchAsJsonAsync(Account(NewEmail), new { ciTokenGeneratedOn = "2026-01-15" }, TestContext.Current.CancellationToken);
+
+        using HttpResponseMessage response = await client.PatchAsJsonAsync(
+            Account(NewEmail),
+            new { ciTokenGeneratedOn = (string?)null },
+            TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
         (await StoredRosterAsync(factory, TestContext.Current.CancellationToken)).Find(Email(NewEmail))!.CiTokenGeneratedOn.ShouldBeNull();
     }
 
