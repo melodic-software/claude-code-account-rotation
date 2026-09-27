@@ -254,6 +254,64 @@ internal sealed partial class FollowerImport : IDisposable
     }
 
     /// <summary>
+    /// The release of a login the CLI here has already given up. Nothing
+    /// crosses: the logged-out file goes, and the state file stops naming
+    /// <paramref name="email"/>. A live pair refuses it with a definite answer,
+    /// and the file is deleted only when it is a logout, so no refresh token is
+    /// ever removed here.
+    /// <para>
+    /// Every partial state succeeds, because the leader asks again after a
+    /// crash or a lost answer: a file already gone, a state file already
+    /// cleared, or both. A failure is never a "no", so the leader keeps its
+    /// journal open and asks again on its next poll.
+    /// </para>
+    /// </summary>
+    public async Task<Result<LogOutAnswer, string>> LogOutAsync(AccountEmail email, CancellationToken cancellationToken)
+    {
+        await ReconcileOnceAsync(cancellationToken);
+        await _sync.WaitAsync(cancellationToken);
+        try
+        {
+            if (_hold is not null || await _journal.ReadOpenAsync(cancellationToken) is not null)
+            {
+                return Result<LogOutAnswer, string>.Failure("an import is in flight here, so nothing was logged out; ask again when it ends");
+            }
+
+            using IDisposable permit = await _gate.AcquireAsync(_options.MutationGateTimeout, cancellationToken);
+            Result<IAsyncDisposable, string> locked = await _refreshLock.AcquireAsync(_options.RefreshLockWaitBound, cancellationToken);
+            if (locked.IsFailure)
+            {
+                return Result<LogOutAnswer, string>.Failure(locked.Error);
+            }
+
+            await using IAsyncDisposable refreshLock = locked.Value;
+            if (await _pairs.ReadLiveAsync(cancellationToken) is not null)
+            {
+                return Result<LogOutAnswer, string>.Success(new LogOutAnswer(false, "not logged out: a live pair is here again"));
+            }
+
+            if (File.Exists(_pairs.LivePath) && !await _pairs.LiveIsLoggedOutAsync(cancellationToken))
+            {
+                return Result<LogOutAnswer, string>.Failure("the live file is neither a pair nor a logout, so nothing was removed");
+            }
+
+            StagedImportCredentialPairStore.DeleteIfPresent(_pairs.LivePath);
+            if ((await _stateFile.ReadAccountBlockAsync(cancellationToken))?.Email == email)
+            {
+                await _stateFile.PatchAccountBlockAsync(OAuthAccountBlock.FromJson([]), CancellationToken.None);
+            }
+
+            StagedImportCredentialPairStore.DeleteIfPresent(_liveOwnerPath);
+            LogLoggedOut(email.Value);
+            return Result<LogOutAnswer, string>.Success(new LogOutAnswer(true, email.Value + " is logged out of this side"));
+        }
+        finally
+        {
+            _sync.Release();
+        }
+    }
+
+    /// <summary>
     /// What the leader's reconciliation asks after a crash on either side. When
     /// it names an account, the answer is about that account: the leader's
     /// <c>ExportVerified</c> row turns on a definite "not imported", and a
@@ -272,7 +330,12 @@ internal sealed partial class FollowerImport : IDisposable
             ImportJournalEntry? journal = await _journal.ReadOpenAsync(cancellationToken);
             CredentialPair? live = await _pairs.ReadLiveAsync(cancellationToken);
             OAuthAccountBlock? liveAccount = await _stateFile.ReadAccountBlockAsync(cancellationToken);
-            return await StatusOfAsync(journal, live, liveAccount, about, cancellationToken);
+            ImportStatus status = await StatusOfAsync(journal, live, liveAccount, about, cancellationToken);
+            // A logout is not a pair this side cannot name. Said apart, so the
+            // leader plans it as nothing to hand back rather than refusing it.
+            return live is null && await _pairs.LiveIsLoggedOutAsync(cancellationToken)
+                ? status with { LiveLoginDead = true }
+                : status;
         }
         finally
         {
@@ -646,6 +709,16 @@ internal sealed partial class FollowerImport : IDisposable
                 + "); a session rotated it, so nothing was swapped");
         }
 
+        // No pair left this side, but a file may still sit at the live name and
+        // the swap replaces it. Only a logout may be replaced: a file this read
+        // could not parse may still hold a refresh token.
+        if (live is null && File.Exists(_pairs.LivePath) && !await _pairs.LiveIsLoggedOutAsync(cancellationToken))
+        {
+            await UnwindAsync(hold);
+            return Result<ImportResult, string>.Failure(
+                "not imported: the live file is neither a pair nor a logout, so nothing replaced it");
+        }
+
         // F5. A release has nothing to put in the live pair's place, so it is
         // removed rather than replaced: the same act, the same gate in front of
         // it, and the leader's natively-read export is the copy that survives.
@@ -922,6 +995,9 @@ internal sealed partial class FollowerImport : IDisposable
 
     [LoggerMessage(Level = LogLevel.Information, Message = "imported {Incoming}; {Outgoing} left this side")]
     private partial void LogImported(string incoming, string outgoing);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "the dead login of {Account} was removed; this side holds nothing")]
+    private partial void LogLoggedOut(string account);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "the import of {Incoming} was unwound; the live pair was not touched")]
     private partial void LogUnwound(string incoming);

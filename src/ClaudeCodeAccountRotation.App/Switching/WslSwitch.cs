@@ -23,7 +23,11 @@ namespace ClaudeCodeAccountRotation.App.Switching;
 /// The account now live on that side, or null after a release, which leaves it
 /// holding nothing.
 /// </param>
-internal sealed record WslSwitchOutcome(SideName Side, AccountEmail? Now, AccountEmail? ParkedAs, DateTimeOffset At, string? QuarantinedAt = null);
+/// <param name="LoggedOut">
+/// The account the CLI on that side had logged out of, which nothing parked
+/// and which now needs a login, or null.
+/// </param>
+internal sealed record WslSwitchOutcome(SideName Side, AccountEmail? Now, AccountEmail? ParkedAs, DateTimeOffset At, string? QuarantinedAt = null, AccountEmail? LoggedOut = null);
 
 /// <summary>
 /// What the leader's own crash table found and did at start, or on a poll.
@@ -49,6 +53,11 @@ internal sealed record WslReconciliation(string Outcome, string? Banner, bool De
 /// account this side holds has no local file left to read it from. Null on the
 /// same terms as the tee.
 /// </para>
+/// <para>
+/// <see cref="LiveLoginDead"/> is that side answering that the CLI there
+/// logged out: its live file holds no login, whatever account its state file
+/// still names.
+/// </para>
 /// </summary>
 internal sealed record WslSideState(
     SideName Side,
@@ -57,7 +66,8 @@ internal sealed record WslSideState(
     string Detail,
     bool CanStart = false,
     StatuslineSnapshot? Usage = null,
-    DateTimeOffset? LoginExpiresAt = null);
+    DateTimeOffset? LoginExpiresAt = null,
+    bool LiveLoginDead = false);
 
 /// <summary>
 /// The leader's coordinator for a switch of the <b>other</b> side of this
@@ -565,6 +575,15 @@ internal sealed partial class WslSwitch : IDisposable
                     "the " + entry.Side.Value + " side has already imported " + entry.Subject.Value + "; the hand-off finishes rather than cancels");
             }
 
+            // That side may already have removed the dead file, and no status
+            // read says so. Cancelling then would leave the holder record naming
+            // a side that holds nothing; the next poll finishes it instead.
+            if (entry is { IsRelease: true, LoggedOut: not null })
+            {
+                return Result<string, string>.Failure(
+                    "the logout of " + entry.Subject.Value + " from " + entry.Side.Value + " finishes rather than cancels; it is asked again when that side answers");
+            }
+
             Result<ImportStatus, string> asked = await peer.Instance.ImportStatusAsync(entry.Subject, cancellationToken);
             if (asked.IsFailure)
             {
@@ -641,7 +660,8 @@ internal sealed partial class WslSwitch : IDisposable
                     live.LiveAccount is null ? "online, holding nothing" : "online",
                     canStart,
                     live.Tee,
-                    live.LoginExpiresAt),
+                    live.LoginExpiresAt,
+                    live.LiveLoginDead),
             reason => new WslSideState(peer.Side, Online: false, null, "offline: " + reason, canStart));
     }
 
@@ -852,8 +872,21 @@ internal sealed partial class WslSwitch : IDisposable
         // must be empty: a slot still holding a pair for an account that is
         // live over there is the duplicate lineage the whole design refuses,
         // and parking on top of it at L4 would be the moment it became one.
+        //
+        // A login the CLI on that side gave up is not a pair to verify: its file
+        // holds no refresh token, so nothing is exported and nothing is lost. It
+        // is planned as the case with no outgoing account, with the account
+        // named apart. Its holder record goes at L4, once that side's own answer
+        // shows the account has left, and never on this read, which is outside
+        // the gate and may already be stale.
+        AccountEmail? loggedOut = remote.LiveLoginDead && remote.LiveFingerprint is null ? remote.LiveAccount : null;
+        if (loggedOut is AccountEmail gone && _slots.HasTransitFile(_profiles.FolderPathFor(gone)))
+        {
+            return Refuse(SwitchRefusal.SlotInTransit);
+        }
+
         string? outgoingFolder = null;
-        if (remote.LiveAccount is AccountEmail outgoing)
+        if (loggedOut is null && remote.LiveAccount is AccountEmail outgoing)
         {
             outgoingFolder = _profiles.FolderPathFor(outgoing);
             bool outgoingSlotHoldsPair = File.Exists(Path.Combine(outgoingFolder, FileSystemCredentialPairStore.FileName));
@@ -895,12 +928,13 @@ internal sealed partial class WslSwitch : IDisposable
             target,
             pair?.Fingerprint,
             incoming?.FolderPath,
-            remote.LiveAccount,
+            loggedOut is null ? remote.LiveAccount : null,
             remote.LiveFingerprint,
             outgoingFolder,
             WslSwitchStep.Claimed,
             _timeProvider.GetUtcNow(),
-            remote.LiveAccountBlock));
+            loggedOut is null ? remote.LiveAccountBlock : null,
+            loggedOut));
     }
 
     /// <summary>
@@ -952,6 +986,11 @@ internal sealed partial class WslSwitch : IDisposable
                 arriving,
                 (await _profiles.ReadAccountAsync(incomingFolder, cancellationToken))?.Raw ?? [],
                 peer.InPeerNamespace(ExportPathFor(entry, peer.Side)));
+        }
+        else if (entry.LoggedOut is not null)
+        {
+            // A release of a dead login: nothing crosses, so nothing is gated.
+            return await LogOutAsync(peer, entry, cancellationToken);
         }
         else if (entry.OutgoingFingerprint is RefreshTokenFingerprint leaving)
         {
@@ -1058,6 +1097,38 @@ internal sealed partial class WslSwitch : IDisposable
         };
         await JournalAsync(verified, CancellationToken.None);
         return await CommitAsync(peer, verified, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// L3 for a release of a dead login: that side removes the logged-out file
+    /// and forgets the account, then L4 drops the holder record.
+    /// <para>
+    /// Only a definite "a live pair is here again" unwinds, and it leaves the
+    /// holder record alone, because that side is using the account again. A
+    /// failure is not an answer: the journal stays at <c>Claimed</c> and the
+    /// next poll asks again, which that side answers the same way from any
+    /// partial state. Clearing it on silence would leave a record naming a side
+    /// that holds nothing, which no later hand-off could clear.
+    /// </para>
+    /// </summary>
+    private async Task<Result<WslSwitchOutcome, SwitchRefusal>> LogOutAsync(Peer peer, WslSwitchJournalEntry entry, CancellationToken cancellationToken)
+    {
+        Result<LogOutAnswer, string> answered = await peer.Instance.LogOutAsync(entry.Subject, cancellationToken);
+        if (answered.IsFailure)
+        {
+            LogHandOffStalled(peer.Side.Value, entry.Subject.Value, answered.Error);
+            return Result<WslSwitchOutcome, SwitchRefusal>.Failure(SwitchRefusal.SideOffline);
+        }
+
+        if (!answered.Value.LoggedOut)
+        {
+            LogNotImported(peer.Side.Value, entry.Subject.Value, answered.Value.Detail);
+            return await UnclaimAsync(peer, entry, SwitchRefusal.LiveIdentityUnverified, CancellationToken.None);
+        }
+
+        WslSwitchJournalEntry imported = entry with { StepReached = WslSwitchStep.Imported };
+        await JournalAsync(imported, CancellationToken.None);
+        return await ParkAsync(peer, imported, CancellationToken.None);
     }
 
     /// <summary>L3c: the commit the gate has earned, and the park that follows it.</summary>
@@ -1222,6 +1293,19 @@ internal sealed partial class WslSwitch : IDisposable
 
             // The slot holds its pair again, so its record goes: design 9.4 row 2.
             await _slots.ReleaseAsync(folder, cancellationToken);
+        }
+
+        // The login the CLI on that side gave up. That side has answered that it
+        // no longer holds it, so the record naming it goes and the slot, with no
+        // pair in it, needs a login. A record naming another side is that
+        // side's statement and stays. Idempotent, so every resume repeats it.
+        if (entry.LoggedOut is AccountEmail loggedOut)
+        {
+            string loggedOutFolder = _profiles.FolderPathFor(loggedOut);
+            if ((await HolderRecordFile.ReadAsync(loggedOutFolder, cancellationToken))?.Side == entry.Side)
+            {
+                await _slots.ReleaseAsync(loggedOutFolder, cancellationToken);
+            }
         }
 
         await JournalAsync(entry with { StepReached = WslSwitchStep.Parked }, cancellationToken);
@@ -1458,7 +1542,7 @@ internal sealed partial class WslSwitch : IDisposable
     }
 
     private WslSwitchOutcome Outcome(WslSwitchJournalEntry entry) =>
-        new(entry.Side, entry.Incoming, entry.Outgoing, _timeProvider.GetUtcNow());
+        new(entry.Side, entry.Incoming, entry.Outgoing, _timeProvider.GetUtcNow(), LoggedOut: entry.LoggedOut);
 
     private static Result<WslSwitchJournalEntry, SwitchRefusal> Refuse(SwitchRefusal refusal) =>
         Result<WslSwitchJournalEntry, SwitchRefusal>.Failure(refusal);

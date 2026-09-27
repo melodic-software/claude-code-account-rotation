@@ -73,6 +73,12 @@ internal sealed record LiveAccountView(string? Email, bool HasCredentials, strin
 /// empty. Refresh and Pause are left as they are for every other blocking state.
 /// </para>
 /// <para>
+/// <c>LoggedOutOn</c> names the side whose CLI logged out of this account while
+/// that side held it, or null. <c>CliLoggedOut</c> then carries that side's
+/// sentence, and the page offers the login: a release of that side first,
+/// which frees the slot, then the ordinary login.
+/// </para>
+/// <para>
 /// Every optional member carries a default, so a route that hands back a card
 /// for an account nothing has read constructs one unchanged.
 /// </para>
@@ -95,7 +101,8 @@ internal sealed record AccountCardView(
     bool CanSwitchHere = false,
     bool HeldAway = false,
     IReadOnlyList<string>? OfferedTo = null,
-    string? CliLoggedOut = null);
+    string? CliLoggedOut = null,
+    string? LoggedOutOn = null);
 
 /// <summary>
 /// The roster entry behind a card, or null when the account is on the machine

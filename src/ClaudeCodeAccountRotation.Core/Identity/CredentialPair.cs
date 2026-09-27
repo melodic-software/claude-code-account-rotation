@@ -49,6 +49,24 @@ public sealed record CredentialPair
     public const string LacksTokensReason = "credential file lacks accessToken or refreshToken";
 
     /// <summary>
+    /// Whether <paramref name="raw"/> is what the CLI leaves behind a logout: no
+    /// <c>claudeAiOauth</c> object, or one whose <c>refreshToken</c> is absent or
+    /// empty. Narrower than <see cref="LacksTokensReason"/>, which an empty
+    /// access token beside a live refresh token also returns: a file this says
+    /// yes to holds no login that deleting it could lose.
+    /// </summary>
+    public static bool IsLoggedOut(JsonObject raw)
+    {
+        ArgumentNullException.ThrowIfNull(raw);
+        return raw["claudeAiOauth"] is not JsonObject oauth || oauth["refreshToken"] switch
+        {
+            null => true,
+            JsonValue value when value.TryGetValue(out string? token) => token.Length == 0,
+            _ => false,
+        };
+    }
+
+    /// <summary>
     /// Reads the file shape <c>{ "claudeAiOauth": { accessToken, refreshToken,
     /// expiresAt, refreshTokenExpiresAt?, scopes? } }</c>; epoch milliseconds for
     /// both instants, as the CLI writes them.

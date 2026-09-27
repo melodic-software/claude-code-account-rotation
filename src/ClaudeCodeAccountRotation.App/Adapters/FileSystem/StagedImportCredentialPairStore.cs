@@ -46,6 +46,14 @@ internal sealed class StagedImportCredentialPairStore
     public Task<CredentialPair?> ReadLiveAsync(CancellationToken cancellationToken) =>
         ReadFreshAsync(LivePath, cancellationToken);
 
+    /// <summary>
+    /// Whether the live file is there and is what the CLI leaves behind a
+    /// logout, by <see cref="CredentialPair.IsLoggedOut"/>. A missing file and a
+    /// torn one are not.
+    /// </summary>
+    public async Task<bool> LiveIsLoggedOutAsync(CancellationToken cancellationToken) =>
+        await ReadObjectAsync(LivePath, cancellationToken) is JsonObject raw && CredentialPair.IsLoggedOut(raw);
+
     /// <summary>The staged pair, or null when nothing is staged.</summary>
     public Task<CredentialPair?> ReadStagedAsync(CancellationToken cancellationToken) =>
         ReadFreshAsync(StagingPath, cancellationToken);
@@ -136,7 +144,12 @@ internal sealed class StagedImportCredentialPairStore
     /// reused stream. Every fingerprint this class compares comes from here, so
     /// no verification is ever answered out of a buffer the write left behind.
     /// </summary>
-    public static async Task<CredentialPair?> ReadFreshAsync(string path, CancellationToken cancellationToken)
+    public static async Task<CredentialPair?> ReadFreshAsync(string path, CancellationToken cancellationToken) =>
+        await ReadObjectAsync(path, cancellationToken) is JsonObject raw
+            ? CredentialPair.FromJson(raw).Match(static pair => pair, static _ => (CredentialPair?)null)
+            : null;
+
+    private static async Task<JsonObject?> ReadObjectAsync(string path, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         if (!File.Exists(path))
@@ -166,9 +179,7 @@ internal sealed class StagedImportCredentialPairStore
             return null;
         }
 
-        return node is JsonObject raw
-            ? CredentialPair.FromJson(raw).Match(static pair => pair, static _ => (CredentialPair?)null)
-            : null;
+        return node as JsonObject;
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1849:Call async methods when in an async method", Justification = "FlushAsync does not reach the device; Flush(flushToDisk: true) is the fsync this step exists for and has no asynchronous form.")]
