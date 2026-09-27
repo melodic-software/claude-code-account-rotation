@@ -292,6 +292,7 @@ internal sealed record SwitchRefusalView(string Refusal, string Message)
         SwitchRefusal.ManagedPolicyUnreadable => "A device-managed login policy exists but could not be read; switching stays off until it can be.",
         SwitchRefusal.LiveIdentityUnverified => "The live identity could not be verified; see the banner.",
         SwitchRefusal.CliLoggedOut => "The CLI logged out of the live account. Log in again before switching.",
+        SwitchRefusal.SideLoggedInAgain => "That side did not log out: its CLI holds a login again, or a credential file this tool could not read. The account stays with that side.",
         SwitchRefusal.HeldByOtherSide => "The other side of this machine has that account's pair in its own live directory. Switch that side off it first: one account holds one pair per machine, and it is moved rather than copied.",
         // Raised for a mailbox file naming the target and for one naming the
         // account this side would park, which is the planner's

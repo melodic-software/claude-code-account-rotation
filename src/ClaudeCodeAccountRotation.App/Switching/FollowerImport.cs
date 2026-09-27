@@ -255,10 +255,10 @@ internal sealed partial class FollowerImport : IDisposable
 
     /// <summary>
     /// The release of a login the CLI here has already given up. Nothing
-    /// crosses: the logged-out file goes, and the state file stops naming
-    /// <paramref name="email"/>. A live pair refuses it with a definite answer,
-    /// and the file is deleted only when it is a logout, so no refresh token is
-    /// ever removed here.
+    /// crosses: the dead login leaves the live file, and the state file stops
+    /// naming <paramref name="email"/>. A live pair, or a file that is neither a
+    /// pair nor a logout, refuses it with a definite answer, so no refresh token
+    /// of a login is ever removed here.
     /// <para>
     /// Every partial state succeeds, because the leader asks again after a
     /// crash or a lost answer: a file already gone, a state file already
@@ -292,10 +292,12 @@ internal sealed partial class FollowerImport : IDisposable
 
             if (File.Exists(_pairs.LivePath) && !await _pairs.LiveIsLoggedOutAsync(cancellationToken))
             {
-                return Result<LogOutAnswer, string>.Failure("the live file is neither a pair nor a logout, so nothing was removed");
+                // A definite "no" as well: asking again would find the same file,
+                // and a failure would hold the leader's journal open for good.
+                return Result<LogOutAnswer, string>.Success(new LogOutAnswer(false, "the live file is neither a pair nor a logout; nothing was removed"));
             }
 
-            StagedImportCredentialPairStore.DeleteIfPresent(_pairs.LivePath);
+            await _pairs.RemoveLoggedOutLoginAsync(CancellationToken.None);
             if ((await _stateFile.ReadAccountBlockAsync(cancellationToken))?.Email == email)
             {
                 await _stateFile.PatchAccountBlockAsync(OAuthAccountBlock.FromJson([]), CancellationToken.None);

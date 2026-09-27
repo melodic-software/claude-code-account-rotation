@@ -54,6 +54,30 @@ internal sealed class StagedImportCredentialPairStore
     public async Task<bool> LiveIsLoggedOutAsync(CancellationToken cancellationToken) =>
         await ReadObjectAsync(LivePath, cancellationToken) is JsonObject raw && CredentialPair.IsLoggedOut(raw);
 
+    /// <summary>
+    /// The logout's own step: the dead <c>claudeAiOauth</c> block leaves the live
+    /// file and every sibling key (<c>mcpOAuth</c> and whatever else the CLI
+    /// keeps there) stays, written back owner-only. A file left with no key is
+    /// deleted. The caller has already found the file to be a logout, so no
+    /// refresh token of this login is removed; repeating it changes nothing.
+    /// </summary>
+    public async Task RemoveLoggedOutLoginAsync(CancellationToken cancellationToken)
+    {
+        if (await ReadObjectAsync(LivePath, cancellationToken) is not JsonObject raw || !CredentialPair.IsLoggedOut(raw))
+        {
+            return;
+        }
+
+        if (raw.Remove("claudeAiOauth") && raw.Count > 0)
+        {
+            await AtomicJsonFile.WriteAsync(LivePath, raw, cancellationToken);
+        }
+        else if (raw.Count == 0)
+        {
+            File.Delete(LivePath);
+        }
+    }
+
     /// <summary>The staged pair, or null when nothing is staged.</summary>
     public Task<CredentialPair?> ReadStagedAsync(CancellationToken cancellationToken) =>
         ReadFreshAsync(StagingPath, cancellationToken);
@@ -144,10 +168,23 @@ internal sealed class StagedImportCredentialPairStore
     /// reused stream. Every fingerprint this class compares comes from here, so
     /// no verification is ever answered out of a buffer the write left behind.
     /// </summary>
-    public static async Task<CredentialPair?> ReadFreshAsync(string path, CancellationToken cancellationToken) =>
-        await ReadObjectAsync(path, cancellationToken) is JsonObject raw
-            ? CredentialPair.FromJson(raw).Match(static pair => pair, static _ => (CredentialPair?)null)
-            : null;
+    public static async Task<CredentialPair?> ReadFreshAsync(string path, CancellationToken cancellationToken)
+    {
+        if (await ReadObjectAsync(path, cancellationToken) is not JsonObject raw)
+        {
+            return null;
+        }
+
+        try
+        {
+            return CredentialPair.FromJson(raw).Match(static pair => pair, static _ => (CredentialPair?)null);
+        }
+        catch (InvalidOperationException)
+        {
+            // A token that is not a string: no credential pair, like a torn file.
+            return null;
+        }
+    }
 
     private static async Task<JsonObject?> ReadObjectAsync(string path, CancellationToken cancellationToken)
     {

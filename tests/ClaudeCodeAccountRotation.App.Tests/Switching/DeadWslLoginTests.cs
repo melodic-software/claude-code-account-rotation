@@ -88,7 +88,7 @@ public sealed class DeadWslLoginTests : IDisposable
 
     [Theory]
     [MemberData(nameof(DeadFiles))]
-    public async Task AFollowerLogOutOfADeadLoginRemovesTheFileAndForgetsTheAccount(string file)
+    public async Task AFollowerLogOutOfADeadLoginRemovesItAndForgetsTheAccount(string file)
     {
         await WriteDeadLiveAsync(file);
         using FollowerImport follower = _roots.Follower();
@@ -97,11 +97,41 @@ public sealed class DeadWslLoginTests : IDisposable
 
         answer.IsSuccess.ShouldBeTrue(answer.IsFailure ? answer.Error : null);
         answer.Value.LoggedOut.ShouldBeTrue();
-        File.Exists(_roots.LivePath).ShouldBeFalse();
+        if (File.Exists(_roots.LivePath))
+        {
+            JsonNode.Parse(await File.ReadAllTextAsync(_roots.LivePath, Token))!["claudeAiOauth"].ShouldBeNull();
+        }
+
         (await _roots.StateFile().ReadAccountBlockAsync(Token))?.Email.ShouldBeNull();
-        ImportStatus status = await follower.StatusAsync(Token);
-        status.LiveLoginDead.ShouldBeFalse();
-        status.LiveAccount?.Email.ShouldBeNull();
+        (await follower.StatusAsync(Token)).LiveAccount?.Email.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// The live file is the CLI's, not only the login's: what it keeps beside
+    /// the dead block survives the logout, owner-only, and a file with nothing
+    /// else in it goes.
+    /// </summary>
+    [Fact]
+    public async Task AFollowerLogOutKeepsEveryOtherKeyInTheLiveFile()
+    {
+        JsonObject mcp = new() { ["server|abc"] = new JsonObject { ["accessToken"] = "mcp-access", ["refreshToken"] = "mcp-refresh" } };
+        await WriteDeadLiveAsync(new JsonObject
+        {
+            ["claudeAiOauth"] = new JsonObject { ["accessToken"] = string.Empty, ["refreshToken"] = string.Empty, ["expiresAt"] = 0 },
+            ["mcpOAuth"] = mcp.DeepClone(),
+        }.ToJsonString());
+        using FollowerImport follower = _roots.Follower();
+
+        (await follower.LogOutAsync(new AccountEmail(Dead), Token)).Value.LoggedOut.ShouldBeTrue();
+        (await follower.LogOutAsync(new AccountEmail(Dead), Token)).Value.LoggedOut.ShouldBeTrue();
+
+        JsonObject left = JsonNode.Parse(await File.ReadAllTextAsync(_roots.LivePath, Token))!.AsObject();
+        left["claudeAiOauth"].ShouldBeNull();
+        JsonNode.DeepEquals(left["mcpOAuth"], mcp).ShouldBeTrue();
+        if (!OperatingSystem.IsWindows())
+        {
+            File.GetUnixFileMode(_roots.LivePath).ShouldBe(UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
     }
 
     [Fact]
@@ -145,7 +175,34 @@ public sealed class DeadWslLoginTests : IDisposable
         using FollowerImport follower = _roots.Follower();
 
         (await follower.StatusAsync(Token)).LiveLoginDead.ShouldBeFalse();
-        (await follower.LogOutAsync(new AccountEmail(Dead), Token)).IsFailure.ShouldBeTrue();
+        (await follower.LogOutAsync(new AccountEmail(Dead), Token)).Value.LoggedOut.ShouldBeFalse();
+        (await File.ReadAllTextAsync(_roots.LivePath, Token)).ShouldBe(file);
+    }
+
+    /// <summary>
+    /// A file that is neither a pair nor a logout answers a definite "no", not
+    /// a failure: asking again finds the same file, and a failure would hold the
+    /// leader's journal open for good. The release unwinds and the record stays.
+    /// </summary>
+    [Fact]
+    public async Task AReleaseOfAFileThatIsNeitherAPairNorALogoutUnwindsInsteadOfWedging()
+    {
+        string file = new JsonObject { ["claudeAiOauth"] = new JsonObject { ["accessToken"] = string.Empty, ["refreshToken"] = 42, ["expiresAt"] = 0 } }.ToJsonString();
+        await File.WriteAllTextAsync(_roots.LivePath, file, Token);
+        await _roots.WriteStateFileAsync(Dead, Token);
+        using FollowerImport follower = _roots.Follower();
+        using WslSwitchHarness harness = new();
+        await SetUpLeaderAsync(harness);
+        harness.Side.OnLogOut = () => follower.LogOutAsync(new AccountEmail(Dead), Token);
+        using WslSwitch coordinator = harness.Coordinator();
+
+        Result<WslSwitchOutcome, SwitchRefusal> result =
+            await coordinator.ReleaseAsync(SideName.Wsl, quarantineForeignFamily: false, Token);
+
+        result.IsFailure.ShouldBeTrue();
+        result.Error.ShouldBe(SwitchRefusal.SideLoggedInAgain);
+        File.Exists(harness.JournalPath).ShouldBeFalse();
+        File.Exists(harness.RecordPath(Dead)).ShouldBeTrue();
         (await File.ReadAllTextAsync(_roots.LivePath, Token)).ShouldBe(file);
     }
 
@@ -242,6 +299,7 @@ public sealed class DeadWslLoginTests : IDisposable
             await coordinator.ReleaseAsync(SideName.Wsl, quarantineForeignFamily: false, Token);
 
         result.IsFailure.ShouldBeTrue();
+        result.Error.ShouldBe(SwitchRefusal.SideLoggedInAgain);
         File.Exists(harness.RecordPath(Dead)).ShouldBeTrue();
         File.Exists(harness.JournalPath).ShouldBeFalse();
     }

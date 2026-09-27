@@ -385,7 +385,7 @@ internal sealed partial class WslSwitch : IDisposable
         if (resumed.IsSuccess)
         {
             return new WslReconciliation(
-                "the hand-off of " + (resumed.Value.Now?.Value ?? resumed.Value.ParkedAs?.Value ?? "nothing")
+                "the hand-off of " + (resumed.Value.Now?.Value ?? resumed.Value.ParkedAs?.Value ?? resumed.Value.LoggedOut?.Value ?? "nothing")
                     + (entry.IsRelease ? " from " : " to ") + resumed.Value.Side.Value + " was finished from " + entry.StepReached
                     + (resumed.Value.QuarantinedAt is string file ? "; a superseded family was quarantined at " + file : string.Empty),
                 null);
@@ -1103,8 +1103,9 @@ internal sealed partial class WslSwitch : IDisposable
     /// L3 for a release of a dead login: that side removes the logged-out file
     /// and forgets the account, then L4 drops the holder record.
     /// <para>
-    /// Only a definite "a live pair is here again" unwinds, and it leaves the
-    /// holder record alone, because that side is using the account again. A
+    /// Only a definite "not logged out" unwinds: a live pair is here again, or
+    /// a file that is neither a pair nor a logout. It leaves the holder record
+    /// alone, because that side may be using the account again. A
     /// failure is not an answer: the journal stays at <c>Claimed</c> and the
     /// next poll asks again, which that side answers the same way from any
     /// partial state. Clearing it on silence would leave a record naming a side
@@ -1122,8 +1123,8 @@ internal sealed partial class WslSwitch : IDisposable
 
         if (!answered.Value.LoggedOut)
         {
-            LogNotImported(peer.Side.Value, entry.Subject.Value, answered.Value.Detail);
-            return await UnclaimAsync(peer, entry, SwitchRefusal.LiveIdentityUnverified, CancellationToken.None);
+            LogNotLoggedOut(peer.Side.Value, entry.Subject.Value, answered.Value.Detail);
+            return await UnclaimAsync(peer, entry, SwitchRefusal.SideLoggedInAgain, CancellationToken.None);
         }
 
         WslSwitchJournalEntry imported = entry with { StepReached = WslSwitchStep.Imported };
@@ -1573,6 +1574,9 @@ internal sealed partial class WslSwitch : IDisposable
 
     [LoggerMessage(Level = LogLevel.Information, Message = "{Side} reports {Incoming} not imported: {Detail}")]
     private partial void LogNotImported(string side, string incoming, string detail);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "{Side} did not log out {Account}: {Detail}; its holder record stays")]
+    private partial void LogNotLoggedOut(string side, string account, string detail);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "{Side} refused the abort of {Incoming} ({Reason}); the swap may have run, so nothing is unclaimed")]
     private partial void LogAbortRefused(string side, string incoming, string reason);
