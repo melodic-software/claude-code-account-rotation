@@ -286,6 +286,9 @@ public sealed class SharedStoreEndpointTests
 
         public Task<Result<ImportStatus, string>> ImportStatusAsync(AccountEmail email, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+
+        public Task<Result<string, string>> ShutdownAsync(CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 
     [Fact]

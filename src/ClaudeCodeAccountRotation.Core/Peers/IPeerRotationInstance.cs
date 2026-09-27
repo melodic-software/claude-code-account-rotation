@@ -126,7 +126,8 @@ public sealed record PeerDashboard(
 
 /// <summary>
 /// The other side of this machine, as the leader's coordinator talks to it:
-/// one dashboard read and the two-call export gate of design 9.2. Every method
+/// one dashboard read, the two-call export gate of design 9.2, and the stop
+/// request the leader's own stop sends first. Every method
 /// answers a failure rather than throwing, because an unreachable side is an
 /// ordinary state — the distro may be off — and never a fault.
 /// </summary>
@@ -149,4 +150,13 @@ public interface IPeerRotationInstance
 
     /// <summary>The leader's crash table: what happened to this account's import, from the files.</summary>
     Task<Result<ImportStatus, string>> ImportStatusAsync(AccountEmail email, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Asks that side to stop through its own shutdown route. The failure is
+    /// that side's refusal (a switch or import in flight there) and nothing
+    /// else. A side that does not answer, or answers anything but a refusal,
+    /// is a success whose sentence says it did not stop: there is nothing to
+    /// drain there, so the caller may stop.
+    /// </summary>
+    Task<Result<string, string>> ShutdownAsync(CancellationToken cancellationToken);
 }

@@ -296,6 +296,9 @@ internal sealed class FakePeerRotationInstance(string mailbox) : IPeerRotationIn
             : Result<ImportStatus, string>.Success(Status));
     }
 
+    public Task<Result<string, string>> ShutdownAsync(CancellationToken cancellationToken) =>
+        throw new NotSupportedException();
+
     /// <summary>The commit's answer: which account left this side, and the block the leader's park needs.</summary>
     public ImportResult Result() => new(
         OutgoingEmail is null ? null : WslSwitchHarness.Email(OutgoingEmail),

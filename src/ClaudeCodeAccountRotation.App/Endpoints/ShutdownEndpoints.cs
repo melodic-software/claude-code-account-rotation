@@ -1,5 +1,6 @@
 using ClaudeCodeAccountRotation.App.Security;
 using ClaudeCodeAccountRotation.App.Switching;
+using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Configuration;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -20,6 +21,14 @@ namespace ClaudeCodeAccountRotation.App.Endpoints;
 /// one; shutdown never rewrites it. A login does not hold the gate for the
 /// session, and this route does not ask whether one is running.
 /// </para>
+/// <para>
+/// <c>POST /api/stop</c> is the leader's alone and stops every configured side
+/// as well. The leader takes its gate and checks its journals first, so no
+/// switch can start between the two stops, then sends each side its own
+/// <c>/api/shutdown</c>. A side's 409 refuses the whole stop and the leader
+/// keeps running. A side that does not answer has nothing to drain, so the
+/// leader stops anyway.
+/// </para>
 /// </summary>
 internal static class ShutdownEndpoints
 {
@@ -30,15 +39,34 @@ internal static class ShutdownEndpoints
     {
         ArgumentNullException.ThrowIfNull(routes);
         RouteGroupBuilder mutations = routes.MapGroup("/api").AddEndpointFilter<SameOriginMutationFilter>();
-        mutations.MapPost("/shutdown", ShutdownAsync);
+        mutations.MapPost("/shutdown", static (
+            HttpContext http,
+            CredentialMutationGate gate,
+            ClaudeCodeAccountRotationConfiguration configuration,
+            IHostApplicationLifetime lifetime,
+            CancellationToken cancellationToken) => StopAsync(http, gate, configuration, lifetime, peers: null, cancellationToken));
+    }
+
+    public static void MapStop(IEndpointRouteBuilder routes)
+    {
+        ArgumentNullException.ThrowIfNull(routes);
+        RouteGroupBuilder mutations = routes.MapGroup("/api").AddEndpointFilter<SameOriginMutationFilter>();
+        mutations.MapPost("/stop", static (
+            HttpContext http,
+            CredentialMutationGate gate,
+            ClaudeCodeAccountRotationConfiguration configuration,
+            IHostApplicationLifetime lifetime,
+            PeerRegistry peers,
+            CancellationToken cancellationToken) => StopAsync(http, gate, configuration, lifetime, peers.All, cancellationToken));
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "The permit is held across the response: OnCompleted stops the host and then releases it, so a new mutation cannot acquire the gate first. A refusal disposes it in this handler.")]
-    private static async Task<IResult> ShutdownAsync(
+    private static async Task<IResult> StopAsync(
         HttpContext http,
         CredentialMutationGate gate,
         ClaudeCodeAccountRotationConfiguration configuration,
         IHostApplicationLifetime lifetime,
+        IReadOnlyList<Peer>? peers,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(http);
@@ -64,6 +92,22 @@ internal static class ShutdownEndpoints
                 return Results.Json(new { error = SwitchOrImportInFlight }, statusCode: StatusCodes.Status409Conflict);
             }
 
+            List<SideStopView> sides = [];
+            foreach (Peer peer in peers ?? [])
+            {
+                // Not the request's token: a tab closed mid-stop must not turn a
+                // side that would have answered into one that did not.
+                Result<string, string> answer = await peer.Instance.ShutdownAsync(CancellationToken.None);
+                if (answer.IsFailure)
+                {
+                    return Results.Json(
+                        new { error = "the " + peer.Side.Value + " side refused to stop: " + answer.Error },
+                        statusCode: StatusCodes.Status409Conflict);
+                }
+
+                sides.Add(new SideStopView(peer.Side.Value, answer.Value));
+            }
+
             // StopApplication inside the handler cancels the request before the
             // 200 is written. OnCompleted runs after that write. The permit stays
             // held until then, so a new mutation cannot take the gate first.
@@ -74,7 +118,7 @@ internal static class ShutdownEndpoints
                 return Task.CompletedTask;
             });
             releaseInHandler = false;
-            return Results.Ok(new { stopped = true });
+            return peers is null ? Results.Ok(new { stopped = true }) : Results.Ok(new { stopped = true, sides });
         }
         finally
         {
@@ -84,6 +128,9 @@ internal static class ShutdownEndpoints
             }
         }
     }
+
+    /// <summary>What one side said to the leader's stop: <c>stopped</c>, or why it did not.</summary>
+    internal sealed record SideStopView(string Side, string Detail);
 
     /// <summary>
     /// The journals this role registered. The follower has no switch journal,
