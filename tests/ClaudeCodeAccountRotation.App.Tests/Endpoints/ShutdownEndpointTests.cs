@@ -194,14 +194,14 @@ public sealed class ShutdownEndpointTests
         using HttpClient client = leader.CreateMutatingClient();
         IHostApplicationLifetime leaderLifetime = Lifetime(leader.Services);
         IHostApplicationLifetime followerLifetime = Lifetime(follower.Services);
+        TaskCompletionSource<bool> followerAskedFirst = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        using CancellationTokenRegistration onStopping = leaderLifetime.ApplicationStopping.Register(
+            () => followerAskedFirst.TrySetResult(link.Sent.Any(sent => sent.Route == "/api/shutdown" && sent.Status == HttpStatusCode.OK)));
 
         using HttpResponseMessage response = await client.PostAsync(_stop, content: null, Token);
 
-        // The follower answered before the leader's own response was written,
-        // and the leader stops only after that response.
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
-        link.Sent.ShouldContain(sent => sent.Route == "/api/shutdown" && sent.Status == HttpStatusCode.OK);
-        (await StoppingAsync(leaderLifetime, Token)).ShouldBeTrue();
+        (await followerAskedFirst.Task.WaitAsync(_applicationStoppingGrace, Token)).ShouldBeTrue();
         (await StoppingAsync(followerLifetime, Token)).ShouldBeTrue();
         JsonNode side = JsonNode.Parse(await response.Content.ReadAsStringAsync(Token))!["sides"]![0]!;
         side["side"]!.GetValue<string>().ShouldBe("wsl");
