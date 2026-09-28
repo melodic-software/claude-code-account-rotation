@@ -837,5 +837,8 @@ public sealed class PeerTests
 
         public Task<Core.Result<Core.Peers.ImportStatus, string>> ImportStatusAsync(Core.Identity.AccountEmail email, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+
+        public Task<Core.Result<Core.Peers.LogOutAnswer, string>> LogOutAsync(Core.Identity.AccountEmail email, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 }

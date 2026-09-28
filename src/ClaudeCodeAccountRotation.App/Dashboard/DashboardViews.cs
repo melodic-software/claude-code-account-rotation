@@ -73,6 +73,12 @@ internal sealed record LiveAccountView(string? Email, bool HasCredentials, strin
 /// empty. Refresh and Pause are left as they are for every other blocking state.
 /// </para>
 /// <para>
+/// <c>LoggedOutOn</c> names the side whose CLI logged out of this account while
+/// that side held it, or null. <c>CliLoggedOut</c> then carries that side's
+/// sentence, and the page offers the login: a release of that side first,
+/// which frees the slot, then the ordinary login.
+/// </para>
+/// <para>
 /// Every optional member carries a default, so a route that hands back a card
 /// for an account nothing has read constructs one unchanged.
 /// </para>
@@ -95,7 +101,8 @@ internal sealed record AccountCardView(
     bool CanSwitchHere = false,
     bool HeldAway = false,
     IReadOnlyList<string>? OfferedTo = null,
-    string? CliLoggedOut = null);
+    string? CliLoggedOut = null,
+    string? LoggedOutOn = null);
 
 /// <summary>
 /// The roster entry behind a card, or null when the account is on the machine
@@ -285,6 +292,7 @@ internal sealed record SwitchRefusalView(string Refusal, string Message)
         SwitchRefusal.ManagedPolicyUnreadable => "A device-managed login policy exists but could not be read; switching stays off until it can be.",
         SwitchRefusal.LiveIdentityUnverified => "The live identity could not be verified; see the banner.",
         SwitchRefusal.CliLoggedOut => "The CLI logged out of the live account. Log in again before switching.",
+        SwitchRefusal.SideLoggedInAgain => "That side did not log out: its CLI holds a login again, or a credential file this tool could not read. The account stays with that side.",
         SwitchRefusal.HeldByOtherSide => "The other side of this machine has that account's pair in its own live directory. Switch that side off it first: one account holds one pair per machine, and it is moved rather than copied.",
         // Raised for a mailbox file naming the target and for one naming the
         // account this side would park, which is the planner's

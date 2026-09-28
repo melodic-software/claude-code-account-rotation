@@ -1,8 +1,10 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json.Nodes;
+using ClaudeCodeAccountRotation.App.Adapters.Peers;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.App.Tests.Switching;
+using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Peers;
 using ClaudeCodeAccountRotation.Core.Switching;
@@ -68,6 +70,49 @@ public sealed class ImportEndpointTests : IAsyncDisposable
         dashboard["side"]!.GetValue<string>().ShouldBe("wsl");
         dashboard["liveAccount"]!.GetValue<string>().ShouldBe(OutgoingEmail);
         dashboard["liveFingerprint"]!.GetValue<string>().ShouldBe(fa.Sha256Hex);
+    }
+
+    [Fact]
+    public async Task AFollowerDashboardSaysTheCliLoggedOutRatherThanNamingAnAccountWithNoPair()
+    {
+        await File.WriteAllTextAsync(_factory.Roots.LivePath, "{\"claudeAiOauth\":{\"accessToken\":\"\",\"refreshToken\":\"\",\"expiresAt\":0}}", Token);
+        await _factory.Roots.WriteStateFileAsync(OutgoingEmail, Token);
+        using HttpClient client = _factory.CreateClient();
+
+        JsonObject dashboard = (await client.GetFromJsonAsync<JsonObject>(_dashboard, Token))!;
+
+        dashboard["liveAccount"]!.GetValue<string>().ShouldBe(OutgoingEmail);
+        dashboard["liveFingerprint"].ShouldBeNull();
+        dashboard["liveLoginDead"]!.GetValue<bool>().ShouldBeTrue();
+    }
+
+    /// <summary>
+    /// The leader keeps its journal open on any failure, so a live pair has to
+    /// come back as an answer, not as one: 200 with <c>loggedOut: false</c>.
+    /// </summary>
+    [Fact]
+    public async Task ALogOutAnswersOverTheWireAndALivePairIsANoRatherThanAFailure()
+    {
+        await File.WriteAllTextAsync(_factory.Roots.LivePath, "{\"claudeAiOauth\":{\"accessToken\":\"\",\"refreshToken\":\"\",\"expiresAt\":0}}", Token);
+        await _factory.Roots.WriteStateFileAsync(OutgoingEmail, Token);
+        HttpPeerRotationInstance peer = new(SideName.Wsl, _factory.CreateClient());
+
+        Result<LogOutAnswer, string> dead = await peer.LogOutAsync(new AccountEmail(OutgoingEmail), Token);
+
+        dead.IsSuccess.ShouldBeTrue(dead.IsFailure ? dead.Error : null);
+        dead.Value.LoggedOut.ShouldBeTrue();
+        File.Exists(_factory.Roots.LivePath).ShouldBeFalse();
+
+        RefreshTokenFingerprint live = await _factory.Roots.WriteLiveAsync(OutgoingEmail, "refresh-a", Token);
+        Result<LogOutAnswer, string> alive = await peer.LogOutAsync(new AccountEmail(OutgoingEmail), Token);
+
+        alive.IsSuccess.ShouldBeTrue(alive.IsFailure ? alive.Error : null);
+        alive.Value.LoggedOut.ShouldBeFalse();
+        (await FollowerRoots.FingerprintOfAsync(_factory.Roots.LivePath, Token)).ShouldBe(live);
+
+        using HttpClient bare = _factory.CreateClient();
+        using HttpResponseMessage refused = await bare.PostAsJsonAsync(new Uri("/api/logout", UriKind.Relative), new { email = OutgoingEmail }, Token);
+        refused.StatusCode.ShouldBe(HttpStatusCode.Forbidden);
     }
 
     [Fact]

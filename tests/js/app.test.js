@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const { takeTokenFromHash } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+const { takeTokenFromHash, switchBlocked } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
 
 function history() {
   const calls = [];
@@ -25,6 +25,13 @@ test("a fragment that does not decode is removed and yields nothing", () => {
   const hist = history();
   assert.strictEqual(takeTokenFromHash({ hash: "#t=%E0%A4%A", pathname: "/", search: "" }, hist), "");
   assert.strictEqual(hist.calls.length, 1);
+});
+
+test("a running refresh pass does not disable Switch", () => {
+  const account = { canSwitchHere: true };
+  assert.strictEqual(switchBlocked(account, { banner: null, refresh: { inProgress: true } }, false), false);
+  assert.strictEqual(switchBlocked(account, { banner: "reconciling", refresh: { inProgress: false } }, false), true);
+  assert.strictEqual(switchBlocked(account, { banner: null, refresh: { inProgress: false } }, true), true);
 });
 
 test("no fragment, or another one, yields nothing and leaves the URL alone", () => {

@@ -14,6 +14,38 @@ All notable changes to this project are documented in this file. The format foll
   it, so at most one card shows the "CI token" badge beside its 5h/7d
   headroom. The date is the operator's own record; nothing here reads GitHub
   or the token value.
+- The README says how to rotate `CLAUDE_CODE_OAUTH_TOKEN` and mark the new
+  holder on the dashboard (#149).
+
+### Changed
+
+- Opening the dashboard reads every account's usage once, the same pass Refresh all
+  starts (#161). The ten-second poll still reads only local files, and nothing reads
+  the usage or token endpoint on a timer. A Refresh inside an account's one-minute
+  gap sends nothing and leaves the last reading and its "as of" time on the card.
+  The gap is taken before a parked account's token request too, so a login whose
+  refresh keeps failing costs the token host one request a minute at most.
+- A running refresh no longer disables Switch or Refresh. A switch ends the pass in
+  flight and then goes through; accounts already read keep their numbers.
+
+### Removed
+
+- A full refresh no longer spends a token request renewing a paused account whose
+  login is within seven days of expiring (#161). A refresh does not extend the fixed
+  28-day login, so the request bought nothing; a paused account now sends nothing at
+  all. Switching to a parked account whose access token has expired still works: the
+  session it is handed to refreshes it.
+
+### Fixed
+
+- A WSL side whose CLI logged out, leaving a live credential file with an empty
+  `refreshToken` or no `claudeAiOauth` block, is reported as a dead login
+  (`liveLoginDead`) instead of refusing every switch with `LiveIdentityUnverified`
+  (#130). A switch or a release from that side finishes in one click: the dead
+  file is replaced or removed, the holder record naming that side goes, and the
+  account's card needs a login. Before that, the card says the CLI on that side
+  logged out and its "Log in again" releases the side and starts the login. A
+  file whose Claude login still holds a refresh token is never removed.
 
 ## [1.2.0] - 2026-09-23
 

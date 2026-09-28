@@ -149,25 +149,18 @@ internal sealed class RefreshHarness : IDisposable
 
     /// <summary>
     /// Parks one account with a credential pair and a profile, both expiries
-    /// stated outright. <paramref name="withoutLoginExpiry"/> writes the pair the
-    /// way a CLI that never recorded a login lifetime wrote it: the key absent
-    /// rather than zero, which is the one shape a renewal must never act on.
+    /// stated outright.
     /// </summary>
     public async Task<string> ParkAsync(
         string email,
         string refreshToken,
         DateTimeOffset accessTokenExpiresAt,
         CancellationToken cancellationToken,
-        DateTimeOffset? loginExpiresAt = null,
-        bool withoutLoginExpiry = false)
+        DateTimeOffset? loginExpiresAt = null)
     {
         string folder = FolderFor(email);
         Directory.CreateDirectory(folder);
         JsonObject shape = CredentialFiles.Shape(refreshToken, accessTokenExpiresAt, loginExpiresAt ?? Clock.GetUtcNow().AddDays(28));
-        if (withoutLoginExpiry)
-        {
-            shape["claudeAiOauth"]!.AsObject().Remove("refreshTokenExpiresAt");
-        }
 
         await File.WriteAllTextAsync(
             Path.Combine(folder, CredentialFiles.FileName),

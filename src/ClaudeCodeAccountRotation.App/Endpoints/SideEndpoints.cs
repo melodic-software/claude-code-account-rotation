@@ -1,4 +1,5 @@
 using ClaudeCodeAccountRotation.App.Dashboard;
+using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.App.Security;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core;
@@ -39,6 +40,7 @@ internal static class SideEndpoints
             // switch sends no query at all.
             bool? quarantineForeignFamily,
             WslSwitch coordinator,
+            QuotaRefreshWorker worker,
             CancellationToken cancellationToken) =>
         {
             Result<AccountEmail, string> target = AccountEmail.Parse(email);
@@ -46,6 +48,8 @@ internal static class SideEndpoints
             {
                 return Results.BadRequest(new { error = target.Error });
             }
+
+            await worker.YieldAsync(cancellationToken);
 
             Result<WslSwitchOutcome, SwitchRefusal> outcome =
                 await coordinator.SwitchToAsync(new SideName(side), target.Value, quarantineForeignFamily == true, cancellationToken);
@@ -110,16 +114,18 @@ internal static class SideEndpoints
 
     /// <summary>One answer for both directions: what moved, or the refusal's sentence.</summary>
     private static IResult View(Result<WslSwitchOutcome, SwitchRefusal> outcome) => outcome.Match(
-        static done => Results.Ok(new SideSwitchView(done.Side.Value, done.Now?.Value, done.ParkedAs?.Value, done.At, done.QuarantinedAt)),
+        static done => Results.Ok(new SideSwitchView(done.Side.Value, done.Now?.Value, done.ParkedAs?.Value, done.At, done.QuarantinedAt, done.LoggedOut?.Value)),
         static refusal => Results.Json(SwitchRefusalView.Of(refusal), statusCode: StatusCodes.Status409Conflict));
 
     /// <summary>
     /// What a hand-off moved. <c>Now</c> is null after a release, which leaves
     /// that side holding nothing. <c>QuarantinedAt</c> names a file instead of
     /// an account when the pair that came back was a superseded family the
-    /// store may not hold, and <c>ParkedAs</c> is then null.
+    /// store may not hold, and <c>ParkedAs</c> is then null. <c>LoggedOut</c>
+    /// names the account the CLI on that side had logged out of, which nothing
+    /// parked and which now needs a login.
     /// </summary>
-    internal sealed record SideSwitchView(string Side, string? Now, string? ParkedAs, DateTimeOffset At, string? QuarantinedAt = null);
+    internal sealed record SideSwitchView(string Side, string? Now, string? ParkedAs, DateTimeOffset At, string? QuarantinedAt = null, string? LoggedOut = null);
 
     internal sealed record SideStateView(string Side, bool Online, string? LiveAccount, string Detail);
 

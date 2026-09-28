@@ -35,6 +35,11 @@ namespace ClaudeCodeAccountRotation.App.Switching;
 /// because there is no slot this hand-off takes a pair out of. The only
 /// account a release names is the one coming back, which is the outgoing half.
 /// </param>
+/// <param name="LoggedOut">
+/// The account the CLI on that side logged out of, whose file there holds no
+/// login. Nothing of it comes back, so the outgoing half is empty; L4 drops the
+/// holder record that still names that side, and the slot then needs a login.
+/// </param>
 internal sealed record WslSwitchJournalEntry(
     SideName Side,
     AccountEmail? Incoming,
@@ -45,7 +50,8 @@ internal sealed record WslSwitchJournalEntry(
     string? OutgoingFolderPath,
     WslSwitchStep StepReached,
     DateTimeOffset StartedAt,
-    JsonObject? OutgoingAccount = null)
+    JsonObject? OutgoingAccount = null,
+    AccountEmail? LoggedOut = null)
 {
     /// <summary>Whether this hand-off sends nothing and only takes a pair back.</summary>
     public bool IsRelease => Incoming is null;
@@ -53,9 +59,10 @@ internal sealed record WslSwitchJournalEntry(
     /// <summary>
     /// The account the other side answers about: what the import request, the
     /// commit, the abort and every status read are keyed on. A switch names the
-    /// arriving account; a release has none and names the one leaving.
+    /// arriving account; a release has none and names the one leaving, or the
+    /// one logged out.
     /// </summary>
-    public AccountEmail Subject => (Incoming ?? Outgoing)!.Value;
+    public AccountEmail Subject => (Incoming ?? Outgoing ?? LoggedOut)!.Value;
 }
 
 /// <summary>
@@ -122,7 +129,8 @@ internal sealed class WslSwitchJournal
         string? OutgoingFolderPath,
         WslSwitchStep StepReached,
         DateTimeOffset StartedAt,
-        JsonObject? OutgoingAccount)
+        JsonObject? OutgoingAccount,
+        string? LoggedOut = null)
     {
         public static JournalDocument From(WslSwitchJournalEntry entry) => new(
             entry.Side.Value,
@@ -134,7 +142,8 @@ internal sealed class WslSwitchJournal
             entry.OutgoingFolderPath,
             entry.StepReached,
             entry.StartedAt,
-            entry.OutgoingAccount?.DeepClone().AsObject());
+            entry.OutgoingAccount?.DeepClone().AsObject(),
+            entry.LoggedOut?.Value);
 
         public WslSwitchJournalEntry ToEntry() => new(
             new SideName(Side),
@@ -146,6 +155,7 @@ internal sealed class WslSwitchJournal
             OutgoingFolderPath,
             StepReached,
             StartedAt,
-            OutgoingAccount);
+            OutgoingAccount,
+            LoggedOut is null ? null : new AccountEmail(LoggedOut));
     }
 }

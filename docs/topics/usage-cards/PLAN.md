@@ -448,7 +448,10 @@ recorded under Phase 4. Deviations from the plan text are in `DEVIATIONS.md`.
 verifier (12 of 12 criteria, every mutation killed by its named test). The merge mutex is
 verified by reading only; no test drives two concurrent saves.
 
-### Phase 3: Paused accounts near login expiry [DONE]
+### Phase 3: Paused accounts near login expiry [DONE, since removed]
+
+Superseded by #161: a refresh does not extend the fixed 28-day login, so a paused account now sends
+nothing. The items below describe what was built and later removed.
 
 1. In `QuotaRefresh.RunAsync` for an `All` request, a paused parked pair whose `LoginExpiresAt` is
    within 7 days of now is included with the gated refresh unit only (one token POST, write-back,

@@ -22,7 +22,8 @@ live in `docs/topics/claude-subscription-rotation/PLAN.md`.
 - Every switch is a human click; nothing rotates on its own.
 - The tool never calls the model API.
 - It reads the undocumented usage endpoint with its own User-Agent, which the research rates GRAY
-  (no Anthropic statement either way), not ALLOWED.
+  (no Anthropic statement either way), not ALLOWED. It reads only when the dashboard is opened
+  or Refresh is pressed, at most once a minute per account, never on a timer.
 - The parked-pair refresh presents Claude Code's public OAuth `client_id`.
 - Running the loop lanes (`work-loop`, `babysit-loop`, `attend-queue`) while rotating accounts is
   outside V1 because reader-side invalidation of a latched window is still an open problem.
@@ -81,6 +82,22 @@ If a card says it is not on the roster, click Adopt. Adopt is only offered for a
 that is already logged in on this machine. Otherwise use Add an account, then Login on the card
 that needs a login. `profilesRoot` is the only hand edit, and the tool has to be restarted after
 it.
+
+## Rotating the CI token
+
+The org secret `CLAUDE_CODE_OAUTH_TOKEN` authenticates Claude Code in GitHub Actions. The
+account behind it is marked on its card with a `CI token · <date>` badge. CI draws on that
+account's 5-hour and 7-day limits alongside your interactive sessions on it.
+
+1. Pick the card with the most 7-day headroom.
+2. Signed in as that account, run `claude setup-token`.
+3. Set the new value with `gh secret set CLAUDE_CODE_OAUTH_TOKEN --org melodic-software`. `gh`
+   sets an org secret to private visibility unless told otherwise, so pass the `--visibility` or
+   `--repos` the secret has now.
+4. On that account's card, open Edit, set "CI token generated on" to today, and Save. Marking it
+   clears the badge from the previous account. The same write is
+   `PATCH /api/accounts/{email}` with `{"ciTokenGeneratedOn":"yyyy-MM-dd"}`, sent with the
+   headers `POST /api/shutdown` takes.
 
 ## Build
 

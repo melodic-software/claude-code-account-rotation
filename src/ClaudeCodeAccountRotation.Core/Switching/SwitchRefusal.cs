@@ -116,4 +116,11 @@ public enum SwitchRefusal
     /// answers when the button is bypassed.
     /// </summary>
     CliLoggedOut,
+
+    /// <summary>
+    /// A release of a dead login on the other side found that side no longer
+    /// logged out: its CLI holds a login again, or its credential file is one
+    /// this tool could not read. Nothing was removed and its holder record stays.
+    /// </summary>
+    SideLoggedInAgain,
 }
