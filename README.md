@@ -22,8 +22,9 @@ live in `docs/topics/claude-subscription-rotation/PLAN.md`.
 - Every switch is a human click; nothing rotates on its own.
 - The tool never calls the model API.
 - It reads the undocumented usage endpoint with its own User-Agent, which the research rates GRAY
-  (no Anthropic statement either way), not ALLOWED. It reads only when the dashboard is opened
-  or Refresh is pressed, at most once a minute per account, never on a timer.
+  (no Anthropic statement either way), not ALLOWED. It reads only when the dashboard is opened,
+  Refresh is pressed, or the rate-limit stop hook fires, at most once a minute per account, never
+  on a timer.
 - The parked-pair refresh presents Claude Code's public OAuth `client_id`.
 - Running the loop lanes (`work-loop`, `babysit-loop`, `attend-queue`) while rotating accounts is
   outside V1 because reader-side invalidation of a latched window is still an open problem.
@@ -93,6 +94,72 @@ If a card says it is not on the roster, click Adopt. Adopt is only offered for a
 that is already logged in on this machine. Otherwise use Add an account, then Login on the card
 that needs a login. `profilesRoot` is the only hand edit, and the tool has to be restarted after
 it.
+
+## Rate-limit stop hook
+
+When a session stops on a usage limit, Claude Code waits for the reset. The optional hook
+`hooks/rate-limit-stop.sh` tells the running dashboard, which reads the live account's usage once
+(at most once a minute per account). When a side's account is at 100% of its 5-hour or 7-day
+window, the dashboard shows a "switch now" prompt naming the first usable account in its order.
+Nothing switches until you click it.
+
+Install it on the side the leader runs on. The follower has no refresh route, and the leader reads
+no usage for an account the other side holds; that side's card shows its own statusline figures.
+
+1. Save `hooks/rate-limit-stop.sh` from the release tag you run, and on Linux run `chmod +x` on it.
+   It needs `bash` and `curl`. On Windows, Git Bash is required: without it Claude Code runs
+   hooks in PowerShell, where `bash` can resolve to WSL's `bash.exe` and the hook does nothing.
+2. Add the hook to `~/.claude/settings.json`, with the path where you saved the script
+   (Claude Code 2.1.78 or later):
+
+   ```json
+   {
+     "hooks": {
+       "StopFailure": [
+         {
+           "matcher": "rate_limit",
+           "hooks": [{ "type": "command", "command": "bash /path/to/rate-limit-stop.sh", "timeout": 10 }]
+         }
+       ]
+     }
+   }
+   ```
+
+The script reads `instance.url` from the default app data directory and exits quietly when the
+app is not running. It posts to `POST /api/hooks/rate-limit` with the headers `POST /api/shutdown`
+takes. It answers 202 when a read started, or 409 with one of these `refusal` values:
+`NoLiveAccount` (no account is logged in on this side), `RateLimited` (the account was read inside
+the last minute, or the usage endpoint's lockout is still running), or `RefreshInProgress` (a
+refresh is already running).
+
+## Reading the dashboard from scripts
+
+`GET /api/dashboard`, sent with `Authorization: Bearer` and the token on the second line of
+`instance.url`, returns more than the page needs. Only these fields are supported for scripts;
+a change to any of them is a breaking change in the CHANGELOG. Everything else may change
+without notice.
+
+- `accounts[]`, in the dashboard's order: grouped `usable`, then `exhausted`, then `unread`, then
+  `paused`. Within a group, accounts sort by `nextResetAt` (the weekly reset for a usable account),
+  earliest first, with an undated one after every dated one, then by e-mail.
+- `accounts[].email`.
+- `accounts[].standing`: `usable`, `exhausted`, `unread`, or `paused`.
+- `accounts[].nextResetAt`: when the account frees up (ISO 8601), or null when there is no wait
+  or none that can be dated.
+- `accounts[].usage.limits[]` where `kind` is `session` (5-hour) or `weekly_all` (7-day):
+  `percent` (null when unknown or the window has reset since the read) and `resetsAt`.
+- `accounts[].isLive`: true for the account this side is logged in as.
+- `accounts[].slot`: where the account's pair is when the store is shared with another side:
+  `held-here`, `held-elsewhere`, `parked`, `in-transit`, or `never-logged-in`; null when the store
+  is not shared.
+
+Which side holds a `held-elsewhere` account comes from `GET /api/sides`, sent the same way. It
+returns one entry per configured side (an empty list when none is). Supported fields:
+
+- `[].side`: the side's name, for example `wsl`.
+- `[].online`: whether that side answered.
+- `[].liveAccount`: the account that side is logged in as, or null when it holds none. It is also
+  null when the side did not answer, and that side may then still hold an account.
 
 ## Rotating the CI token
 

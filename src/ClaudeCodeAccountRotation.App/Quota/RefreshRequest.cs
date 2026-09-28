@@ -10,8 +10,8 @@ namespace ClaudeCodeAccountRotation.App.Quota;
 /// <para>
 /// A pass is the only thing that reaches the usage or token endpoint, and it
 /// starts only through <see cref="QuotaRefreshWorker.TryStart"/>, called by the
-/// refresh routes the page posts to on load and from its Refresh buttons. A
-/// rate-limit stop hook is to start its read the same way, with <see cref="One"/>.
+/// refresh routes the page posts to on load and from its Refresh buttons, and by
+/// the rate-limit stop hook's route, with <see cref="One"/> for the live account.
 /// Nothing starts a pass on a timer.
 /// </para>
 /// </summary>

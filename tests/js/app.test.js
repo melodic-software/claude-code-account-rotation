@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const { takeTokenFromHash, switchBlocked, headroom, recommended } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+const { takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
 
 function limit(kind, percent, fields) {
   return Object.assign({ kind, percent, known: true, windowReset: false }, fields);
@@ -33,6 +33,51 @@ test("the recommended account is the first usable one in server order that the s
   ];
   assert.strictEqual(recommended(accounts, (account) => account.canSwitchHere).email, "c");
   assert.strictEqual(recommended(accounts, () => false), null);
+});
+
+
+function card(email, fields, session, weekly) {
+  return Object.assign({
+    email,
+    isLive: false,
+    standing: "usable",
+    canSwitchHere: true,
+    offeredTo: [],
+    usage: { limits: [{ kind: "session", percent: session }, { kind: "weekly_all", percent: weekly }, { kind: "weekly_scoped", percent: 100 }] }
+  }, fields);
+}
+
+test("no prompt while the live account is under 100% on both windows, whatever the scoped row says", () => {
+  const accounts = [card("b@x", {}, 10, 10), card("a@x", { isLive: true, canSwitchHere: false }, 99, 99)];
+  assert.deepStrictEqual(switchPrompts(accounts, []), []);
+});
+
+test("the live account at 100% of either window prompts a switch to the first usable account this side can take", () => {
+  for (const [session, weekly] of [[100, 5], [5, 100], [null, 100]]) {
+    const accounts = [
+      card("c@x", { canSwitchHere: false }, 0, 0),
+      card("b@x", {}, 0, 0),
+      card("a@x", { isLive: true, canSwitchHere: false, standing: "exhausted" }, session, weekly)
+    ];
+    assert.deepStrictEqual(switchPrompts(accounts, []), [{ side: null, from: "a@x", to: "b@x" }]);
+  }
+});
+
+test("a prompt with no usable account left names no target", () => {
+  const accounts = [card("b@x", { standing: "exhausted" }, 100, 0), card("a@x", { isLive: true, canSwitchHere: false }, 100, 0)];
+  assert.deepStrictEqual(switchPrompts(accounts, []), [{ side: null, from: "a@x", to: null }]);
+});
+
+test("another side at its limit prompts for an account offered to that side, and only while it answers", () => {
+  const accounts = [
+    card("b@x", {}, 0, 0),
+    card("c@x", { offeredTo: ["wsl"] }, 0, 0),
+    card("w@x", { canSwitchHere: false, standing: "exhausted" }, 100, 0)
+  ];
+  assert.deepStrictEqual(
+    switchPrompts(accounts, [{ side: "wsl", online: true, liveAccount: "w@x" }]),
+    [{ side: "wsl", from: "w@x", to: "c@x" }]);
+  assert.deepStrictEqual(switchPrompts(accounts, [{ side: "wsl", online: false, liveAccount: "w@x" }]), []);
 });
 
 function history() {

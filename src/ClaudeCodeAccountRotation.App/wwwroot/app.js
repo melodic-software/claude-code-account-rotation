@@ -3,12 +3,19 @@
 
   // Loaded by Node for tests/js, which has no page: export the pure helpers and stop.
   if (typeof document === "undefined") {
-    module.exports = { takeTokenFromHash: takeTokenFromHash, switchBlocked: switchBlocked, headroom: headroom, recommended: recommended };
+    module.exports = {
+      takeTokenFromHash: takeTokenFromHash,
+      switchBlocked: switchBlocked,
+      headroom: headroom,
+      recommended: recommended,
+      switchPrompts: switchPrompts
+    };
     return;
   }
 
   // Ten seconds. Each poll reads this machine's own files and never starts a
-  // usage read: only the page's load and its Refresh buttons do.
+  // usage read: only the page's load, its Refresh buttons, and the rate-limit
+  // stop hook's route do.
   var POLL_MS = 10000;
   var BROWSERS = ["", "chrome", "edge", "brave"];
   // How close a login's fixed expiry has to be before its card warns.
@@ -86,6 +93,39 @@
   // order, which is the soonest weekly reset, among those that side may take.
   function recommended(accounts, takes) {
     return accounts.filter(function (account) { return account.standing === "usable" && takes(account); })[0] || null;
+  }
+
+  // One "switch now" prompt per side whose account is at 100% of its 5-hour or
+  // 7-day window: { side, from, to }, side null for this side and to null when
+  // no account that side can take has headroom. The recommendation is the first
+  // usable card in the server's order, which is the soonest weekly reset. Nothing
+  // switches on its own; the prompt is a button the operator clicks.
+  function switchPrompts(accounts, sides) {
+    function atLimit(email) {
+      var account = accounts.filter(function (candidate) { return candidate.email === email; })[0];
+      return !!account && account.usage.limits.some(function (limit) {
+        return (limit.kind === "session" || limit.kind === "weekly_all") && limit.percent >= 100;
+      });
+    }
+    function firstUsable(takes) {
+      var found = recommended(accounts, takes);
+      return found ? found.email : null;
+    }
+    var prompts = [];
+    var live = accounts.filter(function (account) { return account.isLive; })[0];
+    if (live && atLimit(live.email)) {
+      prompts.push({ side: null, from: live.email, to: firstUsable(function (account) { return account.canSwitchHere; }) });
+    }
+    sides.forEach(function (side) {
+      if (side.online && side.liveAccount && atLimit(side.liveAccount)) {
+        prompts.push({
+          side: side.side,
+          from: side.liveAccount,
+          to: firstUsable(function (account) { return (account.offeredTo || []).indexOf(side.side) !== -1; })
+        });
+      }
+    });
+    return prompts;
   }
 
   function takeTokenFromHash(loc, hist) {
@@ -364,6 +404,16 @@
     });
   }
 
+  // The "switch now" prompt's wording, all of it here: it is to follow the
+  // operator's test at the next real limit (#148).
+  function promptWording(prompt) {
+    var line = (prompt.side ? prompt.side + " side: " : "") + prompt.from + " is at its usage limit.";
+    return {
+      text: prompt.to ? line : line + " No other account has headroom.",
+      button: prompt.to ? "Switch now to " + prompt.to : null
+    };
+  }
+
   function sidePath(side, suffix) {
     return "/api/sides/" + encodeURIComponent(side) + suffix;
   }
@@ -500,10 +550,17 @@
 
     var go = element("div", "go");
     var blocked = !!lastDashboard.banner;
+    // The #148 "switch now" prompt, when this side's account is at a limit. It
+    // names the same account the recommended button would, so it takes that
+    // button's place rather than sitting beside it.
+    var prompt = switchPrompts(lastAccounts, lastSides).filter(function (candidate) { return candidate.side === name; })[0];
+    var wording = prompt ? promptWording(prompt) : null;
+    if (wording) { strip.appendChild(element("p", "prompt", wording.text)); }
+    var urgent = !!wording || (!!say && say.kind === "crit");
     if (!side) {
       var here = recommended(lastAccounts, function (candidate) { return candidate.canSwitchHere; });
       if (here) {
-        go.appendChild(takeButton("Switch to " + displayName(here), here, at, !!say && say.kind === "crit",
+        go.appendChild(takeButton(wording ? wording.button : "Switch to " + displayName(here), here, at, urgent,
           switchBlocked(here, lastDashboard, false), function () { switchTo(here.email); }));
       }
     } else if (side.online) {
@@ -512,7 +569,7 @@
       }
       var there = recommended(lastAccounts, function (candidate) { return (candidate.offeredTo || []).indexOf(side.side) !== -1; });
       if (there) {
-        go.appendChild(takeButton("Switch " + sideLabel(name) + " to " + displayName(there), there, at, !!say && say.kind === "crit",
+        go.appendChild(takeButton(wording ? wording.button : "Switch " + sideLabel(name) + " to " + displayName(there), there, at, urgent,
           blocked, function () { switchSide(side.side, there.email); }));
       }
       // Read at click time, and re-read by the server before anything moves.
