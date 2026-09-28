@@ -84,11 +84,18 @@ public sealed class ImportReconcilerTests : IDisposable
     /// A live file that does not parse as a pair is not an absent one: it may
     /// still hold a refresh token. A release at Exported over it unwinds, and
     /// the file stays exactly as it was.
+    /// <para>
+    /// A logout is not an absent file either. F5 deletes the file, so a
+    /// logged-out one is the CLI's own logout while the lock was stale, and the
+    /// export from before it is not a login to park: it unwinds, and the side
+    /// then reports the dead login.
+    /// </para>
     /// </summary>
-    [Fact]
-    public async Task AReleaseAtExportedOverALiveFileThatIsNotAPairUnwindsRatherThanFinishing()
+    [Theory]
+    [InlineData("{\"claudeAiOauth\":{\"accessToken\":1,\"refreshToken\":\"r\"}}")]
+    [InlineData("{\"claudeAiOauth\":{\"accessToken\":\"\",\"refreshToken\":\"\",\"expiresAt\":0}}")]
+    public async Task AReleaseAtExportedOverALiveFileThatIsNotAPairUnwindsRatherThanFinishing(string live)
     {
-        const string live = "{\"claudeAiOauth\":{\"accessToken\":1,\"refreshToken\":\"r\"}}";
         await File.WriteAllTextAsync(_roots.LivePath, live, Token);
         await _roots.WriteStateFileAsync(OutgoingEmail, Token);
         RefreshTokenFingerprint fa = CredentialFiles.Pair("refresh-a").Fingerprint;
@@ -114,6 +121,8 @@ public sealed class ImportReconcilerTests : IDisposable
         (await File.ReadAllTextAsync(_roots.LivePath, Token)).ShouldBe(live);
         (await _roots.StateFile().ReadAccountBlockAsync(Token))?.Email?.Value.ShouldBe(OutgoingEmail);
         (await _roots.Journal().ReadOpenAsync(Token)).ShouldBeNull();
+        // Nothing is left for the leader to park as a usable login.
+        File.Exists(_roots.ExportPath(OutgoingEmail)).ShouldBeFalse();
     }
 
     [Fact]
