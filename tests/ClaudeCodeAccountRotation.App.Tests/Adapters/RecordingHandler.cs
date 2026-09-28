@@ -26,6 +26,9 @@ internal sealed class RecordingHandler(params HttpResponseMessage[] responses) :
     /// </summary>
     public void Enqueue(HttpResponseMessage response) => _responses.Enqueue(response);
 
+    /// <summary>Set to hold every request open until it completes or the request is cancelled.</summary>
+    public Task? Hold { get; set; }
+
     public static HttpResponseMessage Json(HttpStatusCode status, string body) =>
         new(status) { Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json") };
 
@@ -34,6 +37,11 @@ internal sealed class RecordingHandler(params HttpResponseMessage[] responses) :
         ArgumentNullException.ThrowIfNull(request);
         Requests.Add(request);
         Bodies.Add(request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken));
+        if (Hold is Task hold)
+        {
+            await hold.WaitAsync(cancellationToken);
+        }
+
         return _responses.Count > 0
             ? _responses.Dequeue()
             : throw new InvalidOperationException("The adapter sent " + (Requests.Count).ToString(System.Globalization.CultureInfo.InvariantCulture) + " requests but the script held fewer responses.");

@@ -22,7 +22,8 @@ live in `docs/topics/claude-subscription-rotation/PLAN.md`.
 - Every switch is a human click; nothing rotates on its own.
 - The tool never calls the model API.
 - It reads the undocumented usage endpoint with its own User-Agent, which the research rates GRAY
-  (no Anthropic statement either way), not ALLOWED.
+  (no Anthropic statement either way), not ALLOWED. It reads only when the dashboard is opened
+  or Refresh is pressed, at most once a minute per account, never on a timer.
 - The parked-pair refresh presents Claude Code's public OAuth `client_id`.
 - Running the loop lanes (`work-loop`, `babysit-loop`, `attend-queue`) while rotating accounts is
   outside V1 because reader-side invalidation of a latched window is still an open problem.

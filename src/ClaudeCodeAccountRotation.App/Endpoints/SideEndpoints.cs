@@ -1,4 +1,5 @@
 using ClaudeCodeAccountRotation.App.Dashboard;
+using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.App.Security;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core;
@@ -39,6 +40,7 @@ internal static class SideEndpoints
             // switch sends no query at all.
             bool? quarantineForeignFamily,
             WslSwitch coordinator,
+            QuotaRefreshWorker worker,
             CancellationToken cancellationToken) =>
         {
             Result<AccountEmail, string> target = AccountEmail.Parse(email);
@@ -46,6 +48,8 @@ internal static class SideEndpoints
             {
                 return Results.BadRequest(new { error = target.Error });
             }
+
+            await worker.YieldAsync(cancellationToken);
 
             Result<WslSwitchOutcome, SwitchRefusal> outcome =
                 await coordinator.SwitchToAsync(new SideName(side), target.Value, quarantineForeignFamily == true, cancellationToken);

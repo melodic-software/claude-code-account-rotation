@@ -82,9 +82,8 @@ internal sealed class ClaudeOAuthTokenRefreshClient : ITokenRefreshClient
 
     /// <summary>
     /// The response shape spike 03 recorded. The login's own expiry is
-    /// recomputed from <c>refresh_token_expires_in</c> rather than carried over:
-    /// a refresh renews the four-week login, and a stale value on the pair would
-    /// make a live account look about to expire.
+    /// recomputed from <c>refresh_token_expires_in</c> rather than carried over,
+    /// so the pair records whatever expiry the endpoint reports.
     /// </summary>
     private Result<RefreshedTokens, UsageReadFailure> Tokens(JsonElement body, string sentRefreshToken)
     {
