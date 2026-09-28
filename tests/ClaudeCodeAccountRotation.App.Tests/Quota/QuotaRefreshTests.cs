@@ -474,55 +474,18 @@ public sealed class QuotaRefreshTests
     }
 
     [Fact]
-    public async Task PausedPairNearLoginExpiryIsRefreshed()
+    public async Task APausedPairNearLoginExpiryCostsNoTokenRequest()
     {
-        // A paused account is out of the rotation, so nothing reads it and nothing
-        // notices its login running down; the operator finds out when they try to
-        // switch to it and the pair is already dead. Inside the last week of that
-        // login a full pass spends one token request on it and nothing else: no
-        // usage read, and no reservation taken out of the read budget that belongs
-        // to the accounts the operator is actually watching. The access token here
-        // is still good, which is what makes this fact about the login's own expiry
-        // rather than about the expired-access-token path every other account takes.
-        using RefreshHarness harness = new();
-        DateTimeOffset renewed = harness.Clock.GetUtcNow().AddDays(28);
-        string folder = await harness.ParkAsync(
-            "a@example.com",
-            "refresh-a",
-            harness.Valid,
-            Token,
-            harness.Clock.GetUtcNow().AddDays(5));
-        await harness.PauseAsync("a@example.com", Token);
-        harness.Tokens.Answers.Enqueue(ScriptedTokens.Rotated("a2", harness.Valid, renewed));
-
-        await harness.Engine.RunAsync(RefreshRequest.All, Token);
-
-        harness.Tokens.Calls.ShouldBe(1);
-        harness.Usage.Calls.ShouldBe(0);
-        JsonObject oauth = await RefreshHarness.ParkedOAuthAsync(folder, Token);
-        oauth["refreshToken"]!.GetValue<string>().ShouldBe("refresh-a2");
-        // The renewal is worth nothing unless the new login expiry lands with it.
-        oauth["refreshTokenExpiresAt"]!.GetValue<long>().ShouldBe(Epoch(renewed));
-        RefreshOutcome outcome = harness.OutcomeFor("a@example.com")!;
-        outcome.Kind.ShouldBe(RefreshOutcomeKind.Skipped);
-        outcome.Message.ShouldBe(RefreshMessages.PausedLoginRenewed);
-    }
-
-    [Fact]
-    public async Task APausedPairWithWeeksOfLoginLeftIsLeftAlone()
-    {
-        // The other side of the renewal window, and the fact that keeps it a
-        // window rather than a license: a paused account with three weeks of login
-        // left costs the token endpoint nothing at all. The scripted endpoint
-        // records an unscripted call and the harness fails on it either way, but
-        // the count is what says it outright.
+        // A parked token is refreshed for a read or by the session a switch hands
+        // it to, never to keep it warm: a refresh does not extend the fixed
+        // twenty-eight-day login anyway.
         using RefreshHarness harness = new();
         await harness.ParkAsync(
             "a@example.com",
             "refresh-a",
             harness.Expired,
             Token,
-            harness.Clock.GetUtcNow().AddDays(20));
+            harness.Clock.GetUtcNow().AddDays(2));
         await harness.PauseAsync("a@example.com", Token);
 
         await harness.Engine.RunAsync(RefreshRequest.All, Token);
@@ -535,13 +498,8 @@ public sealed class QuotaRefreshTests
     }
 
     [Fact]
-    public async Task ASingleAccountRefreshOfAPausedAccountRenewsNothing()
+    public async Task ASingleAccountRefreshOfAPausedAccountSendsNothing()
     {
-        // Renewing a login is something a full pass does on its way past, not
-        // something a card's own Refresh button can be made to do: this account's
-        // login is inside the window a full pass would act on, and a single-account
-        // request still sends nothing and reports what a paused card has always
-        // reported.
         using RefreshHarness harness = new();
         await harness.ParkAsync(
             "a@example.com",
@@ -715,84 +673,6 @@ public sealed class QuotaRefreshTests
         harness.Usage.Calls.ShouldBe(3);
         harness.OutcomeFor("a@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.Read);
         harness.State.LastPassSummary.ShouldBeSameAs(afterThePass);
-    }
-
-    [Fact]
-    public async Task ASecondPassDoesNotRenewALoginItJustRenewed()
-    {
-        // The token response is allowed to omit the new login expiry, and the pair
-        // then keeps the expiry it had, so the renewal window that chose this
-        // account is still open on the next pass and would choose it again. Under
-        // an operator leaning on Refresh all that is a token request every few
-        // seconds for an account nobody is even using.
-        using RefreshHarness harness = new();
-        await harness.ParkAsync(
-            "a@example.com",
-            "refresh-a",
-            harness.Valid,
-            Token,
-            harness.Clock.GetUtcNow().AddDays(3));
-        await harness.PauseAsync("a@example.com", Token);
-        harness.Tokens.Answers.Enqueue(ScriptedTokens.Rotated("a2", harness.Valid, loginExpiresAt: null));
-
-        await harness.Engine.RunAsync(RefreshRequest.All, Token);
-        harness.Clock.Advance(TimeSpan.FromHours(6));
-        await harness.Engine.RunAsync(RefreshRequest.All, Token);
-
-        harness.Tokens.Calls.ShouldBe(1);
-        harness.Usage.Calls.ShouldBe(0);
-        RefreshOutcome outcome = harness.OutcomeFor("a@example.com")!;
-        outcome.Kind.ShouldBe(RefreshOutcomeKind.Skipped);
-        outcome.Message.ShouldBe(RefreshMessages.PausedLoginRenewedRecently);
-    }
-
-    [Fact]
-    public async Task ARenewalThatNeverReachedTheEndpointIsTriedAgain()
-    {
-        // The other half of leaving a renewed login alone for a day: a token
-        // request that failed renewed nothing, so recording it would have the card
-        // say the login was renewed while it ran down to nothing over the day the
-        // record holds.
-        using RefreshHarness harness = new();
-        await harness.ParkAsync(
-            "a@example.com",
-            "refresh-a",
-            harness.Valid,
-            Token,
-            harness.Clock.GetUtcNow().AddDays(3));
-        await harness.PauseAsync("a@example.com", Token);
-        harness.Tokens.Answers.Enqueue(ScriptedTokens.Failed(UsageReadFailureKind.Transport));
-        harness.Tokens.Answers.Enqueue(ScriptedTokens.Rotated("a2", harness.Valid, harness.Clock.GetUtcNow().AddDays(28)));
-
-        await harness.Engine.RunAsync(RefreshRequest.All, Token);
-        harness.OutcomeFor("a@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.TokenRefreshFailed);
-        harness.Clock.Advance(TimeSpan.FromHours(6));
-        await harness.Engine.RunAsync(RefreshRequest.All, Token);
-
-        harness.Tokens.Calls.ShouldBe(2);
-        RefreshOutcome outcome = harness.OutcomeFor("a@example.com")!;
-        outcome.Kind.ShouldBe(RefreshOutcomeKind.Skipped);
-        outcome.Message.ShouldBe(RefreshMessages.PausedLoginRenewed);
-    }
-
-    [Fact]
-    public async Task APausedPairWithoutALoginExpiryIsLeftAlone()
-    {
-        // A pair whose file never carried a login expiry says nothing about when
-        // that login lapses, and a renewal window cannot be read off a value that
-        // is not there. Guessing would spend a token request on every paused
-        // account on every pass, for ever.
-        using RefreshHarness harness = new();
-        await harness.ParkAsync("a@example.com", "refresh-a", harness.Valid, Token, withoutLoginExpiry: true);
-        await harness.PauseAsync("a@example.com", Token);
-
-        await harness.Engine.RunAsync(RefreshRequest.All, Token);
-
-        harness.Tokens.Calls.ShouldBe(0);
-        harness.Usage.Calls.ShouldBe(0);
-        RefreshOutcome outcome = harness.OutcomeFor("a@example.com")!;
-        outcome.Kind.ShouldBe(RefreshOutcomeKind.Skipped);
-        outcome.Message.ShouldBe(RefreshMessages.Paused);
     }
 
     [Fact]

@@ -16,8 +16,7 @@ namespace ClaudeCodeAccountRotation.App.Quota;
 /// <summary>
 /// One refresh pass: every account that has credentials and is not paused, in
 /// the order that reaches the least recently read first, one usage read each. A
-/// paused account is read by no pass; it takes a turn only on a full pass, only
-/// to have its login renewed when that login is about to lapse.
+/// paused account is read by no pass.
 /// <para>
 /// A parked account's access token is expired on nearly every read, because
 /// nothing has used that account since it was parked, so the token refresh and
@@ -58,25 +57,6 @@ internal sealed partial class QuotaRefresh
 
     /// <summary>One second between reads, so a pass does not arrive at the endpoint as a burst.</summary>
     private static readonly TimeSpan _spacing = TimeSpan.FromSeconds(1);
-
-    /// <summary>
-    /// How close a paused account's login has to be to expiring before a pass
-    /// spends a token request on renewing it. A login lasts twenty-eight days, so
-    /// a week is wide enough that any pass inside it catches the account and
-    /// narrow enough that a paused account is otherwise left entirely alone.
-    /// </summary>
-    private static readonly TimeSpan _loginRenewalWindow = TimeSpan.FromDays(7);
-
-    /// <summary>
-    /// How long a renewed login is left alone before a pass will spend another
-    /// token request on it. The token response is allowed to omit the new login
-    /// expiry, and the pair then keeps the expiry it had, so the window above
-    /// stays open and every later pass would post again for the same account —
-    /// every ten seconds if the operator leaves Refresh all under their finger.
-    /// A day is far inside the week the window covers, so a renewal that really
-    /// did not take still gets six more chances before the login lapses.
-    /// </summary>
-    private static readonly TimeSpan _loginRenewalInterval = TimeSpan.FromDays(1);
 
     /// <summary>
     /// Three write-back attempts and the wait after each, jittered. The wait
@@ -225,7 +205,6 @@ internal sealed partial class QuotaRefresh
         bool Wanted(AccountEmail email) => request.Account is null || request.Account == email;
 
         List<Candidate> candidates = [];
-        List<Candidate> renewals = [];
         if (liveEmail is AccountEmail live && Wanted(live))
         {
             if (repair is IdentityRepair.Busy or IdentityRepair.NoProfileBlock)
@@ -246,11 +225,10 @@ internal sealed partial class QuotaRefresh
             }
 
             // Before the paused branch and before the credential branch, because
-            // both of them would speak for a slot this side does not hold: a
-            // paused account can still cost a token request to renew its login,
-            // and an empty slot would otherwise report "log in again" for an
-            // account that is merely in use on the other side. Nothing is sent
-            // for it either way.
+            // both of them would speak for a slot this side does not hold: an
+            // empty slot would otherwise report "log in again" for an account
+            // that is merely in use on the other side. Nothing is sent for it
+            // either way.
             if (await _slots.ReadAsync(profile.Email, profile.FolderPath, profile.HasCredentials, new WindowsHold(liveEmail, null), stopping)
                 is { State: SlotState.HeldElsewhere or SlotState.InTransit })
             {
@@ -260,19 +238,7 @@ internal sealed partial class QuotaRefresh
 
             if (roster.Find(profile.Email) is { Paused: true })
             {
-                // A paused account rides along on a full pass so its login can be
-                // renewed before it lapses; whether that costs a token request is
-                // its login expiry's business, decided on its own turn. A
-                // single-account refresh is the operator asking about one card,
-                // and a paused card has nothing to ask about.
-                if (request.Account is null && profile.HasCredentials)
-                {
-                    renewals.Add(new Candidate(profile.Email, profile.FolderPath, IsLive: false, PausedRenewal: true));
-                }
-                else
-                {
-                    Record(profile.Email, Outcome(RefreshOutcomeKind.Skipped, RefreshMessages.Paused), summary);
-                }
+                Record(profile.Email, Outcome(RefreshOutcomeKind.Skipped, RefreshMessages.Paused), summary);
             }
             else if (!profile.HasCredentials)
             {
@@ -298,11 +264,7 @@ internal sealed partial class QuotaRefresh
 
         IReadOnlyList<RefreshCandidate> order = RefreshOrder.Order(
             [.. candidates.Select(candidate => new RefreshCandidate(candidate.Email, LastReadAt(candidate.Email)))]);
-        // The renewals stay out of the ordering, which is about whose turn it is
-        // to be read, and go first: a pass under a shared rate bucket ends on a
-        // 429 partway down the reading order, and a renewal queued behind that
-        // would be the one thing a pass never gets to.
-        return [.. renewals, .. order.Select(ordered => candidates.First(candidate => candidate.Email == ordered.Email))];
+        return [.. order.Select(ordered => candidates.First(candidate => candidate.Email == ordered.Email))];
     }
 
     /// <summary>
@@ -310,9 +272,7 @@ internal sealed partial class QuotaRefresh
     /// argument: nothing is sent while a lockout stands, a stranded folder is
     /// restored before its pair is read at all, the live pair is never refreshed,
     /// a parked pair known to be expired skips the doomed read, and the budget's
-    /// reservation is taken only when a request is about to leave. A paused
-    /// account takes the same guards up to the pair being in hand and then leaves
-    /// for <see cref="RenewPausedLoginAsync"/>, which never reads.
+    /// reservation is taken only when a request is about to leave.
     /// </summary>
     private async Task<Turn> TurnAsync(Candidate candidate, bool sentRead, CancellationToken stopping)
     {
@@ -338,11 +298,6 @@ internal sealed partial class QuotaRefresh
             if (pair is null)
             {
                 return new Turn(Outcome(RefreshOutcomeKind.NeedsLogin, RefreshMessages.NeedsLogin));
-            }
-
-            if (candidate.PausedRenewal)
-            {
-                return await RenewPausedLoginAsync(candidate, pair, now);
             }
 
             if (pair.AccessTokenExpiresAt <= now)
@@ -474,53 +429,6 @@ internal sealed partial class QuotaRefresh
                         failure.Kind == UsageReadFailureKind.MalformedBody ? RefreshMessages.ReadFailedMalformed : RefreshMessages.ReadFailedTransport),
                     SentRead: true);
         }
-    }
-
-    /// <summary>
-    /// A paused account's login, renewed before it lapses. Nothing reads a paused
-    /// account, which is exactly why its twenty-eight-day login can run out
-    /// unnoticed: the operator finds out when they try to switch to it and the
-    /// pair is already dead. Inside the last week of that login the pass spends
-    /// the gated refresh unit on it and nothing else — no usage read, and no
-    /// reservation out of a read budget that belongs to the accounts still in the
-    /// rotation. Further out, with no recorded login expiry, or within a day of
-    /// the last renewal, the account stays what it was: skipped. A renewal that
-    /// lands is a skip too, with the sentence that says why the card still
-    /// carries no numbers.
-    /// </summary>
-    private async Task<Turn> RenewPausedLoginAsync(Candidate candidate, CredentialPair pair, DateTimeOffset now)
-    {
-        if (pair.LoginExpiresAt is not DateTimeOffset expiry || expiry - now > _loginRenewalWindow)
-        {
-            return new Turn(Outcome(RefreshOutcomeKind.Skipped, RefreshMessages.Paused));
-        }
-
-        if (_state.LoginRenewedAt(candidate.FolderPath!) is DateTimeOffset renewed && now - renewed < _loginRenewalInterval)
-        {
-            return new Turn(Outcome(RefreshOutcomeKind.Skipped, RefreshMessages.PausedLoginRenewedRecently));
-        }
-
-        GatedRefresh refreshed = await RefreshUnderGateAsync(candidate.FolderPath!, pair);
-        // Every refusal the unit makes before it posts is a skip, and nothing it
-        // decides after the endpoint has answered is one, so the kind is what says
-        // whether this turn owes the next candidate the spacing.
-        bool posted = refreshed.Outcome is null or { Kind: not RefreshOutcomeKind.Skipped };
-        // A renewal is recorded only where the endpoint answered with credentials:
-        // the login itself is renewed the moment it does, whether or not the write
-        // back landed, and a stranded pair is put back by the next restore. A
-        // transport failure or a 429 renewed nothing, and recording one would have
-        // the card claim a renewal for a day that never happened. Nor is a lost
-        // lineage recorded: the next pass would skip it as renewed and bury the one
-        // outcome the operator has to act on.
-        if (refreshed.Outcome is null or { Kind: RefreshOutcomeKind.Stranded })
-        {
-            _state.RecordLoginRenewal(candidate.FolderPath!, now);
-        }
-
-        return new Turn(
-            refreshed.Outcome ?? Outcome(RefreshOutcomeKind.Skipped, RefreshMessages.PausedLoginRenewed),
-            refreshed.EndsPass,
-            SentRead: posted);
     }
 
     /// <summary>
@@ -804,12 +712,8 @@ internal sealed partial class QuotaRefresh
         summary[outcome.Kind] = summary.GetValueOrDefault(outcome.Kind) + 1;
     }
 
-    /// <summary>
-    /// One account the pass will read, and which pair it reads. A
-    /// <paramref name="PausedRenewal"/> candidate is the exception: it is here
-    /// only so its login can be renewed, and it is never read.
-    /// </summary>
-    private sealed record Candidate(AccountEmail Email, string? FolderPath, bool IsLive, bool PausedRenewal = false);
+    /// <summary>One account the pass will read, and which pair it reads.</summary>
+    private sealed record Candidate(AccountEmail Email, string? FolderPath, bool IsLive);
 
     /// <summary>How one account's turn ended, and what it cost the pass.</summary>
     private sealed record Turn(RefreshOutcome Outcome, bool EndsPass = false, bool SentRead = false);

@@ -161,6 +161,26 @@ public sealed class SwitchEndpointTests
     }
 
     [Fact]
+    public async Task AnExpiredParkedAccessTokenStillSwitchesAndThisToolSendsNothing()
+    {
+        // The session that picks the pair up refreshes it on its first request,
+        // so the switch itself is the last moment before that refresh and this
+        // tool spends no token request of its own on it.
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(
+            Path.Combine(factory.ProfilesRoot, "b@example.com", CredentialFiles.FileName),
+            CredentialFiles.Shape("refresh-b", factory.Clock.GetUtcNow().AddHours(-1), factory.Clock.GetUtcNow().AddDays(28)).ToJsonString(),
+            TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        (await CredentialFiles.FingerprintAsync(factory.LiveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
+        factory.Outbound.Requests.ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task ASwitchToAStrandedFolderIsRefused()
     {
         // The folder's own pair is the dead half of a rotation the write-back could

@@ -64,7 +64,7 @@ public sealed class SharedStoreRefreshTests
     }
 
     [Fact]
-    public async Task APausedAccountTheOtherSideHoldsIsNotRenewedEither()
+    public async Task APausedAccountTheOtherSideHoldsSendsNothing()
     {
         using RefreshHarness harness = new(sharedStore: true);
         await HeldByWslAsync(harness, "a@example.com", Token);

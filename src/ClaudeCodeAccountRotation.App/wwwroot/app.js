@@ -7,12 +7,11 @@
     return;
   }
 
-  // Ten seconds. Each poll reads this machine's own files. It is not the
-  // usage-endpoint polling the refresh contract forbids.
+  // Ten seconds. Each poll reads this machine's own files and never starts a
+  // usage read: only the page's load and its Refresh buttons do.
   var POLL_MS = 10000;
   var BROWSERS = ["", "chrome", "edge", "brave"];
-  // The window the refresh pass renews a paused login in, so the page's "soon"
-  // and the pass's "renew now" name one span.
+  // How close a login's fixed expiry has to be before its card warns.
   var LOGIN_WARN_SECONDS = 7 * 24 * 3600;
   // The select value that means "this profile is not in the list"; every other
   // value is an index into profileCatalog, because a directory name can hold
@@ -1283,6 +1282,10 @@
         refresh();
         if (!polling) {
           polling = true;
+          // Opening the page reads usage once, the way Refresh all does; the
+          // server's per-account gap keeps a reload from reading again. A refusal
+          // needs no toast: the pass line above the cards already says why.
+          send("/api/refresh", "POST", null).then(function () { return refresh(true); }, function () { return null; });
           setInterval(refresh, POLL_MS);
         }
       });
