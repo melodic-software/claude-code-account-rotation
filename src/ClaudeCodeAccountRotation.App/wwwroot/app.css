@@ -1,244 +1,235 @@
+/* Poppins and Lora, served from /fonts under the SIL Open Font License
+   (fonts/Poppins-OFL.txt, fonts/Lora-OFL.txt). No request leaves this host. */
+@font-face { font-family: "Poppins"; font-weight: 400; font-display: swap; src: url("/fonts/poppins-400.woff2") format("woff2"); }
+@font-face { font-family: "Poppins"; font-weight: 500; font-display: swap; src: url("/fonts/poppins-500.woff2") format("woff2"); }
+@font-face { font-family: "Lora"; font-weight: 400 700; font-display: swap; src: url("/fonts/lora-400-700.woff2") format("woff2"); }
+
+/* The Anthropic palette. Usage is coloured in the statusline's four tiers:
+   green under 50%, ochre from 50, orange from 75, brick from 90. The brand
+   orange fill is otherwise only the primary action; blue is live on a side and
+   the focus ring. Every text colour here meets WCAG AA on its background. */
 :root {
   color-scheme: light dark;
-  --bg: #f6f5f2;
-  --card: #ffffff;
-  --ink: #1d1c1a;
-  --muted: #6b6963;
-  --line: #dcd9d2;
-  --live: #1f7a4d;
-  --warn: #b3661a;
-  --error: #b02a2a;
-  --accent: #2b5fd9;
-  --field: #ffffff;
+  --bg: #faf9f5; --surface: #ffffff; --surface-2: #f5f4ef; --line: #e8e6dc; --line-strong: #dcd9ce;
+  --text: #141413; --muted: #6b6a64; --faint: #b0aea5;
+  --accent: #d97757; --accent-hover: #e08a6d; --accent-press: #c6613f; --accent-fg: #141413;
+  --ok: #5f7148; --ok-fill: #788c5d; --info: #3f6c9c; --high: #a4501c; --high-fill: #d0702f; --warn: #8a6414; --warn-fill: #c79a3e; --crit: #b0453a; --crit-fill: #c0503f;
+  --track: #ecebe4; --focus: #6a9bcc; --shadow: 0 1px 2px rgb(20 20 19 / .04), 0 2px 8px -2px rgb(20 20 19 / .05);
+  --sans: Poppins, Arial, sans-serif; --serif: Lora, Georgia, serif;
+  --columns: minmax(0, 1.2fr) minmax(0, 1.5fr) 8.5rem 8.5rem 19rem;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #171614;
-    --card: #232220;
-    --ink: #ecebe6;
-    --muted: #a19e96;
-    --line: #3a3835;
-    --field: #2c2b28;
+    --bg: #141413; --surface: #1f1e1d; --surface-2: #262624; --line: #2c2b29; --line-strong: #3a3936;
+    --text: #faf9f5; --muted: #a3a19a; --faint: #5e5d58;
+    --accent-hover: #e3906f;
+    --ok: #a3b584; --ok-fill: #8fa472; --info: #8db4dc; --high: #eb8f55; --high-fill: #e08045; --warn: #d4a94f; --warn-fill: #d4a94f; --crit: #e8716a; --crit-fill: #e0605a;
+    --track: #2e2d2b; --shadow: 0 1px 2px rgb(0 0 0 / .3);
   }
 }
 
 * { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--text); font: 14px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+button, input, select, textarea, summary { font: inherit; color: inherit; }
+h1, h2, h3 { margin: 0; font-weight: 500; }
+p { margin: 0; }
+.wrap { max-width: 1240px; margin: 0 auto; padding: 40px 32px 96px; }
+.muted { color: var(--muted); }
 
-body {
-  margin: 0;
-  padding: 2rem clamp(1rem, 4vw, 3rem);
-  background: var(--bg);
-  color: var(--ink);
-  font: 16px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+/* ---------- controls ---------- */
+:where(button, summary.sm) {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  height: 36px; padding: 0 14px; border-radius: 10px;
+  border: 1px solid var(--line-strong); background: var(--surface);
+  font-size: 13px; font-weight: 500; line-height: 1; white-space: nowrap; cursor: pointer;
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+}
+:where(button):hover { background: var(--surface-2); }
+.sm { height: 28px; padding: 0 10px; border-radius: 8px; font-size: 12.5px; }
+.lg { height: auto; min-height: 48px; padding: 8px 18px; border-radius: 12px; flex-direction: column; align-items: flex-start; gap: 2px; font-size: 14px; line-height: 20px; white-space: normal; text-align: left; }
+.lg small { font-size: 12px; font-weight: 400; line-height: 16px; opacity: .8; }
+/* Secondary is the base look above, named here so the class reads as meant. */
+.secondary { background: var(--surface); border-color: var(--line-strong); color: var(--text); }
+.secondary:hover { background: var(--surface-2); }
+.primary, .switch { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+.primary:hover, .switch:hover { background: var(--accent-hover); }
+.primary:active { background: var(--accent-press); }
+.quiet { background: transparent; border-color: transparent; color: var(--muted); }
+.quiet:hover { background: var(--surface-2); color: var(--text); }
+.danger { background: transparent; border-color: transparent; color: var(--crit); }
+.danger:hover { background: color-mix(in srgb, var(--crit) 9%, transparent); }
+button:disabled, button:disabled:hover { opacity: .45; cursor: not-allowed; }
+summary { list-style: none; cursor: pointer; }
+summary::-webkit-details-marker { display: none; }
+:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--focus); }
+
+/* ---------- header ---------- */
+.top { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 16px; }
+.top h1 { font-size: 20px; letter-spacing: -.01em; }
+.asof { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.spacer { flex: 1; }
+.tools { display: flex; gap: 4px; align-items: center; align-self: center; }
+.roster-add { position: relative; }
+.popover {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; width: 22rem; padding: 16px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 32px -8px rgb(20 20 19 / .18);
 }
 
-header h1 { margin: 0; font-size: 1.6rem; letter-spacing: 0.01em; }
-.tagline { margin: 0.25rem 0 0; color: var(--muted); }
-.muted { color: var(--muted); font-size: 0.85rem; }
-
-.banner {
-  margin: 1.25rem 0;
-  padding: 0.85rem 1rem;
-  border: 1px solid var(--warn);
-  border-left-width: 6px;
-  background: color-mix(in srgb, var(--warn) 12%, var(--card));
-  border-radius: 6px;
+/* ---------- banner, warnings, setup ---------- */
+.banner, .setup, .warnings, .instance-token {
+  margin: 16px 0 0; padding: 12px 16px; border-radius: 12px; font-family: var(--serif); font-size: 14px; line-height: 1.55;
 }
+.banner { display: flex; gap: 12px; align-items: baseline; background: color-mix(in srgb, var(--warn-fill) 12%, var(--bg)); }
+.banner b { color: var(--warn); font: 500 13px var(--sans); white-space: nowrap; }
+.warnings { list-style: none; color: var(--warn); background: color-mix(in srgb, var(--warn-fill) 8%, var(--bg)); }
+/* The first-run sentence. Not a warning: the banner is what blocks Switch. */
+.setup { background: var(--surface-2); }
+[hidden] { display: none !important; }
 
-.warnings { margin: 0.75rem 0; padding-left: 1.25rem; color: var(--warn); }
+/* ---------- the Now strips, one per side ---------- */
+.now { display: grid; grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr)); gap: 16px; margin-top: 32px; }
+.side-card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 24px; display: grid; gap: 16px; align-content: start; box-shadow: var(--shadow); }
+.sh { display: flex; align-items: flex-start; gap: 16px; }
+.who { flex: 1; min-width: 0; }
+.where { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+.where .detail { font-family: var(--serif); }
+.where .detail::before { content: "\00b7"; margin-right: 8px; }
+.side-card h2 { font-size: 24px; line-height: 32px; letter-spacing: -.015em; overflow-wrap: anywhere; }
+.side-card h2.empty { color: var(--muted); }
+.em { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-family: var(--serif); font-size: 14px; color: var(--muted); overflow-wrap: anywhere; }
+.hr { text-align: right; }
+.hr .n { display: block; font-size: 40px; line-height: 44px; font-weight: 500; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+.hr span:last-child { font-size: 12px; color: var(--muted); }
+.say { font-family: var(--serif); font-size: 15px; }
+/* The #148 "switch now" prompt: the strip's one call to act. */
+.prompt { padding: 10px 14px; border-radius: 10px; font-family: var(--serif); background: color-mix(in srgb, var(--crit) 8%, var(--surface)); color: var(--crit); }
+.mt { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 24px; }
+.meter .l { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.meter .l .pct { font-size: 14px; color: var(--text); }
+.meter small { display: block; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.go { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 
-/* The first-run sentence. Not a warning: the banner above is what blocks Switch. */
-.setup { margin: 1rem 0 0; }
-
-.side, .prompt { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin: 0.75rem 0; }
-
-.cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  /* Every row in the grid is as tall as the tallest card, so the action rows
-     line up across rows instead of stepping. */
-  grid-auto-rows: 1fr;
-  gap: 1rem;
-  margin-top: 1.5rem;
+/* ---------- tone ---------- */
+.say.ok { color: var(--ok); }
+.say.warn, .n.warn, .meter .l .pct.warn, .u .pct.warn { color: var(--warn); }
+.say.high, .n.high, .meter .l .pct.high, .u .pct.high { color: var(--high); }
+.say.crit, .n.crit, .meter .l .pct.crit, .u .pct.crit { color: var(--crit); }
+.say.paused { color: var(--muted); }
+.bar { height: 6px; border-radius: 999px; background: var(--track); overflow: hidden; }
+.bar i { display: block; height: 100%; border-radius: inherit; background: var(--faint); }
+.bar i.ok { background: var(--ok-fill); } .bar i.high { background: var(--high-fill); } .bar i.warn { background: var(--warn-fill); } .bar i.crit { background: var(--crit-fill); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; display: inline-block; }
+.dot.ok { background: var(--ok-fill); } .dot.high { background: var(--high-fill); } .dot.warn { background: var(--warn-fill); } .dot.crit { background: var(--crit-fill); }
+.dot.paused { background: transparent; box-shadow: inset 0 0 0 1.5px var(--faint); }
+.tag, .badge {
+  display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 6px;
+  background: var(--surface-2); color: var(--muted); font: 500 11.5px var(--sans); white-space: nowrap;
 }
+.badge.next { color: var(--text); background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.badge.store, .badge.live, .badge.off-roster { color: var(--info); background: color-mix(in srgb, var(--info) 10%, transparent); }
+.badge.needs-login { color: var(--warn); background: color-mix(in srgb, var(--warn-fill) 12%, transparent); }
+.badge.login-expired, .badge.error, .badge.logged-out { color: var(--crit); background: color-mix(in srgb, var(--crit) 10%, transparent); }
 
-.card {
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 1rem 1.1rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
-}
-
-.card.live { border-color: var(--live); box-shadow: 0 0 0 2px color-mix(in srgb, var(--live) 30%, transparent); }
-.card.logged-out { border-color: var(--error); box-shadow: 0 0 0 2px color-mix(in srgb, var(--error) 30%, transparent); }
-.cli-logout { margin: 0; color: var(--error); }
-.card h2 { margin: 0; font-size: 1.05rem; word-break: break-all; }
-/* The heading is the display name and the control that renames it, so it must
-   not pick up the accent button chrome. The word sits beside the name, on the
-   card, because the disclosure under Remove is where rename used to hide. */
-.card h2 button.rename {
-  display: inline-flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-  max-width: 100%;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  line-height: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.card h2 button.rename .display-name { min-width: 0; text-align: left; }
-.card h2 button.rename:hover .display-name,
-.card h2 button.rename:focus-visible .display-name { text-decoration: underline; }
-.card h2 button.rename .rename-label {
-  flex: none;
-  color: var(--muted);
-  font-size: 0.75rem;
-  font-weight: 400;
-  white-space: nowrap;
-  word-break: normal;
-}
-.card h2 input.rename {
-  width: 100%;
-  margin: 0;
-  padding: 0.15rem 0.4rem;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--field);
-  color: var(--ink);
-  font: inherit;
-}
-/* An address has no spaces to wrap at and a card is 280px wide. */
-.address { margin: 0; color: var(--muted); font-size: 0.85rem; word-break: break-all; }
-
-.badges { display: flex; gap: 0.4rem; min-height: 1.4rem; }
-.badge {
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  padding: 0.15rem 0.5rem;
-  border-radius: 999px;
-  border: 1px solid currentColor;
-}
-.badge.live { color: var(--live); }
-.badge.needs-login { color: var(--warn); }
-.badge.paused { color: var(--muted); }
-.badge.off-roster { color: var(--accent); }
-.badge.login-expired, .badge.error, .badge.logged-out { color: var(--error); }
-.badge.ready { color: var(--ink); }
-/* The store axis: where this account's one pair is. One class whatever the
-   chip says, because the words carry spaces and parentheses. */
-.badge.store { color: var(--accent); }
-/* The one account the operator marked as backing the CI org secret. */
-.badge.ci-token { color: var(--accent); }
-
-.card.paused { opacity: 0.75; }
-
-.usage { display: flex; flex-direction: column; gap: 0.35rem; }
-
-/* One bucket per row: label, bar, and reading on one line at the card's 280px,
-   with the reset time and a row's own source wrapping under them. */
-.limit { display: flex; flex-wrap: wrap; align-items: center; gap: 0.2rem 0.5rem; font-size: 0.85rem; }
-/* A scoped window's label is whatever the endpoint calls it, so it wraps inside
-   its own basis rather than pushing the bar off the row. */
-.limit .label { flex: 0 0 3.4rem; min-width: 0; overflow-wrap: anywhere; color: var(--muted); }
-.limit .bar {
-  flex: 1 1 5rem;
-  height: 0.5rem;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--line) 70%, transparent);
-  overflow: hidden;
-}
-.limit .fill { height: 100%; border-radius: inherit; background: var(--accent); }
-.limit .fill[data-severity="warning"] { background: var(--warn); }
-.limit .fill[data-severity="error"], .limit .fill[data-severity="critical"] { background: var(--error); }
-.limit .reading { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
-/* The whole basis, so neither line steals the bar's row. */
-.limit .resets, .limit .asof { flex-basis: 100%; color: var(--muted); }
-
-.asof, .next-reset, .refresh-state, .login-expiry { margin: 0; color: var(--muted); font-size: 0.8rem; }
+/* ---------- the ledger ---------- */
+.ledger-title { font-size: 14px; margin: 40px 0 8px; }
+.ledger-head, .row { display: grid; grid-template-columns: var(--columns); gap: 16px; align-items: center; }
+.ledger-head { padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+.switch-head { text-align: right; }
+.card { border-bottom: 1px solid var(--line); transition: background-color .15s ease; }
+.card:hover { background: color-mix(in srgb, var(--surface-2) 70%, transparent); }
+/* Paused reads as muted text, which holds AA; only the bars and dot fade. */
+.card.paused .row > :not(.act), .card.paused .row > :not(.act) * { color: var(--muted); }
+.card.paused .bar { opacity: .6; }
+.row { padding: 12px; }
+.nm { display: grid; grid-template-columns: 8px minmax(0, 1fr); column-gap: 12px; align-items: center; }
+.nm .title { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; min-width: 0; }
+.badges { display: contents; }
+.card h2 { font-size: 14px; }
+.address { grid-column: 2; font-family: var(--serif); font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.st .say { font-size: 14px; }
+.lines p { font-family: var(--serif); font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.lines .cli-logout, .cli-logout { color: var(--crit); }
 .login-expiry.warn { color: var(--warn); }
+.u { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; align-items: center; font-variant-numeric: tabular-nums; }
+.u .pct { font-size: 13px; font-weight: 500; text-align: right; }
+.u small { grid-column: 1 / -1; font-size: 11.5px; color: var(--muted); }
+/* Read by screen readers everywhere; seen only where the column header is not. */
+.cell-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.act { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; align-items: center; }
+.seg { display: inline-flex; align-items: center; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.seg > * { border: 0; border-radius: 0; }
+.seg > * + * { border-left: 1px solid var(--line-strong); }
+.seg button { background: transparent; }
+.seg button:hover { background: var(--surface-2); }
+/* A switch the server refuses is not offered at all. */
+.seg button[data-refused] { display: none; }
+.seg:not(:has(> :not([data-refused]))) { display: none; }
+.seg .live { font-size: 12.5px; color: var(--muted); padding: 0 10px; line-height: 28px; white-space: nowrap; }
 
-header button { margin-top: 0.6rem; }
-#refresh-state { margin: 0.4rem 0 0; min-height: 1.2rem; }
-
-/* The first element of the card's trailing group, so the buttons of a row of
-   cards sit at one height however much each card has to say above them. */
-.actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: auto; }
-/* The group after it is already at the bottom; a second push would split them. */
-.actions.danger-zone { margin-top: 0; }
-
-button {
-  padding: 0.5rem 1rem;
-  border-radius: 6px;
-  border: 1px solid var(--accent);
-  background: var(--accent);
-  color: #fff;
-  font: inherit;
-  cursor: pointer;
+/* The heading is the display name and the control that renames it. */
+.card h2 button.rename {
+  height: auto; padding: 0; border: 0; background: none; border-radius: 4px;
+  display: inline-flex; align-items: baseline; gap: 8px; font: inherit; font-weight: 500; white-space: normal; text-align: left;
 }
-button:disabled { opacity: 0.45; cursor: default; }
-button.secondary { background: transparent; color: var(--accent); }
-button.danger { background: transparent; border-color: var(--error); color: var(--error); }
+.card h2 button.rename:hover .display-name, .card h2 button.rename:focus-visible .display-name { text-decoration: underline; }
+.card h2 button.rename .rename-label { font-size: 11.5px; font-weight: 400; color: var(--muted); opacity: 0; }
+.card:hover h2 button.rename .rename-label, .card h2 button.rename:focus-visible .rename-label { opacity: 1; }
+.card h2 input.rename { width: 100%; height: 28px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); }
 
-.roster-add { margin-top: 1.5rem; }
-.roster-add > summary, .card details.edit > summary, .card details.login > summary { cursor: pointer; color: var(--muted); }
-.card details.login { margin-top: 0.75rem; }
-.card details.login a { color: var(--accent); }
-
-.instance-token { margin-top: 0; margin-bottom: 1.5rem; }
-
-.roster-form {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  margin-top: 0.75rem;
-  max-width: 32rem;
+/* The row menu. */
+details.more { position: relative; }
+details.more > summary { font-size: 16px; letter-spacing: 1px; }
+details.more .menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; min-width: 13rem; padding: 6px; display: grid;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 32px -8px rgb(20 20 19 / .18);
 }
-/* One field per row, each with its own visible label. Without this the fields
-   inside a wrapper div stay inline-block at their default width, which clips a
-   profile directory mid-word and leaves the e-mail beside them at full width. */
+details.more .menu button { justify-content: flex-start; font-weight: 400; }
+details.more .menu button.quiet { color: var(--text); }
+details.more .menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; width: 100%; }
+
+/* A row's Edit and login panels open under it, full width. */
+.card > details.edit:not([open]) { display: none; }
+.card > details.edit, .card > details.login { margin: 0 12px 16px 32px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.card > details > summary { font-weight: 500; }
+.card details.login a { color: var(--info); }
+.card details.login p { font-family: var(--serif); margin-top: 8px; }
+
+/* ---------- forms ---------- */
+.roster-form { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; max-width: 32rem; }
+.popover.roster-form { margin-top: 0; }
 .roster-form .fields, .roster-form .field { display: flex; flex-direction: column; }
-.roster-form .fields { gap: 0.5rem; }
-.roster-form .field { gap: 0.2rem; }
-.roster-form .field > span { font-size: 0.85rem; color: var(--muted); }
-/* More specific than .field's own display, so a hidden row is really gone. */
+.roster-form .fields { gap: 10px; }
+.roster-form .field { gap: 4px; }
+.roster-form .field > span { font-size: 12px; color: var(--muted); }
 .roster-form .field[hidden] { display: none; }
 .roster-form textarea { resize: vertical; }
 .roster-form input, .roster-form select, .roster-form textarea {
-  width: 100%;
-  padding: 0.45rem 0.6rem;
-  border-radius: 6px;
-  border: 1px solid var(--line);
-  background: var(--field);
-  color: var(--ink);
-  font: inherit;
+  width: 100%; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--text);
 }
-/* Named rather than left to the browser: the user-agent default is a fixed
-   grey that all but vanishes on the dark card, and Firefox dims it further. */
 .roster-form ::placeholder { color: var(--muted); opacity: 1; }
 .roster-form button { align-self: flex-start; }
+.instance-token { max-width: 32rem; margin: 32px auto 0; background: var(--surface); border: 1px solid var(--line); font-family: var(--sans); }
 
+/* ---------- toast, stopped page ---------- */
 .toast {
-  position: fixed;
-  right: 1.5rem;
-  bottom: 1.5rem;
-  max-width: 28rem;
-  padding: 0.85rem 1rem;
-  border-radius: 8px;
-  background: var(--card);
-  border: 1px solid var(--line);
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+  position: fixed; right: 24px; bottom: 24px; max-width: 28rem; padding: 12px 16px; border-radius: 12px;
+  background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--line-strong);
+  box-shadow: 0 12px 32px -8px rgb(20 20 19 / .25); font-family: var(--serif);
 }
-.toast.ok { border-color: var(--live); }
-.toast.warn { border-color: var(--warn); }
-.toast.error { border-color: var(--error); }
+.toast.ok { border-left-color: var(--ok-fill); }
+.toast.warn { border-left-color: var(--warn-fill); }
+.toast.error { border-left-color: var(--crit-fill); }
+.stopped { max-width: 40rem; margin: 80px auto; padding: 0 32px; display: grid; gap: 12px; font-family: var(--serif); }
+.stopped h1 { font: 500 20px var(--sans); }
+
+@media (max-width: 1000px) {
+  .cell-label { position: static; width: auto; height: auto; clip-path: none; grid-column: 1 / -1; font-size: 12px; color: var(--muted); }
+  .ledger-head { display: none; }
+  .row { grid-template-columns: 1fr 1fr; }
+  .nm, .act { grid-column: 1 / -1; }
+  .act { justify-content: flex-start; }
+}
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }

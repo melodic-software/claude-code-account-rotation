@@ -46,7 +46,7 @@ public sealed class AccountAvailabilityTests
     public void AUsableAccountComesBeforeAnExhaustedOne()
     {
         Order(
-            Read("a@example.com", Session(95, _now.AddHours(3))),
+            Read("a@example.com", Session(100, _now.AddHours(3))),
             Read("b@example.com", Session(10, _now.AddHours(3))))
             .ShouldBe(["b@example.com", "a@example.com"]);
     }
@@ -70,7 +70,7 @@ public sealed class AccountAvailabilityTests
         // account nobody can say anything about.
         Order(
             NeverRead("a@example.com"),
-            Read("b@example.com", Session(95, _now.AddHours(3))))
+            Read("b@example.com", Session(100, _now.AddHours(3))))
             .ShouldBe(["b@example.com", "a@example.com"]);
     }
 
@@ -121,7 +121,7 @@ public sealed class AccountAvailabilityTests
         // over sooner frees nothing.
         Order(
             Read("a@example.com", Session(10, _now.AddHours(2)), Weekly(100, _now.AddHours(12))),
-            Read("b@example.com", Session(95, _now.AddHours(6)), Weekly(50, _now.AddHours(20))))
+            Read("b@example.com", Session(100, _now.AddHours(6)), Weekly(50, _now.AddHours(20))))
             .ShouldBe(["b@example.com", "a@example.com"]);
     }
 
@@ -132,7 +132,7 @@ public sealed class AccountAvailabilityTests
         // weekly quota, so keying on it would put the card ahead of accounts
         // that really do free up first and promise a wait that is not over.
         AvailabilityKey key = AccountAvailability.KeyFor(
-            Read("a@example.com", Session(95, _now.AddHours(3)), Weekly(100, _now.AddHours(30))),
+            Read("a@example.com", Session(100, _now.AddHours(3)), Weekly(100, _now.AddHours(30))),
             _now);
 
         key.Standing.ShouldBe(AvailabilityStanding.Exhausted);
@@ -166,14 +166,14 @@ public sealed class AccountAvailabilityTests
         // back: stating it would promise a return nobody can vouch for and put
         // the card ahead of accounts that really do free up later.
         AvailabilityKey key = AccountAvailability.KeyFor(
-            Read("a@example.com", Session(95), Weekly(100, _now.AddDays(1))),
+            Read("a@example.com", Session(100), Weekly(100, _now.AddDays(1))),
             _now);
 
         key.Standing.ShouldBe(AvailabilityStanding.Exhausted);
         key.NextResetAt.ShouldBeNull();
 
         Order(
-            Read("a@example.com", Session(95), Weekly(100, _now.AddDays(1))),
+            Read("a@example.com", Session(100), Weekly(100, _now.AddDays(1))),
             Read("b@example.com", Weekly(100, _now.AddDays(3))))
             .ShouldBe(["b@example.com", "a@example.com"]);
     }
@@ -198,7 +198,7 @@ public sealed class AccountAvailabilityTests
     {
         Order(
             Read("a@example.com", Session(0), Weekly(0, _now.AddDays(6))) with { IsPaused = true },
-            Read("b@example.com", Session(95, _now.AddHours(3))))
+            Read("b@example.com", Session(100, _now.AddHours(3))))
             .ShouldBe(["b@example.com", "a@example.com"]);
     }
 
@@ -225,12 +225,27 @@ public sealed class AccountAvailabilityTests
     }
 
     [Fact]
-    public void FiveHourAtThresholdIsExhaustedAndOneBelowItIsUsable()
+    public void FiveHourAtOneHundredIsLimitedUntilItsResetAndNinetyNineIsUsable()
     {
-        AccountAvailability.KeyFor(Read("a@example.com", Session(90, _now.AddHours(3))), _now)
-            .Standing.ShouldBe(AvailabilityStanding.Exhausted);
-        AccountAvailability.KeyFor(Read("a@example.com", Session(89, _now.AddHours(3))), _now)
+        // A spent five-hour window is hours away from use, not exhausted: that
+        // word is the weekly window's alone (Q34).
+        AvailabilityKey key = AccountAvailability.KeyFor(
+            Read("a@example.com", Session(100, _now.AddHours(3)), Weekly(40, _now.AddDays(4))),
+            _now);
+        key.Standing.ShouldBe(AvailabilityStanding.Limited);
+        key.NextResetAt.ShouldBe(_now.AddHours(3));
+        AccountAvailability.KeyFor(Read("a@example.com", Session(99, _now.AddHours(3))), _now)
             .Standing.ShouldBe(AvailabilityStanding.Usable);
+    }
+
+    [Fact]
+    public void ALimitedAccountSortsAfterTheUsableOnesAndBeforeTheExhaustedOnes()
+    {
+        Order(
+            Read("a@example.com", Weekly(100, _now.AddHours(1))),
+            Read("b@example.com", Session(100, _now.AddHours(3))),
+            Read("c@example.com", Weekly(20, _now.AddDays(6))))
+            .ShouldBe(["c@example.com", "b@example.com", "a@example.com"]);
     }
 
     [Fact]
@@ -281,7 +296,7 @@ public sealed class AccountAvailabilityTests
         AccountStanding account = Read("a@example.com", Session(60, _now.AddHours(3)), Weekly(70, _now.AddDays(4)));
 
         AccountAvailability.KeyFor(account, _now).Standing.ShouldBe(AvailabilityStanding.Usable);
-        AccountAvailability.KeyFor(account, _now, eligibleFiveHourMaxPercent: 50).Standing.ShouldBe(AvailabilityStanding.Exhausted);
+        AccountAvailability.KeyFor(account, _now, eligibleFiveHourMaxPercent: 50).Standing.ShouldBe(AvailabilityStanding.Limited);
         AccountAvailability.KeyFor(account, _now, eligibleSevenDayMaxPercent: 70).Standing.ShouldBe(AvailabilityStanding.Exhausted);
     }
 

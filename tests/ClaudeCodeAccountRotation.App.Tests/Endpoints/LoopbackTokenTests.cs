@@ -230,10 +230,16 @@ public sealed class LoopbackTokenTests
         using HttpResponseMessage script = await client.GetAsync(new Uri("/app.js", UriKind.Relative), Token);
         using HttpResponseMessage style = await client.GetAsync(new Uri("/app.css", UriKind.Relative), Token);
         using HttpResponseMessage health = await client.GetAsync(new Uri("/healthz", UriKind.Relative), Token);
+        using HttpResponseMessage font = await client.GetAsync(new Uri("/fonts/lora-400-700.woff2", UriKind.Relative), Token);
+        using HttpResponseMessage api = await client.GetAsync(new Uri("/fontsx", UriKind.Relative), Token);
         string scriptBody = await script.Content.ReadAsStringAsync(Token);
 
         script.StatusCode.ShouldBe(HttpStatusCode.OK);
         style.StatusCode.ShouldBe(HttpStatusCode.OK);
+        font.StatusCode.ShouldBe(HttpStatusCode.OK);
+        font.Content.Headers.ContentType!.MediaType.ShouldBe("font/woff2");
+        // A segment match: a path that only starts with the same letters stays closed.
+        api.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
         health.StatusCode.ShouldBe(HttpStatusCode.OK);
         scriptBody.ShouldNotContain(token);
         scriptBody.ShouldContain("ccar-instance-token");

@@ -32,11 +32,13 @@ if [[ -n "${CHECK_NO_MACHINE_PATHS_NAMES:-}" ]]; then
 fi
 
 findings=0
+# -I skips binary files: compressed bytes in a font can spell "c:/" by chance,
+# and no binary here carries a path the tool reads.
 while IFS= read -r -d '' file; do
-  if grep -nE "$pattern" -- "$file"; then
+  if grep -InE "$pattern" -- "$file"; then
     findings=1
   fi
-  if (( ${#name_args[@]} > 0 )) && grep -nF "${name_args[@]}" -- "$file"; then
+  if (( ${#name_args[@]} > 0 )) && grep -InF "${name_args[@]}" -- "$file"; then
     findings=1
   fi
 done < <(git ls-files -z -- "${surfaces[@]}")

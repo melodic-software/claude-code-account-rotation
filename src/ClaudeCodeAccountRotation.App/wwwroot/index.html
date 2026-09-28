@@ -8,31 +8,38 @@
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-  <header>
-    <h1>claude-code-account-rotation</h1>
-    <p class="tagline">Account switching and quota dashboard for Claude Code</p>
-    <p id="captured" class="muted"></p>
-    <button id="refresh-all" type="button">Refresh all</button>
-    <button id="stop" type="button" class="secondary">Stop</button>
-    <p id="refresh-state" class="muted"></p>
-  </header>
-  <div id="sides" class="sides" hidden></div>
-  <div id="prompts" class="prompts" role="status" hidden></div>
-  <div id="banner" class="banner" hidden></div>
-  <ul id="warnings" class="warnings" hidden></ul>
-  <p id="setup" class="setup" hidden></p>
-  <details class="roster-add">
-    <summary>Add an account</summary>
-    <form id="add" class="roster-form">
-      <label class="field">
-        <span>E-mail</span>
-        <input id="add-email" name="email" type="email" required autocomplete="off" placeholder="you@example.com">
-      </label>
-      <div id="add-fields" class="fields"></div>
-      <button type="submit">Add</button>
-    </form>
-  </details>
-  <main id="cards" class="cards" aria-live="polite"></main>
+  <div class="wrap">
+    <header class="top">
+      <h1>Account rotation</h1>
+      <span id="captured" class="asof"></span>
+      <span id="refresh-state" class="asof"></span>
+      <span class="spacer"></span>
+      <div class="tools">
+        <button id="refresh-all" type="button" class="btn secondary sm">Refresh all</button>
+        <details class="roster-add">
+          <summary class="btn quiet sm">Add an account</summary>
+          <form id="add" class="roster-form popover">
+            <label class="field">
+              <span>E-mail</span>
+              <input id="add-email" name="email" type="email" required autocomplete="off" placeholder="you@example.com">
+            </label>
+            <div id="add-fields" class="fields"></div>
+            <button type="submit" class="btn primary">Add</button>
+          </form>
+        </details>
+        <button id="stop" type="button" class="btn quiet sm">Stop</button>
+      </div>
+    </header>
+    <div id="now" class="now"></div>
+    <div id="banner" class="banner" role="status" hidden></div>
+    <ul id="warnings" class="warnings" hidden></ul>
+    <p id="setup" class="setup" hidden></p>
+    <h2 class="ledger-title">All accounts</h2>
+    <div class="ledger-head" aria-hidden="true">
+      <span>Account</span><span>Status</span><span>5-hour</span><span>7-day</span><span class="switch-head">Switch to</span>
+    </div>
+    <main id="cards" class="cards" aria-live="polite"></main>
+  </div>
   <div id="toast" class="toast" role="status" hidden></div>
   <script src="/app.js"></script>
 </body>

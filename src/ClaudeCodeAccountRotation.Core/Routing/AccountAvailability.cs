@@ -6,13 +6,20 @@ namespace ClaudeCodeAccountRotation.Core.Routing;
 /// <summary>
 /// Where an account stands, and in declaration order, because that order is the
 /// order the accounts are listed in: the ones that can be worked now, then the
-/// ones that come back, then the ones nothing is known about, then the ones the
-/// operator took out of the rotation. Adding a member in the middle moves every
-/// account below it, so a new member belongs where it should be read.
+/// ones back within hours, then the ones back within days, then the ones nothing
+/// is known about, then the ones the operator took out of the rotation. Adding a
+/// member in the middle moves every account below it, so a new member belongs
+/// where it should be read.
+/// <para>
+/// <see cref="Limited"/> is a spent five-hour window with weekly quota left: a
+/// pause of hours, not an exhausted account. <see cref="Exhausted"/> is a spent
+/// weekly window and nothing else.
+/// </para>
 /// </summary>
 public enum AvailabilityStanding
 {
     Usable,
+    Limited,
     Exhausted,
     Unread,
     Paused,
@@ -68,17 +75,18 @@ public static class AccountAvailability
     /// the two windows that decide anything has been read, because a missing
     /// figure is not a zero and an account nobody can say anything about must not
     /// lead the list; then the window-reset rule, which drops a window that has
-    /// already turned over, figure and instant together; then exhausted, on
-    /// either window being spent, keyed by the <b>later</b> of the resets that
-    /// exhausted it, because an account over both limits is not free when the
-    /// first of them turns over, and by no instant at all when one of those
-    /// windows carries no reset, because the later of them is then unknown;
+    /// already turned over, figure and instant together; then exhausted, on the
+    /// weekly window being spent, keyed by the <b>later</b> of the resets that
+    /// block it, because an account over both limits is not free when the first
+    /// of them turns over, and by no instant at all when one of those windows
+    /// carries no reset, because the later of them is then unknown; then
+    /// limited, on the five-hour window alone being spent, keyed by its reset;
     /// else usable, keyed by the weekly reset.
     /// </summary>
     public static AvailabilityKey KeyFor(
         AccountStanding standing,
         DateTimeOffset now,
-        double eligibleFiveHourMaxPercent = 90,
+        double eligibleFiveHourMaxPercent = 100,
         double eligibleSevenDayMaxPercent = 100)
     {
         ArgumentNullException.ThrowIfNull(standing);
@@ -106,6 +114,11 @@ public static class AccountAvailability
         if (!sessionSpent && !weeklySpent)
         {
             return new AvailabilityKey(AvailabilityStanding.Usable, weekly?.ResetsAt, standing.Email);
+        }
+
+        if (!weeklySpent)
+        {
+            return new AvailabilityKey(AvailabilityStanding.Limited, session?.ResetsAt, standing.Email);
         }
 
         // The account comes back when the last of the windows that spent it
@@ -156,7 +169,7 @@ public static class AccountAvailability
     public static IReadOnlyList<ArrangedAccount> Arrange(
         IReadOnlyList<AccountStanding> standings,
         DateTimeOffset now,
-        double eligibleFiveHourMaxPercent = 90,
+        double eligibleFiveHourMaxPercent = 100,
         double eligibleSevenDayMaxPercent = 100)
     {
         ArgumentNullException.ThrowIfNull(standings);

@@ -186,20 +186,20 @@ public sealed class DashboardAssemblerTests
             new UsageLimit("session", LimitKind.Session, "session", 10, "ok", now.AddHours(3), null, IsActive: true),
             Weekly(20, now.AddDays(3)));
         // The tee, rewritten after that read, carries only the two windows it
-        // always does, and its session figure alone clears the exhaustion line.
+        // always does, and its session figure alone spends that window.
         DateTimeOffset sessionResetsAt = now.AddHours(4);
         await WriteTeeAsync(
             factory,
-            TeeWithSessionPercent(LiveEmail, now.AddMinutes(-5), sessionPercent: 95, sessionResetsAt, weeklyPercent: 43, now.AddDays(2)));
+            TeeWithSessionPercent(LiveEmail, now.AddMinutes(-5), sessionPercent: 100, sessionResetsAt, weeklyPercent: 43, now.AddDays(2)));
 
         JsonElement card = await LiveCardAsync(factory);
 
-        // 95 clears the 90 session threshold; 43 stays well under the 100 weekly
-        // one, so the exhausted key is the session reset alone.
-        card.GetProperty("standing").GetString().ShouldBe("exhausted");
+        // 100 spends the session window; 43 stays under the 100 weekly one, so the
+        // account is limited, not exhausted, and keyed on the session reset alone.
+        card.GetProperty("standing").GetString().ShouldBe("limited");
         card.GetProperty("nextResetAt").GetDateTimeOffset().ShouldBe(sessionResetsAt);
         // The row ties to the same figure the standing used, not to the cached 10.
-        Limit(card, 0).GetProperty("percent").GetDouble().ShouldBe(95);
+        Limit(card, 0).GetProperty("percent").GetDouble().ShouldBe(100);
     }
 
     [Fact]

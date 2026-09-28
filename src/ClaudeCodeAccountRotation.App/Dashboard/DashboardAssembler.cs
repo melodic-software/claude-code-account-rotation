@@ -771,6 +771,7 @@ internal sealed partial class DashboardAssembler(
     private static string Wire(AvailabilityStanding standing) => standing switch
     {
         AvailabilityStanding.Usable => "usable",
+        AvailabilityStanding.Limited => "limited",
         AvailabilityStanding.Exhausted => "exhausted",
         AvailabilityStanding.Unread => "unread",
         AvailabilityStanding.Paused => "paused",

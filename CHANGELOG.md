@@ -41,6 +41,17 @@ All notable changes to this project are documented in this file. The format foll
   refresh keeps failing costs the token host one request a minute at most.
 - A running refresh no longer disables Switch or Refresh. A switch ends the pass in
   flight and then goes through; accounts already read keep their numbers.
+- **Breaking for scripts:** an account is `exhausted` only when its 7-day window is at
+  100% (Q34). The old rule that also called a 5-hour window at 90% exhausted is gone. A
+  5-hour window at 100% with 7-day quota left is the new standing `limited`, keyed by the
+  5-hour reset and ordered after `usable` and before `exhausted`.
+- The dashboard is redesigned (#50): a Now strip per side with its live account, its
+  headroom (both windows run to 100%) and a one-click switch to the next account, over a
+  ledger of every account with one-click switch buttons per side and a menu for Edit,
+  Refresh, Pause and Remove. The side picker is replaced by those buttons, and the #148
+  "switch now" prompt sits in its side's strip. Usage is coloured in the statusline's
+  tiers (50/75/90%) in the Anthropic palette, with Poppins and Lora served from the app
+  under the OFL; `GET /fonts/*` answers without the instance token, like the stylesheet.
 
 ### Removed
 

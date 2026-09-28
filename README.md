@@ -139,11 +139,13 @@ refresh is already running).
 a change to any of them is a breaking change in the CHANGELOG. Everything else may change
 without notice.
 
-- `accounts[]`, in the dashboard's order: grouped `usable`, then `exhausted`, then `unread`, then
-  `paused`. Within a group, accounts sort by `nextResetAt` (the weekly reset for a usable account),
-  earliest first, with an undated one after every dated one, then by e-mail.
+- `accounts[]`, in the dashboard's order: grouped `usable`, then `limited`, then `exhausted`, then
+  `unread`, then `paused`. Within a group, accounts sort by `nextResetAt` (the weekly reset for a
+  usable account), earliest first, with an undated one after every dated one, then by e-mail.
 - `accounts[].email`.
-- `accounts[].standing`: `usable`, `exhausted`, `unread`, or `paused`.
+- `accounts[].standing`: `usable`, `limited` (the 5-hour window is at 100% and the 7-day is not;
+  `nextResetAt` is the 5-hour reset), `exhausted` (the 7-day window is at 100%), `unread`, or
+  `paused`.
 - `accounts[].nextResetAt`: when the account frees up (ISO 8601), or null when there is no wait
   or none that can be dated.
 - `accounts[].usage.limits[]` where `kind` is `session` (5-hour) or `weekly_all` (7-day):
