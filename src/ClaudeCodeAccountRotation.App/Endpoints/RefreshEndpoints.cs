@@ -5,6 +5,7 @@ using ClaudeCodeAccountRotation.App.Security;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Identity;
+using ClaudeCodeAccountRotation.Core.Quota;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -12,16 +13,18 @@ using Microsoft.AspNetCore.Routing;
 namespace ClaudeCodeAccountRotation.App.Endpoints;
 
 /// <summary>
-/// The two ways a refresh starts: every account, or one card's button.
+/// The three ways a refresh starts: every account, one card's button, or the
+/// Claude Code <c>StopFailure</c> hook with matcher <c>rate_limit</c>, whose
+/// payload names no account and so reads this side's live one.
 /// <para>
-/// Both answer at once and start nothing themselves. The pass is a credential
+/// All answer at once and start nothing themselves. The pass is a credential
 /// operation that outlives its request — a browser navigating away mid-rotation
 /// would strand a pair — so the route hands the work to the hosted worker and
 /// returns 202, and the page's existing ten-second poll watches each card land
 /// through <c>GET /api/dashboard</c>.
 /// </para>
 /// <para>
-/// Both refusals are 409 with a refusal token, the shape every refusal on this
+/// Every refusal is 409 with a refusal token, the shape every refusal on this
 /// page takes, and never 429: the page has no 429 handling and a lockout is this
 /// tool declining to send, not the endpoint declining to answer.
 /// </para>
@@ -57,6 +60,32 @@ internal static class RefreshEndpoints
             return await KnownAsync(target.Value, stateFile, profiles, rosterFile, cancellationToken)
                 ? Start(worker, state, timeProvider, RefreshRequest.One(target.Value))
                 : Results.NotFound(new { error = "This machine has no account called " + target.Value.Value + "." });
+        });
+
+        // A session stopped by a rate limit fires this on every stopped turn, so
+        // the account's one-minute gap refuses here rather than starting a pass
+        // the budget would only refuse: that pass would still take the run slot
+        // and overwrite the card's last outcome.
+        mutations.MapPost("/hooks/rate-limit", static async (
+            QuotaRefreshWorker worker,
+            QuotaState state,
+            RefreshBudget budget,
+            ClaudeStateFile stateFile,
+            TimeProvider timeProvider,
+            CancellationToken cancellationToken) =>
+        {
+            if ((await stateFile.ReadAccountBlockAsync(cancellationToken))?.Email is not AccountEmail live)
+            {
+                return Refused("NoLiveAccount", "No account is logged in on this side");
+            }
+
+            // The longest of the waits that stand, so the countdown is the one after
+            // which the hook is next accepted: a real 429 leaves both the gap and
+            // the longer lockout. Max skips the ones that are null.
+            DateTimeOffset now = timeProvider.GetUtcNow();
+            return new[] { budget.GapRemaining(live), budget.LockedOutFor(live), state.LockedUntil(now) - now }.Max() is TimeSpan wait
+                ? Refused("RateLimited", RefreshMessages.RateLimited(wait))
+                : Start(worker, state, timeProvider, RefreshRequest.One(live));
         });
     }
 
