@@ -840,5 +840,8 @@ public sealed class PeerTests
 
         public Task<Core.Result<string, string>> ShutdownAsync(CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+
+        public Task<Core.Result<Core.Peers.LogOutAnswer, string>> LogOutAsync(Core.Identity.AccountEmail email, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 }

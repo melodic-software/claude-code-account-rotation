@@ -92,10 +92,16 @@ internal sealed partial class ImportReconciler
         // pre-rotation export while the rotated pair stays live and untracked,
         // which is two families of one account. An absent file cannot be
         // manufactured that way: nothing writes a credential into a follower's
-        // live directory but F5's own rename, and this side never logs in.
+        // live directory but F5's own rename, and this side never logs in. A
+        // file this read cannot parse as a pair is not absent either: it may
+        // still hold a refresh token. A logout holds none, so it finishes like
+        // an absent file. Whether a logout revokes the pair is not known, and
+        // the export may be the only valid copy of the login: parking it costs
+        // at most one login if it was revoked, where unwinding would delete it
+        // and cost that login every time.
         if (entry.IsRelease)
         {
-            return await pairs.ReadLiveAsync(cancellationToken) is null;
+            return !File.Exists(pairs.LivePath) || await pairs.LiveIsLoggedOutAsync(cancellationToken);
         }
 
         // The torn F5, and the only row this file has to infer rather than read.

@@ -412,6 +412,10 @@ internal sealed partial class DashboardAssembler(
             && !cliLoggedOut
             && refresh.State != Kebab(RefreshOutcomeKind.Stranded)
             && !(loginExpiresAt <= capturedAt);
+        // The side holding this account answers that its CLI logged out of it.
+        string? loggedOutOn = slot?.State == SlotState.HeldElsewhere && holder is { Online: true, LiveLoginDead: true } && holder.LiveAccount == email
+            ? holder.Side.Value
+            : null;
         return (
             new AccountCardView(
                 email.Value,
@@ -431,7 +435,10 @@ internal sealed partial class DashboardAssembler(
                 OfferedTo: [.. sides
                     .Where(side => usable && side.Online && slot?.State == SlotState.Parked && side.LiveAccount != email)
                     .Select(static side => side.Side.Value)],
-                CliLoggedOut: isLive ? cliLoggedOutSentence : null),
+                CliLoggedOut: isLive
+                    ? cliLoggedOutSentence
+                    : loggedOutOn is null ? null : "The CLI on " + loggedOutOn + " logged out of this account; log in again.",
+                LoggedOutOn: loggedOutOn),
             new AccountStanding(email, isLive, entry?.Paused ?? false, hasCredentials, merged?.Merged, loginExpiresAt));
     }
 

@@ -20,6 +20,19 @@ All notable changes to this project are documented in this file. The format foll
   409 from either side stops nothing and the page says why. A follower that does not answer
   does not block the stop. On success the page says how to start the tool again.
   `POST /api/shutdown` is unchanged and still stops only the process it is sent to.
+- The README says how to rotate `CLAUDE_CODE_OAUTH_TOKEN` and mark the new
+  holder on the dashboard (#149).
+
+### Fixed
+
+- A WSL side whose CLI logged out, leaving a live credential file with an empty
+  `refreshToken` or no `claudeAiOauth` block, is reported as a dead login
+  (`liveLoginDead`) instead of refusing every switch with `LiveIdentityUnverified`
+  (#130). A switch or a release from that side finishes in one click: the dead
+  file is replaced or removed, the holder record naming that side goes, and the
+  account's card needs a login. Before that, the card says the CLI on that side
+  logged out and its "Log in again" releases the side and starts the login. A
+  file whose Claude login still holds a refresh token is never removed.
 
 ## [1.2.0] - 2026-09-23
 

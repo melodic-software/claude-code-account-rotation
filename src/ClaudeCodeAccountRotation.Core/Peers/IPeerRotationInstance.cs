@@ -83,13 +83,26 @@ public sealed record ImportResult(
 /// to read it from, so this is the only source (design 12). Null when that side
 /// holds nothing or its pair carries no such instant.
 /// </param>
+/// <param name="LiveLoginDead">
+/// Whether that side's live file parses and holds no login: the file the CLI
+/// leaves behind a logout, with the state file possibly still naming the
+/// account. Read in the same snapshot as the fingerprint, which is then null.
+/// </param>
 public sealed record ImportStatus(
     bool Imported,
     ImportStep? JournalStep,
     RefreshTokenFingerprint? LiveFingerprint,
     OAuthAccountBlock? LiveAccount,
     string Detail,
-    DateTimeOffset? LoginExpiresAt = null);
+    DateTimeOffset? LoginExpiresAt = null,
+    bool LiveLoginDead = false);
+
+/// <summary>
+/// The answer to a logout of a dead login. <see cref="LoggedOut"/> is false
+/// only when that side holds a live pair again, which is a definite "no": the
+/// login is not dead any more and nothing was removed.
+/// </summary>
+public sealed record LogOutAnswer(bool LoggedOut, string Detail);
 
 /// <summary>
 /// What the follower's dashboard tells the leader's L1 about that side.
@@ -114,6 +127,11 @@ public sealed record ImportStatus(
 /// the Windows page come from, and it is null when that side has no snapshot or
 /// none it could attribute.
 /// </param>
+/// <param name="LiveLoginDead">
+/// That side's live file is a logout rather than a pair. <see cref="LiveAccount"/>
+/// may still name the account the CLI logged out of, and there is no
+/// fingerprint: nothing is left to verify or to lose.
+/// </param>
 public sealed record PeerDashboard(
     SideName Side,
     AccountEmail? LiveAccount,
@@ -122,7 +140,8 @@ public sealed record PeerDashboard(
     string? Version,
     JsonObject? LiveAccountBlock = null,
     StatuslineSnapshot? Tee = null,
-    DateTimeOffset? LoginExpiresAt = null);
+    DateTimeOffset? LoginExpiresAt = null,
+    bool LiveLoginDead = false);
 
 /// <summary>
 /// The other side of this machine, as the leader's coordinator talks to it:
@@ -159,4 +178,7 @@ public interface IPeerRotationInstance
     /// drain there, so the caller may stop.
     /// </summary>
     Task<Result<string, string>> ShutdownAsync(CancellationToken cancellationToken);
+
+    /// <summary>A release of a dead login: remove that side's logged-out live file and forget the account.</summary>
+    Task<Result<LogOutAnswer, string>> LogOutAsync(AccountEmail email, CancellationToken cancellationToken);
 }
