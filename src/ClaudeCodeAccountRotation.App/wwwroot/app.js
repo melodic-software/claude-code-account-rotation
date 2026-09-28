@@ -40,7 +40,7 @@
   var lastAccounts = [];
   var lastDashboard = null;
   var lastSides = [];
-  // The side names the rows' switch buttons were last drawn for.
+  // The sides, and what each held, that the rows' switch buttons were last drawn for.
   var renderedSides = "";
   // This side has no name on the wire; the other sides are named by config.
   var HERE = "This machine";
@@ -492,10 +492,19 @@
     return button;
   }
 
+  // A switch the server refuses outright, as opposed to one blocked for now.
+  function refusable(button, refused) {
+    if (refused) { button.setAttribute("data-refused", ""); }
+    return button;
+  }
+
   // The one-click hand-over a side's strip offers, naming the account and the
   // weekly figure it was picked for.
   function takeButton(label, target, at, primary, blocked, onClick) {
     var button = actionButton("", "lg " + (primary ? "primary" : "secondary"), onClick);
+    // Named in the markup, so a strip whose target changed is never kept for
+    // looking the same: renderNow compares markup, not click handlers.
+    button.setAttribute("data-target", target.email);
     button.appendChild(element("span", null, label));
     var weekly = target.usage.limits.filter(function (limit) { return limit.kind === "weekly_all"; })[0];
     if (weekly && weekly.known) {
@@ -1016,6 +1025,9 @@
   function cell(limit, at) {
     var box = element("div", "u");
     if (!limit) { return box; }
+    // The column header is hidden on narrow screens and from screen readers,
+    // so each cell names its own window.
+    box.appendChild(element("span", "cell-label", limit.label));
     box.appendChild(bar(limit));
     box.appendChild(element("span", "pct " + meterTone(limit), reading(limit)));
     var reset = resetLine(limit, at);
@@ -1200,7 +1212,8 @@
 
   // The row's switch buttons, one per side: each hands that side this account in
   // one click, and a side already holding it says so instead. A button the
-  // server's verdict refuses is hidden rather than shown dead.
+  // server's verdict refuses is hidden rather than shown dead; one the banner
+  // blocks stays in view, disabled, so the row still says what it offers.
   function switchButtons(account, dashboard) {
     var seg = element("span", "seg");
     var name = displayName(account);
@@ -1215,7 +1228,7 @@
       // and a banner.
       var here = actionButton(HERE, "secondary sm", function () { switchTo(account.email); });
       here.setAttribute("aria-label", "Switch " + HERE.toLowerCase() + " to " + name);
-      seg.appendChild(blockable(here, switchBlocked(account, dashboard, false)));
+      seg.appendChild(refusable(blockable(here, switchBlocked(account, dashboard, false)), !account.canSwitchHere));
     }
     lastSides.forEach(function (side) {
       if (side.liveAccount === account.email) {
@@ -1224,7 +1237,8 @@
       }
       var there = actionButton(sideLabel(side.side), "secondary sm", function () { switchSide(side.side, account.email); });
       there.setAttribute("aria-label", "Switch " + sideLabel(side.side) + " to " + name);
-      seg.appendChild(blockable(there, (account.offeredTo || []).indexOf(side.side) === -1 || !!dashboard.banner));
+      var refused = (account.offeredTo || []).indexOf(side.side) === -1;
+      seg.appendChild(refusable(blockable(there, refused || !!dashboard.banner), refused));
     });
     return seg;
   }
@@ -1388,8 +1402,10 @@
     });
   }
 
+  // What the rows' switch buttons read from the sides: which sides there are
+  // and what each holds, so a side switched to another account redraws them.
   function sideNames() {
-    return lastSides.map(function (side) { return side.side; }).join("\u0000");
+    return lastSides.map(function (side) { return side.side + "\u0001" + (side.liveAccount || ""); }).join("\u0000");
   }
 
   // The rows are drawn with the sides already known, and the side read (which

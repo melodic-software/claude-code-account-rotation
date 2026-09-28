@@ -2,7 +2,6 @@
    (fonts/Poppins-OFL.txt, fonts/Lora-OFL.txt). No request leaves this host. */
 @font-face { font-family: "Poppins"; font-weight: 400; font-display: swap; src: url("/fonts/poppins-400.woff2") format("woff2"); }
 @font-face { font-family: "Poppins"; font-weight: 500; font-display: swap; src: url("/fonts/poppins-500.woff2") format("woff2"); }
-@font-face { font-family: "Poppins"; font-weight: 600; font-display: swap; src: url("/fonts/poppins-600.woff2") format("woff2"); }
 @font-face { font-family: "Lora"; font-weight: 400 700; font-display: swap; src: url("/fonts/lora-400-700.woff2") format("woff2"); }
 
 /* The Anthropic palette. Usage is coloured in the statusline's four tiers:
@@ -150,9 +149,11 @@ summary::-webkit-details-marker { display: none; }
 .lines p { font-family: var(--serif); font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .lines .cli-logout, .cli-logout { color: var(--crit); }
 .login-expiry.warn { color: var(--warn); }
-.u { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; align-items: center; font-variant-numeric: tabular-nums; }
+.u { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; align-items: center; font-variant-numeric: tabular-nums; }
 .u .pct { font-size: 13px; font-weight: 500; text-align: right; }
 .u small { grid-column: 1 / -1; font-size: 11.5px; color: var(--muted); }
+/* Read by screen readers everywhere; seen only where the column header is not. */
+.cell-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .act { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; align-items: center; }
 .seg { display: inline-flex; align-items: center; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; background: var(--surface); }
 .seg > * { border: 0; border-radius: 0; }
@@ -160,8 +161,8 @@ summary::-webkit-details-marker { display: none; }
 .seg button { background: transparent; }
 .seg button:hover { background: var(--surface-2); }
 /* A switch the server refuses is not offered at all. */
-.seg button[data-blocked] { display: none; }
-.seg:not(:has(> :not([data-blocked]))) { display: none; }
+.seg button[data-refused] { display: none; }
+.seg:not(:has(> :not([data-refused]))) { display: none; }
 .seg .live { font-size: 12.5px; color: var(--muted); padding: 0 10px; line-height: 28px; white-space: nowrap; }
 
 /* The heading is the display name and the control that renames it. */
@@ -221,6 +222,7 @@ details.more .menu hr { border: 0; border-top: 1px solid var(--line); margin: 4p
 .stopped h1 { font: 500 20px var(--sans); }
 
 @media (max-width: 1000px) {
+  .cell-label { position: static; width: auto; height: auto; clip-path: none; grid-column: 1 / -1; font-size: 12px; color: var(--muted); }
   .ledger-head { display: none; }
   .row { grid-template-columns: 1fr 1fr; }
   .nm, .act { grid-column: 1 / -1; }
