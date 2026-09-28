@@ -963,6 +963,228 @@ what you found, what the brief expected, and the exact state of your work
 | 5 | main session + human (laptop) | release and fresh-machine install |
 | 6 | sub-agent worker (worktree in `claude-code-plugins`) | mechanical, file-disjoint, other repository |
 
+## Switching model revisited: C versus D (issue #160)
+
+This section analyzes the choice for an operator decision. The plan of record stays as it is until
+the operator answers the questions at the end. Docs were fetched 2026-09-28, when the Claude Code
+changelog head was 2.1.284. The terms findings come from the verified 2026-09-27 research that is
+summarized on #148.
+
+### The candidates
+
+| Id | Shape |
+|---|---|
+| **D** (today) | One live config dir. The app parks and unparks `.credentials.json` pairs, patches `oauthAccount` in the state file, reads usage from `api.anthropic.com/api/oauth/usage`, and refreshes parked pairs at `platform.claude.com/v1/oauth/token`. The WSL side is fed by the leader/follower hand-off (`docs/topics/cross-os-rotation/PLAN.md`). |
+| **D-minus** | D without any of the app's own calls to Anthropic: usage comes only from status-line snapshots, and parked pairs are not refreshed. Claude Code would refresh an unparked pair itself on its first request (unverified, spike S3). The app still moves token files. |
+| **C** | One `CLAUDE_CONFIG_DIR` per account, using the existing `~/.claude-profiles/<email>/` folders. Claude Code owns every login, refresh, and credential file. The app never reads, moves, or writes a token. A session stays on the folder it started in. |
+| **C + launcher** (hybrid H1) | C, plus a per-side "current account" choice that the dashboard sets and a thin launcher reads. The launcher is a `claude` shell function or wrapper on each side, the VS Code `claudeCode.environmentVariables` setting, and the loop-lane start scripts. "Switch now" changes which account new sessions and restarted lanes start on. |
+| **D interactive + C loop lanes** (hybrid H2, Brief Q25) | D stays for interactive work. Loop lanes run pinned to their own folders. |
+
+### What the official docs say (verified this session)
+
+- `CLAUDE_CONFIG_DIR`: "Override the configuration directory (default: `~/.claude`). All settings,
+  session history, and plugins are stored under this path. ... Useful for running multiple accounts
+  side by side: for example, `alias claude-work='CLAUDE_CONFIG_DIR=~/.claude-work claude'`." It can
+  be set in the shell, user settings, or managed settings, and is ignored in project and local
+  settings. <https://code.claude.com/docs/en/env-vars>. This is first-party documentation of C's
+  mechanism. The staff closures of anthropics/claude-code#20131 and #24963 (2026-08-17) only back
+  it up, and the research reads those closures as a triage sweep.
+- Credentials: with `CLAUDE_CONFIG_DIR` set, Claude Code "keeps the `.credentials.json` file under
+  that directory instead ... and keys the macOS Keychain entry to that directory too", and
+  "Claude Code manages `.credentials.json` through `/login` and `/logout`."
+  <https://code.claude.com/docs/en/authentication#credential-management>. No doc describes another
+  program replacing that file. D depends on a session re-reading a swapped file on its next request.
+  The only evidence for that is this repo's own measurement (spike 04, recorded in the Brief's
+  Captured assumptions), and any release could change it without notice.
+- Login lifetime: Claude Code warns three days before a `/login` login expires, and "Renewing
+  early matters most for sessions that run unattended."
+  <https://code.claude.com/docs/en/authentication#renew-an-expiring-login>. This repo measured that
+  the 28-day window is fixed and a refresh does not extend it (cross-os-rotation
+  `design/design-resolution.md` section 2). Refreshing an idle pair therefore gains nothing. Under
+  C, D-minus, and D alike, each token family needs one browser login every 28 days.
+- Status line: `rate_limits.five_hour` and `.seven_day` (`used_percentage`, `resets_at`) are
+  present "only for claude.ai Pro and Max subscribers ... and only after the first API response in
+  the session", and "Claude Code drops a window once its `resets_at` time passes". The input carries
+  no account, email, or config-dir field. <https://code.claude.com/docs/en/statusline#available-data>
+- Transcripts live under each config dir's `projects/`. `claude --resume <transcript-path>` resumes
+  from an absolute path. `CLAUDE_CODE_PROJECT_DIR_NAME` (2.1.234 or later) names the project
+  directory inside a config dir. <https://code.claude.com/docs/en/sessions>
+- VS Code: `claudeCode.environmentVariables` accepts `CLAUDE_CONFIG_DIR`, and only as an absolute
+  path since 2.1.284. Changelog fixes at 2.1.269 and later make open tabs, the session list, and
+  sign-ins follow a changed folder without a reload (CHANGELOG.md, anthropics/claude-code). The docs
+  do not say whether a chat that is already running changes account. The **Switch account** screen
+  existed by 2.1.269, the release that added its Cancel button. It signs out and back in inside one
+  folder, so it mints a new token family the way `/login` does. It is not Model C.
+- Unattended behavior at a limit: 2.1.234 "continues your session automatically when a claude.ai
+  usage limit resets" (CHANGELOG.md). #148 adopts waiting for the reset as the default.
+
+### Comparison
+
+| Concern | D (today) | D-minus | C | C + launcher (H1) | H2 |
+|---|---|---|---|---|---|
+| **Terms: token handling by the app** | Moves, holds, and refreshes token pairs; presents Claude Code's `client_id` on refresh | Moves and holds token files at rest; sends them nowhere | None; Claude Code owns every file | None | Same as D for interactive work |
+| **Terms: app's own endpoint calls** | Usage and token endpoints | None | None | None | Same as D |
+| **Terms: fit with first-party guidance** | Undocumented mechanism | Undocumented mechanism | Documented ("multiple accounts side by side") | Documented; the launcher is an alias with a picker | Mixed |
+| **Accounts live at once on one machine** | One per side | One per side | Several: sessions started before and after a switch run on different accounts at the same time | Several, same as C | Several |
+| **Terms: drawing on several quotas at once** | Not applicable | Not applicable | Not examined: the research covered holding several accounts and switching between them, not one person using two quotas concurrently | Not examined | Not examined |
+| **Open terminal sessions on "switch"** | Follow on their next request (spike 04) | Same | Stay on their account | Stay; new sessions start on the chosen account | Interactive sessions follow; lanes stay |
+| **Session blocked at a limit, "switch now"** | Unknown whether a waiting session retries early on the new login (#148 check 2, spike S1) | Same | Resume it under another folder: `CLAUDE_CONFIG_DIR=<B> claude --resume <A transcript>` (billing and write location unverified, spike S2) | The dashboard can offer that command, or the session waits for the reset | Same as D |
+| **IDE sessions** | Follow like terminal sessions | Same | Per-window `environmentVariables`; changing it re-points open tabs (changelog); a running chat is unverified | Same as C, and the dashboard says which folder to set | Same as D |
+| **Loop lanes** | Follow the machine; a switch moves every lane at once | Same | Each lane is pinned and waits for its own reset | Lanes take the current account at their next start | Pinned (delivers Q25) |
+| **WSL side** | Leader/follower hand-off; one token family per account per machine | Same | Every option below has a cost | Same as C | Same as D, plus C's WSL cost for lanes |
+| **Usage visibility** | Endpoint for every account, plus snapshots | Snapshots only: each account shows its last snapshot, or "reset passed" once the window has reset | Same as D-minus, per folder | Same | Same as D |
+| **Login lifecycle** | App-driven `claude auth login` into the profile folder; the app refreshes parked pairs | Login as today; Claude Code refreshes on unpark (spike S3) | Login as today into the folder; Claude Code refreshes when a session uses it. The "login expires in N days" card reads `refreshTokenExpiresAt` from `.credentials.json` today. Either the app keeps reading that one field or the card is dropped in favor of Claude Code's own three-day warning | Same | Mixed |
+| **macOS (Q26)** | Needs Keychain park and unpark | Same | Nothing to build: the Keychain entry is keyed per config dir (auth doc) | Same | Keychain handling still needed |
+| **Effort** | Built | Small: delete the two HTTP clients and the refresh paths, keep the swap | Large rework: retire most of the roughly 5.6k lines under `App/Switching`, `Core/Switching`, and `Core/Peers` (the peer and WSL parts only under WSL options 1 or 4), and add shared-config handling | C plus a small launcher per side | Largest: both models stay live |
+| **Plan-of-record impact** | None | Brief's refresh contract (Q19) tiers 2 and 3 change | Brings Q25 into scope; amends the Goal ("carries every open session") and AC 1 to 3 and 9, which routes through `/planning:plan review` | Same as C | Same as C |
+
+**Usage visibility without the endpoint (C, H1, D-minus).** The `rate-limit-guard` tee can write
+one snapshot per folder, tagged with the `oauthAccount` in that folder's `.claude.json`. It is
+unverified whether the status-line command and hooks inherit `CLAUDE_CONFIG_DIR` (spike S4). The
+`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` entry in the env-vars doc implies child processes see it by
+default, but that entry lists the Bash tool, hooks, and MCP servers, not the status line. It is also
+unverified whether today's tee finds the state file through `CLAUDE_CONFIG_DIR` or a fixed
+`~/.claude.json` (spike S5).
+
+This source has gaps that cannot be closed:
+
+- An account with no session since its last snapshot shows that snapshot's value.
+- Use on the other machine or on claude.ai never produces a local snapshot, and the laptop and
+  desktop share the same ten accounts.
+
+A `resets_at` in the past tells the app the window has reset, which covers the common case: an idle
+account usually has full headroom. Changelog 2.1.275 says local sessions now share a plan-usage read
+from the last minute. No file holding that read was found under `~/.claude` on this machine, so it
+is not a usable source (checked 2026-09-28, WSL side only).
+
+**Shared configuration under C.** Every folder needs the same settings, hooks (including the #148
+stop hook), plugins, skills, and `CLAUDE.md`. `~/.claude` is managed by chezmoi. Two ways to supply
+them:
+
+- Symlinks or junctions from each account folder to one shared set.
+- chezmoi rendering the same files into all ten folders.
+
+No doc covers sharing `plugins/` or `settings.json` across config dirs used at the same time, and
+both `/config` and plugin updates write into them (spike S6).
+
+`<dir>/.claude.json` cannot be shared. Each folder's copy carries that folder's `oauthAccount`, plus
+user-scope MCP servers, per-project trust decisions, and the global keys `/config` writes
+(<https://code.claude.com/docs/en/settings>). User-scope MCP servers and trust state therefore have
+to be copied into all ten, or MCP servers moved to project or plugin scope.
+
+Transcripts in `projects/` can either:
+
+- stay per account, so `/resume` and `--continue` see only that account's history, or
+- be shared by a link, which carries the same caveat.
+
+**Migration from today's store and roster (C, H1).** The roster (email, alias, browser, profile,
+paused) and the profile folders stay as they are, and each folder becomes that account's config
+dir. The app prunes each folder to its credentials and a few kept files after login
+(`ProfileFolderStore.PruneLoginResidueAsync`). Claude Code rebuilds the rest on first use, and the
+shared-configuration links above supply settings and plugins. Existing transcripts in
+`~/.claude/projects/` belong to no account folder afterwards; they stay resumable by absolute path
+(`claude --resume <transcript-path>`, sessions doc), or can be moved into one folder. The steps:
+
+1. Return any slot the WSL side holds (`holder.json`) through the existing hand-off.
+2. Park the live pair into its owner's folder one last time. After that, `~/.claude` holds no
+   credentials.
+3. Put the launcher ahead of the bare `claude` on `PATH` on each side. A bare `claude` against
+   `~/.claude` would ask for a login and create an eleventh token family.
+4. Retire the switch journal, owner record, state-file patch, parked-pair refresh, and usage
+   client.
+
+No account needs a new browser login, because every existing token family moves once and then stays
+put.
+
+**WSL under C.** The fixed 28-day window makes WSL the constraint that decides the choice.
+
+1. **Own folders on the WSL side:** 20 browser logins per machine every 28 days instead of 10.
+   Cross-os-rotation was built to avoid that cost.
+2. **Keep the leader/follower hand-off for WSL only:** WSL keeps one token family per account. The
+   app, however, keeps copying tokens across the volume boundary, which is the exposure C removes.
+   The hand-off also assumes a parked slot. Under C every Windows folder can be a live config dir,
+   so checking one out to WSL pulls the credentials from under any Windows session running on it.
+   It would need a "no Windows session on this folder" check that does not exist today.
+3. **Both sides use the Windows folders through `/mnt/c`:** Claude Code's refresh lock is an
+   exclusive `mkdir`, and a cross-side `mkdir` was measured to succeed on both sides at once
+   (cross-os-rotation `design/design-resolution.md` section 3). If both sides refresh one folder,
+   each can invalidate the other's refresh token and log that side out. Not viable.
+4. **Split the accounts:** give WSL a fixed subset of accounts (for example two or three) with its
+   own folders, logged in only there. That is 10 logins per machine every 28 days and no hand-off,
+   but a WSL lane can only use its subset, and those accounts leave the Windows rotation on that
+   machine.
+
+### Spikes before any build (all unverified today)
+
+- **S1:** Does a session waiting at a usage limit retry early on a swapped credential file, or keep
+  waiting for the old reset (#148 check 2)? The answer decides D's one remaining UX advantage.
+- **S2:** With `CLAUDE_CONFIG_DIR=<B> claude --resume <absolute transcript path in A>`, which account
+  is billed, and where is the continued transcript written?
+- **S3:** For an unparked pair whose access token has expired, does Claude Code refresh it itself on
+  the first request? D-minus depends on this.
+- **S4:** Do the status-line command and hooks see the session's `CLAUDE_CONFIG_DIR`?
+- **S5:** Does the `rate-limit-guard` tee write and read per folder?
+- **S6:** Do linked shared `settings.json`, `plugins/`, and skills work across ten folders in use at
+  the same time?
+- **S7:** Does changing `claudeCode.environmentVariables` move a chat that is already running?
+
+### Recommendation
+
+Adopt **C + launcher (H1)** on Windows. It is the only candidate in which the app never touches a
+token or calls Anthropic, and it uses the mechanism the env-vars doc names for running several
+accounts. Losing "open sessions follow the switch" costs less now than when C was first rejected:
+issue #148 already chose waiting for the reset over automatic switching, so moving open sessions matters
+only when the operator clicks "switch now". At that point, resuming the session under another folder
+(S2) or starting a new session takes its place.
+
+For WSL, take option 4 (a fixed WSL subset) if the operator's WSL use is mostly loop lanes. Option 2
+would bring back the token copying C exists to remove and needs a new guard. If WSL must reach the
+whole roster without 20 logins every 28 days, choose **D-minus** instead of H1.
+
+If S2 or S6 fails, fall back to **D-minus**. It removes every endpoint call and keeps today's swap
+and WSL design.
+
+Choosing C or H1 also puts several accounts live on one machine at once. The terms research did not
+examine that, and it changes the plan of record (see the "Plan-of-record impact" row).
+
+Rule out H2. It keeps all of D's exposure and adds C's cost.
+
+### Decision questions for the operator
+
+1. **Switching model.**
+   - Options: D as built; D-minus; C; C + launcher (H1); H2.
+   - Recommendation: H1, falling back to D-minus if spike S2 or S6 fails or WSL needs the whole
+     roster.
+   - Consequence: choosing C or H1 brings Q25 (several accounts live at once) into scope, amends the
+     Goal and AC 1 to 3 and 9, and routes through `/planning:plan review`.
+   - Unblocks: the build issues for either the switch rework or the endpoint cut.
+2. **WSL under C.**
+   - Options: own WSL folders (20 logins per machine every 28 days); keep the leader/follower
+     hand-off for WSL (keeps token copying, needs a new guard); a fixed WSL account subset with its
+     own folders, which leaves the Windows rotation.
+   - Recommendation: a fixed subset if WSL runs mostly loop lanes; if WSL needs the whole roster,
+     choose D-minus in question 1 instead.
+   - Unblocks: the cross-os-rotation follow-ups.
+3. **Shared configuration and transcripts.**
+   - Options: links from each folder to one shared set, with `projects/` shared; links with
+     `projects/` per account; chezmoi renders ten copies, with `projects/` per account. In every
+     option `.claude.json` stays per folder, so user-scope MCP servers are copied ten times or moved
+     to project or plugin scope.
+   - Recommendation: links for settings, hooks, plugins, skills, and `CLAUDE.md`, with `projects/`
+     per account and MCP servers moved to plugin scope, pending S6.
+   - Unblocks: the migration plan.
+4. **"Switch now" under C.**
+   - Options: set the default for new sessions only; also offer a command that resumes the blocked
+     session under another account; do nothing and wait for the reset.
+   - Recommendation: set the default for new sessions, and offer the resume command if S2 passes.
+   - Unblocks: the design of the #148 prompt.
+5. **Usage source.**
+   - Options: status-line snapshots only (accept stale values for idle accounts and invisible use
+     from the other machine); snapshots plus an endpoint read the operator triggers by clicking;
+     keep today's reads.
+   - Recommendation: snapshots only.
+   - Unblocks: the endpoint-cut issue.
+
 ## Open questions
 
 - D1 (spike 02b): usage bucket keyed per token or per client. Phase 2.0, before pacing locks; a
