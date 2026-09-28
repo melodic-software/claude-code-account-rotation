@@ -133,7 +133,9 @@ summary::-webkit-details-marker { display: none; }
 .switch-head { text-align: right; }
 .card { border-bottom: 1px solid var(--line); transition: background-color .15s ease; }
 .card:hover { background: color-mix(in srgb, var(--surface-2) 70%, transparent); }
-.card.paused .row > :not(.act) { opacity: .6; }
+/* Paused reads as muted text, which holds AA; only the bars and dot fade. */
+.card.paused .row > :not(.act), .card.paused .row > :not(.act) * { color: var(--muted); }
+.card.paused .bar { opacity: .6; }
 .row { padding: 12px; }
 .nm { display: grid; grid-template-columns: 8px minmax(0, 1fr); column-gap: 12px; align-items: center; }
 .nm .title { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; min-width: 0; }

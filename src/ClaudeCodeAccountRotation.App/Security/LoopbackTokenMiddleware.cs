@@ -12,7 +12,8 @@ namespace ClaudeCodeAccountRotation.App.Security;
 
 /// <summary>
 /// Requires this process's loopback token on every route except the liveness
-/// probe and the two static assets the page loads before it has a token.
+/// probe and the static assets the page loads before it has a token: the
+/// script, the stylesheet, and the fonts under <c>/fonts</c>.
 /// The document itself loads either way: a missing or wrong credential returns
 /// the page with an empty token element, and a matching one embeds the token.
 /// A query string is never a credential.
