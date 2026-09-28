@@ -283,10 +283,13 @@ public sealed class RefreshEndpointTests
     [Fact]
     public async Task TheRateLimitHookUnderTheLiveAccountsLockoutIsRefusedWithTheCountdown()
     {
-        // The account's own 429 lockout, not the host-wide one Start checks: the
-        // live account has never been read, so no gap stands in the way.
+        // The account's own 429 lockout, not the host-wide one Start checks. A
+        // real 429 spent a reservation too, so the 60 s gap also stands, and the
+        // countdown must name the longer of the two.
         await using AppFactory factory = await LiveAndParkedAsync(TestContext.Current.CancellationToken, liveExpired: false);
-        factory.Services.GetRequiredService<RefreshBudget>().RecordLockout(new AccountEmail(LiveEmail), TimeSpan.FromMinutes(5));
+        RefreshBudget budget = factory.Services.GetRequiredService<RefreshBudget>();
+        budget.TryReserve(new AccountEmail(LiveEmail)).ShouldBeTrue();
+        budget.RecordLockout(new AccountEmail(LiveEmail), TimeSpan.FromMinutes(5));
         using HttpClient client = factory.CreateMutatingClient();
 
         using HttpResponseMessage response = await client.PostAsync(HookUri, content: null, TestContext.Current.CancellationToken);

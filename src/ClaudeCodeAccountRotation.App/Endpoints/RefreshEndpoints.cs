@@ -79,7 +79,11 @@ internal static class RefreshEndpoints
                 return Refused("NoLiveAccount", "No account is logged in on this side");
             }
 
-            return (budget.GapRemaining(live) ?? budget.LockedOutFor(live)) is TimeSpan wait
+            // The longest of the waits that stand, so the countdown is the one after
+            // which the hook is next accepted: a real 429 leaves both the gap and
+            // the longer lockout. Max skips the ones that are null.
+            DateTimeOffset now = timeProvider.GetUtcNow();
+            return new[] { budget.GapRemaining(live), budget.LockedOutFor(live), state.LockedUntil(now) - now }.Max() is TimeSpan wait
                 ? Refused("RateLimited", RefreshMessages.RateLimited(wait))
                 : Start(worker, state, timeProvider, RefreshRequest.One(live));
         });
