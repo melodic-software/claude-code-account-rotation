@@ -40,6 +40,25 @@ public sealed class QuotaRefreshTests
         // The keys the tool knows nothing about survive the rewrite.
         oauth["subscriptionType"]!.GetValue<string>().ShouldBe("max");
         harness.OutcomeFor("a@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.Read);
+        // The rotation and the retry rode the first read's reservation.
+        harness.Budget.GapRemaining(RefreshHarness.Email("a@example.com")).ShouldBe(TimeSpan.FromSeconds(60));
+    }
+
+    [Fact]
+    public async Task AnUnauthorizedReadWhoseRefreshFailsWaitsOutTheGap()
+    {
+        using RefreshHarness harness = new();
+        await harness.ParkAsync("a@example.com", "refresh-a", harness.Valid, Token);
+        harness.Usage.Answers.Enqueue(ScriptedUsage.Failed(UsageReadFailureKind.Unauthorized));
+        harness.Tokens.AnswerAt = _ => ScriptedTokens.Failed(UsageReadFailureKind.Transport);
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+        harness.Clock.Advance(TimeSpan.FromSeconds(2));
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.Tokens.Calls.ShouldBe(1);
+        harness.Usage.Calls.ShouldBe(1);
+        harness.OutcomeFor("a@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.BudgetRefused);
     }
 
     [Fact]

@@ -6,6 +6,7 @@ using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Dashboard;
 using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.App.Switching;
+using ClaudeCodeAccountRotation.App.Tests.Adapters;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Configuration;
 using ClaudeCodeAccountRotation.Core.Identity;
@@ -227,6 +228,43 @@ public sealed class SwitchEndpointTests
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
         factory.Services.GetRequiredService<QuotaState>().InProgress.ShouldBeFalse();
         (await CredentialFiles.FingerprintAsync(factory.LiveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
+    }
+
+    [Fact]
+    public async Task ASwitchDuringATokenRequestLetsTheRotatedPairLandFirst()
+    {
+        // The token POST and its write-back run under no cancellation at all: the
+        // old refresh token is dead once the host answers. A switch that ends the
+        // pass mid-POST waits for the write-back and then moves the rotated pair.
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(
+            Path.Combine(factory.ProfilesRoot, "b@example.com", CredentialFiles.FileName),
+            CredentialFiles.Shape("refresh-b", factory.Clock.GetUtcNow().AddHours(-1), factory.Clock.GetUtcNow().AddDays(28)).ToJsonString(),
+            TestContext.Current.CancellationToken);
+        TaskCompletionSource answer = new();
+        factory.Outbound.Hold = answer.Task;
+#pragma warning disable CA2000 // The handler hands the response to the adapter, which disposes it.
+        factory.Outbound.Enqueue(RecordingHandler.Json(
+            HttpStatusCode.OK,
+            """{"access_token":"access-rotated","refresh_token":"refresh-rotated","expires_in":28800,"refresh_token_expires_in":2419200}"""));
+#pragma warning restore CA2000
+        using HttpClient client = factory.CreateMutatingClient();
+        (await client.PostAsync(new Uri("/api/accounts/b%40example.com/refresh", UriKind.Relative), content: null, TestContext.Current.CancellationToken)).Dispose();
+        while (factory.Outbound.Requests.Count == 0)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        Task<HttpResponseMessage> switching = client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+        // Time for the switch to reach its yield; were it late, the pass would go
+        // on to an unscripted usage read and the request count below would say so.
+        await Task.Delay(200, TestContext.Current.CancellationToken);
+        answer.SetResult();
+        using HttpResponseMessage response = await switching;
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        factory.Outbound.Requests.Count.ShouldBe(1);
+        (await CredentialFiles.FingerprintAsync(factory.LiveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-rotated").Fingerprint);
     }
 
     [Fact]

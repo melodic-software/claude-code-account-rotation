@@ -327,7 +327,7 @@ internal sealed partial class QuotaRefresh
                     return new Turn(refused, refreshed.EndsPass);
                 }
 
-                return await ReadAsync(candidate, refreshed.Pair!, sentRead, retried: false, stopping, reserved: true);
+                return await ReadAsync(candidate, refreshed.Pair!, sentRead, retried: true, stopping, reserved: true);
             }
 
             return await ReadAsync(candidate, pair, sentRead, retried: false, stopping);
@@ -353,6 +353,8 @@ internal sealed partial class QuotaRefresh
     /// </summary>
     private async Task<Turn> ReadAsync(Candidate candidate, CredentialPair pair, bool sentRead, bool retried, CancellationToken stopping, bool reserved = false)
     {
+        // A pass ended by a switch while its token unit ran sends no read after it.
+        stopping.ThrowIfCancellationRequested();
         if (!reserved && !_budget.TryReserve(candidate.Email))
         {
             return new Turn(BudgetRefused(candidate.Email));
@@ -404,7 +406,8 @@ internal sealed partial class QuotaRefresh
 
             case UsageReadFailureKind.Unauthorized when !retried:
                 {
-                    _budget.RecordUnauthorized(candidate.Email);
+                    // The retry rides this read's reservation, so the token request
+                    // and the second read cost the account one turn of its budget.
                     CredentialPair? current = await _pairs.ReadParkedAsync(candidate.FolderPath!, stopping);
                     if (current is null)
                     {
@@ -414,7 +417,7 @@ internal sealed partial class QuotaRefresh
                     GatedRefresh refreshed = await RefreshUnderGateAsync(candidate.FolderPath!, current);
                     return refreshed.Outcome is RefreshOutcome refused
                         ? new Turn(refused, refreshed.EndsPass, SentRead: true)
-                        : await ReadAsync(candidate, refreshed.Pair!, sentRead: false, retried: true, stopping);
+                        : await ReadAsync(candidate, refreshed.Pair!, sentRead: false, retried: true, stopping, reserved: true);
                 }
 
             case UsageReadFailureKind.Unauthorized:
