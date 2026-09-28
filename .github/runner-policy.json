@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "repositoryOwner": "melodic-software",
+  "visibility": "public",
+  "selfHostedCi": false,
+  "exceptions": {}
+}
