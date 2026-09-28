@@ -1,5 +1,6 @@
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Dashboard;
+using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.App.Security;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core;
@@ -23,6 +24,7 @@ internal static class SwitchEndpoints
             LiveDirectorySwitch executor,
             RateLimitGuardTeeFileReader tee,
             DashboardState state,
+            QuotaRefreshWorker worker,
             CancellationToken cancellationToken) =>
         {
             Result<AccountEmail, string> target = AccountEmail.Parse(email);
@@ -30,6 +32,8 @@ internal static class SwitchEndpoints
             {
                 return Results.BadRequest(new { error = target.Error });
             }
+
+            await worker.YieldAsync(cancellationToken);
 
             // Remember the outgoing account's windows before the swap. A session
             // mid-turn at switch time writes them back under the incoming

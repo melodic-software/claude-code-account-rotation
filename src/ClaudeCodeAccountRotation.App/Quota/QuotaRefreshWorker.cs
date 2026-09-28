@@ -27,6 +27,12 @@ internal sealed partial class QuotaRefreshWorker : BackgroundService
     private readonly QuotaRefresh _refresh;
     private readonly QuotaState _state;
     private readonly ILogger<QuotaRefreshWorker> _logger;
+    private readonly Lock _yieldMutex = new();
+    // Borrowed, never owned: the pass that created it disposes it.
+#pragma warning disable CA2213 // Disposable fields should be disposed
+    private CancellationTokenSource? _run;
+#pragma warning restore CA2213
+    private bool _yieldRequested;
 
     public QuotaRefreshWorker(QuotaRefresh refresh, QuotaState state, ILogger<QuotaRefreshWorker> logger)
     {
@@ -46,9 +52,18 @@ internal sealed partial class QuotaRefreshWorker : BackgroundService
     /// </summary>
     public bool TryStart(RefreshRequest request)
     {
-        if (!_state.TryBeginRun())
+        // The claim and the reset are one step under the yield lock, and only the
+        // caller that won the claim resets: a yield left over from the previous
+        // pass cannot end this one, a yield that lands after the claim is kept,
+        // and a caller that loses the claim touches nothing.
+        lock (_yieldMutex)
         {
-            return false;
+            if (!_state.TryBeginRun())
+            {
+                return false;
+            }
+
+            _yieldRequested = false;
         }
 
         if (_requests.Writer.TryWrite(request))
@@ -61,6 +76,41 @@ internal sealed partial class QuotaRefreshWorker : BackgroundService
         // saying a pass is running that nothing will ever run.
         _state.EndRun();
         return false;
+    }
+
+    /// <summary>
+    /// Ends the pass in flight at its next stopping point and waits for it, so a
+    /// switch the operator clicked is never refused because a read was running.
+    /// The accounts already read keep their numbers; a gated token unit that has
+    /// started still finishes, because it runs under no token at all.
+    /// </summary>
+    public async Task YieldAsync(CancellationToken cancellationToken)
+    {
+        if (!_state.InProgress)
+        {
+            return;
+        }
+
+        CancellationTokenSource? run;
+        lock (_yieldMutex)
+        {
+            _yieldRequested = true;
+            run = _run;
+        }
+
+        if (run is not null)
+        {
+            try
+            {
+                await run.CancelAsync();
+            }
+            catch (ObjectDisposedException)
+            {
+                // The pass ended between the read above and the cancel.
+            }
+        }
+
+        await _state.CurrentRun.WaitAsync(cancellationToken);
     }
 
     /// <summary>
@@ -98,9 +148,22 @@ internal sealed partial class QuotaRefreshWorker : BackgroundService
                 return;
             }
 
+            using var run = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+            bool yielded;
+            lock (_yieldMutex)
+            {
+                _run = run;
+                yielded = _yieldRequested;
+            }
+
+            if (yielded)
+            {
+                await run.CancelAsync();
+            }
+
             try
             {
-                await _refresh.RunAsync(request, stoppingToken);
+                await _refresh.RunAsync(request, run.Token);
             }
 #pragma warning disable CA1031 // Do not catch general exception types
             catch (Exception exception)
@@ -115,6 +178,12 @@ internal sealed partial class QuotaRefreshWorker : BackgroundService
             }
             finally
             {
+                lock (_yieldMutex)
+                {
+                    _run = null;
+                    _yieldRequested = false;
+                }
+
                 _state.EndRun();
             }
         }

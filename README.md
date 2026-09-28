@@ -22,7 +22,8 @@ live in `docs/topics/claude-subscription-rotation/PLAN.md`.
 - Every switch is a human click; nothing rotates on its own.
 - The tool never calls the model API.
 - It reads the undocumented usage endpoint with its own User-Agent, which the research rates GRAY
-  (no Anthropic statement either way), not ALLOWED.
+  (no Anthropic statement either way), not ALLOWED. It reads only when the dashboard is opened
+  or Refresh is pressed, at most once a minute per account, never on a timer.
 - The parked-pair refresh presents Claude Code's public OAuth `client_id`.
 - Running the loop lanes (`work-loop`, `babysit-loop`, `attend-queue`) while rotating accounts is
   outside V1 because reader-side invalidation of a latched window is still an open problem.
@@ -69,8 +70,9 @@ then the leader, and lets a rotation in flight finish. While a switch or import 
 either side, it refuses, says why, and both keep running. That refusal is the only thing that
 blocks the stop: any other follower answer, or none within 10 s, lets the leader stop, and the
 page shows what the follower said. With more than one side in `peers[]` it refuses before
-stopping anything; stop each process with `POST /api/shutdown` instead. The page cannot start the tool again: use the Start-menu shortcut or
-`claude-code-account-rotation.exe --open`, then Start WSL side on the page.
+stopping anything; stop each process with `POST /api/shutdown` instead. The page cannot start
+the tool again: run `claude-code-account-rotation --open`, or on Windows use the Start-menu
+shortcut, then Start WSL side on the page.
 
 Scripts use routes. `POST /api/shutdown` stops only the process it is sent to, on either side,
 which is what an upgrade that replaces one side's binary wants. `POST /api/stop` on the leader

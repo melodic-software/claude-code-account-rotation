@@ -224,6 +224,54 @@ public sealed class RefreshEndpointTests
         card["refresh"]!["state"]!.GetValue<string>().ShouldBe("session-will-refresh");
     }
 
+    [Fact]
+    public async Task NothingReachesEitherEndpointWithoutATrigger()
+    {
+        // A parked pair with an expired access token is the one a background
+        // refresher would reach for first. Hours pass and the page polls, and
+        // neither is a trigger.
+        await using AppFactory factory = await LiveAndParkedAsync(TestContext.Current.CancellationToken, parkedExpired: true);
+        using HttpClient client = factory.CreateClient();
+
+        for (int hour = 0; hour < 6; hour++)
+        {
+            factory.Clock.Advance(TimeSpan.FromHours(1));
+            await CardAsync(client, ParkedEmail);
+        }
+
+        factory.Outbound.Requests.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task ARefreshInsideTheMinuteKeepsTheCachedReadingAndItsTime()
+    {
+        await using AppFactory factory = await LiveAndParkedAsync(TestContext.Current.CancellationToken);
+        Script(factory, UsageResponse);
+        Script(factory, UsageResponse);
+        using HttpClient client = factory.CreateMutatingClient();
+        QuotaState state = factory.Services.GetRequiredService<QuotaState>();
+        DateTimeOffset firstRead = factory.Clock.GetUtcNow();
+
+        (await client.PostAsync(OneUri(ParkedEmail), content: null, TestContext.Current.CancellationToken)).Dispose();
+        await state.CurrentRun;
+        factory.Clock.Advance(TimeSpan.FromSeconds(30));
+        using HttpResponseMessage inside = await client.PostAsync(OneUri(ParkedEmail), content: null, TestContext.Current.CancellationToken);
+        await state.CurrentRun;
+
+        inside.StatusCode.ShouldBe(HttpStatusCode.Accepted);
+        factory.Outbound.Requests.Count.ShouldBe(1);
+        JsonNode card = await CardAsync(client, ParkedEmail);
+        card["usage"]!["capturedAt"]!.GetValue<DateTimeOffset>().ShouldBe(firstRead);
+        card["refresh"]!["state"]!.GetValue<string>().ShouldBe("budget-refused");
+        card["refresh"]!["message"]!.GetValue<string>().ShouldBe("read 30 s ago");
+
+        factory.Clock.Advance(TimeSpan.FromSeconds(30));
+        (await client.PostAsync(OneUri(ParkedEmail), content: null, TestContext.Current.CancellationToken)).Dispose();
+        await state.CurrentRun;
+
+        factory.Outbound.Requests.Count.ShouldBe(2);
+    }
+
     /// <summary>
     /// One live account whose pair is expired (so a pass over it sends nothing)
     /// and one parked account. Both credential files are written here rather than

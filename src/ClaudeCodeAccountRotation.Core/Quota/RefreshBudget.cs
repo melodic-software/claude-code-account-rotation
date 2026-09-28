@@ -73,6 +73,18 @@ public sealed class RefreshBudget(
         }
     }
 
+    /// <summary>Takes back a reservation nothing was sent on, as if it had never been made.</summary>
+    public void Release(AccountEmail account)
+    {
+        lock (_mutex)
+        {
+            if (_accounts.TryGetValue(account, out AccountBudget? budget) && budget.Reads.Count > 0)
+            {
+                budget.Reads.RemoveAt(budget.Reads.Count - 1);
+            }
+        }
+    }
+
     /// <summary>Honors a 429: no read for this account until <paramref name="retryAfter"/> has passed.</summary>
     public void RecordLockout(AccountEmail account, TimeSpan retryAfter)
     {

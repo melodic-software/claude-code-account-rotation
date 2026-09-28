@@ -23,6 +23,25 @@ All notable changes to this project are documented in this file. The format foll
 - The README says how to rotate `CLAUDE_CODE_OAUTH_TOKEN` and mark the new
   holder on the dashboard (#149).
 
+### Changed
+
+- Opening the dashboard reads every account's usage once, the same pass Refresh all
+  starts (#161). The ten-second poll still reads only local files, and nothing reads
+  the usage or token endpoint on a timer. A Refresh inside an account's one-minute
+  gap sends nothing and leaves the last reading and its "as of" time on the card.
+  The gap is taken before a parked account's token request too, so a login whose
+  refresh keeps failing costs the token host one request a minute at most.
+- A running refresh no longer disables Switch or Refresh. A switch ends the pass in
+  flight and then goes through; accounts already read keep their numbers.
+
+### Removed
+
+- A full refresh no longer spends a token request renewing a paused account whose
+  login is within seven days of expiring (#161). A refresh does not extend the fixed
+  28-day login, so the request bought nothing; a paused account now sends nothing at
+  all. Switching to a parked account whose access token has expired still works: the
+  session it is handed to refreshes it.
+
 ### Fixed
 
 - A WSL side whose CLI logged out, leaving a live credential file with an empty
