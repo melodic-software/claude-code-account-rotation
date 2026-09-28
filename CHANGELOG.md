@@ -14,6 +14,8 @@ All notable changes to this project are documented in this file. The format foll
   it, so at most one card shows the "CI token" badge beside its 5h/7d
   headroom. The date is the operator's own record; nothing here reads GitHub
   or the token value.
+- The README says how to rotate `CLAUDE_CODE_OAUTH_TOKEN` and mark the new
+  holder on the dashboard (#149).
 
 ### Fixed
 
