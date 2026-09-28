@@ -207,30 +207,25 @@ public sealed class SwitchEndpointTests
     }
 
     [Fact]
-    public async Task ASwitchIsRefusedWhileARefreshPassIsInFlight()
+    public async Task ASwitchEndsARefreshPassInFlightAndGoesThrough()
     {
-        // A pass fixes the live account's identity when it starts and reads the live
-        // pair between its gated units. A switch landing between two turns would have
-        // the outgoing account's turn read the incoming account's pair, putting one
-        // account's usage figures on the other's card, so the refusal is server-side
-        // and not a disabled button.
+        // A switch landing between two turns of a pass would put one account's
+        // figures on the other's card, so the switch ends the pass first rather
+        // than being refused: the operator's click wins over a usage read.
         using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
-        QuotaState quota = factory.Services.GetRequiredService<QuotaState>();
-        quota.TryBeginRun().ShouldBeTrue();
+        TaskCompletionSource never = new();
+        factory.Outbound.Hold = never.Task;
         using HttpClient client = factory.CreateMutatingClient();
-
-        using (HttpResponseMessage refused = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken))
+        (await client.PostAsync(new Uri("/api/accounts/b%40example.com/refresh", UriKind.Relative), content: null, TestContext.Current.CancellationToken)).Dispose();
+        while (factory.Outbound.Requests.Count == 0)
         {
-            refused.StatusCode.ShouldBe(HttpStatusCode.Conflict);
-            (await refused.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["refusal"]!.GetValue<string>().ShouldBe("RefreshInProgress");
-            (await CredentialFiles.FingerprintAsync(factory.LiveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
+            await Task.Delay(10, TestContext.Current.CancellationToken);
         }
 
-        quota.EndRun();
+        using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
 
-        using HttpResponseMessage allowed = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
-
-        allowed.StatusCode.ShouldBe(HttpStatusCode.OK);
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        factory.Services.GetRequiredService<QuotaState>().InProgress.ShouldBeFalse();
         (await CredentialFiles.FingerprintAsync(factory.LiveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
     }
 

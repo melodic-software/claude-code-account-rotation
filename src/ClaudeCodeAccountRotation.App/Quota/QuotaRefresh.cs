@@ -307,13 +307,27 @@ internal sealed partial class QuotaRefresh
                     return new Turn(Outcome(RefreshOutcomeKind.SessionWillRefresh, RefreshMessages.SessionWillRefresh));
                 }
 
+                // The reservation is taken before the token request, so a login
+                // whose refresh keeps failing costs the token host one request a
+                // minute at most, the same as a read. Only a refusal that sent
+                // nothing gives it back.
+                if (!_budget.TryReserve(candidate.Email))
+                {
+                    return new Turn(BudgetRefused(candidate.Email));
+                }
+
                 GatedRefresh refreshed = await RefreshUnderGateAsync(candidate.FolderPath!, pair);
                 if (refreshed.Outcome is RefreshOutcome refused)
                 {
+                    if (refused.Kind == RefreshOutcomeKind.Skipped)
+                    {
+                        _budget.Release(candidate.Email);
+                    }
+
                     return new Turn(refused, refreshed.EndsPass);
                 }
 
-                pair = refreshed.Pair!;
+                return await ReadAsync(candidate, refreshed.Pair!, sentRead, retried: false, stopping, reserved: true);
             }
 
             return await ReadAsync(candidate, pair, sentRead, retried: false, stopping);
@@ -337,9 +351,9 @@ internal sealed partial class QuotaRefresh
     /// and its rule for a token the endpoint keeps rejecting is the one that
     /// should decide, not this method.
     /// </summary>
-    private async Task<Turn> ReadAsync(Candidate candidate, CredentialPair pair, bool sentRead, bool retried, CancellationToken stopping)
+    private async Task<Turn> ReadAsync(Candidate candidate, CredentialPair pair, bool sentRead, bool retried, CancellationToken stopping, bool reserved = false)
     {
-        if (!_budget.TryReserve(candidate.Email))
+        if (!reserved && !_budget.TryReserve(candidate.Email))
         {
             return new Turn(BudgetRefused(candidate.Email));
         }

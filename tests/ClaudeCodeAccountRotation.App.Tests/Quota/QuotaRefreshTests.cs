@@ -424,6 +424,29 @@ public sealed class QuotaRefreshTests
     }
 
     [Fact]
+    public async Task ADeadLoginCostsTheTokenHostOneRequestAMinute()
+    {
+        // A login whose refresh keeps failing never reaches a read, so without a
+        // reservation taken ahead of the token request every page load would post.
+        using RefreshHarness harness = new();
+        await harness.ParkAsync("a@example.com", "refresh-a", harness.Expired, Token);
+        harness.Tokens.AnswerAt = _ => ScriptedTokens.Failed(UsageReadFailureKind.Transport);
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+        harness.Clock.Advance(TimeSpan.FromSeconds(30));
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.Tokens.Calls.ShouldBe(1);
+        harness.OutcomeFor("a@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.BudgetRefused);
+
+        harness.Clock.Advance(TimeSpan.FromSeconds(30));
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.Tokens.Calls.ShouldBe(2);
+        harness.Usage.Calls.ShouldBe(0);
+    }
+
+    [Fact]
     public async Task ThePassPacesOneSecondBetweenReads()
     {
         using RefreshHarness harness = new();

@@ -23,6 +23,10 @@ All notable changes to this project are documented in this file. The format foll
   starts (#161). The ten-second poll still reads only local files, and nothing reads
   the usage or token endpoint on a timer. A Refresh inside an account's one-minute
   gap sends nothing and leaves the last reading and its "as of" time on the card.
+  The gap is taken before a parked account's token request too, so a login whose
+  refresh keeps failing costs the token host one request a minute at most.
+- A running refresh no longer disables Switch or Refresh. A switch ends the pass in
+  flight and then goes through; accounts already read keep their numbers.
 
 ### Removed
 

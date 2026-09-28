@@ -3,7 +3,7 @@
 
   // Loaded by Node for tests/js, which has no page: export the pure helpers and stop.
   if (typeof document === "undefined") {
-    module.exports = { takeTokenFromHash: takeTokenFromHash };
+    module.exports = { takeTokenFromHash: takeTokenFromHash, switchBlocked: switchBlocked };
     return;
   }
 
@@ -62,6 +62,12 @@
 
   // The token from a #t= fragment, with the fragment taken off the address bar
   // and the history entry; "" when there is none or it does not decode.
+  // Whether a card's Switch is disabled. A running refresh pass is not a
+  // reason: the switch route ends the pass and then switches.
+  function switchBlocked(account, dashboard, isBusy) {
+    return !account.canSwitchHere || isBusy || !!dashboard.banner;
+  }
+
   function takeTokenFromHash(loc, hist) {
     if (loc.hash.indexOf("#t=") !== 0) { return ""; }
     var raw = loc.hash.slice(3);
@@ -1064,12 +1070,11 @@
     // pass's progress, the Refresh all button, and a banner or setup sentence
     // that has since been cleared freeze at whatever they said when the field
     // opened. The setup sentence disables nothing; Switch still follows
-    // canSwitchHere, a request in flight, the reconciliation banner, and a
-    // refresh pass.
+    // canSwitchHere, a request in flight, and the reconciliation banner.
     lastAccounts = dashboard.accounts;
     captured.textContent = "as of " + new Date(dashboard.capturedAt).toLocaleTimeString();
     refreshStateLine.textContent = passState(dashboard);
-    refreshAllButton.disabled = busy || dashboard.refresh.inProgress;
+    refreshAllButton.disabled = busy;
     banner.hidden = !dashboard.banner;
     banner.textContent = dashboard.banner || "";
     setup.hidden = !dashboard.setup;
@@ -1141,13 +1146,13 @@
       // which is where the slot, the strand and the expiry are all known: a
       // paused account can still be switched to by hand, a stranded or expired
       // one cannot, and neither can one whose pair the other side is holding.
-      // What is added here is only what the browser knows: a request in flight,
-      // a banner, and a refresh pass.
-      switchButton.disabled = !account.canSwitchHere || busy || !!dashboard.banner || dashboard.refresh.inProgress;
+      // What is added here is only what the browser knows: a request in flight
+      // and a banner.
+      switchButton.disabled = switchBlocked(account, dashboard, busy);
       actions.appendChild(switchButton);
 
       var refreshButton = actionButton("Refresh", "secondary", function () { refreshAccount(account.email); });
-      refreshButton.disabled = busy || dashboard.refresh.inProgress;
+      refreshButton.disabled = busy;
       actions.appendChild(refreshButton);
 
       if (roster) {
