@@ -16,6 +16,14 @@ All notable changes to this project are documented in this file. The format foll
   or the token value.
 - The README says how to rotate `CLAUDE_CODE_OAUTH_TOKEN` and mark the new
   holder on the dashboard (#149).
+- A Claude Code `StopFailure` hook with matcher `rate_limit`
+  (`hooks/rate-limit-stop.sh`) calls the new `POST /api/hooks/rate-limit`, which
+  reads the live account's usage once, at most once a minute per account (#148).
+- The dashboard shows a "switch now" prompt when a side's account is at 100% of
+  its 5-hour or 7-day window, naming the first usable account in its order.
+  Nothing switches until the operator clicks it (#148).
+- The README documents a supported read-only subset of `GET /api/dashboard` for
+  scripts; changes to it are breaking changes from now on (#148).
 
 ### Changed
 

@@ -26,6 +26,8 @@ public sealed class RefreshEndpointTests
 
     private static Uri AllUri => new("/api/refresh", UriKind.Relative);
 
+    private static Uri HookUri => new("/api/hooks/rate-limit", UriKind.Relative);
+
     private static Uri OneUri(string email) => new("/api/accounts/" + Uri.EscapeDataString(email) + "/refresh", UriKind.Relative);
 
     public static TheoryData<string> Routes => ["/api/refresh", "/api/accounts/" + ParkedEmail + "/refresh"];
@@ -272,18 +274,78 @@ public sealed class RefreshEndpointTests
         factory.Outbound.Requests.Count.ShouldBe(2);
     }
 
+    [Fact]
+    public async Task TheRateLimitHookWithoutTheCustomHeaderIsForbiddenAndSendsNothing()
+    {
+        await using AppFactory factory = await LiveAndParkedAsync(TestContext.Current.CancellationToken, liveExpired: false);
+        using HttpClient client = factory.CreateClient();
+
+        using HttpResponseMessage response = await client.PostAsync(HookUri, content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.Forbidden);
+        factory.Outbound.Requests.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task TheRateLimitHookReadsOnlyTheLiveAccountAtMostOnceAMinute()
+    {
+        await using AppFactory factory = await LiveAndParkedAsync(TestContext.Current.CancellationToken, liveExpired: false);
+        Script(factory, UsageResponse);
+        Script(factory, UsageResponse);
+        using HttpClient client = factory.CreateMutatingClient();
+        QuotaState state = factory.Services.GetRequiredService<QuotaState>();
+
+        using HttpResponseMessage first = await client.PostAsync(HookUri, content: null, TestContext.Current.CancellationToken);
+        await state.CurrentRun;
+
+        first.StatusCode.ShouldBe(HttpStatusCode.Accepted);
+        factory.Outbound.Requests.Count.ShouldBe(1);
+        (await CardAsync(client, LiveEmail))["refresh"]!["state"]!.GetValue<string>().ShouldBe("read");
+        (await CardAsync(client, ParkedEmail))["refresh"]!["state"]!.GetValue<string>().ShouldBe("idle");
+
+        factory.Clock.Advance(TimeSpan.FromSeconds(30));
+        using HttpResponseMessage inside = await client.PostAsync(HookUri, content: null, TestContext.Current.CancellationToken);
+
+        inside.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        JsonNode refusal = (await inside.Content.ReadFromJsonAsync<JsonNode>(TestContext.Current.CancellationToken))!;
+        refusal["refusal"]!.GetValue<string>().ShouldBe("RateLimited");
+        refusal["message"]!.GetValue<string>().ShouldBe("rate limited, retry in 30 s");
+        state.InProgress.ShouldBeFalse();
+        factory.Outbound.Requests.Count.ShouldBe(1);
+
+        factory.Clock.Advance(TimeSpan.FromSeconds(30));
+        using HttpResponseMessage after = await client.PostAsync(HookUri, content: null, TestContext.Current.CancellationToken);
+        await state.CurrentRun;
+
+        after.StatusCode.ShouldBe(HttpStatusCode.Accepted);
+        factory.Outbound.Requests.Count.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task TheRateLimitHookWithNoLiveAccountIsRefusedAndSendsNothing()
+    {
+        await using AppFactory factory = new();
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(HookUri, content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        (await response.Content.ReadFromJsonAsync<JsonNode>(TestContext.Current.CancellationToken))!["refusal"]!.GetValue<string>().ShouldBe("NoLiveAccount");
+        factory.Outbound.Requests.ShouldBeEmpty();
+    }
+
     /// <summary>
-    /// One live account whose pair is expired (so a pass over it sends nothing)
-    /// and one parked account. Both credential files are written here rather than
+    /// One live account whose pair is expired unless asked otherwise (so a pass
+    /// over it sends nothing) and one parked account. Both credential files are written here rather than
     /// through the factory's helper because both expiries have to come from the
     /// frozen clock: the fixture's own defaults are wall-clock and mean nothing to
     /// a host four days behind them.
     /// </summary>
-    private static async Task<AppFactory> LiveAndParkedAsync(CancellationToken cancellationToken, bool parkedExpired = false)
+    private static async Task<AppFactory> LiveAndParkedAsync(CancellationToken cancellationToken, bool parkedExpired = false, bool liveExpired = true)
     {
         AppFactory factory = new();
         await factory.WriteStateFileAsync(LiveEmail, cancellationToken);
-        await WritePairAsync(factory, factory.LiveDirectory, "refresh-live", factory.Clock.GetUtcNow().AddHours(-1), cancellationToken);
+        await WritePairAsync(factory, factory.LiveDirectory, "refresh-live", factory.Clock.GetUtcNow().AddHours(liveExpired ? -1 : 1), cancellationToken);
         string folder = Path.Combine(factory.ProfilesRoot, ParkedEmail);
         Directory.CreateDirectory(folder);
         await WritePairAsync(

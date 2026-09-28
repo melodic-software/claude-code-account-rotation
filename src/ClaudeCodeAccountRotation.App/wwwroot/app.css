@@ -51,7 +51,7 @@ header h1 { margin: 0; font-size: 1.6rem; letter-spacing: 0.01em; }
 /* The first-run sentence. Not a warning: the banner above is what blocks Switch. */
 .setup { margin: 1rem 0 0; }
 
-.side { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin: 0.75rem 0; }
+.side, .prompt { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin: 0.75rem 0; }
 
 .cards {
   display: grid;

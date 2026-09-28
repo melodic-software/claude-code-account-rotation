@@ -3,12 +3,13 @@
 
   // Loaded by Node for tests/js, which has no page: export the pure helpers and stop.
   if (typeof document === "undefined") {
-    module.exports = { takeTokenFromHash: takeTokenFromHash, switchBlocked: switchBlocked };
+    module.exports = { takeTokenFromHash: takeTokenFromHash, switchBlocked: switchBlocked, switchPrompts: switchPrompts };
     return;
   }
 
   // Ten seconds. Each poll reads this machine's own files and never starts a
-  // usage read: only the page's load and its Refresh buttons do.
+  // usage read: only the page's load, its Refresh buttons, and the rate-limit
+  // stop hook's route do.
   var POLL_MS = 10000;
   var BROWSERS = ["", "chrome", "edge", "brave"];
   // How close a login's fixed expiry has to be before its card warns.
@@ -26,6 +27,10 @@
   var refreshStateLine = document.getElementById("refresh-state");
   var toast = document.getElementById("toast");
   var sidesLine = document.getElementById("sides");
+  var promptsLine = document.getElementById("prompts");
+  // What the prompts line was last built from, so a poll with the same prompts
+  // leaves its buttons alone rather than rebuilding one under the pointer.
+  var renderedPrompts = "";
   // The accounts the last dashboard named, which is what a side's switch control
   // offers: the ones parked in the store, so there is a pair to hand over.
   var lastAccounts = [];
@@ -66,6 +71,39 @@
   // reason: the switch route ends the pass and then switches.
   function switchBlocked(account, dashboard, isBusy) {
     return !account.canSwitchHere || isBusy || !!dashboard.banner;
+  }
+
+  // One "switch now" prompt per side whose account is at 100% of its 5-hour or
+  // 7-day window: { side, from, to }, side null for this side and to null when
+  // no account that side can take has headroom. The recommendation is the first
+  // usable card in the server's order, which is the soonest weekly reset. Nothing
+  // switches on its own; the prompt is a button the operator clicks.
+  function switchPrompts(accounts, sides) {
+    function atLimit(email) {
+      var account = accounts.filter(function (candidate) { return candidate.email === email; })[0];
+      return !!account && account.usage.limits.some(function (limit) {
+        return (limit.kind === "session" || limit.kind === "weekly_all") && limit.percent >= 100;
+      });
+    }
+    function firstUsable(takes) {
+      var found = accounts.filter(function (account) { return account.standing === "usable" && takes(account); })[0];
+      return found ? found.email : null;
+    }
+    var prompts = [];
+    var live = accounts.filter(function (account) { return account.isLive; })[0];
+    if (live && atLimit(live.email)) {
+      prompts.push({ side: null, from: live.email, to: firstUsable(function (account) { return account.canSwitchHere; }) });
+    }
+    sides.forEach(function (side) {
+      if (side.online && side.liveAccount && atLimit(side.liveAccount)) {
+        prompts.push({
+          side: side.side,
+          from: side.liveAccount,
+          to: firstUsable(function (account) { return (account.offeredTo || []).indexOf(side.side) !== -1; })
+        });
+      }
+    });
+    return prompts;
   }
 
   function takeTokenFromHash(loc, hist) {
@@ -342,6 +380,38 @@
       if (result.body.identityMismatchWarning) { text += ". The CLI reports " + result.body.cliEmail + "; check /status."; }
       showToast(text, result.body.identityMismatchWarning ? "warn" : "ok");
     });
+  }
+
+  // The "switch now" prompt's wording, all of it here: it is to follow the
+  // operator's test at the next real limit (#148).
+  function promptWording(prompt) {
+    var line = (prompt.side ? prompt.side + " side: " : "") + prompt.from + " is at its usage limit.";
+    return {
+      text: prompt.to ? line : line + " No other account has headroom.",
+      button: prompt.to ? "Switch now to " + prompt.to : null
+    };
+  }
+
+  function renderPrompts(sides) {
+    var prompts = switchPrompts(lastAccounts, sides);
+    var key = JSON.stringify(prompts);
+    if (key !== renderedPrompts) {
+      renderedPrompts = key;
+      promptsLine.innerHTML = "";
+      prompts.forEach(function (prompt) {
+        var wording = promptWording(prompt);
+        var row = element("div", "prompt");
+        row.appendChild(element("span", null, wording.text));
+        if (wording.button) {
+          row.appendChild(actionButton(wording.button, "switch", function () {
+            return prompt.side ? switchSide(prompt.side, prompt.to) : switchTo(prompt.to);
+          }));
+        }
+        promptsLine.appendChild(row);
+      });
+    }
+    promptsLine.hidden = prompts.length === 0;
+    Array.prototype.forEach.call(promptsLine.querySelectorAll("button"), function (button) { button.disabled = busy || !banner.hidden; });
   }
 
   function sidePath(side, suffix) {
@@ -1232,7 +1302,9 @@
       })
       .then(function (sides) {
         if (!instanceToken) { return; }
-        renderSides(Array.isArray(sides) ? sides : []);
+        var list = Array.isArray(sides) ? sides : [];
+        renderSides(list);
+        renderPrompts(list);
       })
       .catch(function (error) { showToast("Dashboard unavailable: " + error, "error"); });
   }
