@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const { takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+const { takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, tier } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
 
 function limit(kind, percent, fields) {
   return Object.assign({ kind, percent, known: true, windowReset: false }, fields);
@@ -116,4 +116,8 @@ test("no fragment, or another one, yields nothing and leaves the URL alone", () 
     assert.strictEqual(takeTokenFromHash({ hash, pathname: "/", search: "" }, hist), "");
     assert.strictEqual(hist.calls.length, 0);
   }
+});
+
+test("usage tiers follow the statusline: green, then yellow from 50, orange from 75, red from 90", () => {
+  assert.deepStrictEqual([0, 49, 50, 74, 75, 89, 90, 100].map(tier), ["ok", "ok", "warn", "warn", "high", "high", "crit", "crit"]);
 });

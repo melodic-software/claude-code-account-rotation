@@ -5,15 +5,16 @@
 @font-face { font-family: "Poppins"; font-weight: 600; font-display: swap; src: url("/fonts/poppins-600.woff2") format("woff2"); }
 @font-face { font-family: "Lora"; font-weight: 400 700; font-display: swap; src: url("/fonts/lora-400-700.woff2") format("woff2"); }
 
-/* The Anthropic palette. Orange is only the primary action; green is healthy
-   usage; blue is live on a side and the focus ring; ochre warns and brick is
-   at the limit. Every text colour here meets WCAG AA on its background. */
+/* The Anthropic palette. Usage is coloured in the statusline's four tiers:
+   green under 50%, ochre from 50, orange from 75, brick from 90. The brand
+   orange fill is otherwise only the primary action; blue is live on a side and
+   the focus ring. Every text colour here meets WCAG AA on its background. */
 :root {
   color-scheme: light dark;
   --bg: #faf9f5; --surface: #ffffff; --surface-2: #f5f4ef; --line: #e8e6dc; --line-strong: #dcd9ce;
   --text: #141413; --muted: #6b6a64; --faint: #b0aea5;
   --accent: #d97757; --accent-hover: #e08a6d; --accent-press: #c6613f; --accent-fg: #141413;
-  --ok: #5f7148; --ok-fill: #788c5d; --info: #3f6c9c; --warn: #8a6414; --warn-fill: #c79a3e; --crit: #b0453a; --crit-fill: #c0503f;
+  --ok: #5f7148; --ok-fill: #788c5d; --info: #3f6c9c; --high: #a4501c; --high-fill: #d0702f; --warn: #8a6414; --warn-fill: #c79a3e; --crit: #b0453a; --crit-fill: #c0503f;
   --track: #ecebe4; --focus: #6a9bcc; --shadow: 0 1px 2px rgb(20 20 19 / .04), 0 2px 8px -2px rgb(20 20 19 / .05);
   --sans: Poppins, Arial, sans-serif; --serif: Lora, Georgia, serif;
   --columns: minmax(0, 1.2fr) minmax(0, 1.5fr) 8.5rem 8.5rem 19rem;
@@ -24,7 +25,7 @@
     --bg: #141413; --surface: #1f1e1d; --surface-2: #262624; --line: #2c2b29; --line-strong: #3a3936;
     --text: #faf9f5; --muted: #a3a19a; --faint: #5e5d58;
     --accent-hover: #e3906f;
-    --ok: #a3b584; --ok-fill: #8fa472; --info: #8db4dc; --warn: #d4a94f; --warn-fill: #d4a94f; --crit: #e8716a; --crit-fill: #e0605a;
+    --ok: #a3b584; --ok-fill: #8fa472; --info: #8db4dc; --high: #eb8f55; --high-fill: #e08045; --warn: #d4a94f; --warn-fill: #d4a94f; --crit: #e8716a; --crit-fill: #e0605a;
     --track: #2e2d2b; --shadow: 0 1px 2px rgb(0 0 0 / .3);
   }
 }
@@ -111,13 +112,14 @@ summary::-webkit-details-marker { display: none; }
 /* ---------- tone ---------- */
 .say.ok { color: var(--ok); }
 .say.warn, .n.warn, .meter .l .pct.warn, .u .pct.warn { color: var(--warn); }
+.say.high, .n.high, .meter .l .pct.high, .u .pct.high { color: var(--high); }
 .say.crit, .n.crit, .meter .l .pct.crit, .u .pct.crit { color: var(--crit); }
 .say.paused { color: var(--muted); }
 .bar { height: 6px; border-radius: 999px; background: var(--track); overflow: hidden; }
 .bar i { display: block; height: 100%; border-radius: inherit; background: var(--faint); }
-.bar i.ok { background: var(--ok-fill); } .bar i.warn { background: var(--warn-fill); } .bar i.crit { background: var(--crit-fill); }
+.bar i.ok { background: var(--ok-fill); } .bar i.high { background: var(--high-fill); } .bar i.warn { background: var(--warn-fill); } .bar i.crit { background: var(--crit-fill); }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; display: inline-block; }
-.dot.ok { background: var(--ok-fill); } .dot.warn { background: var(--warn-fill); } .dot.crit { background: var(--crit-fill); }
+.dot.ok { background: var(--ok-fill); } .dot.high { background: var(--high-fill); } .dot.warn { background: var(--warn-fill); } .dot.crit { background: var(--crit-fill); }
 .dot.paused { background: transparent; box-shadow: inset 0 0 0 1.5px var(--faint); }
 .tag, .badge {
   display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 6px;

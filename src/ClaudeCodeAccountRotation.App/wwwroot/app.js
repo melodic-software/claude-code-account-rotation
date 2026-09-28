@@ -8,7 +8,8 @@
       switchBlocked: switchBlocked,
       headroom: headroom,
       recommended: recommended,
-      switchPrompts: switchPrompts
+      switchPrompts: switchPrompts,
+      tier: tier
     };
     return;
   }
@@ -532,7 +533,7 @@
     if (account) {
       var room = headroom(account);
       var figure = element("div", "hr");
-      figure.appendChild(element("span", "n " + (room === null ? "" : room <= 0 ? "crit" : room < 25 ? "warn" : ""), room === null ? "–" : room + "%"));
+      figure.appendChild(element("span", "n " + (room === null ? "" : tier(100 - room)), room === null ? "–" : room + "%"));
       figure.appendChild(element("span", null, "headroom"));
       head.appendChild(figure);
     }
@@ -905,8 +906,14 @@
   // severity, when a source sent one, can only raise the tone.
   function meterTone(limit) {
     if (!limit.known || limit.windowReset || limit.percent === null) { return ""; }
-    if (limit.percent >= 100 || limit.severity === "error" || limit.severity === "critical") { return "crit"; }
-    return limit.percent >= 75 || limit.severity === "warning" ? "warn" : "ok";
+    return tier(limit.percent);
+  }
+
+  // The statusline's four tiers for both rate-limit windows, so the page and
+  // the terminal colour one figure alike: red from 90%, orange from 75%,
+  // yellow from 50%, green below (~/.claude/statusline/lib/format.sh:31-33).
+  function tier(percent) {
+    return percent >= 90 ? "crit" : percent >= 75 ? "high" : percent >= 50 ? "warn" : "ok";
   }
 
   function bar(limit) {
@@ -949,17 +956,22 @@
     if (chip === "login expired") { return { kind: "crit", text: "Login expired" }; }
     if (chip === "error") { return { kind: "crit", text: account.refresh.message || "Refresh failed" }; }
     if (chip === "needs login") { return { kind: "warn", text: "Needs login" }; }
+    // Exhausted is the 7-day window spent, and nothing else; a spent 5-hour
+    // window is a pause of hours with its own reset (Q34).
     if (account.standing === "exhausted") {
       return { kind: "crit", text: account.nextResetAt ? "Exhausted, usable " + relative(account.nextResetAt, at) : "Exhausted" };
+    }
+    if (account.standing === "limited") {
+      return { kind: "crit", text: "5-hour limit reached" + (account.nextResetAt ? ", resets " + relative(account.nextResetAt, at) : "") };
     }
     if (chip === "paused" || account.standing === "paused") { return { kind: "paused", text: "Paused" }; }
     if (account.standing === "unread") { return { kind: "", text: "No usage read yet" }; }
     var near = account.usage.limits.filter(function (limit) {
-      return (limit.kind === "session" || limit.kind === "weekly_all") && meterTone(limit) !== "ok" && meterTone(limit) !== "";
+      return (limit.kind === "session" || limit.kind === "weekly_all") && (meterTone(limit) === "crit" || meterTone(limit) === "high");
     })[0];
     if (near) {
       var reset = resetLine(near, at);
-      return { kind: "warn", text: "Near the " + near.label + " limit" + (reset ? ", " + reset : "") };
+      return { kind: meterTone(near), text: "Near the " + near.label + " limit" + (reset ? ", " + reset : "") };
     }
     return { kind: "ok", text: "Usable now" };
   }
