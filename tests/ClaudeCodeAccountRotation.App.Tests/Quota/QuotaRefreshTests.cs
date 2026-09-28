@@ -498,6 +498,24 @@ public sealed class QuotaRefreshTests
     }
 
     [Fact]
+    public async Task APassEndedDuringThePacingWaitGivesTheUnsentReadsReservationBack()
+    {
+        using RefreshHarness harness = new();
+        await harness.ParkAsync("a@example.com", "refresh-a", harness.Valid, Token);
+        await harness.ParkAsync("b@example.com", "refresh-b", harness.Valid, Token);
+        using CancellationTokenSource stopping = new();
+        harness.Usage.Answers.Enqueue(ScriptedUsage.Ok());
+        harness.Waits.DuringWait = stopping.Cancel;
+
+        await harness.Engine.RunAsync(RefreshRequest.All, stopping.Token);
+
+        harness.Usage.Calls.ShouldBe(1);
+        harness.Waits.Requested.Count.ShouldBe(1);
+        harness.Budget.GapRemaining(RefreshHarness.Email("a@example.com")).ShouldNotBeNull();
+        harness.Budget.TryReserve(RefreshHarness.Email("b@example.com")).ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task TheLiveAccountIsSkippedWhenItsIdentityIsBusy()
     {
         using RefreshHarness harness = new();

@@ -362,7 +362,18 @@ internal sealed partial class QuotaRefresh
 
         if (sentRead)
         {
-            await _pace(_spacing, stopping);
+            try
+            {
+                await _pace(_spacing, stopping);
+            }
+            catch (OperationCanceledException) when (!reserved)
+            {
+                // Ended during the wait, before anything was sent: the reservation
+                // goes back, so the next Refresh is not refused for a read that
+                // never happened. One carried in from a token request stays spent.
+                _budget.Release(candidate.Email);
+                throw;
+            }
         }
 
         Result<JsonDocument, UsageReadFailure> read = await _usage().ReadUsageAsync(pair.AccessToken, stopping);

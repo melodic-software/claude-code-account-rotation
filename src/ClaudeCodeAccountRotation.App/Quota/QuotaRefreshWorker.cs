@@ -52,20 +52,18 @@ internal sealed partial class QuotaRefreshWorker : BackgroundService
     /// </summary>
     public bool TryStart(RefreshRequest request)
     {
-        // Cleared before the claim, so a yield that lands after the previous pass
-        // ended cannot end this one, and one that lands after the claim is kept.
-        // Not while a pass runs: that pass may not have seen its yield yet.
-        if (!_state.InProgress)
+        // The claim and the reset are one step under the yield lock, and only the
+        // caller that won the claim resets: a yield left over from the previous
+        // pass cannot end this one, a yield that lands after the claim is kept,
+        // and a caller that loses the claim touches nothing.
+        lock (_yieldMutex)
         {
-            lock (_yieldMutex)
+            if (!_state.TryBeginRun())
             {
-                _yieldRequested = false;
+                return false;
             }
-        }
 
-        if (!_state.TryBeginRun())
-        {
-            return false;
+            _yieldRequested = false;
         }
 
         if (_requests.Writer.TryWrite(request))

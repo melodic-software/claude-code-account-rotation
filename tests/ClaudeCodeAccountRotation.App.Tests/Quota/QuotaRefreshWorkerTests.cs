@@ -27,4 +27,21 @@ public sealed class QuotaRefreshWorkerTests
         worker.TryStart(RefreshRequest.All).ShouldBeFalse();
         harness.State.InProgress.ShouldBeFalse();
     }
+
+    [Fact]
+    public async Task ALosingStartDoesNotEraseAYieldTheClaimedPassOwes()
+    {
+        using RefreshHarness harness = new();
+        await harness.ParkAsync("a@example.com", "refresh-a", harness.Valid, TestContext.Current.CancellationToken);
+        using QuotaRefreshWorker worker = new(harness.Engine, harness.State, NullLogger<QuotaRefreshWorker>.Instance);
+        worker.TryStart(RefreshRequest.All).ShouldBeTrue();
+        Task yielded = worker.YieldAsync(TestContext.Current.CancellationToken);
+
+        worker.TryStart(RefreshRequest.All).ShouldBeFalse();
+        await worker.StartAsync(TestContext.Current.CancellationToken);
+        await yielded;
+
+        harness.Usage.Calls.ShouldBe(0);
+        await worker.StopAsync(TestContext.Current.CancellationToken);
+    }
 }

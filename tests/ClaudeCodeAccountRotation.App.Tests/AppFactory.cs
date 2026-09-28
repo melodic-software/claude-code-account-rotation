@@ -262,9 +262,13 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
 
         public IReadOnlyCollection<TimeSpan> Requested => _requested;
 
+        /// <summary>Runs inside each wait, before it answers: where a test ends a pass mid-wait.</summary>
+        public Action? DuringWait { get; set; }
+
         public Task Record(TimeSpan delay, CancellationToken cancellationToken)
         {
             _requested.Enqueue(delay);
+            DuringWait?.Invoke();
             return cancellationToken.IsCancellationRequested ? Task.FromCanceled(cancellationToken) : Task.CompletedTask;
         }
     }
