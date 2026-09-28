@@ -27,13 +27,15 @@ namespace ClaudeCodeAccountRotation.App.Endpoints;
 /// switch can start between the two stops, then sends each side its own
 /// <c>/api/shutdown</c>. A side's 409 refuses the whole stop and the leader
 /// keeps running. A side that does not answer has nothing to drain, so the
-/// leader stops anyway.
+/// leader stops anyway. With more than one side configured it refuses before
+/// asking any of them.
 /// </para>
 /// </summary>
 internal static class ShutdownEndpoints
 {
     private const string SwitchOrImportInFlight = "a switch or import is in flight";
     private const string CredentialChangeInProgress = "another credential change is in progress";
+    private const string MoreThanOneSide = "more than one side is configured; stop each with its own /api/shutdown";
 
     public static void Map(IEndpointRouteBuilder routes)
     {
@@ -90,6 +92,13 @@ internal static class ShutdownEndpoints
             if (await JournalOpenAsync(configuration, http.RequestServices, cancellationToken))
             {
                 return Results.Json(new { error = SwitchOrImportInFlight }, statusCode: StatusCodes.Status409Conflict);
+            }
+
+            // One side's 409 must stop nothing, and with two a later refusal would
+            // come after the first had already stopped.
+            if (peers is { Count: > 1 })
+            {
+                return Results.Json(new { error = MoreThanOneSide }, statusCode: StatusCodes.Status409Conflict);
             }
 
             List<SideStopView> sides = [];

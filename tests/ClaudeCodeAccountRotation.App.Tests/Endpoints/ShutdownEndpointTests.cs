@@ -1,9 +1,11 @@
 using System.Net;
 using System.Text.Json.Nodes;
+using ClaudeCodeAccountRotation.App.Adapters.Peers;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Switching;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Endpoints;
@@ -297,6 +299,29 @@ public sealed class ShutdownEndpointTests
         stopping.ShouldBeTrue();
         body.ShouldNotContain("sides");
         link.Sent.ShouldNotContain(sent => sent.Route == "/api/shutdown");
+    }
+
+    [Fact]
+    public async Task StopWithMoreThanOneSideRefusesBeforeAskingAny()
+    {
+        await using FollowerAppFactory follower = new();
+        SideEndpointTests.PeerLink link = new();
+        await using AppFactory leader = SideEndpointTests.LeaderOver(follower, link);
+        HttpClient toFollower = follower.CreateDefaultClient(link);
+        leader.Overrides = services => services.Replace(ServiceDescriptor.Singleton(new PeerRegistry(
+        [
+            new Peer(new HttpPeerRotationInstance(SideName.Wsl, toFollower), null, follower.Roots.Store),
+            new Peer(new HttpPeerRotationInstance(new SideName("other"), toFollower), null, follower.Roots.Store),
+        ])));
+        using HttpClient client = leader.CreateMutatingClient();
+
+        (HttpStatusCode status, string body, bool stopping) = await PostAsync(client, Lifetime(leader.Services), Token, _stop);
+
+        status.ShouldBe(HttpStatusCode.Conflict);
+        stopping.ShouldBeFalse();
+        JsonNode.Parse(body)!["error"]!.GetValue<string>().ShouldStartWith("more than one side is configured");
+        link.Sent.ShouldNotContain(sent => sent.Route == "/api/shutdown");
+        using IDisposable permit = await leader.Services.GetRequiredService<CredentialMutationGate>().AcquireAsync(TimeSpan.Zero, Token);
     }
 
     [Fact]

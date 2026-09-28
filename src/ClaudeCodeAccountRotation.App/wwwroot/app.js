@@ -1270,9 +1270,14 @@
     mutate("/api/refresh", "POST", null, started);
   });
 
+  // The leader runs on Windows, Linux or macOS, so the command is the one every build answers to.
+  var RESTART = "Start it again with claude-code-account-rotation --open, or on Windows from the Start-menu shortcut.";
+
   // Not through mutate(): its refresh afterwards would poll a process that is going away.
   document.getElementById("stop").addEventListener("click", function () {
-    if (!window.confirm("Stop claude-code-account-rotation and its WSL side?\n\nThe page cannot restart the tool. Start it again from the Start-menu shortcut or with claude-code-account-rotation.exe --open.")) {
+    var sideNames = Object.keys(sideRows);
+    var also = sideNames.length ? " and its " + sideNames.join(", ") + " side" : "";
+    if (!window.confirm("Stop claude-code-account-rotation" + also + "?\n\nThe page cannot restart the tool. " + RESTART)) {
       return;
     }
     busy = true;
@@ -1290,7 +1295,7 @@
   function showStopped(sides) {
     var page = element("main", "stopped");
     page.appendChild(element("h1", null, "claude-code-account-rotation is stopped"));
-    page.appendChild(element("p", null, "Start it again from the Start-menu shortcut, or run claude-code-account-rotation.exe --open."));
+    page.appendChild(element("p", null, RESTART));
     sides.forEach(function (side) {
       page.appendChild(element("p", "muted", "The " + side.side + " side: " + side.detail + ". Start it from the page once the tool is running again."));
     });
