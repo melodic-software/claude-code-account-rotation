@@ -41,7 +41,7 @@ public sealed class SideEndpointTests
     /// records what crossed it, and can refuse to carry anything, which is what
     /// a stopped distribution looks like from the leader's side.
     /// </summary>
-    private sealed class PeerLink : DelegatingHandler
+    internal sealed class PeerLink : DelegatingHandler
     {
         public bool Offline { get; set; }
 
@@ -78,7 +78,7 @@ public sealed class SideEndpointTests
     /// over the follower's client. Both sides are the same assembly, so the
     /// version check the coordinator runs before anything moves passes.
     /// </summary>
-    private static AppFactory LeaderOver(FollowerAppFactory follower, PeerLink link)
+    internal static AppFactory LeaderOver(FollowerAppFactory follower, PeerLink link)
     {
         AppFactory leader = new(sharedStore: true, profilesRoot: follower.Roots.Store, peerStorePath: follower.Roots.Store);
         HttpClient toFollower = follower.CreateDefaultClient(link);

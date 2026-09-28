@@ -358,6 +358,7 @@ internal static class AppComposition
         RefreshEndpoints.Map(app);
         LoginEndpoints.Map(app);
         ShutdownEndpoints.Map(app);
+        ShutdownEndpoints.MapStop(app);
     }
 
     /// <summary>

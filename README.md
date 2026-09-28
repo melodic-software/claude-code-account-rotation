@@ -65,8 +65,19 @@ does not stop it. A launcher running inside a job object that kills its processe
 takes the leader down with it; some IDE terminals and Win32-OpenSSH sessions do that. The
 Start-menu shortcut and the logon task are not affected.
 
-The dashboard has no stop control. Stop the leader with its shutdown route, which lets a
-rotation in flight finish and answers 409 while a switch or import is in progress:
+Stop the tool with the Stop button in the dashboard header. It stops the WSL follower first and
+then the leader, and lets a rotation in flight finish. While a switch or import is in progress on
+either side, it refuses, says why, and both keep running. That refusal is the only thing that
+blocks the stop: any other follower answer, or none within 10 s, lets the leader stop, and the
+page shows what the follower said. With more than one side in `peers[]` it refuses before
+stopping anything; stop each process with `POST /api/shutdown` instead. The page cannot start
+the tool again: run `claude-code-account-rotation --open`, or on Windows use the Start-menu
+shortcut, then Start WSL side on the page.
+
+Scripts use routes. `POST /api/shutdown` stops only the process it is sent to, on either side,
+which is what an upgrade that replaces one side's binary wants. `POST /api/stop` on the leader
+is the Stop button: send it in place of `/api/shutdown` below to stop both sides. Both answer 409
+while a switch or import is in progress:
 
 ```powershell
 $instance = Get-Content "$env:LOCALAPPDATA\claude-code-account-rotation\instance.url"

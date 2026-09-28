@@ -14,6 +14,12 @@ All notable changes to this project are documented in this file. The format foll
   it, so at most one card shows the "CI token" badge beside its 5h/7d
   headroom. The date is the operator's own record; nothing here reads GitHub
   or the token value.
+- A Stop button in the dashboard header stops the tool gracefully, with the 45 s drain (#138).
+  After a confirmation it calls the new leader route `POST /api/stop`, which takes the leader's
+  mutation gate, sends the WSL follower its own `POST /api/shutdown`, then stops the leader. A
+  409 from either side stops nothing and the page says why. A follower that does not answer
+  does not block the stop. On success the page says how to start the tool again.
+  `POST /api/shutdown` is unchanged and still stops only the process it is sent to.
 - The README says how to rotate `CLAUDE_CODE_OAUTH_TOKEN` and mark the new
   holder on the dashboard (#149).
 

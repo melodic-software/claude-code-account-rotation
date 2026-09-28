@@ -307,6 +307,9 @@ internal sealed class FakePeerRotationInstance(string mailbox) : IPeerRotationIn
             : Result<ImportStatus, string>.Success(Status));
     }
 
+    public Task<Result<string, string>> ShutdownAsync(CancellationToken cancellationToken) =>
+        throw new NotSupportedException();
+
     public async Task<Result<LogOutAnswer, string>> LogOutAsync(AccountEmail email, CancellationToken cancellationToken)
     {
         Calls.Add("LogOut");
