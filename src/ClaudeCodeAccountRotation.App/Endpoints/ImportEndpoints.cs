@@ -86,6 +86,23 @@ internal static class ImportEndpoints
                 static reason => Results.Json(new { error = reason }, statusCode: StatusCodes.Status409Conflict));
         });
 
+        mutations.MapPost("/logout", static async (
+            ImportCommitBody body,
+            FollowerImport import,
+            CancellationToken cancellationToken) =>
+        {
+            Result<AccountEmail, string> email = AccountEmail.Parse(body?.Email ?? string.Empty);
+            if (email.IsFailure)
+            {
+                return Results.BadRequest(new { error = email.Error });
+            }
+
+            Result<LogOutAnswer, string> answer = await import.LogOutAsync(email.Value, cancellationToken);
+            return answer.Match(
+                static done => Results.Ok(new LogOutView(done.LoggedOut, done.Detail)),
+                static reason => Results.Json(new { error = reason }, statusCode: StatusCodes.Status409Conflict));
+        });
+
         routes.MapGet("/api/import-status", static async (string? email, FollowerImport import, CancellationToken cancellationToken) =>
         {
             AccountEmail? about = string.IsNullOrWhiteSpace(email) ? null : AccountEmail.Parse(email).Match(static parsed => (AccountEmail?)parsed, static _ => null);
@@ -138,7 +155,8 @@ internal static class ImportEndpoints
                 // Read in the status snapshot above, under the commit's own
                 // lock: one family per account, so the card for an account this
                 // side holds has no local file to read its expiry from.
-                status.LoginExpiresAt));
+                status.LoginExpiresAt,
+                status.LiveLoginDead));
         });
     }
 
@@ -216,7 +234,10 @@ internal static class ImportEndpoints
         string? Version,
         JsonObject? LiveAccountBlock,
         TeeView? Tee = null,
-        DateTimeOffset? LoginExpiresAt = null);
+        DateTimeOffset? LoginExpiresAt = null,
+        bool LiveLoginDead = false);
+
+    internal sealed record LogOutView(bool LoggedOut, string Detail);
 
     /// <summary>
     /// This side's rate-limit-guard observation in plain wire types: the account

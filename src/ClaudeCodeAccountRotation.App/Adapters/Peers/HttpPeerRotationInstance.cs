@@ -12,7 +12,7 @@ using ClaudeCodeAccountRotation.Core.Switching;
 namespace ClaudeCodeAccountRotation.App.Adapters.Peers;
 
 /// <summary>
-/// The other side over loopback HTTP: the five calls of
+/// The other side over loopback HTTP: the six calls of
 /// <see cref="IPeerRotationInstance"/> against the follower's routes.
 /// <para>
 /// Every mutating call carries <see cref="SameOriginMutationFilter.HeaderName"/>
@@ -65,7 +65,8 @@ internal sealed class HttpPeerRotationInstance : IPeerRotationInstance
                 view.Version,
                 view.LiveAccountBlock,
                 Tee(view.Tee),
-                view.LoginExpiresAt),
+                view.LoginExpiresAt,
+                view.LiveLoginDead),
             cancellationToken);
 
     /// <summary>
@@ -116,6 +117,13 @@ internal sealed class HttpPeerRotationInstance : IPeerRotationInstance
             "/api/import/abort",
             new ImportEndpoints.ImportCommitBody(email.Value),
             static _ => Unit.Value,
+            cancellationToken);
+
+    public Task<Result<LogOutAnswer, string>> LogOutAsync(AccountEmail email, CancellationToken cancellationToken) =>
+        PostAsync<ImportEndpoints.ImportCommitBody, ImportEndpoints.LogOutView, LogOutAnswer>(
+            "/api/logout",
+            new ImportEndpoints.ImportCommitBody(email.Value),
+            static view => new LogOutAnswer(view.LoggedOut, view.Detail),
             cancellationToken);
 
     public Task<Result<ImportStatus, string>> ImportStatusAsync(AccountEmail email, CancellationToken cancellationToken) =>

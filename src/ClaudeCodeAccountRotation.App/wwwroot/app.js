@@ -359,6 +359,7 @@
       }
       var text = "The " + result.body.side + " side now holds " + result.body.now;
       if (result.body.parkedAs) { text += "; parked " + result.body.parkedAs; }
+      if (result.body.loggedOut) { text += "; its CLI had logged out of " + result.body.loggedOut + ", which needs a login"; }
       showToast(text, "ok");
     });
   }
@@ -391,8 +392,20 @@
       // The account just handed back is now on offer. Leaving the picker on it,
       // or on whichever account sorts first, would hand a pair straight back out.
       clearSidePicker(side);
-      showToast("The " + result.body.side + " side holds nothing; " + (result.body.parkedAs || holding) + " is parked here", "ok");
+      showToast(result.body.loggedOut
+        ? "The " + result.body.side + " side holds nothing; its CLI had logged out of " + result.body.loggedOut + ", which needs a login"
+        : "The " + result.body.side + " side holds nothing; " + (result.body.parkedAs || holding) + " is parked here", "ok");
     });
+  }
+
+  // A login the CLI on that side gave up. The slot is still that side's, so a
+  // release frees it first, and the login opens on the card the release redraws.
+  function loginFromSide(side, email) {
+    var released = false;
+    return mutate(sidePath(side, "/release"), "POST", null, function (result) {
+      released = result.ok;
+      if (released) { clearSidePicker(side); } else { showToast(refused(result.body), "error"); }
+    }).then(function () { return released ? startLogin(email) : null; });
   }
 
   // A release succeeded: the picker returns to "choose an account". Switch is
@@ -1174,6 +1187,9 @@
           account.hasCredentials ? "Log in again" : "Login",
           "secondary",
           function () { startLogin(account.email); }));
+      }
+      if (roster && account.loggedOutOn) {
+        actions.appendChild(actionButton("Log in again", "secondary", function () { loginFromSide(account.loggedOutOn, account.email); }));
       }
 
       card.appendChild(actions);
