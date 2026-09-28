@@ -94,13 +94,14 @@ internal sealed partial class ImportReconciler
         // manufactured that way: nothing writes a credential into a follower's
         // live directory but F5's own rename, and this side never logs in. A
         // file this read cannot parse as a pair is not absent either: it may
-        // still hold a refresh token. Nor is a logout: F5 deletes the file, so a
-        // logged-out one is the CLI's own logout while the lock was stale, and
-        // the export it left behind is not a login to park. That unwinds, and
-        // the dead login is handed back by a release of a dead login.
+        // still hold a refresh token. A logout holds none, so it finishes like
+        // an absent file. Whether a logout revokes the pair is not known, and
+        // the export may be the only valid copy of the login: parking it costs
+        // at most one login if it was revoked, where unwinding would delete it
+        // and cost that login every time.
         if (entry.IsRelease)
         {
-            return !File.Exists(pairs.LivePath);
+            return !File.Exists(pairs.LivePath) || await pairs.LiveIsLoggedOutAsync(cancellationToken);
         }
 
         // The torn F5, and the only row this file has to infer rather than read.
