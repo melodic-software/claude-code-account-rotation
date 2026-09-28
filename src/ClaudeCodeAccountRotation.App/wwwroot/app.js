@@ -105,7 +105,7 @@
     function atLimit(email) {
       var account = accounts.filter(function (candidate) { return candidate.email === email; })[0];
       return !!account && account.usage.limits.some(function (limit) {
-        return (limit.kind === "session" || limit.kind === "weekly_all") && limit.percent >= 100;
+        return (limit.kind === "session" || limit.kind === "weekly_all") && limit.percent >= 100 && !limit.windowReset;
       });
     }
     function firstUsable(takes) {

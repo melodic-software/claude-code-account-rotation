@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-09-28
+
 ### Added
 
 - The Edit panel marks one enrolled account as the holder of the CI org secret
@@ -71,6 +73,8 @@ All notable changes to this project are documented in this file. The format foll
   account's card needs a login. Before that, the card says the CLI on that side
   logged out and its "Log in again" releases the side and starts the login. A
   file whose Claude login still holds a refresh token is never removed.
+- A 5-hour window at 100% whose reset has passed no longer raises a switch prompt, and the
+  ranked-queue note says only `Usable` accounts are offered next; `Limited` never is.
 
 ## [1.2.0] - 2026-09-23
 

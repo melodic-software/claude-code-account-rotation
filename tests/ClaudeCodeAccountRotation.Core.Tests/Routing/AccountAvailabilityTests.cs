@@ -239,6 +239,14 @@ public sealed class AccountAvailabilityTests
     }
 
     [Fact]
+    public void FiveHourAtOneHundredWhoseResetHasPassedIsUsable()
+    {
+        AccountAvailability.KeyFor(
+            Read("a@example.com", Session(100, _now.AddHours(-1)), Weekly(40, _now.AddDays(4))),
+            _now).Standing.ShouldBe(AvailabilityStanding.Usable);
+    }
+
+    [Fact]
     public void ALimitedAccountSortsAfterTheUsableOnesAndBeforeTheExhaustedOnes()
     {
         Order(

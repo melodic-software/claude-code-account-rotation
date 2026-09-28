@@ -60,8 +60,9 @@ public sealed record ArrangedAccount(AvailabilityKey Key, AccountStanding Standi
 /// <para>
 /// It is a total order, and over every account, so that a ranked queue is a
 /// filter and a truncation over this one list rather than a second ordering that
-/// can disagree with the page: drop the paused, drop the exhausted, flag the
-/// unread as carrying no data, take as many of the rest as are wanted. The
+/// can disagree with the page: keep only the `Usable`
+/// accounts (a paused, limited, exhausted or unread one is not offered next),
+/// take as many of them as are wanted. The
 /// eligibility figures are parameters for the same reason, so a policy can move
 /// them without changing a signature here.
 /// </para>

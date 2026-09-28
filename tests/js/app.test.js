@@ -80,6 +80,22 @@ test("another side at its limit prompts for an account offered to that side, and
   assert.deepStrictEqual(switchPrompts(accounts, [{ side: "wsl", online: false, liveAccount: "w@x" }]), []);
 });
 
+test("a limited card is never recommended or offered as a switch target, even ahead of a usable one", () => {
+  const accounts = [
+    card("l@x", { standing: "limited" }, 100, 0),
+    card("u@x", {}, 0, 0),
+    card("a@x", { isLive: true, canSwitchHere: false }, 100, 0)
+  ];
+  assert.strictEqual(recommended(accounts, (account) => account.canSwitchHere).email, "u@x");
+  assert.deepStrictEqual(switchPrompts(accounts, []), [{ side: null, from: "a@x", to: "u@x" }]);
+});
+
+test("a 100% row whose window has reset raises no prompt", () => {
+  const stale = card("a@x", { isLive: true, canSwitchHere: false }, 100, 5);
+  stale.usage.limits[0].windowReset = true;
+  assert.deepStrictEqual(switchPrompts([card("b@x", {}, 0, 0), stale], []), []);
+});
+
 function history() {
   const calls = [];
   return { calls, replaceState: (...args) => calls.push(args) };
