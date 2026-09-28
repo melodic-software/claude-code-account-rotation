@@ -16,7 +16,7 @@ Uninterrupted Claude Code work across ten personally owned Max 20x subscriptions
 
 - **Terms posture.** Behaviors Anthropic's terms neither prohibit nor address are acceptable when ban risk is judged minimal (Q1). Hard lines from the research: no inference with subscription tokens outside the unmodified `claude` binary; no proxying, pooling, or sharing; no synthetic requests to start or measure a window; no User-Agent imitation (the tool identifies itself honestly on every request it makes); no claiming promotional credits across accounts. Credential handling is limited to the developer's own files on the developer's own machine: pairs are moved, never copied, so one holder exists at any moment; credential refresh writes back only to Claude Code's own credential file and never stores tokens anywhere else. **Amendment note 2026-09-21 (#70):** "pairs are moved, never copied, so one holder exists at any moment" is amended to **"at most one reachable copy at every instant"**. A hand-off to the other side of the machine cannot be a rename — the two sides are on different volumes — so it is a staged copy, verified by fingerprint through a fresh open, promoted, and deleted, under a journal that finishes or unwinds it after a crash. The staging file is unreachable as a credential while it exists. The invariant the original sentence protects is unchanged and is the one `check-single-holder.sh` tests: no lineage is ever readable from two places at once. Proven on real credentials this date; see `docs/topics/cross-os-rotation/PLAN.md` phase 5.
 - **Switch model D** (Q18). The live config dir is the one every session already uses; a switch parks the live pair into the outgoing account's folder and unparks the target pair, patching only the `oauthAccount` block of the state file (`~/.claude.json` at the home root when `CLAUDE_CONFIG_DIR` is unset, `<dir>/.claude.json` when it is set; verified on this machine 2026-09-04). The tool honors Claude Code's token-refresh lock before touching the live pair. Fallback if the spike fails: model C, one `CLAUDE_CONFIG_DIR` per account with junction-shared `projects/` and `plugins/` (Q9).
-- **Refresh contract** (Q19). Tier 1: the live session's statusline snapshot. Tier 2: manual "Refresh all", one usage read per account with its existing token; on 401 the tool refreshes that parked pair's token and retries once. Tier 3: automatic refresh of the top three queue candidates only at decision points (active account crosses 80%, or a switch is about to be proposed). No timer polling. Never refresh the live account's pair while a session may be refreshing it. Every card shows "as of <time> via snapshot|refresh" and "login expires in N days."
+- **Refresh contract** (Q19, as amended by the D-minus decision in "Switching model revisited: C versus D (issue #160)"). Tier 1: the live session's statusline snapshot. Tier 2: a triggered read, one usage read per account with its existing token, sent only when the dashboard is opened, when the operator clicks Refresh (all or one card), or when the #148 stop hook fires; at most one read per account per minute, and a repeat inside the minute returns the cached reading. On 401 for a parked pair, a triggered read may refresh that pair's expired access token and retry once, inside the same per-account minute. There is no tier 3: nothing reads or refreshes automatically, there is no timer polling, and paused logins are not renewed. Never refresh the live account's pair while a session may be refreshing it. Every card shows "as of <time> via snapshot|refresh" and "login expires in N days."
 - **Routing** (Q4, Q11). Eligible = not paused, 7-day used under 100%, 5-hour used under 90%. Order by earliest `seven_day.resets_at`. Propose a switch when the active account trips or crosses 90%. Propose a switch-back when an earlier-deadline account regains 5-hour headroom, at most once per 30 minutes, never mid-turn. Flag accounts whose weekly reset is within 24 hours and still hold headroom. The dashboard shows a ranked queue of the next three. All three numbers are settings.
 - **No hard-coded assumptions, cross-platform by design** (Q16, Q22). Every path, port, threshold, and browser mapping lives in one config file with defaults derived from the user profile (never a drive letter): live dir `~/.claude` or `CLAUDE_CONFIG_DIR` when set; profiles root `~/.claude-profiles`; config and roster under the platform's per-user app-data dir. Paths, folder-name sanitization, browser launching, and credential-store access go through platform abstractions so that Windows is the first target, not the only one; macOS Keychain support itself stays deferred (Q26). First run creates the config; the repo carries the template.
 - **Quota data model.** Cards are driven by the endpoint's generic `limits[]` array (kind, group, percent, severity, resets_at, scope), so session, weekly all-models, and any weekly scoped bucket such as Fable render without code changes when Anthropic adds or renames buckets; the codenamed top-level fields are never referenced by name. The usage-credits state and `refreshTokenExpiresAt` ("login expires in N days") come from the same responses and the credential store.
@@ -448,8 +448,8 @@ time, plus login expiry (AC 4). Behavioral references: `spike-usage-probe.py`,
   `anthropic-beta: oauth-2025-04-20` on the usage read, Claude Code's public client id on the refresh
   as spike 03 did. Errors map to `UsageReadFailure`; `Retry-After` parsed from the 429.
 - [x] **2.5** `QuotaRefresh` under the `CredentialMutationGate`: Refresh all iterates non-paused
-  accounts with one-second spacing, plus any paused account whose login expires within 7 days (a
-  paused pair's 28-day login must never lapse silently); on 401 for a **parked** pair, refresh once
+  accounts with one-second spacing (the paused-login renewal this step first carried is removed by
+  #161: a refresh does not extend the fixed 28-day login; see the refresh contract); on 401 for a **parked** pair, refresh once
   and write back (rotated `refreshToken`, `accessToken`, `expiresAt`, and `refreshTokenExpiresAt`
   recomputed from `refresh_token_expires_in`) through `ICredentialPairStore.WriteParkedAsync` as a
   compare-and-swap on the parked file's fingerprint (abort loudly if the file moved or changed since
@@ -485,7 +485,7 @@ The phase stays `[DOING]` for 2.0 alone.
 - `RefreshBudgetTests`: seventh reserve within 5 minutes is denied; a reserve within 60 s of the last successful read is denied; `UnauthorizedResponseDoesNotStartTheGapClock` allows the retry 2 s after a 401.
 - `QuotaRefreshTests.WriteBackFailureParksTheRotatedPairInRecovery`: with the parked file made read-only after the token endpoint answers, the recovery file exists with the new fingerprint, the card reports a blocking error, and the next start restores the pair and deletes the recovery file.
 - `AtomicJsonFileTests.CreatesOwnerOnlyFilesOnUnix` (Linux CI leg): target mode `600`, no temp residue; `ReplacesAbsentTargetByMove` on both legs.
-- `QuotaRefreshTests.PausedPairNearLoginExpiryIsRefreshed`: a paused pair 5 days from login expiry gets one token POST; one 20 days out gets none.
+- `QuotaRefreshTests.PausedPairNearLoginExpiryIsRefreshed`: superseded by #161; paused logins are no longer renewed.
 - Live acceptance (human): with ≥ 2 parked accounts, one idle > 8 h, click Refresh all; every card populated within 60 s (wall clock) with source, capture time, and "login expires in N days"; compare one card to that account's claude.ai Settings > Usage. Scope-change note 2026-09-12 (#52): "login expires in N days" moved to #49; the 60-second bound is not promised while the bucket keying is unknown, since under a shared bucket a pass populates about eight cards and the rest report "rate limited, retry in N s" and lead the next pass (converging in three passes over ten accounts). Running spike 02b per-token restores the bound as written. The runbook step is in `tests/acceptance/README.md`.
 
 ### Phase 3: Ranking, queue, and switch proposals [NOT BUILT, by decision]
@@ -536,7 +536,8 @@ decision-point auto-refresh (AC 5). Pure functions over `AccountStanding` rows.
   last such proposal is older than the cooldown; none when the queue is empty. The cooldown clock and
   the last-seen trigger state persist in `<appdata>/state/advisor-state.json` (`AdvisorState`, via
   `AtomicJsonFile`) so a restart does not reset them.
-- [ ] **3.4** Tier-3 auto-refresh in `QuotaRefresh` is **edge-triggered**: it fires only on the
+- [ ] **3.4** Superseded by the amended refresh contract, which has no tier 3; kept as the original
+  design. Tier-3 auto-refresh in `QuotaRefresh` is **edge-triggered**: it fires only on the
   active account's transition into `AutoRefreshTriggerPercent` (last-seen state in `AdvisorState`)
   or when a proposal first appears or changes kind; it refreshes the top three candidates, skipping
   any read within 60 s, under `RefreshBudget`. A dashboard read with unchanged state sends nothing,
@@ -975,7 +976,7 @@ summarized on #148.
 | Id | Shape |
 |---|---|
 | **D** (today) | One live config dir. The app parks and unparks `.credentials.json` pairs, patches `oauthAccount` in the state file, reads usage from `api.anthropic.com/api/oauth/usage`, and refreshes parked pairs at `platform.claude.com/v1/oauth/token`. The WSL side is fed by the leader/follower hand-off (`docs/topics/cross-os-rotation/PLAN.md`). |
-| **D-minus** | D without any of the app's own calls to Anthropic: usage comes only from status-line snapshots, and parked pairs are not refreshed. Claude Code would refresh an unparked pair itself on its first request (unverified, spike S3). The app still moves token files. |
+| **D-minus** | D's live-file swap, with the app's own calls to Anthropic cut to triggered reads: the usage and token endpoints are called only on dashboard open, a manual Refresh, or the #148 stop hook, at most once per account per minute. A triggered read may refresh an expired parked access token; paused-login renewal is removed. Between reads, usage comes from status-line snapshots. The app still moves token files. This is what #161 built (PR #164). |
 | **C** | One `CLAUDE_CONFIG_DIR` per account, using the existing `~/.claude-profiles/<email>/` folders. Claude Code owns every login, refresh, and credential file. The app never reads, moves, or writes a token. A session stays on the folder it started in. |
 | **C + launcher** (hybrid H1) | C, plus a per-side "current account" choice that the dashboard sets and a thin launcher reads. The launcher is a `claude` shell function or wrapper on each side, the VS Code `claudeCode.environmentVariables` setting, and the loop-lane start scripts. "Switch now" changes which account new sessions and restarted lanes start on. |
 | **D interactive + C loop lanes** (hybrid H2, Brief Q25) | D stays for interactive work. Loop lanes run pinned to their own folders. |
@@ -1023,7 +1024,7 @@ summarized on #148.
 | Concern | D (today) | D-minus | C | C + launcher (H1) | H2 |
 |---|---|---|---|---|---|
 | **Terms: token handling by the app** | Moves, holds, and refreshes token pairs; presents Claude Code's `client_id` on refresh | Moves and holds token files at rest; sends them nowhere | None; Claude Code owns every file | None | Same as D for interactive work |
-| **Terms: app's own endpoint calls** | Usage and token endpoints | None | None | None | Same as D |
+| **Terms: app's own endpoint calls** | Usage and token endpoints | Usage and token endpoints, only when triggered (dashboard open, Refresh, stop hook), at most once per account per minute | None | None | Same as D |
 | **Terms: fit with first-party guidance** | Undocumented mechanism | Undocumented mechanism | Documented ("multiple accounts side by side") | Documented; the launcher is an alias with a picker | Mixed |
 | **Accounts live at once on one machine** | One per side | One per side | Several: sessions started before and after a switch run on different accounts at the same time | Several, same as C | Several |
 | **Terms: drawing on several quotas at once** | Not applicable | Not applicable | Not examined: the research covered holding several accounts and switching between them, not one person using two quotas concurrently | Not examined | Not examined |
@@ -1032,13 +1033,13 @@ summarized on #148.
 | **IDE sessions** | Follow like terminal sessions | Same | Per-window `environmentVariables`; changing it re-points open tabs (changelog); a running chat is unverified | Same as C, and the dashboard says which folder to set | Same as D |
 | **Loop lanes** | Follow the machine; a switch moves every lane at once | Same | Each lane is pinned and waits for its own reset | Lanes take the current account at their next start | Pinned (delivers Q25) |
 | **WSL side** | Leader/follower hand-off; one token family per account per machine | Same | Every option below has a cost | Same as C | Same as D, plus C's WSL cost for lanes |
-| **Usage visibility** | Endpoint for every account, plus snapshots | Snapshots only: each account shows its last snapshot, or "reset passed" once the window has reset | Same as D-minus, per folder | Same | Same as D |
-| **Login lifecycle** | App-driven `claude auth login` into the profile folder; the app refreshes parked pairs | Login as today; Claude Code refreshes on unpark (spike S3) | Login as today into the folder; Claude Code refreshes when a session uses it. The "login expires in N days" card reads `refreshTokenExpiresAt` from `.credentials.json` today. Either the app keeps reading that one field or the card is dropped in favor of Claude Code's own three-day warning | Same | Mixed |
+| **Usage visibility** | Endpoint for every account, plus snapshots | Snapshots, plus a triggered read per account; between reads each card shows its last reading | Snapshots only: each account shows its last snapshot, or "reset passed" once the window has reset | Same as C | Same as D |
+| **Login lifecycle** | App-driven `claude auth login` into the profile folder; the app refreshes parked pairs | Login as today; a triggered read may refresh an expired parked access token; paused logins are not renewed | Login as today into the folder; Claude Code refreshes when a session uses it. The "login expires in N days" card reads `refreshTokenExpiresAt` from `.credentials.json` today. Either the app keeps reading that one field or the card is dropped in favor of Claude Code's own three-day warning | Same | Mixed |
 | **macOS (Q26)** | Needs Keychain park and unpark | Same | Nothing to build: the Keychain entry is keyed per config dir (auth doc) | Same | Keychain handling still needed |
-| **Effort** | Built | Small: delete the two HTTP clients and the refresh paths, keep the swap | Large rework: retire most of the roughly 5.6k lines under `App/Switching`, `Core/Switching`, and `Core/Peers` (the peer and WSL parts only under WSL options 1 or 4), and add shared-config handling | C plus a small launcher per side | Largest: both models stay live |
-| **Plan-of-record impact** | None | Brief's refresh contract (Q19) tiers 2 and 3 change | Brings Q25 into scope; amends the Goal ("carries every open session") and AC 1 to 3 and 9, which routes through `/planning:plan review` | Same as C | Same as C |
+| **Effort** | Built | Small: gate the reads on triggers, remove paused-login renewal, keep the swap (built in #161) | Large rework: retire most of the roughly 5.6k lines under `App/Switching`, `Core/Switching`, and `Core/Peers` (the peer and WSL parts only under WSL options 1 or 4), and add shared-config handling | C plus a small launcher per side | Largest: both models stay live |
+| **Plan-of-record impact** | None | Brief's refresh contract (Q19) amended: triggered tier 2, no tier 3 | Brings Q25 into scope; amends the Goal ("carries every open session") and AC 1 to 3 and 9, which routes through `/planning:plan review` | Same as C | Same as C |
 
-**Usage visibility without the endpoint (C, H1, D-minus).** The `rate-limit-guard` tee can write
+**Usage visibility without the endpoint (C, H1).** The `rate-limit-guard` tee can write
 one snapshot per folder, tagged with the `oauthAccount` in that folder's `.claude.json`. It is
 unverified whether the status-line command and hooks inherit `CLAUDE_CONFIG_DIR` (spike S4). The
 `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` entry in the env-vars doc implies child processes see it by
@@ -1121,7 +1122,9 @@ put.
 - **S2:** With `CLAUDE_CONFIG_DIR=<B> claude --resume <absolute transcript path in A>`, which account
   is billed, and where is the continued transcript written?
 - **S3:** For an unparked pair whose access token has expired, does Claude Code refresh it itself on
-  the first request? D-minus depends on this.
+  the first request? D-minus as built does not depend on this: a triggered read refreshes an
+  expired parked access token, and #161's tests switch to an expired parked pair with no outbound
+  call.
 - **S4:** Do the status-line command and hooks see the session's `CLAUDE_CONFIG_DIR`?
 - **S5:** Does the `rate-limit-guard` tee write and read per folder?
 - **S6:** Do linked shared `settings.json`, `plugins/`, and skills work across ten folders in use at
@@ -1141,8 +1144,8 @@ For WSL, take option 4 (a fixed WSL subset) if the operator's WSL use is mostly 
 would bring back the token copying C exists to remove and needs a new guard. If WSL must reach the
 whole roster without 20 logins every 28 days, choose **D-minus** instead of H1.
 
-If S2 or S6 fails, fall back to **D-minus**. It removes every endpoint call and keeps today's swap
-and WSL design.
+If S2 or S6 fails, fall back to **D-minus**. It limits the app's endpoint calls to triggered reads
+and keeps today's swap and WSL design.
 
 Choosing C or H1 also puts several accounts live on one machine at once. The terms research did not
 examine that, and it changes the plan of record (see the "Plan-of-record impact" row).
@@ -1188,7 +1191,10 @@ Rule out H2. It keeps all of D's exposure and adds C's cost.
 ### Decision (2026-09-28)
 
 The operator chose **D-minus**. Today's live-file swap stays, with one active account per side
-shared by every session on that side, and the app's calls to Anthropic are reduced under #161.
+shared by every session on that side. Under #161 (PR #164) the app calls the usage and token
+endpoints only on dashboard open, a manual Refresh, or the #148 stop hook, at most once per account
+per minute; a triggered read may refresh an expired parked access token; paused-login renewal is
+removed. The Brief's refresh contract is amended to match.
 
 Rejected:
 
@@ -1285,7 +1291,7 @@ evidence captured this session; the last row is below the bar and is flagged for
 | Interfaces only for out-of-process dependencies plus the credential store | Six ports in the type inventory; file classes concrete | `/tdd:principles` (managed vs unmanaged); Brief Q26 abstraction requirement |
 | Tee identity read by `jq` over stdin at drain time, mtime staleness guard, floor bullet amended across all carriers | Phase 6.2 to 6.4; W6 scope | Measured 3.7 s (bash) vs 35 ms (jq) vs 175 ms (CLI); the floor block's own text |
 | Cross-volume and sync-root profiles roots are refused | Phase 1.4 configuration validation; no copy path | Brief "moved, never copied"; handoff constraint on OneDrive |
-| Tier-3 refresh is edge-triggered | Phase 3.4 | Brief Q19 (no timer); a level trigger under a 10-second page poll is polling |
+| Tier-3 refresh is edge-triggered (superseded: the amended refresh contract has no tier 3) | Phase 3.4 | Brief Q19 (no timer); a level trigger under a 10-second page poll is polling |
 | Failed write-back parks the rotated pair in a recovery file | Phase 2.5 | Spike 03: the old refresh token is consumed on 200 |
 | Max-only roster admission; refusal under a managed `forceLoginOrgUUID` | Phases 1.2, 1.3, 4.4 | Brief Q6, Q23 |
 | Login mechanism (a) piped, gated by spike 05b, (b) fallback with `login_hint` | Phase 4.1 | Spike 03 crumbs; reopens the handoff's (b)-primary note because (a) removes the manual step |
