@@ -52,7 +52,7 @@
   // the page reads the fragment once and removes it from the address bar, and
   // puts the token in no storage and no URL of its own.
   var instanceToken = readInstanceToken();
-  var polling = false;
+  var polling = null;
 
   function readInstanceToken() {
     var meta = document.querySelector('meta[name="ccar-instance-token"]');
@@ -1274,6 +1274,38 @@
     mutate("/api/refresh", "POST", null, started);
   });
 
+  // The leader runs on Windows, Linux or macOS, so the command is the one every build answers to.
+  var RESTART = "Start it again with claude-code-account-rotation --open, or on Windows from the Start-menu shortcut.";
+
+  // Not through mutate(): its refresh afterwards would poll a process that is going away.
+  document.getElementById("stop").addEventListener("click", function () {
+    var sideNames = Object.keys(sideRows);
+    var also = sideNames.length ? " and its " + sideNames.join(", ") + " side" : "";
+    if (!window.confirm("Stop claude-code-account-rotation" + also + "?\n\nThe page cannot restart the tool. " + RESTART)) {
+      return;
+    }
+    busy = true;
+    setButtonsDisabled(true);
+    send("/api/stop", "POST", null)
+      .then(function (result) {
+        if (!result.ok) { showToast(refused(result.body), "error"); return; }
+        clearInterval(polling);
+        showStopped(result.body.sides || []);
+      })
+      .catch(function (error) { showToast("Request failed: " + error, "error"); })
+      .then(function () { busy = false; setButtonsDisabled(false); });
+  });
+
+  function showStopped(sides) {
+    var page = element("main", "stopped");
+    page.appendChild(element("h1", null, "claude-code-account-rotation is stopped"));
+    page.appendChild(element("p", null, RESTART));
+    sides.forEach(function (side) {
+      page.appendChild(element("p", "muted", "The " + side.side + " side: " + side.detail + ". Start it from the page once the tool is running again."));
+    });
+    document.body.replaceChildren(page);
+  }
+
   addEmail.addEventListener("input", function () {
     if (addFields) { addFields.autoMatch(addEmail.value); }
   });
@@ -1302,12 +1334,11 @@
         }
         refresh();
         if (!polling) {
-          polling = true;
+          polling = setInterval(refresh, POLL_MS);
           // Opening the page reads usage once, the way Refresh all does; the
           // server's per-account gap keeps a reload from reading again. A refusal
           // needs no toast: the pass line above the cards already says why.
           send("/api/refresh", "POST", null).then(function () { return refresh(true); }, function () { return null; });
-          setInterval(refresh, POLL_MS);
         }
       });
   }

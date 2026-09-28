@@ -12,7 +12,7 @@ using ClaudeCodeAccountRotation.Core.Switching;
 namespace ClaudeCodeAccountRotation.App.Adapters.Peers;
 
 /// <summary>
-/// The other side over loopback HTTP: the six calls of
+/// The other side over loopback HTTP: the calls of
 /// <see cref="IPeerRotationInstance"/> against the follower's routes.
 /// <para>
 /// Every mutating call carries <see cref="SameOriginMutationFilter.HeaderName"/>
@@ -26,7 +26,9 @@ namespace ClaudeCodeAccountRotation.App.Adapters.Peers;
 /// <para>
 /// Nothing here throws for an unreachable side. The distro being off is an
 /// ordinary state, and every failure comes back as a reason the coordinator
-/// turns into <see cref="SwitchRefusal.SideOffline"/> or a banner.
+/// turns into <see cref="SwitchRefusal.SideOffline"/> or a banner. The stop
+/// request is the exception: an unreachable side is a success there, because
+/// it has nothing to drain.
 /// </para>
 /// </summary>
 internal sealed class HttpPeerRotationInstance : IPeerRotationInstance
@@ -137,6 +139,39 @@ internal sealed class HttpPeerRotationInstance : IPeerRotationInstance
                 view.Detail,
                 view.LoginExpiresAt),
             cancellationToken);
+
+    /// <summary>
+    /// Bounded like a read: the follower answers before it drains, so a side
+    /// that takes longer is wedged, and the leader's stop should not wait on it.
+    /// Only a 409 is a refusal. A 503 from <see cref="FollowerLoopbackTokenHandler"/>
+    /// (no token to read, so no follower) and any other answer leave that side
+    /// as it is and let the caller stop.
+    /// </summary>
+    public async Task<Result<string, string>> ShutdownAsync(CancellationToken cancellationToken)
+    {
+        const string route = "/api/shutdown";
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        bounded.CancelAfter(ReadTimeout);
+        try
+        {
+            using HttpResponseMessage response = await _client.PostAsync(new Uri(route, UriKind.Relative), content: null, bounded.Token);
+            Result<Unit, string> answer = await ProjectAsync<JsonObject, Unit>(response, route, static _ => Unit.Value, bounded.Token);
+            if (answer.IsSuccess)
+            {
+                return Result<string, string>.Success("stopped");
+            }
+
+            return response.StatusCode == System.Net.HttpStatusCode.Conflict
+                ? Result<string, string>.Failure(answer.Error)
+                : Result<string, string>.Success("did not stop: " + answer.Error);
+        }
+        catch (Exception exception) when (Unreachable(exception))
+        {
+            return Result<string, string>.Success(cancellationToken.IsCancellationRequested || !bounded.IsCancellationRequested
+                ? "not running: " + exception.Message
+                : "did not answer within " + ReadTimeout.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture) + " s");
+        }
+    }
 
     private async Task<Result<TOut, string>> GetAsync<TView, TOut>(string route, Func<TView, TOut> project, CancellationToken cancellationToken)
     {

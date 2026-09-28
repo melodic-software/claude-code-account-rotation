@@ -1,9 +1,11 @@
 using System.Net;
 using System.Text.Json.Nodes;
+using ClaudeCodeAccountRotation.App.Adapters.Peers;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Switching;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Endpoints;
@@ -17,6 +19,7 @@ namespace ClaudeCodeAccountRotation.App.Tests.Endpoints;
 public sealed class ShutdownEndpointTests
 {
     private static readonly Uri _shutdown = new("/api/shutdown", UriKind.Relative);
+    private static readonly Uri _stop = new("/api/stop", UriKind.Relative);
     private static readonly RefreshTokenFingerprint _outgoing = new("1111111111111111111111111111111111111111111111111111111111111111");
     private static readonly RefreshTokenFingerprint _incoming = new("2222222222222222222222222222222222222222222222222222222222222222");
     private static readonly AccountEmail _outgoingAccount = new("a@example.com");
@@ -184,6 +187,154 @@ public sealed class ShutdownEndpointTests
         permit.ShouldNotBeNull();
     }
 
+    [Fact]
+    public async Task StopAsksTheFollowerFirstThenStopsTheLeader()
+    {
+        await using FollowerAppFactory follower = new();
+        SideEndpointTests.PeerLink link = new();
+        await using AppFactory leader = SideEndpointTests.LeaderOver(follower, link);
+        using HttpClient client = leader.CreateMutatingClient();
+        IHostApplicationLifetime leaderLifetime = Lifetime(leader.Services);
+        IHostApplicationLifetime followerLifetime = Lifetime(follower.Services);
+        TaskCompletionSource<bool> followerAskedFirst = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        using CancellationTokenRegistration onStopping = leaderLifetime.ApplicationStopping.Register(
+            () => followerAskedFirst.TrySetResult(link.Sent.Any(sent => sent.Route == "/api/shutdown" && sent.Status == HttpStatusCode.OK)));
+
+        using HttpResponseMessage response = await client.PostAsync(_stop, content: null, Token);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        (await followerAskedFirst.Task.WaitAsync(_applicationStoppingGrace, Token)).ShouldBeTrue();
+        (await StoppingAsync(followerLifetime, Token)).ShouldBeTrue();
+        JsonNode side = JsonNode.Parse(await response.Content.ReadAsStringAsync(Token))!["sides"]![0]!;
+        side["side"]!.GetValue<string>().ShouldBe("wsl");
+        side["detail"]!.GetValue<string>().ShouldBe("stopped");
+    }
+
+    [Fact]
+    public async Task AFollowerRefusalStopsNothingAndReleasesTheLeadersGate()
+    {
+        await using FollowerAppFactory follower = new();
+        SideEndpointTests.PeerLink link = new();
+        await using AppFactory leader = SideEndpointTests.LeaderOver(follower, link);
+        using HttpClient client = leader.CreateMutatingClient();
+        IHostApplicationLifetime followerLifetime = Lifetime(follower.Services);
+        await follower.Roots.Journal().WriteAsync(
+            new ImportJournalEntry(
+                _incomingAccount,
+                _incoming,
+                follower.Roots.ClaimedPath("b@example.com"),
+                follower.Roots.ExportPath("a@example.com"),
+                _outgoingAccount,
+                _outgoing,
+                IncomingAccount: null,
+                OutgoingAccount: null,
+                ImportStep.Exported,
+                follower.Roots.Clock.GetUtcNow()),
+            Token);
+
+        (HttpStatusCode status, string body, bool stopping) = await PostAsync(client, Lifetime(leader.Services), Token, _stop);
+
+        status.ShouldBe(HttpStatusCode.Conflict);
+        stopping.ShouldBeFalse();
+        followerLifetime.ApplicationStopping.IsCancellationRequested.ShouldBeFalse();
+        JsonNode.Parse(body)!["error"]!.GetValue<string>().ShouldBe("the wsl side refused to stop: a switch or import is in flight");
+        using IDisposable permit = await leader.Services.GetRequiredService<CredentialMutationGate>().AcquireAsync(TimeSpan.Zero, Token);
+    }
+
+    [Fact]
+    public async Task AFollowerThatDoesNotAnswerLeavesTheLeaderToStop()
+    {
+        await using FollowerAppFactory follower = new();
+        SideEndpointTests.PeerLink link = new() { Offline = true };
+        await using AppFactory leader = SideEndpointTests.LeaderOver(follower, link);
+        using HttpClient client = leader.CreateMutatingClient();
+
+        (HttpStatusCode status, string body, bool stopping) = await PostAsync(client, Lifetime(leader.Services), Token, _stop);
+
+        status.ShouldBe(HttpStatusCode.OK);
+        stopping.ShouldBeTrue();
+        JsonNode.Parse(body)!["sides"]![0]!["detail"]!.GetValue<string>().ShouldStartWith("not running: ");
+    }
+
+    [Fact]
+    public async Task AnOpenLeaderJournalRefusesStopWithoutAskingTheFollower()
+    {
+        await using FollowerAppFactory follower = new();
+        SideEndpointTests.PeerLink link = new();
+        await using AppFactory leader = SideEndpointTests.LeaderOver(follower, link);
+        using HttpClient client = leader.CreateMutatingClient();
+        IHostApplicationLifetime lifetime = Lifetime(leader.Services);
+        await new SwitchJournal(leader.AppData).WriteAsync(
+            new SwitchJournalEntry(
+                _outgoingAccount,
+                _outgoing,
+                Path.Combine(leader.ProfilesRoot, "a@example.com"),
+                _incomingAccount,
+                _incoming,
+                Path.Combine(leader.ProfilesRoot, "b@example.com"),
+                SwitchStep.Parked,
+                DateTimeOffset.UnixEpoch),
+            Token);
+
+        (HttpStatusCode status, string body, bool stopping) = await PostAsync(client, lifetime, Token, _stop);
+
+        status.ShouldBe(HttpStatusCode.Conflict);
+        stopping.ShouldBeFalse();
+        JsonNode.Parse(body)!["error"]!.GetValue<string>().ShouldBe("a switch or import is in flight");
+        link.Sent.ShouldNotContain(sent => sent.Route == "/api/shutdown");
+        Lifetime(follower.Services).ApplicationStopping.IsCancellationRequested.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task ShutdownOnTheLeaderLeavesTheFollowerRunning()
+    {
+        await using FollowerAppFactory follower = new();
+        SideEndpointTests.PeerLink link = new();
+        await using AppFactory leader = SideEndpointTests.LeaderOver(follower, link);
+        using HttpClient client = leader.CreateMutatingClient();
+
+        (HttpStatusCode status, string body, bool stopping) = await PostAsync(client, Lifetime(leader.Services), Token);
+
+        status.ShouldBe(HttpStatusCode.OK);
+        stopping.ShouldBeTrue();
+        body.ShouldNotContain("sides");
+        link.Sent.ShouldNotContain(sent => sent.Route == "/api/shutdown");
+    }
+
+    [Fact]
+    public async Task StopWithMoreThanOneSideRefusesBeforeAskingAny()
+    {
+        await using FollowerAppFactory follower = new();
+        SideEndpointTests.PeerLink link = new();
+        await using AppFactory leader = SideEndpointTests.LeaderOver(follower, link);
+        HttpClient toFollower = follower.CreateDefaultClient(link);
+        leader.Overrides = services => services.Replace(ServiceDescriptor.Singleton(new PeerRegistry(
+        [
+            new Peer(new HttpPeerRotationInstance(SideName.Wsl, toFollower), null, follower.Roots.Store),
+            new Peer(new HttpPeerRotationInstance(new SideName("other"), toFollower), null, follower.Roots.Store),
+        ])));
+        using HttpClient client = leader.CreateMutatingClient();
+
+        (HttpStatusCode status, string body, bool stopping) = await PostAsync(client, Lifetime(leader.Services), Token, _stop);
+
+        status.ShouldBe(HttpStatusCode.Conflict);
+        stopping.ShouldBeFalse();
+        JsonNode.Parse(body)!["error"]!.GetValue<string>().ShouldStartWith("more than one side is configured");
+        link.Sent.ShouldNotContain(sent => sent.Route == "/api/shutdown");
+        using IDisposable permit = await leader.Services.GetRequiredService<CredentialMutationGate>().AcquireAsync(TimeSpan.Zero, Token);
+    }
+
+    [Fact]
+    public async Task TheFollowerHasNoStopRoute()
+    {
+        await using FollowerAppFactory factory = new();
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(_stop, content: null, Token);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.NotFound);
+    }
+
     private static IHostApplicationLifetime Lifetime(IServiceProvider services) =>
         services.GetRequiredService<IHostApplicationLifetime>();
 
@@ -199,12 +350,20 @@ public sealed class ShutdownEndpointTests
     private static async Task<(HttpStatusCode Status, string Body, bool Stopping)> PostAsync(
         HttpClient client,
         IHostApplicationLifetime lifetime,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Uri? route = null)
     {
-        using HttpResponseMessage response = await client.PostAsync(_shutdown, content: null, cancellationToken);
+        using HttpResponseMessage response = await client.PostAsync(route ?? _shutdown, content: null, cancellationToken);
         string body = await response.Content.ReadAsStringAsync(cancellationToken);
-        bool stopping = lifetime.ApplicationStopping.IsCancellationRequested;
-        if (response.StatusCode == HttpStatusCode.OK && !stopping)
+        bool stopping = response.StatusCode == HttpStatusCode.OK
+            ? await StoppingAsync(lifetime, cancellationToken)
+            : lifetime.ApplicationStopping.IsCancellationRequested;
+        return (response.StatusCode, body, stopping);
+    }
+
+    private static async Task<bool> StoppingAsync(IHostApplicationLifetime lifetime, CancellationToken cancellationToken)
+    {
+        if (!lifetime.ApplicationStopping.IsCancellationRequested)
         {
             using var wait = CancellationTokenSource.CreateLinkedTokenSource(
                 cancellationToken,
@@ -216,10 +375,8 @@ public sealed class ShutdownEndpointTests
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
             }
-
-            stopping = lifetime.ApplicationStopping.IsCancellationRequested;
         }
 
-        return (response.StatusCode, body, stopping);
+        return lifetime.ApplicationStopping.IsCancellationRequested;
     }
 }
