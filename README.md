@@ -82,6 +82,22 @@ that is already logged in on this machine. Otherwise use Add an account, then Lo
 that needs a login. `profilesRoot` is the only hand edit, and the tool has to be restarted after
 it.
 
+## Rotating the CI token
+
+The org secret `CLAUDE_CODE_OAUTH_TOKEN` authenticates Claude Code in GitHub Actions. The
+account behind it is marked on its card with a `CI token · <date>` badge. CI draws on that
+account's 5-hour and 7-day limits alongside your interactive sessions on it.
+
+1. Pick the card with the most 7-day headroom.
+2. Signed in as that account, run `claude setup-token`.
+3. Set the new value with `gh secret set CLAUDE_CODE_OAUTH_TOKEN --org melodic-software`. `gh`
+   sets an org secret to private visibility unless told otherwise, so pass the `--visibility` or
+   `--repos` the secret has now.
+4. On that account's card, open Edit, set "CI token generated on" to today, and Save. Marking it
+   clears the badge from the previous account. The same write is
+   `PATCH /api/accounts/{email}` with `{"ciTokenGeneratedOn":"yyyy-MM-dd"}`, sent with the
+   headers `POST /api/shutdown` takes.
+
 ## Build
 
 Requires the .NET SDK pinned in `global.json`.
