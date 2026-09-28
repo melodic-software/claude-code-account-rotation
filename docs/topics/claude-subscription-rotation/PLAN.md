@@ -976,7 +976,7 @@ summarized on #148.
 | Id | Shape |
 |---|---|
 | **D** (today) | One live config dir. The app parks and unparks `.credentials.json` pairs, patches `oauthAccount` in the state file, reads usage from `api.anthropic.com/api/oauth/usage`, and refreshes parked pairs at `platform.claude.com/v1/oauth/token`. The WSL side is fed by the leader/follower hand-off (`docs/topics/cross-os-rotation/PLAN.md`). |
-| **D-minus** | D's live-file swap, with the app's own calls to Anthropic cut to triggered reads: the usage and token endpoints are called only on dashboard open, a manual Refresh, or the #148 stop hook, at most once per account per minute. A triggered read may refresh an expired parked access token; paused-login renewal is removed. Between reads, usage comes from status-line snapshots. The app still moves token files. This is what #161 built (PR #164). |
+| **D-minus** | D's live-file swap, with the app's own calls to Anthropic cut to triggered reads: the usage and token endpoints are called only on dashboard open, a manual Refresh, or the #148 stop hook, at most once per account per minute. A triggered read may refresh an expired parked access token; paused-login renewal is removed. Between reads, usage comes from status-line snapshots. The app still moves token files. #161 (PR #164) built this for dashboard open and manual Refresh; #148 adds the stop-hook trigger (planned). |
 | **C** | One `CLAUDE_CONFIG_DIR` per account, using the existing `~/.claude-profiles/<email>/` folders. Claude Code owns every login, refresh, and credential file. The app never reads, moves, or writes a token. A session stays on the folder it started in. |
 | **C + launcher** (hybrid H1) | C, plus a per-side "current account" choice that the dashboard sets and a thin launcher reads. The launcher is a `claude` shell function or wrapper on each side, the VS Code `claudeCode.environmentVariables` setting, and the loop-lane start scripts. "Switch now" changes which account new sessions and restarted lanes start on. |
 | **D interactive + C loop lanes** (hybrid H2, Brief Q25) | D stays for interactive work. Loop lanes run pinned to their own folders. |
@@ -1191,9 +1191,9 @@ Rule out H2. It keeps all of D's exposure and adds C's cost.
 ### Decision (2026-09-28)
 
 The operator chose **D-minus**. Today's live-file swap stays, with one active account per side
-shared by every session on that side. Under #161 (PR #164) the app calls the usage and token
-endpoints only on dashboard open, a manual Refresh, or the #148 stop hook, at most once per account
-per minute; a triggered read may refresh an expired parked access token; paused-login renewal is
+shared by every session on that side. The app calls the usage and token endpoints only when
+triggered, at most once per account per minute: #161 (PR #164) gates calls to dashboard open and a
+manual Refresh, and #148 adds the stop-hook trigger (planned); a triggered read may refresh an expired parked access token; paused-login renewal is
 removed. The Brief's refresh contract is amended to match.
 
 Rejected:
