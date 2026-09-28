@@ -80,6 +80,66 @@ public sealed class ImportReconcilerTests : IDisposable
         (await _roots.NonStagingFilesHoldingAsync(fb, Token)).Count.ShouldBe(1);
     }
 
+    /// <summary>
+    /// A live file that does not parse as a pair is not an absent one: it may
+    /// still hold a refresh token. A release at Exported over it unwinds, and
+    /// the file stays exactly as it was.
+    /// </summary>
+    [Fact]
+    public async Task AReleaseAtExportedOverALiveFileThatIsNotAPairUnwindsRatherThanFinishing()
+    {
+        const string live = "{\"claudeAiOauth\":{\"accessToken\":1,\"refreshToken\":\"r\"}}";
+        await ReleaseAtExportedOverAsync(live);
+
+        ImportReconciliation done = await _roots.Reconciler().ReconcileAsync(Token);
+
+        done.Imported.ShouldBeFalse();
+        (await File.ReadAllTextAsync(_roots.LivePath, Token)).ShouldBe(live);
+        (await _roots.StateFile().ReadAccountBlockAsync(Token))?.Email?.Value.ShouldBe(OutgoingEmail);
+        (await _roots.Journal().ReadOpenAsync(Token)).ShouldBeNull();
+        File.Exists(_roots.ExportPath(OutgoingEmail)).ShouldBeFalse();
+    }
+
+    /// <summary>
+    /// A logout holds no refresh token, so it finishes like an absent file.
+    /// Whether the logout revoked the pair is not known, and the export may be
+    /// the only valid copy of the login, so it is kept for the leader to park.
+    /// </summary>
+    [Fact]
+    public async Task AReleaseAtExportedOverALoggedOutLiveFileFinishesAndKeepsTheExport()
+    {
+        await ReleaseAtExportedOverAsync("{\"claudeAiOauth\":{\"accessToken\":\"\",\"refreshToken\":\"\",\"expiresAt\":0}}");
+
+        ImportReconciliation done = await _roots.Reconciler().ReconcileAsync(Token);
+
+        done.Imported.ShouldBeTrue();
+        (await FollowerRoots.FingerprintOfAsync(_roots.ExportPath(OutgoingEmail), Token)).ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
+        (await _roots.StateFile().ReadAccountBlockAsync(Token))?.Email.ShouldBeNull();
+        (await _roots.Journal().ReadOpenAsync(Token)).ShouldBeNull();
+    }
+
+    private async Task ReleaseAtExportedOverAsync(string live)
+    {
+        await File.WriteAllTextAsync(_roots.LivePath, live, Token);
+        await _roots.WriteStateFileAsync(OutgoingEmail, Token);
+        RefreshTokenFingerprint fa = CredentialFiles.Pair("refresh-a").Fingerprint;
+        await File.WriteAllTextAsync(_roots.ExportPath(OutgoingEmail), CredentialFiles.Shape("refresh-a").ToJsonString(), Token);
+        await _roots.Journal().WriteAsync(
+            new ImportJournalEntry(
+                null,
+                null,
+                null,
+                _roots.ExportPath(OutgoingEmail),
+                new AccountEmail(OutgoingEmail),
+                fa,
+                null,
+                FollowerRoots.AccountJson(OutgoingEmail),
+                ImportStep.Exported,
+                _roots.Clock.GetUtcNow(),
+                fa),
+            Token);
+    }
+
     [Fact]
     public async Task ExportedWithTheSwapNotDoneDeletesTheExportAndTheStagingFile()
     {

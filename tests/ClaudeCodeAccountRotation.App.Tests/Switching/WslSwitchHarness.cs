@@ -204,7 +204,17 @@ internal sealed class FakePeerRotationInstance(string mailbox) : IPeerRotationIn
     /// <summary>When the login behind this side's live pair runs out, as its dashboard reports it.</summary>
     public DateTimeOffset? LoginExpiresAt { get; set; }
 
+    /// <summary>
+    /// The CLI here logged out of <see cref="OutgoingEmail"/>: the dashboard
+    /// still names it beside no fingerprint, and nothing is exported or
+    /// handed back for it.
+    /// </summary>
+    public bool LiveLoginDead { get; set; }
+
     public Func<ImportRequest, Task<Result<ImportAnswer, string>>>? OnImport { get; set; }
+
+    /// <summary>What the logout of a dead login answers. By default, that it logged out.</summary>
+    public Func<Task<Result<LogOutAnswer, string>>>? OnLogOut { get; set; }
 
     public Func<Task<Result<ImportResult, string>>>? OnCommit { get; set; }
 
@@ -231,7 +241,8 @@ internal sealed class FakePeerRotationInstance(string mailbox) : IPeerRotationIn
                 Version,
                 OutgoingEmail is null ? null : WslSwitchHarness.AccountJson(OutgoingEmail),
                 Tee,
-                LoginExpiresAt)));
+                LoginExpiresAt,
+                LiveLoginDead)));
     }
 
     public async Task<Result<ImportAnswer, string>> ImportAsync(ImportRequest request, CancellationToken cancellationToken)
@@ -296,11 +307,19 @@ internal sealed class FakePeerRotationInstance(string mailbox) : IPeerRotationIn
             : Result<ImportStatus, string>.Success(Status));
     }
 
-    /// <summary>The commit's answer: which account left this side, and the block the leader's park needs.</summary>
+    public async Task<Result<LogOutAnswer, string>> LogOutAsync(AccountEmail email, CancellationToken cancellationToken)
+    {
+        Calls.Add("LogOut");
+        return OnLogOut is not null
+            ? await OnLogOut()
+            : Result<LogOutAnswer, string>.Success(new LogOutAnswer(true, email.Value + " is logged out of this side"));
+    }
+
+    /// <summary>The commit's answer: which account left this side, and the block the leader's park needs. A dead login leaves none.</summary>
     public ImportResult Result() => new(
-        OutgoingEmail is null ? null : WslSwitchHarness.Email(OutgoingEmail),
+        OutgoingEmail is null || LiveLoginDead ? null : WslSwitchHarness.Email(OutgoingEmail),
         OutgoingFingerprint,
-        OutgoingEmail is null ? null : WslSwitchHarness.AccountJson(OutgoingEmail),
+        OutgoingEmail is null || LiveLoginDead ? null : WslSwitchHarness.AccountJson(OutgoingEmail),
         false);
 }
 

@@ -261,8 +261,27 @@ public sealed class SharedStoreEndpointTests
             .ShouldBe(CredentialFiles.Pair("refresh-b-on-wsl").Fingerprint);
     }
 
+    [Fact]
+    public async Task TheCardOfAnAccountWhoseCliLoggedOutOnTheOtherSideSaysSoAndOffersALogin()
+    {
+        using AppFactory factory = await LiveOnAWithBHeldByWslAsync(
+            sharedStore: true,
+            TestContext.Current.CancellationToken,
+            static services => services.Replace(ServiceDescriptor.Singleton(
+                new PeerRegistry([new Peer(new AnsweringSide(liveLoginDead: true), null, "unused")]))));
+        using HttpClient client = factory.CreateClient();
+
+        JsonObject dashboard = (await client.GetFromJsonAsync<JsonObject>(_dashboard, TestContext.Current.CancellationToken))!;
+
+        JsonObject card = Card(dashboard, "b@example.com");
+        card["loggedOutOn"]!.GetValue<string>().ShouldBe("wsl");
+        card["cliLoggedOut"]!.GetValue<string>().ShouldContain("The CLI on wsl logged out");
+        // Only that card: the live card here is not logged out.
+        Card(dashboard, "a@example.com")["cliLoggedOut"].ShouldBeNull();
+    }
+
     /// <summary>A side that answers its dashboard, which is all the escape hatch's own guard asks it.</summary>
-    private sealed class AnsweringSide : IPeerRotationInstance
+    private sealed class AnsweringSide(bool liveLoginDead = false) : IPeerRotationInstance
     {
         public SideName Side => SideName.Wsl;
 
@@ -270,10 +289,11 @@ public sealed class SharedStoreEndpointTests
             Task.FromResult(Result<PeerDashboard, string>.Success(new PeerDashboard(
                 SideName.Wsl,
                 AccountEmail.Parse("b@example.com").Value,
-                CredentialFiles.Pair("refresh-b").Fingerprint,
+                liveLoginDead ? null : CredentialFiles.Pair("refresh-b").Fingerprint,
                 null,
                 App.Hosting.AppComposition.Version,
-                null)));
+                null,
+                LiveLoginDead: liveLoginDead)));
 
         public Task<Result<ImportAnswer, string>> ImportAsync(ImportRequest request, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
@@ -285,6 +305,9 @@ public sealed class SharedStoreEndpointTests
             throw new NotSupportedException();
 
         public Task<Result<ImportStatus, string>> ImportStatusAsync(AccountEmail email, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<Result<LogOutAnswer, string>> LogOutAsync(AccountEmail email, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
     }
 
