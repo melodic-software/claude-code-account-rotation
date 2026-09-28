@@ -68,9 +68,12 @@ internal sealed class LoopbackTokenMiddleware(RequestDelegate next)
         await next(context);
     }
 
+    // The stylesheet's fonts load while the page parses, before the first /api
+    // call has set the cookie, so they are open like the stylesheet itself.
     private static bool IsOpen(HttpRequest request) =>
         HttpMethods.IsGet(request.Method)
-        && request.Path.Value is "/healthz" or "/app.js" or "/app.css";
+        && (request.Path.Value is "/healthz" or "/app.js" or "/app.css"
+            || request.Path.StartsWithSegments("/fonts", StringComparison.Ordinal));
 
     private static bool IsDocument(HttpRequest request) =>
         HttpMethods.IsGet(request.Method) && request.Path.Value == "/";

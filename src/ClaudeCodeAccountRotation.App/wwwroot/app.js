@@ -3,7 +3,7 @@
 
   // Loaded by Node for tests/js, which has no page: export the pure helpers and stop.
   if (typeof document === "undefined") {
-    module.exports = { takeTokenFromHash: takeTokenFromHash, switchBlocked: switchBlocked };
+    module.exports = { takeTokenFromHash: takeTokenFromHash, switchBlocked: switchBlocked, headroom: headroom, recommended: recommended };
     return;
   }
 
@@ -25,13 +25,17 @@
   var refreshAllButton = document.getElementById("refresh-all");
   var refreshStateLine = document.getElementById("refresh-state");
   var toast = document.getElementById("toast");
-  var sidesLine = document.getElementById("sides");
-  // The accounts the last dashboard named, which is what a side's switch control
-  // offers: the ones parked in the store, so there is a pair to hand over.
+  var nowLine = document.getElementById("now");
+  // The accounts the last dashboard named, and the other sides the last side
+  // read named. A side's Now strip and every row's switch buttons are drawn
+  // from the two together.
   var lastAccounts = [];
-  // The side rows on the page, by side name, kept across polls so an open
-  // picker is never rebuilt under whoever is using it.
-  var sideRows = {};
+  var lastDashboard = null;
+  var lastSides = [];
+  // The side names the rows' switch buttons were last drawn for.
+  var renderedSides = "";
+  // This side has no name on the wire; the other sides are named by config.
+  var HERE = "This machine";
   var addForm = document.getElementById("add");
   var addEmail = document.getElementById("add-email");
   var toastTimer = null;
@@ -66,6 +70,22 @@
   // reason: the switch route ends the pass and then switches.
   function switchBlocked(account, dashboard, isBusy) {
     return !account.canSwitchHere || isBusy || !!dashboard.banner;
+  }
+
+  // Points left before the first of the 5-hour and 7-day windows runs out. Both
+  // run to 100% (Q19); a row that is unknown or has reset since its read says
+  // nothing, and null is "no figure at all".
+  function headroom(account) {
+    var used = account.usage.limits.filter(function (limit) {
+      return (limit.kind === "session" || limit.kind === "weekly_all") && limit.known && !limit.windowReset && limit.percent !== null;
+    }).map(function (limit) { return limit.percent; });
+    return used.length ? Math.max(0, Math.round(100 - Math.max.apply(null, used))) : null;
+  }
+
+  // The account a side should take next: the first usable card in the server's
+  // order, which is the soonest weekly reset, among those that side may take.
+  function recommended(accounts, takes) {
+    return accounts.filter(function (account) { return account.standing === "usable" && takes(account); })[0] || null;
   }
 
   function takeTokenFromHash(loc, hist) {
@@ -379,7 +399,6 @@
         if (result.body.refusal === "ForeignFamily"
           && window.confirm(result.body.message + "\n\nHand it back into quarantine? The family that side holds is kept there and never used, and the one in the store stays as it is.")) {
           mutate(sidePath(side, "/release") + "?quarantineForeignFamily=true", "POST", null, function (retry) {
-            if (retry.ok) { clearSidePicker(side); }
             showToast(retry.ok
               ? "The " + retry.body.side + " side holds nothing; a superseded family was quarantined at " + retry.body.quarantinedAt
               : refused(retry.body), retry.ok ? "warn" : "error");
@@ -389,9 +408,6 @@
         showToast(refused(result.body), "error");
         return;
       }
-      // The account just handed back is now on offer. Leaving the picker on it,
-      // or on whichever account sorts first, would hand a pair straight back out.
-      clearSidePicker(side);
       showToast(result.body.loggedOut
         ? "The " + result.body.side + " side holds nothing; its CLI had logged out of " + result.body.loggedOut + ", which needs a login"
         : "The " + result.body.side + " side holds nothing; " + (result.body.parkedAs || holding) + " is parked here", "ok");
@@ -404,147 +420,130 @@
     var released = false;
     return mutate(sidePath(side, "/release"), "POST", null, function (result) {
       released = result.ok;
-      if (released) { clearSidePicker(side); } else { showToast(refused(result.body), "error"); }
+      if (!released) { showToast(refused(result.body), "error"); }
     }).then(function () { return released ? startLogin(email) : null; });
   }
 
-  // A release succeeded: the picker returns to "choose an account". Switch is
-  // disabled here, in the same turn, because the request's re-enable runs before
-  // the refresh and a failed refresh would otherwise leave it clickable.
-  function clearSidePicker(side) {
-    var row = sideRows[side];
-    if (!row || !row.pick) { return; }
-    row.pick.value = "";
-    if (row.button) { row.button.disabled = true; }
+  function sideLabel(name) {
+    if (!name) { return HERE; }
+    return name.length <= 3 ? name.toUpperCase() : name.charAt(0).toUpperCase() + name.slice(1);
   }
 
-  // One line per configured side, and on it that side's switch control: which
-  // parked account it should take. A selection survives the poll's redraw, and a
-  // redraw is skipped while the picker is in use, so the ten-second poll never
-  // changes the target under the operator.
-  // Which accounts a side may be handed is the server's verdict, per card, and
-  // the same one the card's own chip is drawn from.
-  function offerable(side) {
-    return lastAccounts.filter(function (account) {
-      return (account.offeredTo || []).indexOf(side.side) !== -1;
-    });
+  function accountByEmail(email) {
+    return lastAccounts.filter(function (candidate) { return candidate.email === email; })[0] || null;
   }
 
-  // Alias-first, the way a card's heading is. liveAccount is the address from
-  // GET /api/sides; the alias is roster.alias on the dashboard account with that
-  // email. An absent address is "holding nothing" only when the side answered
-  // and said so. An offline read also leaves the address null, because the
-  // dashboard could not be read, and that side may still hold an account.
-  function heldAccount(email) {
-    var account = lastAccounts.filter(function (candidate) { return candidate.email === email; })[0];
-    var alias = account && account.roster && account.roster.alias;
-    return alias ? "holding " + alias + " (" + email + ")" : "holding " + email;
+  // A button its own state disables stays disabled through a request's
+  // re-enable, which runs before the redraw a failed refresh never delivers.
+  function blockable(button, blocked) {
+    button.disabled = busy || blocked;
+    if (blocked) { button.setAttribute("data-blocked", ""); }
+    return button;
   }
 
-  function sideStateText(side) {
-    var prefix = side.side + " side: " + side.detail;
-    if (!side.liveAccount) {
-      if (!side.online) { return prefix; }
-      var nothing = "holding nothing";
-      if (typeof side.detail === "string" && side.detail.slice(-nothing.length) === nothing) { return prefix; }
-      return prefix + ", " + nothing;
+  // The one-click hand-over a side's strip offers, naming the account and the
+  // weekly figure it was picked for.
+  function takeButton(label, target, at, primary, blocked, onClick) {
+    var button = actionButton("", "lg " + (primary ? "primary" : "secondary"), onClick);
+    button.appendChild(element("span", null, label));
+    var weekly = target.usage.limits.filter(function (limit) { return limit.kind === "weekly_all"; })[0];
+    if (weekly && weekly.known) {
+      var reset = resetLine(weekly, at);
+      button.appendChild(element("small", null, "7-day at " + reading(weekly) + (reset ? ", " + reset : "")));
     }
-    return prefix + ", " + heldAccount(side.liveAccount);
+    return blockable(button, blocked);
   }
 
-  // Updated in place rather than rebuilt, so nothing here is ever taken from
-  // under the pointer: the picker keeps its selection, its focus and its open
-  // menu across every poll, and no guard has to suppress a redraw to protect
-  // it. Its options are replaced only when the accounts on offer change, and
-  // the control is rebuilt only when the side goes on or offline.
-  function renderSides(sides) {
-    sidesLine.hidden = sides.length === 0;
-    var present = {};
-    sides.forEach(function (side) {
-      present[side.side] = true;
-      var row = sideRows[side.side];
-      if (!row) {
-        row = { node: element("div", "side"), state: element("span", "side-state"), mode: null };
-        row.node.appendChild(row.state);
-        sideRows[side.side] = row;
-        sidesLine.appendChild(row.node);
+  // One strip per side: what it holds, how much room that account has left, and
+  // the switch to the account it should take next. This side first.
+  function nowStrip(side, account, at) {
+    var name = side ? side.side : null;
+    var say = account ? sentence(account, at) : null;
+    var strip = element("section", "side-card");
+    strip.setAttribute("aria-label", sideLabel(name));
+    var head = element("div", "sh");
+    var who = element("div", "who");
+    var where = element("div", "where");
+    where.appendChild(element("span", "dot " + (say ? say.kind : "")));
+    where.appendChild(element("span", null, sideLabel(name)));
+    if (side) { where.appendChild(element("span", "detail", side.detail)); }
+    who.appendChild(where);
+    if (account) {
+      who.appendChild(element("h2", null, displayName(account)));
+      var address = element("div", "em", account.email);
+      if (account.roster && account.roster.ciTokenGeneratedOn) { address.appendChild(element("span", "tag", "CI token")); }
+      who.appendChild(address);
+    } else {
+      // An offline read leaves the address null too, and that side may still
+      // hold an account, so only an answering side is said to hold nothing.
+      who.appendChild(element("h2", "empty", side && !side.online ? "Not answering" : (side && side.liveAccount) || "Holding nothing"));
+    }
+    head.appendChild(who);
+    if (account) {
+      var room = headroom(account);
+      var figure = element("div", "hr");
+      figure.appendChild(element("span", "n " + (room === null ? "" : room <= 0 ? "crit" : room < 25 ? "warn" : ""), room === null ? "–" : room + "%"));
+      figure.appendChild(element("span", null, "headroom"));
+      head.appendChild(figure);
+    }
+    strip.appendChild(head);
+
+    if (account) {
+      strip.appendChild(element("p", "say " + say.kind, say.text));
+      if (account.cliLoggedOut) { strip.appendChild(element("p", "cli-logout", account.cliLoggedOut)); }
+      var meters = element("div", "mt");
+      account.usage.limits.forEach(function (limit) {
+        if (limit.known || limit.kind === "session" || limit.kind === "weekly_all") { meters.appendChild(meter(limit, at)); }
+      });
+      strip.appendChild(meters);
+    }
+
+    var go = element("div", "go");
+    var blocked = !!lastDashboard.banner;
+    if (!side) {
+      var here = recommended(lastAccounts, function (candidate) { return candidate.canSwitchHere; });
+      if (here) {
+        go.appendChild(takeButton("Switch to " + displayName(here), here, at, !!say && say.kind === "crit",
+          switchBlocked(here, lastDashboard, false), function () { switchTo(here.email); }));
       }
-
-      row.state.textContent = sideStateText(side);
-      var mode = side.online ? "switch" : (side.canStart ? "start" : "none");
-      if (row.mode !== mode) {
-        if (row.control) { row.node.removeChild(row.control); }
-        row.mode = mode;
-        row.control = element("span", "side-control");
-        row.pick = null;
-        row.release = null;
-        // With the picker goes what it was holding: a side that went offline and
-        // came back while the parked accounts were unchanged would otherwise
-        // match the old signature, leave the new picker empty, and keep Switch
-        // disabled until the account list happened to change.
-        row.offers = null;
-        if (mode === "switch") {
-          row.pick = document.createElement("select");
-          row.pick.name = side.side;
-          row.control.appendChild(row.pick);
-          row.button = actionButton("Switch " + side.side + " side", "switch", function () { switchSide(side.side, row.pick.value); });
-          // The poll is what disables Switch on an empty value. A choice has to
-          // enable it immediately, or the picker stays dead until the next one.
-          row.pick.addEventListener("change", function () {
-            row.button.disabled = busy || !row.pick.value;
-          });
-          // One control for the park-back, beside the switch and only on a side
-          // that is answering: it reads what that side holds at click time and
-          // the server re-reads it before anything moves.
-          row.release = actionButton("Hand back", "secondary", function () { releaseSide(side.side, row.holding); });
-          row.control.appendChild(row.release);
-        } else if (mode === "start") {
-          row.button = actionButton("Start " + side.side + " side", "secondary", function () { mutate(sidePath(side.side, "/start"), "POST", null, null); });
-        } else {
-          row.button = null;
-        }
-
-        if (row.button) { row.control.appendChild(row.button); }
-        row.node.appendChild(row.control);
+    } else if (side.online) {
+      if (account && account.roster && account.loggedOutOn === side.side) {
+        go.appendChild(actionButton("Log in again on " + sideLabel(name), "primary lg", function () { loginFromSide(side.side, account.email); }));
       }
-
-      if (row.pick) {
-        var offers = offerable(side);
-        var arriving = offers.map(function (account) { return account.email; }).join("\u0000");
-        if (row.offers !== arriving) {
-          row.offers = arriving;
-          var held = row.pick.value;
-          row.pick.innerHTML = "";
-          // The empty choice is first, and it is the selection whenever the
-          // previous address is no longer on offer. Never the first real account.
-          var placeholder = element("option", null, "choose an account");
-          placeholder.value = "";
-          row.pick.appendChild(placeholder);
-          offers.forEach(function (account) {
-            var option = element("option", null, (account.roster && account.roster.alias) || account.email);
-            option.value = account.email;
-            row.pick.appendChild(option);
-          });
-          if (held && arriving.split("\u0000").indexOf(held) !== -1) { row.pick.value = held; }
-        }
+      var there = recommended(lastAccounts, function (candidate) { return (candidate.offeredTo || []).indexOf(side.side) !== -1; });
+      if (there) {
+        go.appendChild(takeButton("Switch " + sideLabel(name) + " to " + displayName(there), there, at, !!say && say.kind === "crit",
+          blocked, function () { switchSide(side.side, there.email); }));
       }
+      // Read at click time, and re-read by the server before anything moves.
+      if (side.liveAccount) {
+        go.appendChild(blockable(actionButton("Hand back", "quiet", function () { releaseSide(side.side, side.liveAccount); }), false));
+      }
+    } else if (side.canStart) {
+      go.appendChild(blockable(actionButton("Start " + sideLabel(name) + " side", "secondary", function () { mutate(sidePath(side.side, "/start"), "POST", null, null); }), false));
+    }
+    if (go.children.length) { strip.appendChild(go); }
+    return strip;
+  }
 
-      if (row.button) { row.button.disabled = busy || (row.pick ? !row.pick.value : false); }
-      if (row.release) {
-        // A side holding nothing has nothing to hand back, which is the
-        // NothingToRelease the server answers when the control is bypassed.
-        row.holding = side.liveAccount;
-        row.release.hidden = !side.liveAccount;
-        row.release.disabled = busy;
+  function renderNow() {
+    if (!lastDashboard) { return; }
+    var at = new Date(lastDashboard.capturedAt).getTime();
+    var strips = [nowStrip(null, lastAccounts.filter(function (account) { return account.isLive; })[0] || null, at)];
+    lastSides.forEach(function (side) {
+      strips.push(nowStrip(side, side.liveAccount ? accountByEmail(side.liveAccount) : null, at));
+    });
+    // A strip is replaced only when it changed, so a poll that says the same
+    // thing never takes a button from under the pointer or the focus.
+    strips.forEach(function (strip, index) {
+      var old = nowLine.children[index];
+      if (!old) {
+        nowLine.appendChild(strip);
+      } else if (old.outerHTML !== strip.outerHTML) {
+        nowLine.replaceChild(strip, old);
       }
     });
-
-    Object.keys(sideRows).forEach(function (name) {
-      if (!present[name]) {
-        sidesLine.removeChild(sideRows[name].node);
-        delete sideRows[name];
-      }
-    });
+    while (nowLine.children.length > strips.length) { nowLine.removeChild(nowLine.lastChild); }
   }
 
   function setPaused(email, paused) {
@@ -826,26 +825,6 @@
     return Math.max(0, Math.min(100, limit.percent));
   }
 
-  function limitRow(limit, at) {
-    var row = element("div", "limit");
-    row.appendChild(element("span", "label", limit.label));
-    var bar = element("div", "bar");
-    var fill = element("div", "fill");
-    fill.style.width = barWidth(limit) + "%";
-    fill.setAttribute("data-severity", limit.severity || "");
-    bar.appendChild(fill);
-    row.appendChild(bar);
-    row.appendChild(element("span", "reading", reading(limit)));
-    // A window that has already reset has no reset to count down to: "resets in
-    // 0 s" beside "window reset since last read" is the same stale figure said
-    // twice.
-    if (limit.resetsAt && !limit.windowReset) { row.appendChild(element("span", "resets", "resets " + relative(limit.resetsAt, at))); }
-    // Only a row taken from another source than the card's own says where it
-    // came from; otherwise the card's single "as of" line speaks for it.
-    if (limit.source) { row.appendChild(element("span", "asof", asOf(limit.capturedAt, limit.source, at))); }
-    return row;
-  }
-
   function creditsLine(credits) {
     var text = "usage credits: " + (credits.enabled
       ? "enabled"
@@ -865,48 +844,114 @@
     return account.refresh.message || state;
   }
 
-  // Where the card sits in the list, said in the one word its rows never carry.
-  // A usable account's countdown is not repeated here: the seven-day row above
-  // already reads "resets in 2 h 14 min", and the same phrase twice on one card
-  // reads as two different facts.
-  // The chip above states the credential facts, so this line is left off a
-  // paused card except the live one, whose chip says "live" and would otherwise
-  // leave "paused" unsaid; a parked card whose login has expired is spared a
-  // "usable now" its Switch button refuses; the live account keeps its quota
-  // standing, which is the operative fact whatever its login says.
-  function nextReset(account, at) {
-    if (loginExpired(account, at) && !account.isLive) { return null; }
-    if (account.standing === "usable") { return "usable now"; }
-    if (account.standing === "unread") { return "no usage read yet"; }
-    if (account.standing === "paused") { return account.isLive ? "paused" : null; }
-    // A spent account whose reset nothing can date has no wait to state, and the
-    // rows above already say which figure is missing.
-    if (account.standing === "exhausted" && account.nextResetAt) { return "usable " + relative(account.nextResetAt, at); }
-    return null;
+  // Colour carries meaning: healthy, near the limit, at it. The server's own
+  // severity, when a source sent one, can only raise the tone.
+  function meterTone(limit) {
+    if (!limit.known || limit.windowReset || limit.percent === null) { return ""; }
+    if (limit.percent >= 100 || limit.severity === "error" || limit.severity === "critical") { return "crit"; }
+    return limit.percent >= 75 || limit.severity === "warning" ? "warn" : "ok";
   }
 
-  function usage(account, dashboard) {
-    var section = element("div", "usage");
-    var at = new Date(dashboard.capturedAt).getTime();
-    account.usage.limits.forEach(function (limit) { section.appendChild(limitRow(limit, at)); });
-    if (account.usage.source) {
-      section.appendChild(element("p", "asof", asOf(account.usage.capturedAt, account.usage.source, at)));
+  function bar(limit) {
+    var track = element("div", "bar");
+    var fill = element("i", meterTone(limit));
+    fill.style.width = barWidth(limit) + "%";
+    track.appendChild(fill);
+    return track;
+  }
+
+  // A window that has already reset has no reset to count down to: "resets in
+  // 0 s" beside "window reset since last read" is the same stale figure said twice.
+  function resetLine(limit, at) {
+    return limit.resetsAt && !limit.windowReset ? "resets " + relative(limit.resetsAt, at) : null;
+  }
+
+  // One window: its label and reading, the bar, when it resets, and, only for a
+  // row taken from another source than the account's own, where it came from.
+  function meter(limit, at) {
+    var box = element("div", "meter");
+    var line = element("div", "l");
+    line.appendChild(element("span", "label", limit.label));
+    line.appendChild(element("span", "pct " + meterTone(limit), reading(limit)));
+    box.appendChild(line);
+    box.appendChild(bar(limit));
+    var reset = resetLine(limit, at);
+    if (reset) { box.appendChild(element("small", null, reset)); }
+    if (limit.source) { box.appendChild(element("small", null, asOf(limit.capturedAt, limit.source, at))); }
+    return box;
+  }
+
+  // The account's state in one sentence, worst first, and the tone it is said
+  // in. The credential facts come before the quota: a card whose login has
+  // expired is not "usable now" whatever its figures say.
+  function sentence(account, at) {
+    if (account.cliLoggedOut) {
+      return { kind: "crit", text: "Logged out" + (account.loggedOutOn ? " on " + sideLabel(account.loggedOutOn) : "") };
     }
-    var frees = nextReset(account, at);
-    if (frees) { section.appendChild(element("p", "next-reset", frees)); }
-    if (account.usage.credits) { section.appendChild(element("p", "asof", creditsLine(account.usage.credits))); }
-    if (account.usageNote) { section.appendChild(element("p", "muted", account.usageNote)); }
+    var chip = stateChip(account, at);
+    if (chip === "login expired") { return { kind: "crit", text: "Login expired" }; }
+    if (chip === "error") { return { kind: "crit", text: account.refresh.message || "Refresh failed" }; }
+    if (chip === "needs login") { return { kind: "warn", text: "Needs login" }; }
+    if (account.standing === "exhausted") {
+      return { kind: "crit", text: account.nextResetAt ? "Exhausted, usable " + relative(account.nextResetAt, at) : "Exhausted" };
+    }
+    if (chip === "paused" || account.standing === "paused") { return { kind: "paused", text: "Paused" }; }
+    if (account.standing === "unread") { return { kind: "", text: "No usage read yet" }; }
+    var near = account.usage.limits.filter(function (limit) {
+      return (limit.kind === "session" || limit.kind === "weekly_all") && meterTone(limit) !== "ok" && meterTone(limit) !== "";
+    })[0];
+    if (near) {
+      var reset = resetLine(near, at);
+      return { kind: "warn", text: "Near the " + near.label + " limit" + (reset ? ", " + reset : "") };
+    }
+    return { kind: "ok", text: "Usable now" };
+  }
+
+  // Everything else a row knows, in small lines under its sentence: where the
+  // figures came from and when, the credits, the refresh outcome, the login's
+  // age and expiry, and the browser it opens in.
+  function statusLines(account, dashboard, at) {
+    var lines = element("div", "lines");
+    if (account.cliLoggedOut) { lines.appendChild(element("p", "cli-logout", account.cliLoggedOut)); }
+    if (account.usage.source) { lines.appendChild(element("p", "asof", asOf(account.usage.capturedAt, account.usage.source, at))); }
+    // The row's two columns are the 5-hour and 7-day windows; any other window
+    // the endpoint reported, and a column taken from another source, say so here.
+    account.usage.limits.forEach(function (limit) {
+      var column = limit.kind === "session" || limit.kind === "weekly_all";
+      if (!column && limit.known) {
+        var reset = resetLine(limit, at);
+        lines.appendChild(element("p", "asof", limit.label + " " + reading(limit) + (reset ? ", " + reset : "")));
+      }
+      if (limit.source) { lines.appendChild(element("p", "asof", limit.label + " " + asOf(limit.capturedAt, limit.source, at))); }
+    });
+    if (account.usage.credits) { lines.appendChild(element("p", "asof", creditsLine(account.usage.credits))); }
+    if (account.usageNote) { lines.appendChild(element("p", "muted", account.usageNote)); }
     var state = refreshState(account, dashboard);
-    if (state) { section.appendChild(element("p", "refresh-state", state)); }
+    if (state) { lines.appendChild(element("p", "refresh-state", state)); }
     var login = loginLine(account, at);
     if (login) {
       var line = element("p", "login-expiry" + (loginSoon(account, at) ? " warn" : ""), login);
       // new Date(null) is the 1970 epoch, which would date every card without an
       // expiry to a lie, so the absolute instant is offered only when there is one.
       if (account.loginExpiresAt) { line.title = new Date(account.loginExpiresAt).toLocaleString(); }
-      section.appendChild(line);
+      lines.appendChild(line);
     }
-    return section;
+    var roster = account.roster;
+    if (roster && roster.browser) {
+      lines.appendChild(element("p", "muted", roster.browser + (roster.browserProfileDirectory ? " / " + profileCardLabel(roster.browser, roster.browserProfileDirectory) : "")));
+    }
+    return lines;
+  }
+
+  // One window in a row: the bar, the reading, and when it resets.
+  function cell(limit, at) {
+    var box = element("div", "u");
+    if (!limit) { return box; }
+    box.appendChild(bar(limit));
+    box.appendChild(element("span", "pct " + meterTone(limit), reading(limit)));
+    var reset = resetLine(limit, at);
+    if (reset) { box.appendChild(element("small", null, reset)); }
+    return box;
   }
 
   // The pass as a whole, in one line above the cards.
@@ -965,7 +1010,7 @@
     button.addEventListener("click", function () {
       // The Edit panel is already changing this account. Focus its display-name
       // field instead of opening a second editor that a save would throw away.
-      var aliasField = heading.parentNode && heading.parentNode.querySelector("details.edit[open] input.alias");
+      var aliasField = heading.closest(".card") && heading.closest(".card").querySelector("details.edit[open] input.alias");
       if (aliasField) {
         aliasField.focus();
         if (aliasField.select) { aliasField.select(); }
@@ -1075,144 +1120,212 @@
       || arriving.some(function (email, index) { return email !== renderedOrder[index]; });
   }
 
-  function render(dashboard, force) {
-    // The header, the banner, the setup sentence, and the warnings are not part
-    // of any card, so they are written before the guards below and on every
-    // poll: an operator with an Edit panel, a half-typed login code, or a
-    // display name open would otherwise watch the page's own timestamp, the
-    // pass's progress, the Refresh all button, and a banner or setup sentence
-    // that has since been cleared freeze at whatever they said when the field
-    // opened. The setup sentence disables nothing; Switch still follows
-    // canSwitchHere, a request in flight, and the reconciliation banner.
-    lastAccounts = dashboard.accounts;
-    captured.textContent = "as of " + new Date(dashboard.capturedAt).toLocaleTimeString();
-    refreshStateLine.textContent = passState(dashboard);
-    refreshAllButton.disabled = busy;
-    banner.hidden = !dashboard.banner;
-    banner.textContent = dashboard.banner || "";
-    setup.hidden = !dashboard.setup;
-    setup.textContent = dashboard.setup || "";
-    warnings.innerHTML = "";
-    warnings.hidden = dashboard.warnings.length === 0;
-    dashboard.warnings.forEach(function (warning) { warnings.appendChild(element("li", null, warning)); });
-    // Rendering rebuilds every card, so the ten-second poll would otherwise wipe an
-    // Edit panel, a half-typed login code, or a display name being typed, out from
-    // under whoever is typing it. A mutation's own render passes force, since that
-    // one has to show the result.
-    if (!force && cards.querySelector("details.edit[open], details.login[open], input.rename")) { return; }
-    // The hazard is a card moving, not a card being redrawn. Switch fires without a
-    // confirm, so an order that changes while the pointer rests on the list, or
-    // while a button inside it holds focus, sends the operator to whichever account
-    // slid under the aim; the pointer resting there is the mouse's ordinary state,
-    // so deferring on it alone would freeze the cards for as long as an operator
-    // left the cursor on them. An order identical to the one on screen moves no
-    // card, so it is rendered in place and a Refresh all pass keeps landing card by
-    // card under the pointer.
-    var arriving = dashboard.accounts.map(function (account) { return account.email; });
-    if (!force && reordered(arriving) && (cards.matches(":hover") || cards.contains(document.activeElement))) { return; }
+  // A row's overflow menu item: the menu closes before the action runs, so the
+  // redraw that follows is not held back by an open menu.
+  function menuItem(more, label, className, onClick) {
+    return actionButton(label, className, function () {
+      more.open = false;
+      onClick();
+    });
+  }
 
-    cards.innerHTML = "";
-    cardNodes = {};
-    renderedOrder = arriving;
-    dashboard.accounts.forEach(function (account) {
-      var roster = account.roster;
-      var paused = !!(roster && roster.paused);
-      var card = element("section", "card" + (account.isLive && !account.cliLoggedOut ? " live" : "") + (account.cliLoggedOut ? " logged-out" : "") + (paused ? " paused" : ""));
-      var at = new Date(dashboard.capturedAt).getTime();
-      var chip = stateChip(account, at);
-      card.appendChild(cardHeading(account));
-      // The heading is the display name, or the local part when the account has
-      // no alias. The address is always its own line under that: the card-layout
-      // record hid it only when the heading was the address itself, and a local
-      // part is not the address, so this line is what keeps the account identifiable.
-      card.appendChild(element("p", "address", account.email));
-
-      var badges = element("div", "badges");
-      // Two axes, and a card shows the second only when it adds something: the
-      // store chip says where this account's one pair is, and the credential
-      // chip says whether this side can switch to it. "live here" and "parked"
-      // already carry "live" and "ready", so those two are not said twice. The
-      // class is fixed rather than derived from the text, since a chip can
-      // carry "(offline)".
-      if (account.chip) { badges.appendChild(element("span", "badge store", account.chip)); }
-      if (chip && (!account.chip || (chip !== "live" && chip !== "ready"))) {
-        badges.appendChild(element("span", "badge " + chip.replace(/ /g, "-"), chip));
-      }
-      if (!roster) { badges.appendChild(element("span", "badge off-roster", "not on roster")); }
-      if (roster && roster.ciTokenGeneratedOn) {
-        badges.appendChild(element("span", "badge ci-token", "CI token · " + roster.ciTokenGeneratedOn));
-      }
-      card.appendChild(badges);
-      if (account.cliLoggedOut) {
-        card.appendChild(element("p", "cli-logout", account.cliLoggedOut));
-      }
-
-      card.appendChild(usage(account, dashboard));
-
-      if (roster && roster.browser) {
-        card.appendChild(element("p", "muted", roster.browser + (roster.browserProfileDirectory ? " / " + profileCardLabel(roster.browser, roster.browserProfileDirectory) : "")));
-      }
-
-      var actions = element("div", "actions");
-      var switchButton = actionButton(account.isLive && !account.cliLoggedOut ? "Live now" : "Switch", "switch", function () { switchTo(account.email); });
+  // The row's switch buttons, one per side: each hands that side this account in
+  // one click, and a side already holding it says so instead. A button the
+  // server's verdict refuses is hidden rather than shown dead.
+  function switchButtons(account, dashboard) {
+    var seg = element("span", "seg");
+    var name = displayName(account);
+    if (account.isLive && !account.cliLoggedOut) {
+      seg.appendChild(element("span", "live", "Live on " + HERE.toLowerCase()));
+    } else {
       // Whether this account can come live on this side is the server's verdict,
       // which is where the slot, the strand and the expiry are all known: a
       // paused account can still be switched to by hand, a stranded or expired
       // one cannot, and neither can one whose pair the other side is holding.
       // What is added here is only what the browser knows: a request in flight
       // and a banner.
-      switchButton.disabled = switchBlocked(account, dashboard, busy);
-      actions.appendChild(switchButton);
-
-      var refreshButton = actionButton("Refresh", "secondary", function () { refreshAccount(account.email); });
-      refreshButton.disabled = busy;
-      actions.appendChild(refreshButton);
-
-      if (roster) {
-        actions.appendChild(actionButton(paused ? "Resume" : "Pause", "secondary", function () { setPaused(account.email, !paused); }));
-      } else if (account.isLive) {
-        actions.appendChild(actionButton("Adopt", "secondary", function () { adopt(account.email); }));
+      var here = actionButton(HERE, "secondary sm", function () { switchTo(account.email); });
+      here.setAttribute("aria-label", "Switch " + HERE.toLowerCase() + " to " + name);
+      seg.appendChild(blockable(here, switchBlocked(account, dashboard, false)));
+    }
+    lastSides.forEach(function (side) {
+      if (side.liveAccount === account.email) {
+        seg.appendChild(element("span", "live", "Live on " + sideLabel(side.side)));
+        return;
       }
+      var there = actionButton(sideLabel(side.side), "secondary sm", function () { switchSide(side.side, account.email); });
+      there.setAttribute("aria-label", "Switch " + sideLabel(side.side) + " to " + name);
+      seg.appendChild(blockable(there, (account.offeredTo || []).indexOf(side.side) === -1 || !!dashboard.banner));
+    });
+    return seg;
+  }
 
-      // The live account is signed in already; logging it into its parked folder
-      // would leave one account holding two logins. A card with a login good for
-      // longer than the warning window does not need the button on its face; an
-      // expired login is inside that window, so the one test covers both.
-      // A slot the other side holds is empty for a reason, and logging into it
-      // would put a second token family on the machine. The route refuses it
-      // anyway; the button goes so the operator is not sent at a 409.
-      var needsLogin = !account.heldAway && (!account.hasCredentials || loginSoon(account, at));
-      if (roster && !account.isLive && needsLogin) {
-        actions.appendChild(actionButton(
-          account.hasCredentials ? "Log in again" : "Login",
-          "secondary",
-          function () { startLogin(account.email); }));
-      }
-      if (roster && account.loggedOutOn) {
-        actions.appendChild(actionButton("Log in again", "secondary", function () { loginFromSide(account.loggedOutOn, account.email); }));
-      }
+  function row(account, dashboard, at, next) {
+    var roster = account.roster;
+    var paused = !!(roster && roster.paused);
+    var say = sentence(account, at);
+    var tone = say.kind === "ok" && loginSoon(account, at) ? "warn" : say.kind;
+    var card = element("section", "card" + (account.isLive && !account.cliLoggedOut ? " live" : "") + (account.cliLoggedOut ? " logged-out" : "") + (paused ? " paused" : ""));
+    var line = element("div", "row");
 
-      card.appendChild(actions);
+    var who = element("div", "nm");
+    who.appendChild(element("span", "dot " + tone));
+    var title = element("div", "title");
+    title.appendChild(cardHeading(account));
+    var badges = element("span", "badges");
+    if (next) { badges.appendChild(element("span", "badge next", "Next up")); }
+    // Two axes, and a card shows the second only when it adds something: the
+    // store chip says where this account's one pair is, and the credential
+    // chip says whether this side can switch to it. "live here" and "parked"
+    // already carry "live" and "ready", so those two are not said twice. The
+    // class is fixed rather than derived from the text, since a chip can
+    // carry "(offline)".
+    var chip = stateChip(account, at);
+    if (account.chip) { badges.appendChild(element("span", "badge store", account.chip)); }
+    if (chip && (!account.chip || (chip !== "live" && chip !== "ready"))) {
+      badges.appendChild(element("span", "badge " + chip.replace(/ /g, "-"), chip));
+    }
+    if (!roster) { badges.appendChild(element("span", "badge off-roster", "not on roster")); }
+    if (roster && roster.ciTokenGeneratedOn) {
+      badges.appendChild(element("span", "badge ci-token", "CI token · " + roster.ciTokenGeneratedOn));
+    }
+    title.appendChild(badges);
+    who.appendChild(title);
+    // The heading is the display name, or the local part when the account has
+    // no alias. The address is always its own line under that: the card-layout
+    // record hid it only when the heading was the address itself, and a local
+    // part is not the address, so this line is what keeps the account identifiable.
+    who.appendChild(element("p", "address", account.email));
+    line.appendChild(who);
 
-      // Remove revokes the login and deletes the folder, so it stands in its own
-      // group rather than a pointer's width from Switch.
-      if (!account.isLive) {
-        var danger = element("div", "actions danger-zone");
-        var removeButton = actionButton("Remove", "danger", function () { remove(account.email); });
-        // Removing a slot the other side holds would skip the logout it cannot
-        // reach and delete the record that says the pair exists at all. The
-        // route refuses it; the button goes with it.
-        removeButton.disabled = account.heldAway;
-        danger.appendChild(removeButton);
-        card.appendChild(danger);
-      }
+    var status = element("div", "st");
+    status.appendChild(element("p", "say " + say.kind, say.text));
+    status.appendChild(statusLines(account, dashboard, at));
+    line.appendChild(status);
 
-      if (roster) { card.appendChild(editPanel(account, !account.isLive && !needsLogin)); }
+    function limitOf(kind) { return account.usage.limits.filter(function (limit) { return limit.kind === kind; })[0]; }
+    line.appendChild(cell(limitOf("session"), at));
+    line.appendChild(cell(limitOf("weekly_all"), at));
+
+    var act = element("div", "act");
+    // The live account is signed in already; logging it into its parked folder
+    // would leave one account holding two logins. A card with a login good for
+    // longer than the warning window does not need the button on its face; an
+    // expired login is inside that window, so the one test covers both.
+    // A slot the other side holds is empty for a reason, and logging into it
+    // would put a second token family on the machine. The route refuses it
+    // anyway; the button goes so the operator is not sent at a 409.
+    var needsLogin = !account.heldAway && (!account.hasCredentials || loginSoon(account, at));
+    if (roster && !account.isLive && needsLogin) {
+      act.appendChild(actionButton(account.hasCredentials ? "Log in again" : "Login", "primary sm", function () { startLogin(account.email); }));
+    }
+    if (roster && account.loggedOutOn) {
+      act.appendChild(actionButton("Log in again", "primary sm", function () { loginFromSide(account.loggedOutOn, account.email); }));
+    }
+    if (!roster && account.isLive) {
+      act.appendChild(actionButton("Adopt", "secondary sm", function () { adopt(account.email); }));
+    }
+    act.appendChild(switchButtons(account, dashboard));
+
+    var more = element("details", "more");
+    var summary = element("summary", "quiet sm", "···");
+    summary.setAttribute("aria-label", "More actions for " + displayName(account));
+    more.appendChild(summary);
+    var menu = element("div", "menu");
+    var edit = roster ? editPanel(account, !account.isLive && !needsLogin) : null;
+    if (edit) {
+      menu.appendChild(menuItem(more, "Edit", "quiet sm", function () {
+        edit.open = true;
+        var first = edit.querySelector("input, select, textarea");
+        if (first) { first.focus(); }
+      }));
+    }
+    menu.appendChild(blockable(menuItem(more, "Refresh usage", "quiet sm", function () { refreshAccount(account.email); }), false));
+    if (roster) {
+      menu.appendChild(menuItem(more, paused ? "Resume rotation" : "Pause rotation", "quiet sm", function () { setPaused(account.email, !paused); }));
+    }
+    // Remove revokes the login and deletes the folder, so it sits apart, under
+    // a rule, and never beside Switch.
+    if (!account.isLive) {
+      menu.appendChild(element("hr"));
+      // Removing a slot the other side holds would skip the logout it cannot
+      // reach and delete the record that says the pair exists at all. The
+      // route refuses it; the button goes with it.
+      menu.appendChild(blockable(menuItem(more, "Remove account", "danger sm", function () { remove(account.email); }), account.heldAway));
+    }
+    more.appendChild(menu);
+    act.appendChild(more);
+    line.appendChild(act);
+
+    card.appendChild(line);
+    if (edit) { card.appendChild(edit); }
+    return card;
+  }
+
+  function render(dashboard, force) {
+    // The header, the Now strips, the banner, the setup sentence, and the
+    // warnings are not part of any row, so they are written before the guards
+    // below and on every poll: an operator with an Edit panel, a half-typed
+    // login code, or a display name open would otherwise watch the page's own
+    // timestamp, the pass's progress, the Refresh all button, and a banner or
+    // setup sentence that has since been cleared freeze at whatever they said
+    // when the field opened. The setup sentence disables nothing; Switch still
+    // follows canSwitchHere, a request in flight, and the reconciliation banner.
+    lastDashboard = dashboard;
+    lastAccounts = dashboard.accounts;
+    captured.textContent = "Updated " + new Date(dashboard.capturedAt).toLocaleTimeString();
+    refreshStateLine.textContent = passState(dashboard);
+    refreshAllButton.disabled = busy;
+    banner.hidden = !dashboard.banner;
+    banner.replaceChildren();
+    if (dashboard.banner) {
+      banner.appendChild(element("b", null, "Switching is off"));
+      banner.appendChild(element("span", null, dashboard.banner));
+    }
+    setup.hidden = !dashboard.setup;
+    setup.textContent = dashboard.setup || "";
+    warnings.innerHTML = "";
+    warnings.hidden = dashboard.warnings.length === 0;
+    dashboard.warnings.forEach(function (warning) { warnings.appendChild(element("li", null, warning)); });
+    renderNow();
+    // Rendering rebuilds every row, so the ten-second poll would otherwise wipe an
+    // Edit panel, a half-typed login code, a display name being typed, or an open
+    // row menu, out from under whoever is using it. A mutation's own render
+    // passes force, since that one has to show the result.
+    if (!force && cards.querySelector("details.edit[open], details.login[open], input.rename, details.more[open]")) { return; }
+    // The hazard is a row moving, not a row being redrawn. Switch fires without a
+    // confirm, so an order that changes while the pointer rests on the list, or
+    // while a button inside it holds focus, sends the operator to whichever account
+    // slid under the aim; the pointer resting there is the mouse's ordinary state,
+    // so deferring on it alone would freeze the rows for as long as an operator
+    // left the cursor on them. An order identical to the one on screen moves no
+    // row, so it is rendered in place and a Refresh all pass keeps landing row by
+    // row under the pointer.
+    var arriving = dashboard.accounts.map(function (account) { return account.email; });
+    if (!force && reordered(arriving) && (cards.matches(":hover") || cards.contains(document.activeElement))) { return; }
+
+    var at = new Date(dashboard.capturedAt).getTime();
+    var next = recommended(dashboard.accounts, function (account) {
+      return account.canSwitchHere || (account.offeredTo || []).length > 0;
+    });
+    cards.innerHTML = "";
+    cardNodes = {};
+    renderedOrder = arriving;
+    renderedSides = sideNames();
+    dashboard.accounts.forEach(function (account) {
+      var card = row(account, dashboard, at, account === next);
       cardNodes[account.email] = card;
       cards.appendChild(card);
     });
   }
 
+  function sideNames() {
+    return lastSides.map(function (side) { return side.side; }).join("\u0000");
+  }
+
+  // The rows are drawn with the sides already known, and the side read (which
+  // waits on the other side for up to its timeout) never holds them back. A
+  // side that comes or goes redraws the rows once, under the same guards.
   function refresh(force) {
     if (!instanceToken) { return Promise.resolve(); }
     return fetch("/api/dashboard", { headers: withBearer({ "Accept": "application/json" }) })
@@ -1226,13 +1339,15 @@
         return fetch("/api/sides", { headers: withBearer({ "Accept": "application/json" }) });
       })
       .then(function (response) {
-        if (!response || !instanceToken) { return []; }
-        if (response.status === 401) { loseToken(); return []; }
+        if (!response || !instanceToken) { return null; }
+        if (response.status === 401) { loseToken(); return null; }
         return response.ok ? response.json() : [];
       })
       .then(function (sides) {
-        if (!instanceToken) { return; }
-        renderSides(Array.isArray(sides) ? sides : []);
+        if (!sides || !instanceToken) { return; }
+        lastSides = Array.isArray(sides) ? sides : [];
+        renderNow();
+        if (sideNames() !== renderedSides) { render(lastDashboard, force); }
       })
       .catch(function (error) { showToast("Dashboard unavailable: " + error, "error"); });
   }
@@ -1240,19 +1355,27 @@
   function setButtonsDisabled(disabled) {
     // Synchronously, at click time: a second click during the lock wait would
     // otherwise send a second request whose refusal toast overwrote the outcome of
-    // the first. The re-enable is unconditional and the following render applies
-    // the per-account state, so a failed request can never leave a button dead.
-    // A side Switch whose picker is the empty "choose an account" is the exception:
-    // the re-enable runs before the refresh, and a failed refresh would leave that
-    // Switch clickable with nothing selected.
-    Array.prototype.forEach.call(document.querySelectorAll("button"), function (button) { button.disabled = disabled; });
-    if (!disabled) {
-      Object.keys(sideRows).forEach(function (name) {
-        var row = sideRows[name];
-        if (row.button && row.pick && !row.pick.value) { row.button.disabled = true; }
-      });
-    }
+    // the first. The re-enable runs before the redraw, and a failed refresh never
+    // delivers that redraw, so a button its own state disables stays disabled.
+    Array.prototype.forEach.call(document.querySelectorAll("button"), function (button) {
+      button.disabled = disabled || button.hasAttribute("data-blocked");
+    });
   }
+
+  // A row menu closes when the pointer or the focus goes anywhere else.
+  document.addEventListener("click", function (event) {
+    Array.prototype.forEach.call(document.querySelectorAll("details.more[open], details.roster-add[open]"), function (open) {
+      if (!open.contains(event.target)) { open.open = false; }
+    });
+  });
+  document.addEventListener("keydown", function (event) {
+    if (event.key !== "Escape") { return; }
+    Array.prototype.forEach.call(document.querySelectorAll("details.more[open]"), function (open) {
+      open.open = false;
+      open.querySelector("summary").focus();
+    });
+  });
+
 
   addForm.addEventListener("submit", function (event) {
     event.preventDefault();
@@ -1279,8 +1402,8 @@
 
   // Not through mutate(): its refresh afterwards would poll a process that is going away.
   document.getElementById("stop").addEventListener("click", function () {
-    var sideNames = Object.keys(sideRows);
-    var also = sideNames.length ? " and its " + sideNames.join(", ") + " side" : "";
+    var names = lastSides.map(function (side) { return side.side; });
+    var also = names.length ? " and its " + names.join(", ") + " side" : "";
     if (!window.confirm("Stop claude-code-account-rotation" + also + "?\n\nThe page cannot restart the tool. " + RESTART)) {
       return;
     }

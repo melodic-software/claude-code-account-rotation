@@ -11,6 +11,7 @@ public sealed class SecurityHeadersTests
     [InlineData("/")]
     [InlineData("/app.js")]
     [InlineData("/app.css")]
+    [InlineData("/fonts/poppins-400.woff2")]
     public async Task ThePageAndItsAssetsCarryTheContentSecurityPolicyAndNosniff(string path)
     {
         await using AppFactory factory = new();

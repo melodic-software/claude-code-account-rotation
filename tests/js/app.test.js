@@ -2,7 +2,38 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const { takeTokenFromHash, switchBlocked } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+const { takeTokenFromHash, switchBlocked, headroom, recommended } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+
+function limit(kind, percent, fields) {
+  return Object.assign({ kind, percent, known: true, windowReset: false }, fields);
+}
+
+test("headroom runs both windows to 100% and reads the fuller one", () => {
+  assert.strictEqual(headroom({ usage: { limits: [limit("session", 91), limit("weekly_all", 71)] } }), 9);
+  assert.strictEqual(headroom({ usage: { limits: [limit("session", 12), limit("weekly_all", 100)] } }), 0);
+});
+
+test("headroom ignores the scoped window and rows that say nothing, and is null with no figure", () => {
+  const limits = [
+    limit("session", 40, { windowReset: true }),
+    limit("weekly_all", null, { known: false }),
+    limit("weekly_scoped", 99)
+  ];
+  assert.strictEqual(headroom({ usage: { limits } }), null);
+  limits[1] = limit("weekly_all", 30);
+  assert.strictEqual(headroom({ usage: { limits } }), 70);
+});
+
+test("the recommended account is the first usable one in server order that the side may take", () => {
+  const accounts = [
+    { email: "a", standing: "exhausted", canSwitchHere: true },
+    { email: "b", standing: "usable", canSwitchHere: false },
+    { email: "c", standing: "usable", canSwitchHere: true },
+    { email: "d", standing: "usable", canSwitchHere: true }
+  ];
+  assert.strictEqual(recommended(accounts, (account) => account.canSwitchHere).email, "c");
+  assert.strictEqual(recommended(accounts, () => false), null);
+});
 
 function history() {
   const calls = [];
