@@ -782,7 +782,7 @@ to 5 except that Phase 2's `RateLimitGuardTeeFileReader` already parses the key 
 
 | Alternative | Why rejected | Switch condition (what would make it the better choice) |
 |---|---|---|
-| Model C: one `CLAUDE_CONFIG_DIR` per account with junction-shared `projects/` and `plugins/` | Model D reproduces the "Login tab" behavior every open session follows, needs no junctions or settings duplication, and spike 04 proved live sessions follow the credential file | Spike-04 behavior regresses in a CLI release (sessions pin credentials in memory), or Q25 (two live accounts) is promoted |
+| Model C: one `CLAUDE_CONFIG_DIR` per account with junction-shared `projects/` and `plugins/` | Model D reproduces the "Login tab" behavior every open session follows, needs no junctions or settings duplication, and spike 04 proved live sessions follow the credential file | Spike-04 behavior regresses in a CLI release (sessions pin credentials in memory), or Q25 (two live accounts) is promoted, or the operator wants parallel accounts (issue #160) |
 | Ship the four Python spike scripts as the product | Brief Q22 chose a .NET single-file executable with a web page; the scripts have no UI, roster, or ranking, and Python is not on the work machine | The user reverses Q22 |
 | One project instead of Core plus App | Core's pure functions (planner, parser, ranking) are the tested heart; a project boundary makes the dependency direction compiler-checked at zero runtime cost | Core stays under about 400 lines after Phase 3 |
 | Login by driving the interactive `claude` TUI through a pseudo-terminal | Fragile on Windows ConPTY; mechanism (a) needs no terminal and (b) needs no automation | Both (a) and (b) fail on a calm machine |
@@ -1184,6 +1184,21 @@ Rule out H2. It keeps all of D's exposure and adds C's cost.
      keep today's reads.
    - Recommendation: snapshots only.
    - Unblocks: the endpoint-cut issue.
+
+### Decision (2026-09-28)
+
+The operator chose **D-minus**. Today's live-file swap stays, with one active account per side
+shared by every session on that side, and the app's calls to Anthropic are reduced under #161.
+
+Rejected:
+
+- **C and C + launcher (H1).** The goal is one account per side, shared by every session and swapped
+  to get the most use out of each account. One folder per account serves parallel accounts instead,
+  and linking or duplicating config across ten folders is too hacky and complicates the dotfiles.
+- **H2.** It keeps all of D's exposure and adds C's cost.
+
+Model C's switch conditions in "Alternatives considered" now also include: the operator wants
+parallel accounts.
 
 ## Open questions
 
