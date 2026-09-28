@@ -96,7 +96,8 @@ Install it on the side the leader runs on. The follower has no refresh route, an
 no usage for an account the other side holds; that side's card shows its own statusline figures.
 
 1. Save `hooks/rate-limit-stop.sh` from the release tag you run, and on Linux run `chmod +x` on it.
-   It needs `bash` and `curl`; on Windows, Claude Code runs hooks in Git Bash.
+   It needs `bash` and `curl`. On Windows, Git Bash is required: without it Claude Code runs
+   hooks in PowerShell, where `bash` can resolve to WSL's `bash.exe` and the hook does nothing.
 2. Add the hook to `~/.claude/settings.json`, with the path where you saved the script
    (Claude Code 2.1.78 or later):
 
@@ -115,7 +116,10 @@ no usage for an account the other side holds; that side's card shows its own sta
 
 The script reads `instance.url` from the default app data directory and exits quietly when the
 app is not running. It posts to `POST /api/hooks/rate-limit` with the headers `POST /api/shutdown`
-takes; a 409 means the account was read inside the last minute or no account is logged in.
+takes. It answers 202 when a read started, or 409 with one of these `refusal` values:
+`NoLiveAccount` (no account is logged in on this side), `RateLimited` (the account was read inside
+the last minute, or the usage endpoint's lockout is still running), or `RefreshInProgress` (a
+refresh is already running).
 
 ## Reading the dashboard from scripts
 
@@ -124,7 +128,9 @@ takes; a 409 means the account was read inside the last minute or no account is 
 a change to any of them is a breaking change in the CHANGELOG. Everything else may change
 without notice.
 
-- `accounts[]`, in the dashboard's order: the account that frees up next first.
+- `accounts[]`, in the dashboard's order: grouped `usable`, then `exhausted`, then `unread`, then
+  `paused`. Within a group, accounts sort by `nextResetAt` (the weekly reset for a usable account),
+  earliest first, with an undated one after every dated one, then by e-mail.
 - `accounts[].email`.
 - `accounts[].standing`: `usable`, `exhausted`, `unread`, or `paused`.
 - `accounts[].nextResetAt`: when the account frees up (ISO 8601), or null when there is no wait
@@ -135,6 +141,14 @@ without notice.
 - `accounts[].slot`: where the account's pair is when the store is shared with another side:
   `held-here`, `held-elsewhere`, `parked`, `in-transit`, or `never-logged-in`; null when the store
   is not shared.
+
+Which side holds a `held-elsewhere` account comes from `GET /api/sides`, sent the same way. It
+returns one entry per configured side (an empty list when none is). Supported fields:
+
+- `[].side`: the side's name, for example `wsl`.
+- `[].online`: whether that side answered.
+- `[].liveAccount`: the account that side is logged in as, or null when it holds none. It is also
+  null when the side did not answer, and that side may then still hold an account.
 
 ## Rotating the CI token
 
