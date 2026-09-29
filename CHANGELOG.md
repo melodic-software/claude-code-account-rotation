@@ -6,6 +6,13 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Changed
+
+- A release is published when a dated CHANGELOG heading reaches `main`: the
+  release workflow tags the merge commit and publishes in the same run, and does
+  nothing when that version's tag already exists. Pushing a `v*` tag by hand still
+  publishes (#173).
+
 ### Fixed
 
 - A dashboard poll that found the credential gate held, for a moment by the

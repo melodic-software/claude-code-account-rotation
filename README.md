@@ -189,6 +189,14 @@ dotnet build -c Release --no-restore
 dotnet test -c Release --no-build
 ```
 
+## Releasing
+
+A fix pull request that should ship dates its CHANGELOG heading: `## [x.y.z] - YYYY-MM-DD`.
+Ask the operator before dating a heading. When that change reaches `main`, the release workflow
+tags the merge commit `vx.y.z` and publishes the release in the same run. A push to `main` whose
+top dated heading already has a tag publishes nothing. Pushing a `v*` tag by hand still publishes
+from that tag.
+
 ## Upgrading from `account-rotation`
 
 The tool was named `account-rotation` until 2026-09-07. The executable, the User-Agent product
