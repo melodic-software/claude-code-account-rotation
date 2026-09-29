@@ -45,18 +45,10 @@ internal sealed partial class StartupReconciliation(
         // The leader half of the hand-off crash table, after the Windows one and
         // before the first request: a hand-off this process died in the middle of
         // is finished or left in transit by its own rules, not by a Windows
-        // switch's, which know nothing about mailboxes. The same zero-timeout
-        // gate can throw once that pass has a pair to move.
-        WslReconciliation? handOff = null;
-        try
-        {
-            handOff = await coordinator.ReconcileAsync(cancellationToken);
-            LogHandOffReconciled(handOff.Outcome);
-        }
-        catch (TimeoutException)
-        {
-            LogHandOffSkipped();
-        }
+        // switch's, which know nothing about mailboxes. A busy gate comes back
+        // as an undecided outcome, logged like any other.
+        WslReconciliation handOff = await coordinator.ReconcileAsync(cancellationToken);
+        LogHandOffReconciled(handOff.Outcome);
 
         // One publication: a poll must not see the new report beside the banner
         // this pass has not written yet. A pass that did not run leaves the
@@ -64,7 +56,7 @@ internal sealed partial class StartupReconciliation(
         state.Publish(current => current with
         {
             LastReconciliation = report ?? current.LastReconciliation,
-            HandOffBanner = handOff is null ? current.HandOffBanner : handOff.Banner,
+            HandOffBanner = handOff.Decided ? handOff.Banner : current.HandOffBanner,
         });
         await RestoreStrandedPairsAsync(cancellationToken);
         await LoadCachedUsageAsync(cancellationToken);
@@ -150,9 +142,6 @@ internal sealed partial class StartupReconciliation(
 
     [LoggerMessage(Level = LogLevel.Information, Message = "hand-off reconciliation at start: {Outcome}")]
     private partial void LogHandOffReconciled(string outcome);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "hand-off reconciliation did not run: another credential mutation holds the gate")]
-    private partial void LogHandOffSkipped();
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "startup recovery did not run: another credential mutation holds the gate")]
     private partial void LogRecoveryDeferred();

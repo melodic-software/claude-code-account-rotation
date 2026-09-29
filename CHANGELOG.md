@@ -8,6 +8,34 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- A dashboard poll that found the credential gate held, for a moment by the
+  state-file watcher's repair, while it finished a hand-off answered 500. It now
+  leaves the "in transit" line up and the next poll finishes the hand-off (#175).
+- Both Now strips are headed by the display name over the address, whether or
+  not another account shares the name, so their meters line up. A window with no
+  reset to show keeps its line, so the strips' switch buttons line up too (#175).
+- An address wraps only after its `@` or a dot, never mid-word; a row's browser
+  line stays on one line, cut short with the whole of it on hover (#175).
+- The orange switch button's subtitle is drawn at full strength: 5.9:1 against
+  the orange, up from 4.45:1, which was under WCAG AA (#175).
+
+## [2.0.2] - 2026-09-29
+
+### Fixed
+
+- The Refresh button reads the live account again. The page's own refresh, sent
+  milliseconds after the button's request, briefly took the credential gate, and
+  the pass then skipped the live account as "live identity unverified" without a
+  log line. The pass now waits for the gate as long as its other gated steps do;
+  if a credential change still holds it, the card says "a credential change was
+  running; refresh again" and the skip is logged.
+- A row's Rename button names the account the way its switch and menu buttons do,
+  so rows that share a display name read distinctly to a screen reader.
+
+## [2.0.1] - 2026-09-29
+
+### Fixed
+
 - The "near the limit" sentence names the fuller of the 5-hour and 7-day windows,
   not the first one at orange or red; a tie names the 7-day.
 - A display name that another account shares, such as one local part at two mail
@@ -19,14 +47,6 @@ All notable changes to this project are documented in this file. The format foll
 - The page carries its own icon, open like the stylesheet, so the browser's
   `/favicon.ico` request no longer answers 401 before the cookie is set and 404
   after it.
-- The Refresh button reads the live account again. The page's own refresh, sent
-  milliseconds after the button's request, briefly took the credential gate, and
-  the pass then skipped the live account as "live identity unverified" without a
-  log line. The pass now waits for the gate as long as its other gated steps do;
-  if a credential change still holds it, the card says "a credential change was
-  running; refresh again" and the skip is logged.
-- A row's Rename button names the account the way its switch and menu buttons do,
-  so rows that share a display name read distinctly to a screen reader.
 
 ## [2.0.0] - 2026-09-28
 

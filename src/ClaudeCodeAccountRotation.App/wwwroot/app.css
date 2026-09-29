@@ -50,6 +50,8 @@ p { margin: 0; }
 .sm { height: 28px; padding: 0 10px; border-radius: 8px; font-size: 12.5px; }
 .lg { height: auto; min-height: 48px; padding: 8px 18px; border-radius: 12px; flex-direction: column; align-items: flex-start; gap: 2px; font-size: 14px; line-height: 20px; white-space: normal; text-align: left; }
 .lg small { font-size: 12px; font-weight: 400; line-height: 16px; opacity: .8; }
+/* Full strength on the orange: at .8 the subtitle falls under AA (4.45:1). */
+.primary.lg small { opacity: 1; }
 /* Secondary is the base look above, named here so the class reads as meant. */
 .secondary { background: var(--surface); border-color: var(--line-strong); color: var(--text); }
 .secondary:hover { background: var(--surface-2); }
@@ -98,7 +100,7 @@ summary::-webkit-details-marker { display: none; }
 .where .detail::before { content: "\00b7"; margin-right: 8px; }
 .side-card h2 { font-size: 24px; line-height: 32px; letter-spacing: -.015em; overflow-wrap: anywhere; }
 .side-card h2.empty { color: var(--muted); }
-.em { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-family: var(--serif); font-size: 14px; color: var(--muted); overflow-wrap: anywhere; }
+.em { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-family: var(--serif); font-size: 14px; color: var(--muted); }
 .hr { text-align: right; }
 .hr .n { display: block; font-size: 40px; line-height: 44px; font-weight: 500; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
 .hr span:last-child { font-size: 12px; color: var(--muted); }
@@ -109,6 +111,8 @@ summary::-webkit-details-marker { display: none; }
 .meter .l { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
 .meter .l .pct { font-size: 14px; color: var(--text); }
 .meter small { display: block; margin-top: 8px; font-size: 12px; color: var(--muted); }
+/* A window with no reset to show (one at 0% has not started) keeps the line, so both strips' buttons sit level. */
+.meter:not(:has(small))::after { content: "\00a0"; display: block; margin-top: 8px; font-size: 12px; }
 .go { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 
 /* ---------- tone ---------- */
@@ -151,9 +155,10 @@ summary::-webkit-details-marker { display: none; }
 .badges { display: flex; flex-wrap: wrap; gap: 6px 8px; }
 .badges:empty { display: none; }
 .card h2 { font-size: 14px; }
-.address { grid-column: 2; font-family: var(--serif); font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.address { grid-column: 2; font-family: var(--serif); font-size: 13px; color: var(--muted); }
 .st .say { font-size: 14px; }
 .lines p { font-family: var(--serif); font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.lines .browser { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lines .cli-logout, .cli-logout { color: var(--crit); }
 .login-expiry.warn { color: var(--warn); }
 .u { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; align-items: center; font-variant-numeric: tabular-nums; }
