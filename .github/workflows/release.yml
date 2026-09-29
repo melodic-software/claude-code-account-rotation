@@ -5,7 +5,7 @@ name: release
 # asset, so a machine never hand-stages a binary), the wrapper the leader
 # execs in place of that binary, plus the embedded config.template.json.
 # A push to main that changes CHANGELOG.md publishes the top dated heading's
-# version when its tag does not exist yet, tagging the pushed commit; a pushed
+# version when it has no published release yet, tagging the pushed commit; a pushed
 # v* tag still publishes as the manual fallback.
 
 on:
@@ -35,6 +35,9 @@ jobs:
       # An empty output skips every later step.
       - name: Resolve the version
         id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             version="${GITHUB_REF_NAME#v}"
@@ -44,8 +47,10 @@ jobs:
               echo "::error::CHANGELOG.md has no dated version heading"
               exit 1
             fi
-            if [ -n "$(git ls-remote --tags origin "refs/tags/v$version")" ]; then
-              echo "v$version already exists; nothing to publish."
+            # Only a published release counts: a tag or draft left by a failed
+            # run falls through, and the create below fails loudly on it.
+            if [ "$(gh release view "v$version" --json isDraft -q .isDraft 2>/dev/null)" = false ]; then
+              echo "v$version is already released; nothing to publish."
               exit 0
             fi
           fi
