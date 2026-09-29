@@ -4,11 +4,14 @@ name: release
 # linux-x64 follower the WSL side runs (#73 installs the follower from this
 # asset, so a machine never hand-stages a binary), the wrapper the leader
 # execs in place of that binary, plus the embedded config.template.json.
-# Tag-driven: the assets are built from the tag's own tree and nothing
-# publishes from a branch.
+# A push to main that changes CHANGELOG.md publishes the top dated heading's
+# version when it has no published release yet, tagging the pushed commit; a pushed
+# v* tag still publishes as the manual fallback.
 
 on:
   push:
+    branches: [main]
+    paths: [CHANGELOG.md]
     tags: ['v*']
 
 permissions:
@@ -28,7 +31,32 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The version is digits only, so it is safe in every later run line.
+      # An empty output skips every later step.
+      - name: Resolve the version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version=$(sed -nE '/^## \[[0-9]+\.[0-9]+\.[0-9]+\] - [0-9]{4}-[0-9]{2}-[0-9]{2}/{s/^## \[([^]]+)\].*/\1/p;q}' CHANGELOG.md)
+            if [ -z "$version" ]; then
+              echo "::error::CHANGELOG.md has no dated version heading"
+              exit 1
+            fi
+            # Only a published release counts: a tag or draft left by a failed
+            # run falls through, and the create below fails loudly on it.
+            if [ "$(gh release view "v$version" --json isDraft -q .isDraft 2>/dev/null)" = false ]; then
+              echo "v$version is already released; nothing to publish."
+              exit 0
+            fi
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Set up .NET
+        if: steps.version.outputs.version
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           global-json-file: global.json
@@ -36,8 +64,10 @@ jobs:
       # single-file bundler is cross-platform, so a Linux runner produces the
       # Windows executable byte-for-byte the same as a Windows one would.
       - name: Publish
+        if: steps.version.outputs.version
+        env:
+          version: ${{ steps.version.outputs.version }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
           for rid in linux-x64 win-x64; do
             dotnet publish src/ClaudeCodeAccountRotation.App \
               -c Release -r "$rid" --self-contained true \
@@ -56,8 +86,13 @@ jobs:
       # The installer verifies the asset it downloads against this file, so a
       # truncated or substituted download is refused rather than run.
       - name: Checksums
+        if: steps.version.outputs.version
         run: cd dist && sha256sum ./* > SHA256SUMS
+      # A tag this token creates starts no other workflow run, so the tag and
+      # the release both happen here. --target is ignored when the tag exists.
       - name: Create the release
+        if: steps.version.outputs.version
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --generate-notes dist/*
+          version: ${{ steps.version.outputs.version }}
+        run: gh release create "v$version" --target "$GITHUB_SHA" --generate-notes dist/*
