@@ -32,7 +32,8 @@ internal sealed record WslSwitchOutcome(SideName Side, AccountEmail? Now, Accoun
 /// <summary>
 /// What the leader's own crash table found and did at start, or on a poll.
 /// <see cref="Decided"/> is
-/// false when the pass did not run at all because a hand-off held the gate, so
+/// false when the pass did not run at all because a hand-off held the gate, or
+/// stopped at a credential gate something else held, so
 /// its null <see cref="Banner"/> means "no answer", not "nothing standing".
 /// </summary>
 internal sealed record WslReconciliation(string Outcome, string? Banner, bool Decided = true);
@@ -335,6 +336,14 @@ internal sealed partial class WslSwitch : IDisposable
         try
         {
             return await ReconcileUnderHandOffAsync(cancellationToken);
+        }
+        catch (TimeoutException)
+        {
+            // The credential gate was held, for a moment by the state-file
+            // watcher's repair or longer by a switch. Every gated step takes the
+            // gate before it touches a file and the journal records each step, so
+            // nothing moved and the next poll resumes from where this one stopped.
+            return new WslReconciliation("the credential gate is busy; the next poll tries again", null, Decided: false);
         }
         finally
         {

@@ -367,9 +367,35 @@ public sealed class SideEndpointTests
         // And the line goes when the side comes back and the hand-off resolves.
         link.OfflineFrom = null;
         link.Offline = false;
-        JsonObject resolved = (await client.GetFromJsonAsync<JsonObject>(_dashboard, Token))!;
 
-        resolved["warnings"]!.AsArray().ShouldNotContain(warning => warning!.GetValue<string>().Contains("in transit", StringComparison.Ordinal));
+        // A poll that finds the credential gate held, as the state-file watcher's
+        // repair holds it for a moment, leaves the line up for the next poll
+        // rather than failing the page's read.
+        using (await leader.Services.GetRequiredService<CredentialMutationGate>().AcquireAsync(TimeSpan.FromSeconds(5), Token))
+        {
+            JsonObject deferred = (await client.GetFromJsonAsync<JsonObject>(_dashboard, Token))!;
+            deferred["warnings"]!.AsArray().ShouldContain(warning => warning!.GetValue<string>().Contains("in transit", StringComparison.Ordinal));
+        }
+
+        (await PollUntilNoLineIsInTransitAsync(client)).ShouldBeTrue();
+    }
+
+    // The watcher can take the gate again at any poll, so one poll proves nothing;
+    // the page polls every ten seconds and this polls for as long.
+    private static async Task<bool> PollUntilNoLineIsInTransitAsync(HttpClient client)
+    {
+        for (int attempt = 0; attempt < 100; attempt++)
+        {
+            JsonObject dashboard = (await client.GetFromJsonAsync<JsonObject>(_dashboard, Token))!;
+            if (!dashboard["warnings"]!.AsArray().Any(warning => warning!.GetValue<string>().Contains("in transit", StringComparison.Ordinal)))
+            {
+                return true;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(100), Token);
+        }
+
+        return false;
     }
 
     [Fact]

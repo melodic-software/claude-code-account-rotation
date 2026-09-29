@@ -640,7 +640,7 @@ public sealed class RosterEndpointTests
         script.ShouldContain("function localPart");
         script.ShouldContain("function displayName");
         script.ShouldContain("alias || localPart(account.email)");
-        script.ShouldContain("element(\"p\", \"address\", account.email)");
+        script.ShouldContain("element(\"p\", \"address\")).appendChild(wrappableEmail(account.email))");
         script.ShouldNotContain("if (alias) { card.appendChild(element(\"p\", \"address\"");
         // Rename is the heading itself, labeled, not only the disclosure under Remove.
         script.ShouldContain("Rename this account");

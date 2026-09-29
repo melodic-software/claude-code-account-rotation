@@ -200,6 +200,16 @@
     return node;
   }
 
+  // An address that may wrap only after its "@" and its dots, never mid-word.
+  function wrappableEmail(address) {
+    var node = element("span");
+    address.split(/(?<=[@.])/).forEach(function (part, index) {
+      if (index) { node.appendChild(element("wbr")); }
+      node.appendChild(document.createTextNode(part));
+    });
+    return node;
+  }
+
   // One row per field: a visible label wrapping its own control, so no id is
   // needed and the Add form's rows cannot collide with a card's Edit rows.
   function labeled(container, text, field) {
@@ -537,12 +547,13 @@
     if (side) { where.appendChild(element("span", "detail", side.detail)); }
     who.appendChild(where);
     if (account) {
-      var heading = uniqueName(account, lastAccounts);
-      who.appendChild(element("h2", null, heading));
-      // A shared name is headed by the address itself, so the line under it would repeat it.
-      var address = element("div", "em", heading === account.email ? "" : account.email);
+      // Every strip is headed the same way, the name over the address, so the
+      // strips' meters line up whether or not another account shares the name.
+      who.appendChild(element("h2", null, displayName(account)));
+      var address = element("div", "em");
+      address.appendChild(wrappableEmail(account.email));
       if (account.roster && account.roster.ciTokenGeneratedOn) { address.appendChild(element("span", "tag", "CI token")); }
-      if (address.childNodes.length) { who.appendChild(address); }
+      who.appendChild(address);
     } else {
       // An offline read leaves the address null too, and that side may still
       // hold an account, so only an answering side is said to hold nothing.
@@ -1035,7 +1046,9 @@
     }
     var roster = account.roster;
     if (roster && roster.browser) {
-      lines.appendChild(element("p", "muted", roster.browser + (roster.browserProfileDirectory ? " / " + profileCardLabel(roster.browser, roster.browserProfileDirectory) : "")));
+      var browser = roster.browser + (roster.browserProfileDirectory ? " / " + profileCardLabel(roster.browser, roster.browserProfileDirectory) : "");
+      // One line, cut short with the whole of it on hover.
+      lines.appendChild(element("p", "muted browser", browser)).title = browser;
     }
     return lines;
   }
@@ -1310,7 +1323,7 @@
     // no alias. The address is always its own line under that: the card-layout
     // record hid it only when the heading was the address itself, and a local
     // part is not the address, so this line is what keeps the account identifiable.
-    who.appendChild(element("p", "address", account.email));
+    who.appendChild(element("p", "address")).appendChild(wrappableEmail(account.email));
     line.appendChild(who);
 
     var status = element("div", "st");
