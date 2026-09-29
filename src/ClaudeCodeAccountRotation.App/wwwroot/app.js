@@ -9,6 +9,9 @@
       headroom: headroom,
       recommended: recommended,
       switchPrompts: switchPrompts,
+      promptWording: promptWording,
+      uniqueName: uniqueName,
+      nearestLimit: nearestLimit,
       tier: tier
     };
     return;
@@ -407,11 +410,15 @@
 
   // The "switch now" prompt's wording, all of it here: it is to follow the
   // operator's test at the next real limit (#148).
-  function promptWording(prompt) {
-    var line = (prompt.side ? prompt.side + " side: " : "") + prompt.from + " is at its usage limit.";
+  function promptWording(prompt, accounts) {
+    function named(email) {
+      var account = accounts.filter(function (candidate) { return candidate.email === email; })[0];
+      return account ? uniqueName(account, accounts) : email;
+    }
+    var line = (prompt.side ? prompt.side + " side: " : "") + named(prompt.from) + " is at its usage limit.";
     return {
       text: prompt.to ? line : line + " No other account has headroom.",
-      button: prompt.to ? "Switch now to " + prompt.to : null
+      button: prompt.to ? "Switch now to " + named(prompt.to) : null
     };
   }
 
@@ -529,10 +536,12 @@
     if (side) { where.appendChild(element("span", "detail", side.detail)); }
     who.appendChild(where);
     if (account) {
-      who.appendChild(element("h2", null, displayName(account)));
-      var address = element("div", "em", account.email);
+      var heading = uniqueName(account, lastAccounts);
+      who.appendChild(element("h2", null, heading));
+      // A shared name is headed by the address itself, so the line under it would repeat it.
+      var address = element("div", "em", heading === account.email ? "" : account.email);
       if (account.roster && account.roster.ciTokenGeneratedOn) { address.appendChild(element("span", "tag", "CI token")); }
-      who.appendChild(address);
+      if (address.childNodes.length) { who.appendChild(address); }
     } else {
       // An offline read leaves the address null too, and that side may still
       // hold an account, so only an answering side is said to hold nothing.
@@ -564,13 +573,13 @@
     // names the same account the recommended button would, so it takes that
     // button's place rather than sitting beside it.
     var prompt = switchPrompts(lastAccounts, lastSides).filter(function (candidate) { return candidate.side === name; })[0];
-    var wording = prompt ? promptWording(prompt) : null;
+    var wording = prompt ? promptWording(prompt, lastAccounts) : null;
     if (wording) { strip.appendChild(element("p", "prompt", wording.text)); }
     var urgent = !!wording || (!!say && say.kind === "crit");
     if (!side) {
       var here = recommended(lastAccounts, function (candidate) { return candidate.canSwitchHere; });
       if (here) {
-        go.appendChild(takeButton(wording ? wording.button : "Switch to " + displayName(here), here, at, urgent,
+        go.appendChild(takeButton(wording ? wording.button : "Switch to " + uniqueName(here, lastAccounts), here, at, urgent,
           switchBlocked(here, lastDashboard, false), function () { switchTo(here.email); }));
       }
     } else if (side.online) {
@@ -579,7 +588,7 @@
       }
       var there = recommended(lastAccounts, function (candidate) { return (candidate.offeredTo || []).indexOf(side.side) !== -1; });
       if (there) {
-        go.appendChild(takeButton(wording ? wording.button : "Switch " + sideLabel(name) + " to " + displayName(there), there, at, urgent,
+        go.appendChild(takeButton(wording ? wording.button : "Switch " + sideLabel(name) + " to " + uniqueName(there, lastAccounts), there, at, urgent,
           blocked, function () { switchSide(side.side, there.email); }));
       }
       // Read at click time, and re-read by the server before anything moves.
@@ -975,14 +984,23 @@
     }
     if (chip === "paused" || account.standing === "paused") { return { kind: "paused", text: "Paused" }; }
     if (account.standing === "unread") { return { kind: "", text: "No usage read yet" }; }
-    var near = account.usage.limits.filter(function (limit) {
-      return (limit.kind === "session" || limit.kind === "weekly_all") && (meterTone(limit) === "crit" || meterTone(limit) === "high");
-    })[0];
+    var near = nearestLimit(account.usage.limits);
     if (near) {
       var reset = resetLine(near, at);
       return { kind: meterTone(near), text: "Near the " + near.label + " limit" + (reset ? ", " + reset : "") };
     }
     return { kind: "ok", text: "Usable now" };
+  }
+
+  // The window the "near the limit" sentence names: the fuller of the two at
+  // orange or red. A tie goes to the 7-day, whose reset is the later one.
+  function nearestLimit(limits) {
+    return limits.filter(function (limit) {
+      var tone = meterTone(limit);
+      return (limit.kind === "session" || limit.kind === "weekly_all") && (tone === "crit" || tone === "high");
+    }).reduce(function (worst, limit) {
+      return !worst || limit.percent > worst.percent || (limit.percent === worst.percent && limit.kind === "weekly_all") ? limit : worst;
+    }, null);
   }
 
   // Everything else a row knows, in small lines under its sentence: where the
@@ -1066,6 +1084,15 @@
   function displayName(account) {
     var alias = account.roster && account.roster.alias;
     return alias || localPart(account.email);
+  }
+
+  // The name for a place that shows no address beside it: a switch button, the
+  // prompt, a strip's heading. Two accounts can share a local part across
+  // providers, so a name another account also answers to gives way to the address.
+  function uniqueName(account, accounts) {
+    var name = displayName(account);
+    var shared = accounts.some(function (other) { return other.email !== account.email && displayName(other).toLowerCase() === name.toLowerCase(); });
+    return shared ? account.email : name;
   }
 
   // Alias only. A missing key leaves notes, the browser, and pause alone, which
@@ -1216,7 +1243,7 @@
   // blocks stays in view, disabled, so the row still says what it offers.
   function switchButtons(account, dashboard) {
     var seg = element("span", "seg");
-    var name = displayName(account);
+    var name = uniqueName(account, lastAccounts);
     if (account.isLive && !account.cliLoggedOut) {
       seg.appendChild(element("span", "live", "Live on " + HERE.toLowerCase()));
     } else {
@@ -1312,7 +1339,7 @@
 
     var more = element("details", "more");
     var summary = element("summary", "quiet sm", "···");
-    summary.setAttribute("aria-label", "More actions for " + displayName(account));
+    summary.setAttribute("aria-label", "More actions for " + uniqueName(account, lastAccounts));
     more.appendChild(summary);
     var menu = element("div", "menu");
     var edit = roster ? editPanel(account, !account.isLive && !needsLogin) : null;

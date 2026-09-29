@@ -144,8 +144,12 @@ summary::-webkit-details-marker { display: none; }
 .card.paused .bar { opacity: .6; }
 .row { padding: 12px; }
 .nm { display: grid; grid-template-columns: 8px minmax(0, 1fr); column-gap: 12px; align-items: center; }
-.nm .title { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; min-width: 0; }
-.badges { display: contents; }
+/* Level with the name line, not centred on the name and its chips together. */
+.nm > .dot { align-self: start; margin-top: 7px; }
+/* The chips always take their own line under the name, however short the name is. */
+.nm .title { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.badges { display: flex; flex-wrap: wrap; gap: 6px 8px; }
+.badges:empty { display: none; }
 .card h2 { font-size: 14px; }
 .address { grid-column: 2; font-family: var(--serif); font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
 .st .say { font-size: 14px; }

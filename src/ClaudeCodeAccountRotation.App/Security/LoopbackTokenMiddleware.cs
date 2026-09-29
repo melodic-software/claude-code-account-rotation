@@ -13,7 +13,7 @@ namespace ClaudeCodeAccountRotation.App.Security;
 /// <summary>
 /// Requires this process's loopback token on every route except the liveness
 /// probe and the static assets the page loads before it has a token: the
-/// script, the stylesheet, and the fonts under <c>/fonts</c>.
+/// script, the stylesheet, the icon, and the fonts under <c>/fonts</c>.
 /// The document itself loads either way: a missing or wrong credential returns
 /// the page with an empty token element, and a matching one embeds the token.
 /// A query string is never a credential.
@@ -69,11 +69,12 @@ internal sealed class LoopbackTokenMiddleware(RequestDelegate next)
         await next(context);
     }
 
-    // The stylesheet's fonts load while the page parses, before the first /api
-    // call has set the cookie, so they are open like the stylesheet itself.
+    // The stylesheet's fonts and the page's icon load while the page parses,
+    // before the first /api call has set the cookie, so they are open like the
+    // stylesheet itself.
     private static bool IsOpen(HttpRequest request) =>
         HttpMethods.IsGet(request.Method)
-        && (request.Path.Value is "/healthz" or "/app.js" or "/app.css"
+        && (request.Path.Value is "/healthz" or "/app.js" or "/app.css" or "/favicon.svg"
             || request.Path.StartsWithSegments("/fonts", StringComparison.Ordinal));
 
     private static bool IsDocument(HttpRequest request) =>

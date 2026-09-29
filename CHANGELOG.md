@@ -6,6 +6,20 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Fixed
+
+- The "near the limit" sentence names the fuller of the 5-hour and 7-day windows,
+  not the first one at orange or red; a tie names the 7-day.
+- A display name that another account shares, such as one local part at two mail
+  providers, gives way to the full address wherever no address is shown beside it:
+  the Now strip heading, its switch button, the "switch now" prompt, and the rows'
+  switch and menu labels.
+- A row's chips always sit on their own line under the name; a short name no
+  longer pulls them up beside it.
+- The page carries its own icon, open like the stylesheet, so the browser's
+  `/favicon.ico` request no longer answers 401 before the cookie is set and 404
+  after it.
+
 ## [2.0.0] - 2026-09-28
 
 ### Added
