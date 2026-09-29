@@ -521,8 +521,9 @@ public sealed class QuotaRefreshTests
         using RefreshHarness harness = new();
         await harness.WriteLiveIdentityAsync("live@example.com", Token);
         await harness.WriteLivePairAsync("refresh-live", harness.Valid, Token);
-        // A switch or a login holds the gate, so the stale-identity repair cannot
-        // run and nothing here can say whose pair the live directory holds.
+        // A switch or a login holds the gate past the pass's wait, so the
+        // stale-identity repair cannot run and nothing here can say whose pair the
+        // live directory holds.
         using IDisposable held = await harness.Gate.AcquireAsync(TimeSpan.Zero, Token);
 
         await harness.Engine.RunAsync(RefreshRequest.All, Token);
@@ -530,7 +531,29 @@ public sealed class QuotaRefreshTests
         harness.Usage.Calls.ShouldBe(0);
         RefreshOutcome outcome = harness.OutcomeFor("live@example.com")!;
         outcome.Kind.ShouldBe(RefreshOutcomeKind.Skipped);
-        outcome.Message.ShouldBe(RefreshMessages.LiveIdentityUnverified);
+        outcome.Message.ShouldBe(RefreshMessages.LiveIdentityBusy);
+        harness.RefreshLog.Lines.ShouldContain(line => line.Contains("live@example.com was not read", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ThePassWaitsForAGateHeldBrieflyAndReadsTheLiveAccount()
+    {
+        // The dashboard's own GET runs a zero-wait repair milliseconds after the
+        // Refresh button's POST starts a pass. The pass must wait it out.
+        using RefreshHarness harness = new();
+        await harness.WriteLiveIdentityAsync("live@example.com", Token);
+        await harness.WriteLivePairAsync("refresh-live", harness.Valid, Token);
+        harness.Usage.Answers.Enqueue(ScriptedUsage.Ok());
+        IDisposable held = await harness.Gate.AcquireAsync(TimeSpan.Zero, Token);
+
+        // The repair's gate wait is the pass's first await, so the pass is
+        // parked on the gate by the time RunAsync returns its task.
+        Task pass = harness.Engine.RunAsync(RefreshRequest.All, Token);
+        held.Dispose();
+        await pass;
+
+        harness.Usage.Calls.ShouldBe(1);
+        harness.OutcomeFor("live@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.Read);
     }
 
     [Fact]

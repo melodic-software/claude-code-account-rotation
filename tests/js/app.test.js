@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const { takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, promptWording, uniqueName, nearestLimit, tier } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+const { takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, promptWording, uniqueName, renameLabel, nearestLimit, tier } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
 
 function limit(kind, percent, fields) {
   return Object.assign({ kind, percent, known: true, windowReset: false }, fields);
@@ -163,6 +163,11 @@ test("a name another account shares gives way to the address, in buttons and in 
   const cased = [card("pat@example.net", { roster: { alias: "Pat" } }, 0, 0), accounts[1]];
   assert.strictEqual(uniqueName(cased[0], cased), "pat@example.net");
   assert.strictEqual(uniqueName(cased[1], cased), "pat@example.org");
+  const four = ["com", "org", "net", "io"].map((tld) => card("pat@example." + tld, { roster: {} }, 0, 0));
+  assert.deepStrictEqual(four.map((account) => renameLabel(account, four)), [
+    "Rename pat@example.com", "Rename pat@example.org", "Rename pat@example.net", "Rename pat@example.io"
+  ]);
+  assert.strictEqual(renameLabel(accounts[2], accounts), "Rename Lee");
   assert.deepStrictEqual(promptWording({ side: "wsl", from: "pat@example.com", to: "pat@example.org" }, accounts), {
     text: "wsl side: pat@example.com is at its usage limit.",
     button: "Switch now to pat@example.org"
