@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [2.0.3] - 2026-09-29
+
 ### Changed
 
 - A release is published when a dated CHANGELOG heading reaches `main`: the
