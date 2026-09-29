@@ -1091,7 +1091,7 @@
   // providers, so a name another account also answers to gives way to the address.
   function uniqueName(account, accounts) {
     var name = displayName(account);
-    var shared = accounts.some(function (other) { return other.email !== account.email && displayName(other) === name; });
+    var shared = accounts.some(function (other) { return other.email !== account.email && displayName(other).toLowerCase() === name.toLowerCase(); });
     return shared ? account.email : name;
   }
 

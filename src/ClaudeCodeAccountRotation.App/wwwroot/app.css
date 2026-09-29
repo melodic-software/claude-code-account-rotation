@@ -144,6 +144,8 @@ summary::-webkit-details-marker { display: none; }
 .card.paused .bar { opacity: .6; }
 .row { padding: 12px; }
 .nm { display: grid; grid-template-columns: 8px minmax(0, 1fr); column-gap: 12px; align-items: center; }
+/* Level with the name line, not centred on the name and its chips together. */
+.nm > .dot { align-self: start; margin-top: 7px; }
 /* The chips always take their own line under the name, however short the name is. */
 .nm .title { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .badges { display: flex; flex-wrap: wrap; gap: 6px 8px; }

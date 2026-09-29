@@ -145,6 +145,10 @@ test("the near-limit sentence names the fuller window, and a tie names the 7-day
   assert.strictEqual(near(80, 80).kind, "weekly_all");
   assert.strictEqual(near(80, 10).kind, "session");
   assert.strictEqual(near(60, 10), null);
+  const reset = nearestLimit([limit("session", 80), limit("weekly_all", 95, { windowReset: true })]);
+  assert.strictEqual(reset.kind, "session");
+  assert.strictEqual(nearestLimit([limit("session", null, { known: false }), limit("weekly_all", 85)]).kind, "weekly_all");
+  assert.strictEqual(nearestLimit([limit("session", null), limit("weekly_all", null)]), null);
 });
 
 test("a name another account shares gives way to the address, in buttons and in the prompt", () => {
@@ -156,6 +160,9 @@ test("a name another account shares gives way to the address, in buttons and in 
   assert.strictEqual(uniqueName(accounts[1], accounts), "pat@example.org");
   assert.strictEqual(uniqueName(accounts[2], accounts), "Lee");
   assert.strictEqual(uniqueName(accounts[1], accounts.slice(1)), "pat");
+  const cased = [card("pat@example.net", { roster: { alias: "Pat" } }, 0, 0), accounts[1]];
+  assert.strictEqual(uniqueName(cased[0], cased), "pat@example.net");
+  assert.strictEqual(uniqueName(cased[1], cased), "pat@example.org");
   assert.deepStrictEqual(promptWording({ side: "wsl", from: "pat@example.com", to: "pat@example.org" }, accounts), {
     text: "wsl side: pat@example.com is at its usage limit.",
     button: "Switch now to pat@example.org"
