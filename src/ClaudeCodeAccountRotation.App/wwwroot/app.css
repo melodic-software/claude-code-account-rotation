@@ -100,7 +100,7 @@ summary::-webkit-details-marker { display: none; }
 .where .detail::before { content: "\00b7"; margin-right: 8px; }
 .side-card h2 { font-size: 24px; line-height: 32px; letter-spacing: -.015em; overflow-wrap: anywhere; }
 .side-card h2.empty { color: var(--muted); }
-.em { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-family: var(--serif); font-size: 14px; color: var(--muted); overflow-wrap: break-word; }
+.em { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-family: var(--serif); font-size: 14px; color: var(--muted); }
 .hr { text-align: right; }
 .hr .n { display: block; font-size: 40px; line-height: 44px; font-weight: 500; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
 .hr span:last-child { font-size: 12px; color: var(--muted); }
@@ -155,7 +155,7 @@ summary::-webkit-details-marker { display: none; }
 .badges { display: flex; flex-wrap: wrap; gap: 6px 8px; }
 .badges:empty { display: none; }
 .card h2 { font-size: 14px; }
-.address { grid-column: 2; font-family: var(--serif); font-size: 13px; color: var(--muted); overflow-wrap: break-word; }
+.address { grid-column: 2; font-family: var(--serif); font-size: 13px; color: var(--muted); }
 .st .say { font-size: 14px; }
 .lines p { font-family: var(--serif); font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .lines .browser { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
