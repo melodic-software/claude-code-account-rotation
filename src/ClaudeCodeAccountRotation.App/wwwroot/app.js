@@ -11,6 +11,7 @@
       switchPrompts: switchPrompts,
       promptWording: promptWording,
       uniqueName: uniqueName,
+      renameLabel: renameLabel,
       nearestLimit: nearestLimit,
       tier: tier
     };
@@ -1095,6 +1096,10 @@
     return shared ? account.email : name;
   }
 
+  function renameLabel(account, accounts) {
+    return "Rename " + uniqueName(account, accounts);
+  }
+
   // Alias only. A missing key leaves notes, the browser, and pause alone, which
   // is what makes typing a name safe while the Edit panel holds a warning.
   function renameAccount(account, alias) {
@@ -1112,7 +1117,7 @@
     var button = element("button", "rename");
     button.type = "button";
     button.title = "Rename this account";
-    button.setAttribute("aria-label", "Rename " + displayName(account));
+    button.setAttribute("aria-label", renameLabel(account, lastAccounts));
     button.appendChild(element("span", "display-name", displayName(account)));
     button.appendChild(element("span", "rename-label", "Rename"));
     button.addEventListener("click", function () {

@@ -78,6 +78,7 @@ internal static class RefreshMessages
     public const string LoginInProgress = "a login is in progress";
     public const string PairChanged = "the pair changed underneath the refresh";
     public const string LiveIdentityUnverified = "live identity unverified";
+    public const string LiveIdentityBusy = "a credential change was running; refresh again";
     public const string SessionWillRefresh = "session will refresh";
     public const string NeedsLogin = "no credentials on this machine; log in again";
     public const string HeldElsewhere = "in use by the other side of this machine";

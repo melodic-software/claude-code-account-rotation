@@ -176,16 +176,22 @@ internal sealed partial class LiveDirectorySwitch
     /// naming another account and stamped before the record was written is stale,
     /// and the owner's block, kept in its profile folder since it was parked, is
     /// patched in again; a block stamped after the record is a real login and is
-    /// adopted instead. Runs with a zero gate wait so it never delays a switch.
+    /// adopted instead. The watcher and the dashboard run it with a zero gate wait
+    /// so it never delays a switch; a refresh pass waits as long as its own gated
+    /// units do, because a repair it loses leaves the live account unread.
     /// </summary>
-    public async Task<IdentityRepair> RepairStaleIdentityAsync(CancellationToken cancellationToken)
+    public Task<IdentityRepair> RepairStaleIdentityAsync(CancellationToken cancellationToken) =>
+        RepairStaleIdentityAsync(TimeSpan.Zero, cancellationToken);
+
+    /// <inheritdoc cref="RepairStaleIdentityAsync(CancellationToken)"/>
+    public async Task<IdentityRepair> RepairStaleIdentityAsync(TimeSpan gateWait, CancellationToken cancellationToken)
     {
         IDisposable? permit = null;
         try
         {
             try
             {
-                permit = await _gate.AcquireAsync(TimeSpan.Zero, cancellationToken);
+                permit = await _gate.AcquireAsync(gateWait, cancellationToken);
             }
             catch (TimeoutException)
             {

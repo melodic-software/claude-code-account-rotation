@@ -19,6 +19,14 @@ All notable changes to this project are documented in this file. The format foll
 - The page carries its own icon, open like the stylesheet, so the browser's
   `/favicon.ico` request no longer answers 401 before the cookie is set and 404
   after it.
+- The Refresh button reads the live account again. The page's own refresh, sent
+  milliseconds after the button's request, briefly took the credential gate, and
+  the pass then skipped the live account as "live identity unverified" without a
+  log line. The pass now waits for the gate as long as its other gated steps do;
+  if a credential change still holds it, the card says "a credential change was
+  running; refresh again" and the skip is logged.
+- A row's Rename button names the account the way its switch and menu buttons do,
+  so rows that share a display name read distinctly to a screen reader.
 
 ## [2.0.0] - 2026-09-28
 

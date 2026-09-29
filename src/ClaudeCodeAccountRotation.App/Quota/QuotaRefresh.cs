@@ -198,7 +198,7 @@ internal sealed partial class QuotaRefresh
         Dictionary<RefreshOutcomeKind, int> summary,
         CancellationToken stopping)
     {
-        IdentityRepair repair = await _executor.RepairStaleIdentityAsync(stopping);
+        IdentityRepair repair = await _executor.RepairStaleIdentityAsync(_gateWait, stopping);
         AccountEmail? liveEmail = (await _stateFile.ReadAccountBlockAsync(stopping))?.Email;
         IReadOnlyList<ParkedProfile> parked = await _profiles.ListAsync(stopping);
         Roster roster = await _rosterFile.ReadAsync(stopping);
@@ -207,7 +207,12 @@ internal sealed partial class QuotaRefresh
         List<Candidate> candidates = [];
         if (liveEmail is AccountEmail live && Wanted(live))
         {
-            if (repair is IdentityRepair.Busy or IdentityRepair.NoProfileBlock)
+            if (repair is IdentityRepair.Busy)
+            {
+                LogLiveRepairBusy(live.Value);
+                Record(live, Outcome(RefreshOutcomeKind.Skipped, RefreshMessages.LiveIdentityBusy), summary);
+            }
+            else if (repair is IdentityRepair.NoProfileBlock)
             {
                 Record(live, Outcome(RefreshOutcomeKind.Skipped, RefreshMessages.LiveIdentityUnverified), summary);
             }
@@ -753,6 +758,9 @@ internal sealed partial class QuotaRefresh
     // level the operator sees, and the exception itself at Debug. A stack trace
     // or a file-system message quotes paths, and these lines are read off a
     // console the operator leaves open beside ten real accounts.
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the live account {Account} was not read: a credential change held the gate past the pass's wait")]
+    private partial void LogLiveRepairBusy(string account);
+
     [LoggerMessage(Level = LogLevel.Warning, Message = "the refresh pass could not be built ({Failure})")]
     private partial void LogPassFailed(string failure);
 
