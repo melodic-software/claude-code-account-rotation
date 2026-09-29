@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const { takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, tier } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+const { takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, promptWording, uniqueName, nearestLimit, tier } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
 
 function limit(kind, percent, fields) {
   return Object.assign({ kind, percent, known: true, windowReset: false }, fields);
@@ -136,4 +136,32 @@ test("no fragment, or another one, yields nothing and leaves the URL alone", () 
 
 test("usage tiers follow the statusline: green, then yellow from 50, orange from 75, red from 90", () => {
   assert.deepStrictEqual([0, 49, 50, 74, 75, 89, 90, 100].map(tier), ["ok", "ok", "warn", "warn", "high", "high", "crit", "crit"]);
+});
+
+test("the near-limit sentence names the fuller window, and a tie names the 7-day", () => {
+  const near = (session, weekly) => nearestLimit([limit("session", session), limit("weekly_all", weekly), limit("weekly_scoped", 99)]);
+  assert.strictEqual(near(81, 92).kind, "weekly_all");
+  assert.strictEqual(near(95, 80).kind, "session");
+  assert.strictEqual(near(80, 80).kind, "weekly_all");
+  assert.strictEqual(near(80, 10).kind, "session");
+  assert.strictEqual(near(60, 10), null);
+});
+
+test("a name another account shares gives way to the address, in buttons and in the prompt", () => {
+  const accounts = [
+    card("pat@example.com", { isLive: true, canSwitchHere: false }, 100, 0),
+    card("pat@example.org", {}, 0, 0),
+    card("lee@example.com", { roster: { alias: "Lee" } }, 0, 0)
+  ];
+  assert.strictEqual(uniqueName(accounts[1], accounts), "pat@example.org");
+  assert.strictEqual(uniqueName(accounts[2], accounts), "Lee");
+  assert.strictEqual(uniqueName(accounts[1], accounts.slice(1)), "pat");
+  assert.deepStrictEqual(promptWording({ side: "wsl", from: "pat@example.com", to: "pat@example.org" }, accounts), {
+    text: "wsl side: pat@example.com is at its usage limit.",
+    button: "Switch now to pat@example.org"
+  });
+  assert.deepStrictEqual(promptWording({ side: null, from: "lee@example.com", to: null }, accounts), {
+    text: "Lee is at its usage limit. No other account has headroom.",
+    button: null
+  });
 });

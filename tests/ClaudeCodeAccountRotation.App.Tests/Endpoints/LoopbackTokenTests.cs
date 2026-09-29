@@ -232,12 +232,15 @@ public sealed class LoopbackTokenTests
         using HttpResponseMessage health = await client.GetAsync(new Uri("/healthz", UriKind.Relative), Token);
         using HttpResponseMessage font = await client.GetAsync(new Uri("/fonts/lora-400-700.woff2", UriKind.Relative), Token);
         using HttpResponseMessage api = await client.GetAsync(new Uri("/fontsx", UriKind.Relative), Token);
+        using HttpResponseMessage icon = await client.GetAsync(new Uri("/favicon.svg", UriKind.Relative), Token);
         string scriptBody = await script.Content.ReadAsStringAsync(Token);
 
         script.StatusCode.ShouldBe(HttpStatusCode.OK);
         style.StatusCode.ShouldBe(HttpStatusCode.OK);
         font.StatusCode.ShouldBe(HttpStatusCode.OK);
         font.Content.Headers.ContentType!.MediaType.ShouldBe("font/woff2");
+        icon.StatusCode.ShouldBe(HttpStatusCode.OK);
+        icon.Content.Headers.ContentType!.MediaType.ShouldBe("image/svg+xml");
         // A segment match: a path that only starts with the same letters stays closed.
         api.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
         health.StatusCode.ShouldBe(HttpStatusCode.OK);
