@@ -7,8 +7,7 @@ accounts with its 5-hour and 7-day headroom, ranks them by earliest weekly reset
 whole machine to the account you pick, with no browser step. Every open Claude Code session follows
 the switch on its next request.
 
-Status: a tagged release exists. The confirmed Brief and the approved implementation plan
-live in `docs/topics/claude-subscription-rotation/PLAN.md`.
+Status: a tagged release exists.
 
 ## Posture
 
