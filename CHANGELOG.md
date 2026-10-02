@@ -6,7 +6,30 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [2.0.5] - 2026-10-02
+
 ### Fixed
+
+- **Refresh now reads accounts held by the WSL side.** "Refresh all accounts"
+  and a card's own Refresh used to skip them. The leader now asks the WSL side
+  to read the usage itself with its live access token. The WSL side never
+  renews a token, and it reads only when the leader asks. If an account still
+  cannot be read, its card says why: the side is offline, its session has to
+  refresh first, it no longer holds the account, or a hand-off is in flight
+  (#185).
+- **Every usage figure shows its age.** A figure older than 30 minutes is marked
+  "may be out of date", and the card no longer says "Usable now" on figures
+  that old (#185).
+- **A switch keeps the usage already known for an account.** After a switch, a
+  card keeps its last figures, from Refresh or from a session on either side,
+  until fresher ones arrive. Before, a card for an account the WSL side held
+  showed only "unknown". A WSL session still on the outgoing account no longer
+  puts that account's figures on the incoming account's card. An account in use
+  with no figures yet is listed right after the usable ones, not at the bottom
+  (#184).
+- **A Windows CLI logout no longer stops the whole refresh pass.** The live
+  account is reported as logged out and every other account is still read
+  (#186).
 
 - The WSL side now repairs its own state file when a Claude Code session that
   started under an earlier account writes that account's identity back. Before,
