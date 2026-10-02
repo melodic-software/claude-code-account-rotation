@@ -1,6 +1,9 @@
 using System.Net;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
+using ClaudeCodeAccountRotation.App.Tests.Endpoints;
+using ClaudeCodeAccountRotation.App.Tests.Switching;
+using ClaudeCodeAccountRotation.Core.Identity;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Hosting;
 
@@ -73,6 +76,35 @@ public sealed class StateFileWatcherTests
         }
 
         email.ShouldBe("b@example.com", "the watcher survived the torn read and repaired the next write-back");
+    }
+
+    [Fact]
+    public async Task TheFollowerRepairsAStaleBlockWithoutAnyRequest()
+    {
+        // The follower's composition registered no watcher, so a block a WSL session
+        // wrote back stood for hours and every WSL switch was refused.
+        await using FollowerAppFactory factory = new();
+        FollowerRoots roots = factory.Roots;
+        RefreshTokenFingerprint live = await roots.WriteLiveAsync("a@example.com", "refresh-b", TestContext.Current.CancellationToken);
+        Directory.CreateDirectory(Path.Combine(roots.AppData, "state"));
+        JsonObject record = new()
+        {
+            ["fingerprint"] = live.Sha256Hex,
+            ["email"] = "b@example.com",
+            ["at"] = DateTimeOffset.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+            ["account"] = FollowerRoots.AccountJson("b@example.com"),
+        };
+        await File.WriteAllTextAsync(Path.Combine(roots.AppData, "state", "live-owner.json"), record.ToJsonString(), TestContext.Current.CancellationToken);
+
+        _ = factory.Services;
+        string? email = null;
+        for (int attempt = 0; attempt < 40 && email != "b@example.com"; attempt++)
+        {
+            await Task.Delay(250, TestContext.Current.CancellationToken);
+            email = await StateFileEmailAsync(roots.StateFilePath, TestContext.Current.CancellationToken);
+        }
+
+        email.ShouldBe("b@example.com", "the follower's own watcher repairs the block at start");
     }
 
     private static bool Warned(string line) => line.Contains("stale identity repair failed", StringComparison.Ordinal);

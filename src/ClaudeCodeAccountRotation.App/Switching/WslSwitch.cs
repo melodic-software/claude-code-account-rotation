@@ -1223,11 +1223,19 @@ internal sealed partial class WslSwitch : IDisposable
     /// </summary>
     private async Task<WslSwitchJournalEntry> ImportedAsync(WslSwitchJournalEntry entry, ImportResult result, CancellationToken cancellationToken)
     {
+        // The block that side hands back is whatever its state file named at F2.
+        // One naming another account is a stale identity a session wrote back,
+        // and writing it into the outgoing slot's profile would file that slot
+        // under the wrong account; the planned block stands instead.
+        JsonObject? handedBack = result.OutgoingAccount is JsonObject block
+            && OAuthAccountBlock.FromJson(block).Email == entry.Outgoing
+            ? block
+            : null;
         WslSwitchJournalEntry imported = entry with
         {
             StepReached = WslSwitchStep.Imported,
             OutgoingFingerprint = result.OutgoingFingerprint ?? entry.OutgoingFingerprint,
-            OutgoingAccount = result.OutgoingAccount ?? entry.OutgoingAccount,
+            OutgoingAccount = handedBack ?? entry.OutgoingAccount,
         };
         await JournalAsync(imported, cancellationToken);
         return imported;

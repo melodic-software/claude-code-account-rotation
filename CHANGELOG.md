@@ -6,6 +6,26 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Fixed
+
+- The WSL side now repairs its own state file when a Claude Code session that
+  started under an earlier account writes that account's identity back. Before,
+  only Windows did this, so the WSL side kept the wrong name and every WSL
+  switch was refused as "live identity unverified" until the file was edited by
+  hand. The repair restores the identity recorded with the live pair at import
+  and runs at start and on every change to the file. Before it names the
+  account that is leaving, an import now first corrects the name (#182).
+- A stale name no longer blocks a switch when the credentials show which
+  account is really live:
+  - **WSL:** when the WSL side's live pair matches the pair this store handed it
+    for an account, the leader treats that account as live there, whatever name
+    the WSL side reports. The leader also no longer writes an identity block
+    naming a different account into the slot it parks a pair in.
+  - **Windows:** a Windows switch repairs a stale name itself before it plans.
+  - **When neither applies:** the switch is refused with its own reason,
+    `LiveNameStale` or `SideLiveAccountAmbiguous`, instead of "see the banner"
+    when no banner explains it (#183).
+
 ## [2.0.4] - 2026-10-02
 
 ### Fixed

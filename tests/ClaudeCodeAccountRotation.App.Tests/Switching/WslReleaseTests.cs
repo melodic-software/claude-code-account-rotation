@@ -200,7 +200,7 @@ public sealed class WslReleaseTests
             await coordinator.ReleaseAsync(SideName.Wsl, quarantineForeignFamily: false, Token);
 
         result.IsFailure.ShouldBeTrue();
-        result.Error.ShouldBe(SwitchRefusal.LiveIdentityUnverified);
+        result.Error.ShouldBe(SwitchRefusal.SideLiveAccountAmbiguous);
         (await FingerprintAtAsync(harness.PairPath(Held))).ShouldBe(CredentialFiles.Pair("refresh-stray").Fingerprint);
     }
 

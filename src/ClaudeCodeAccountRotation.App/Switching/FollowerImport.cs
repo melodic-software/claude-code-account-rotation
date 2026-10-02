@@ -107,11 +107,31 @@ internal sealed partial class FollowerImport : IDisposable, IStaleIdentityRepair
     /// <summary>
     /// Restores this side's state file when a session writes an older identity
     /// back over the one the import put there. The same repair the leader runs,
-    /// with a zero gate wait so it never delays an import, which patches the file
+    /// with a zero wait so it never delays an import, which patches the file
     /// itself and wakes the watcher again.
+    /// <para>
+    /// Taken behind the same semaphore every request takes before the gate. This
+    /// side's gate timeout is zero, so a repair holding the gate on its own would
+    /// fail a request that arrived during it; holding the semaphore as well makes
+    /// that request wait its turn instead.
+    /// </para>
     /// </summary>
-    public Task<IdentityRepair> RepairStaleIdentityAsync(CancellationToken cancellationToken) =>
-        _repair.RepairAsync(TimeSpan.Zero, cancellationToken);
+    public async Task<IdentityRepair> RepairStaleIdentityAsync(CancellationToken cancellationToken)
+    {
+        if (!await _sync.WaitAsync(TimeSpan.Zero, cancellationToken))
+        {
+            return IdentityRepair.Busy;
+        }
+
+        try
+        {
+            return await _repair.RepairAsync(TimeSpan.Zero, cancellationToken);
+        }
+        finally
+        {
+            _sync.Release();
+        }
+    }
 
     /// <summary>
     /// The owner's block for a record written before the record carried one: the

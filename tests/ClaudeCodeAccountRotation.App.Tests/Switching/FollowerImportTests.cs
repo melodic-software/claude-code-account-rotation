@@ -74,6 +74,64 @@ public sealed class FollowerImportTests : IDisposable
     }
 
     [Fact]
+    public async Task AStaleBlockASessionWritesBackAfterAnImportIsRepairedFromTheOwnerRecord()
+    {
+        // The 2026-10-02 incident: sessions started under A rewrote the state file
+        // to A two hours after B was imported, and nothing on this side put it right.
+        (_, RefreshTokenFingerprint fb) = await SeedAsync();
+        using FollowerImport follower = _roots.Follower();
+        await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
+        (await follower.CommitAsync(new AccountEmail(IncomingEmail), Token)).IsSuccess.ShouldBeTrue();
+        await _roots.WriteStateFileAsync(OutgoingEmail, Token);
+
+        IdentityRepair outcome = await follower.RepairStaleIdentityAsync(Token);
+
+        outcome.ShouldBe(IdentityRepair.Repatched);
+        (await _roots.StateFile().ReadAccountBlockAsync(Token))!.Email!.Value.Value.ShouldBe(IncomingEmail);
+        (await follower.RepairStaleIdentityAsync(Token)).ShouldBe(IdentityRepair.NotNeeded);
+    }
+
+    [Fact]
+    public async Task AnOwnerRecordWithoutABlockIsRepairedFromTheStoreSlotsProfile()
+    {
+        // A record written before the record carried the block: the store slot the
+        // account was claimed from still has its profile.json.
+        RefreshTokenFingerprint fb = await _roots.WriteLiveAsync(OutgoingEmail, IncomingToken, Token);
+        Directory.CreateDirectory(Path.Combine(_roots.AppData, "state"));
+        await File.WriteAllTextAsync(
+            Path.Combine(_roots.AppData, "state", "live-owner.json"),
+            new JsonObject { ["fingerprint"] = fb.Sha256Hex, ["email"] = IncomingEmail, ["at"] = _roots.Clock.GetUtcNow().ToString("O", System.Globalization.CultureInfo.InvariantCulture) }.ToJsonString(),
+            Token);
+        string slot = Path.Combine(_roots.Store, IncomingEmail);
+        Directory.CreateDirectory(slot);
+        await File.WriteAllTextAsync(Path.Combine(slot, "profile.json"), FollowerRoots.AccountJson(IncomingEmail).ToJsonString(), Token);
+        using FollowerImport follower = _roots.Follower();
+
+        (await follower.RepairStaleIdentityAsync(Token)).ShouldBe(IdentityRepair.Repatched);
+
+        (await _roots.StateFile().ReadAccountBlockAsync(Token))!.Email!.Value.Value.ShouldBe(IncomingEmail);
+    }
+
+    [Fact]
+    public async Task TheNextImportNamesThePairsOwnerAsOutgoingRatherThanAStaleBlock()
+    {
+        // The leader trusts the pair's holder record; the follower's answer has to
+        // agree, or the leader aborts the hand-off as an outgoing account that changed.
+        (_, RefreshTokenFingerprint fb) = await SeedAsync();
+        using FollowerImport follower = _roots.Follower();
+        await follower.ImportAsync(_roots.Request(IncomingEmail, fb), Token);
+        (await follower.CommitAsync(new AccountEmail(IncomingEmail), Token)).IsSuccess.ShouldBeTrue();
+        await _roots.WriteStateFileAsync(OutgoingEmail, Token);
+        RefreshTokenFingerprint fc = await _roots.WriteClaimedAsync("c@example.com", "refresh-c", Token);
+
+        Result<ImportAnswer, string> answer = await follower.ImportAsync(_roots.Request("c@example.com", fc, IncomingEmail), Token);
+
+        answer.IsSuccess.ShouldBeTrue(answer.IsFailure ? answer.Error : null);
+        answer.Value.Outgoing?.Value.ShouldBe(IncomingEmail);
+        answer.Value.ExportedFingerprint.ShouldBe(fb);
+    }
+
+    [Fact]
     public async Task AFinishThatAppliesAnAccountRecordsOnboardingAndKeepsEveryOtherKey()
     {
         (_, RefreshTokenFingerprint fb) = await SeedAsync();

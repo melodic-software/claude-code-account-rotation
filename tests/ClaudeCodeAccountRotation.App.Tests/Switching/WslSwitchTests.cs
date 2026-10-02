@@ -786,6 +786,54 @@ public sealed class WslSwitchTests
         harness.MailboxFiles().ShouldBeEmpty();
     }
 
+    /// <summary>
+    /// The 2026-10-02 incident. The other side imported g, then a session that
+    /// predated the import wrote its older block back, so its state file names
+    /// h, whose own slot here still holds h's parked pair. Its live pair is the
+    /// one this store handed it for g, as g's holder record says. Trusting the
+    /// name refused every switch with LiveIdentityUnverified; the pair settles
+    /// it, and the stale block the commit hands back never lands in g's slot.
+    /// </summary>
+    [Fact]
+    public async Task AStaleNameOnTheOtherSideIsOverruledByTheHolderRecordItsPairMatches()
+    {
+        const string Held = "g@example.com";
+        const string StaleName = "h@example.com";
+        using WslSwitchHarness harness = new();
+        await SetUpAsync(harness);
+        RefreshTokenFingerprint parkedStale = await harness.ParkedSlotAsync(StaleName, "refresh-h", Token);
+        await harness.IdentifiedSlotAsync(Held, Token);
+        await HolderRecordFile.WriteAsync(
+            harness.FolderFor(Held),
+            new HolderRecord(SideName.Wsl, CredentialFiles.Pair("refresh-g").Fingerprint, harness.Clock.GetUtcNow()),
+            Token);
+        harness.Side.OutgoingEmail = StaleName;
+        harness.Side.OutgoingRefreshToken = "refresh-g";
+        // The follower repairs its own state file before F2 names what is
+        // leaving, so its answer names the pair's owner; the commit still hands
+        // back the stale block the leader must not file under g.
+        harness.Side.OnImport = async request =>
+        {
+            await File.WriteAllTextAsync(request.ExportPath, CredentialFiles.Shape("refresh-g").ToJsonString(), Token);
+            return Result<ImportAnswer, string>.Success(new ImportAnswer(
+                CredentialFiles.Pair("refresh-g").Fingerprint, WslSwitchHarness.Email(Held), false, null));
+        };
+        using WslSwitch coordinator = harness.Coordinator();
+
+        (await coordinator.ReadSideAsync(SideName.Wsl, Token)).LiveAccount.ShouldBe(WslSwitchHarness.Email(Held));
+        Result<WslSwitchOutcome, SwitchRefusal> result =
+            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), quarantineForeignFamily: false, Token);
+
+        result.IsSuccess.ShouldBeTrue(result.IsFailure ? result.Error.ToString() : string.Empty);
+        result.Value.ParkedAs.ShouldBe(WslSwitchHarness.Email(Held));
+        (await FingerprintAtAsync(harness.PairPath(Held))).ShouldBe(CredentialFiles.Pair("refresh-g").Fingerprint);
+        (await FingerprintAtAsync(harness.PairPath(StaleName))).ShouldBe(parkedStale, "the stale name's own parked pair is untouched");
+        JsonNode profile = JsonNode.Parse(await File.ReadAllTextAsync(
+            Path.Combine(harness.FolderFor(Held), ProfileFolderStore.ProfileFileName),
+            Token))!;
+        profile["emailAddress"]!.GetValue<string>().ShouldBe(Held);
+    }
+
     /// <summary>The journal as the step named would have left it, written by hand for a restart.</summary>
     private static Task JournalAtAsync(
         WslSwitchHarness harness,
