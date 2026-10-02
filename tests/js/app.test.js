@@ -76,6 +76,17 @@ test("a card with no dated 5-hour or 7-day figure is never recommended", () => {
   assert.strictEqual(recommended([account], () => true, NOW), null);
 });
 
+test("a current 5-hour figure with no 7-day figure is unverified: not recommended, not Usable now", () => {
+  const account = card("half@x", { hasCredentials: true, roster: null, refresh: { state: "read" } }, 10, null, 1);
+  account.usage.limits[1].known = false;
+  assert.strictEqual(recommended([account], () => true, NOW), null);
+  assert.deepStrictEqual(sentence(account, NOW), { kind: "warn", text: "Not verified: 7-day figure unknown" });
+  const live = card("a@x", { isLive: true, canSwitchHere: false }, 100, 0);
+  const prompts = switchPrompts([account, live], [], NOW);
+  assert.deepStrictEqual(prompts, [{ side: null, from: "a@x", to: null, unverified: "half@x" }]);
+  assert.match(promptWording(prompts[0], [account, live], NOW).text, /half is unverified, its 7-day figure unknown; refresh before switching\.$/);
+});
+
 test("a stop at the limit with only stale accounts left names no target and says which account is unverified and how old", () => {
   const accounts = [
     card("old@x", {}, 0, 10, 125),

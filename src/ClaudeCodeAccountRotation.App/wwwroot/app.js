@@ -106,12 +106,22 @@
     return used.length ? Math.max(0, Math.round(100 - Math.max.apply(null, used))) : null;
   }
 
-  // Whether a card's figures are recent enough to steer by: every 5-hour and
-  // 7-day row it has was read within STALE_SECONDS. A usable standing read
-  // longer ago may be limited by now, so nothing recommends it (#188).
+  // Whether a card's figures are recent enough to steer by: both the 5-hour and
+  // the 7-day row are known and were read within STALE_SECONDS. A usable
+  // standing read longer ago may be limited by now, and one with a window no
+  // source carried may be spent on it, so nothing recommends either (#188).
   function current(account, at) {
     var age = usageAge(account, at);
-    return age !== null && age <= STALE_SECONDS;
+    return age !== null && age <= STALE_SECONDS && unknownWindow(account) === null;
+  }
+
+  // The label of the first of the 5-hour and 7-day windows no source carried,
+  // or null when both are known.
+  function unknownWindow(account) {
+    var missing = [["session", "5-hour"], ["weekly_all", "7-day"]].filter(function (window) {
+      return !account.usage.limits.some(function (limit) { return limit.kind === window[0] && limit.known; });
+    })[0];
+    return missing ? missing[1] : null;
   }
 
   function usableFor(accounts, takes) {
@@ -474,8 +484,10 @@
   // long ago to steer by: no target, the best of them with its age, and Refresh.
   function unverifiedLine(account, accounts, at) {
     var age = usageAge(account, at);
+    var gap = unknownWindow(account);
     return "No account to switch to has usage read in the last " + span(STALE_SECONDS) + ". "
-      + uniqueName(account, accounts) + " is unverified, " + (age === null ? "with no figures" : "figures " + span(age) + " old")
+      + uniqueName(account, accounts) + " is unverified, "
+      + (gap ? "its " + gap + " figure unknown" : age === null ? "with no figures" : "figures " + span(age) + " old")
       + "; refresh before switching.";
   }
 
@@ -1095,6 +1107,9 @@
       return { kind: meterTone(near), text: "Near the " + near.label + " limit" + (reset ? ", " + reset : "") + outOfDate };
     }
     if (outOfDate) { return { kind: "warn", text: "Was usable" + outOfDate }; }
+    // A window no source carried may be the spent one.
+    var gap = unknownWindow(account);
+    if (gap) { return { kind: "warn", text: "Not verified: " + gap + " figure unknown" }; }
     return { kind: "ok", text: "Usable now" };
   }
 

@@ -21,6 +21,9 @@ All notable changes to this project are documented in this file. The format foll
 - A card whose windows have reset since an old read no longer says "Usable now".
   The reset means the old figure no longer applies. It does not mean the account
   is unused now, so the card shows the read's age and is not recommended (#188).
+- A card with a 5-hour or 7-day figure that no source carried no longer says
+  "Usable now" and is not recommended. It reads "Not verified" and names the
+  missing window, because that window may be the spent one (#188).
 
 ## [2.0.5] - 2026-10-02
 
