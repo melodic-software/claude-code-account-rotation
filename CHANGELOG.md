@@ -6,6 +6,16 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Fixed
+
+- A switch away from an account that was logged in from the CLI itself, while
+  that account's earlier pair was still parked, answered 500 and left the switch
+  journal open, so every later switch was refused as "live identity unverified"
+  and Stop was refused until the leader was killed. The switch now moves the
+  older pair to the superseded quarantine, where it is kept and never used, and
+  goes ahead. A file in that folder that it cannot set aside is refused before
+  anything is journaled or moved, as `OutgoingSlotHoldsPair` (#180).
+
 ## [2.0.3] - 2026-09-29
 
 ### Changed

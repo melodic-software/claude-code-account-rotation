@@ -32,6 +32,13 @@ namespace ClaudeCodeAccountRotation.Core.Switching;
 /// is empty by definition — its pair is live here — so the only thing the
 /// planner can learn about it is whether a hand-off has already claimed it.
 /// </para>
+/// <para>
+/// <paramref name="OutgoingSlotHoldsPair"/> says that definition does not hold
+/// and the App cannot make it hold: a credential file sits in the slot of the
+/// account this switch would park, and it is not an older family the switch
+/// can set aside. A login made in the CLI itself puts an account there, live
+/// with one family while its slot keeps another.
+/// </para>
 /// </summary>
 public sealed record SwitchPlanningInput(
     LiveAccountState Live,
@@ -45,4 +52,5 @@ public sealed record SwitchPlanningInput(
     DateTimeOffset Now,
     bool TargetHasRecoveryFile = false,
     SlotState TargetSlot = SlotState.Parked,
-    bool OutgoingSlotInTransit = false);
+    bool OutgoingSlotInTransit = false,
+    bool OutgoingSlotHoldsPair = false);

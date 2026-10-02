@@ -64,6 +64,15 @@ public static class SwitchPlanner
             return Refuse(SwitchRefusal.SlotInTransit);
         }
 
+        // The park is a rename into the outgoing account's slot, and it refuses a
+        // slot that holds a file. It runs after the journal is written, so a file
+        // the switch cannot set aside is refused here. Nothing to park, nothing
+        // to refuse.
+        if (input.OutgoingSlotHoldsPair && input.Live.HasCredentials)
+        {
+            return Refuse(SwitchRefusal.OutgoingSlotHoldsPair);
+        }
+
         if (!input.Target.HasCredentials || input.TargetCredentials is null)
         {
             return Refuse(SwitchRefusal.TargetHasNoCredentials);
