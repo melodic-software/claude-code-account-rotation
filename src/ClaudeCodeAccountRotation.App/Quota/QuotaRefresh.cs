@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
+using ClaudeCodeAccountRotation.App.Dashboard;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Accounts;
@@ -198,16 +199,38 @@ internal sealed partial class QuotaRefresh
         Dictionary<RefreshOutcomeKind, int> summary,
         CancellationToken stopping)
     {
-        IdentityRepair repair = await _executor.RepairStaleIdentityAsync(_gateWait, stopping);
+        // A logged-out live file costs the live account its turn and nothing
+        // more: the repair and the live read both throw on it, and letting that
+        // end the pass would leave every parked account unread too.
+        IdentityRepair? repair;
+        try
+        {
+            repair = await _executor.RepairStaleIdentityAsync(_gateWait, stopping);
+        }
+        catch (InvalidDataException exception) when (CliLogoutMonitor.IsTokenAbsence(exception))
+        {
+            repair = null;
+        }
+
+        RefreshTokenFingerprint? liveFingerprint = repair is null ? null : await LiveFingerprintAsync(stopping);
         AccountEmail? liveEmail = (await _stateFile.ReadAccountBlockAsync(stopping))?.Email;
         IReadOnlyList<ParkedProfile> parked = await _profiles.ListAsync(stopping);
         Roster roster = await _rosterFile.ReadAsync(stopping);
         bool Wanted(AccountEmail email) => request.Account is null || request.Account == email;
+        // The reading of what this side holds the page makes too: the account the
+        // state file names, and the live pair's fingerprint for when the CLI has
+        // rotated past a record. Judging slots on the name alone could call a
+        // slot held elsewhere here and parked on the page.
+        WindowsHold hold = new(liveEmail, liveFingerprint);
 
         List<Candidate> candidates = [];
         if (liveEmail is AccountEmail live && Wanted(live))
         {
-            if (repair is IdentityRepair.Busy)
+            if (repair is null)
+            {
+                Record(live, Outcome(RefreshOutcomeKind.NeedsLogin, RefreshMessages.CliLoggedOut), summary);
+            }
+            else if (repair is IdentityRepair.Busy)
             {
                 LogLiveRepairBusy(live.Value);
                 Record(live, Outcome(RefreshOutcomeKind.Skipped, RefreshMessages.LiveIdentityBusy), summary);
@@ -234,7 +257,7 @@ internal sealed partial class QuotaRefresh
             // empty slot would otherwise report "log in again" for an account
             // that is merely in use on the other side. Nothing is sent for it
             // either way.
-            if (await _slots.ReadAsync(profile.Email, profile.FolderPath, profile.HasCredentials, new WindowsHold(liveEmail, null), stopping)
+            if (await _slots.ReadAsync(profile.Email, profile.FolderPath, profile.HasCredentials, hold, stopping)
                 is { State: SlotState.HeldElsewhere or SlotState.InTransit })
             {
                 Record(profile.Email, Outcome(RefreshOutcomeKind.HeldElsewhere, RefreshMessages.HeldElsewhere), summary);
@@ -270,6 +293,19 @@ internal sealed partial class QuotaRefresh
         IReadOnlyList<RefreshCandidate> order = RefreshOrder.Order(
             [.. candidates.Select(candidate => new RefreshCandidate(candidate.Email, LastReadAt(candidate.Email)))]);
         return [.. order.Select(ordered => candidates.First(candidate => candidate.Email == ordered.Email))];
+    }
+
+    /// <summary>The live pair's fingerprint, or null when there is no pair to name: absent, logged out, or torn.</summary>
+    private async Task<RefreshTokenFingerprint?> LiveFingerprintAsync(CancellationToken stopping)
+    {
+        try
+        {
+            return (await _pairs.ReadLiveAsync(stopping))?.Fingerprint;
+        }
+        catch (Exception exception) when (exception is InvalidDataException or JsonException or IOException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

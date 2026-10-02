@@ -81,6 +81,7 @@ internal static class RefreshMessages
     public const string LiveIdentityBusy = "a credential change was running; refresh again";
     public const string SessionWillRefresh = "session will refresh";
     public const string NeedsLogin = "no credentials on this machine; log in again";
+    public const string CliLoggedOut = "the CLI logged out of this account; log in again";
     public const string HeldElsewhere = "in use by the other side of this machine";
     public const string Read = "read just now";
     public const string TokenRefreshFailed = "the token endpoint did not answer with new credentials";
