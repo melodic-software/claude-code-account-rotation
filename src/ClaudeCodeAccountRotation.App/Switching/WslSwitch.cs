@@ -43,10 +43,10 @@ internal sealed record WslReconciliation(string Outcome, string? Banner, bool De
 /// One line of side state for the page: is it up, what does it hold, whether
 /// this leader can start it, and the usage its own sessions last observed.
 /// <para>
-/// <see cref="Usage"/> is that side's rate-limit-guard tee, which is the only
-/// source of figures for an account it holds: the leader reads no usage for a
-/// pair it does not have (design 12). It is null when that side is offline or
-/// has no snapshot to give.
+/// <see cref="Usage"/> is that side's rate-limit-guard tee: between Refresh
+/// clicks, which ask that side to read (design 12), it is the only new source of
+/// figures for an account it holds. It is null when that side is offline or has
+/// no snapshot to give.
 /// </para>
 /// <para>
 /// <see cref="LoginExpiresAt"/> is when the login behind that side's live pair

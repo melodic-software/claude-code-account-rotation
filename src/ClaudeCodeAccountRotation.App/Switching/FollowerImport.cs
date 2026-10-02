@@ -1,9 +1,12 @@
 using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Peers;
+using ClaudeCodeAccountRotation.Core.Ports;
+using ClaudeCodeAccountRotation.Core.Quota;
 using ClaudeCodeAccountRotation.Core.Switching;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -349,6 +352,75 @@ internal sealed partial class FollowerImport : IDisposable, IStaleIdentityRepair
         {
             _sync.Release();
         }
+    }
+
+    /// <summary>
+    /// One usage read the leader asked for, of the account this side holds,
+    /// with this side's own live access token. The pair is read under the same
+    /// lock as a commit, so an import cannot swap it between the ownership check
+    /// and the read, and the lock is released before the request goes out.
+    /// Nothing here refreshes a token: an expired or rejected access token is
+    /// the session's to renew, and the answer says so.
+    /// </summary>
+    public async Task<PeerUsageRead> ReadUsageAsync(
+        AccountEmail email,
+        RefreshTokenFingerprint? expected,
+        IUsageEndpointClient usage,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(usage);
+        await ReconcileOnceAsync(cancellationToken);
+        CredentialPair? live;
+        await _sync.WaitAsync(cancellationToken);
+        try
+        {
+            if (_hold is not null || await _journal.ReadOpenAsync(cancellationToken) is not null)
+            {
+                return new PeerUsageRead(PeerUsageOutcome.NotHeld, null, null, "a hand-off is in flight on this side");
+            }
+
+            live = await _pairs.ReadLiveAsync(cancellationToken);
+            if (live is null)
+            {
+                return new PeerUsageRead(PeerUsageOutcome.NotHeld, null, null, "this side holds no live pair");
+            }
+
+            // The leader's record names the pair it handed over; the CLI here
+            // rotates it on its first refresh, so this side's own record of the
+            // live pair's owner also counts.
+            OAuthAccountBlock? named = await _stateFile.ReadAccountBlockAsync(cancellationToken);
+            if (live.Fingerprint != expected
+                && !await LiveOwnerRecord.At(_liveOwnerPath, _timeProvider, _logger).NamesOwnerAsync(email, live.Fingerprint, named, cancellationToken))
+            {
+                return new PeerUsageRead(PeerUsageOutcome.NotHeld, null, null, "this side's live pair is not " + email.Value + "'s");
+            }
+        }
+        finally
+        {
+            _sync.Release();
+        }
+
+        if (live.AccessTokenExpiresAt <= _timeProvider.GetUtcNow())
+        {
+            return new PeerUsageRead(PeerUsageOutcome.SessionWillRefresh, null, null, "the live access token has expired");
+        }
+
+        Result<JsonDocument, UsageReadFailure> read = await usage.ReadUsageAsync(live.AccessToken, cancellationToken);
+        if (read.IsSuccess)
+        {
+            using JsonDocument body = read.Value;
+            return JsonNode.Parse(body.RootElement.GetRawText()) is JsonObject answer
+                ? new PeerUsageRead(PeerUsageOutcome.Read, answer, null, "read")
+                : new PeerUsageRead(PeerUsageOutcome.Failed, null, null, "the usage endpoint answered something other than an object");
+        }
+
+        LogUsageReadFailed(email.Value, read.Error.Kind.ToString());
+        return read.Error.Kind switch
+        {
+            UsageReadFailureKind.Unauthorized => new PeerUsageRead(PeerUsageOutcome.SessionWillRefresh, null, null, "the live access token was rejected"),
+            UsageReadFailureKind.RateLimited => new PeerUsageRead(PeerUsageOutcome.RateLimited, null, read.Error.RetryAfter, "rate limited"),
+            _ => new PeerUsageRead(PeerUsageOutcome.Failed, null, null, read.Error.Kind.ToString()),
+        };
     }
 
     /// <summary>
@@ -1031,6 +1103,9 @@ internal sealed partial class FollowerImport : IDisposable, IStaleIdentityRepair
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "the import of {Incoming} was asked to unwind after the swap had already run; it was finished instead, because the outgoing pair exists only as the export")]
     private partial void LogFinishedInsteadOfUnwound(string incoming);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the usage read the leader asked for of {Account} failed ({Kind})")]
+    private partial void LogUsageReadFailed(string account, string kind);
 
     /// <summary>
     /// The state that spans the two calls: what was asked, what was exported,

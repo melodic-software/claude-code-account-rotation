@@ -1,7 +1,9 @@
 using System.Net.Http.Headers;
 using ClaudeCodeAccountRotation.App.Security;
 using ClaudeCodeAccountRotation.App.Switching;
+using ClaudeCodeAccountRotation.App.Tests.Quota;
 using ClaudeCodeAccountRotation.App.Tests.Switching;
+using ClaudeCodeAccountRotation.Core.Ports;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -28,6 +30,9 @@ internal sealed class FollowerAppFactory : WebApplicationFactory<Program>
     public string ConfigPath { get; }
 
     public AppFactory.LogSink Logs { get; } = new();
+
+    /// <summary>The usage endpoint this side reads through when the leader asks, scripted so nothing reaches the network.</summary>
+    public ScriptedUsage Usage { get; } = new();
 
     public HttpClient CreateMutatingClient()
     {
@@ -58,7 +63,10 @@ internal sealed class FollowerAppFactory : WebApplicationFactory<Program>
         builder.UseSetting("ClaudeCodeAccountRotation:ConfigPath", ConfigPath);
         builder.ConfigureLogging(logging => logging.AddProvider(Logs));
         builder.ConfigureTestServices(services =>
-            services.Replace(ServiceDescriptor.Singleton<TimeProvider>(Roots.Clock)));
+        {
+            services.Replace(ServiceDescriptor.Singleton<TimeProvider>(Roots.Clock));
+            services.Replace(ServiceDescriptor.Singleton<IUsageEndpointClient>(Usage));
+        });
     }
 
     public override async ValueTask DisposeAsync()

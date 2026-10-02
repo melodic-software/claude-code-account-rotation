@@ -259,6 +259,38 @@ public sealed class SideEndpointTests
     }
 
     /// <summary>
+    /// A card's Refresh for the account the distribution holds reads it there,
+    /// across the real wire, with that side's live access token (#185). The
+    /// leader's own usage client and token client are never called, and the
+    /// card then shows a fresh read rather than "unknown".
+    /// </summary>
+    [Fact]
+    public async Task RefreshingAHeldAccountReadsItThroughTheSideThatHoldsIt()
+    {
+        await using FollowerAppFactory follower = new();
+        PeerLink link = new();
+        await using AppFactory leader = LeaderOver(follower, link);
+        await follower.Roots.WriteLiveAsync(Outgoing, "refresh-a", Token);
+        await CredentialFiles.WriteAsync(leader.LiveDirectory, "refresh-w", Token);
+        await leader.WriteStateFileAsync("w@example.com", Token);
+        await leader.ParkedProfileAsync(Incoming, "refresh-b", Token);
+        using HttpClient client = leader.CreateMutatingClient();
+        (await client.PostAsync(SwitchUri(Incoming), content: null, Token)).StatusCode.ShouldBe(HttpStatusCode.OK);
+        follower.Usage.Answers.Enqueue(Quota.ScriptedUsage.Ok());
+        int outboundBefore = leader.Outbound.Requests.Count;
+
+        using HttpResponseMessage started = await client.PostAsync(new Uri("/api/accounts/" + Incoming + "/refresh", UriKind.Relative), content: null, Token);
+        started.StatusCode.ShouldBe(HttpStatusCode.Accepted);
+        await leader.Services.GetRequiredService<App.Quota.QuotaState>().CurrentRun;
+
+        follower.Usage.AccessTokens.ShouldBe(["access-refresh-b"]);
+        leader.Outbound.Requests.Count.ShouldBe(outboundBefore);
+        JsonObject card = Card((await client.GetFromJsonAsync<JsonObject>(_dashboard, Token))!, Incoming);
+        card["usage"]!["source"]!.GetValue<string>().ShouldBe("refresh");
+        card["refresh"]!["state"]!.GetValue<string>().ShouldBe("read");
+    }
+
+    /// <summary>
     /// A session in the distribution that was mid-turn at the switch writes the
     /// outgoing account's windows under the incoming account's name. The switch
     /// route remembers that side's windows from before the swap, so the
