@@ -79,6 +79,24 @@ public sealed class FollowerUsageReadTests : IAsyncDisposable
         _factory.Usage.Calls.ShouldBe(0);
     }
 
+    /// <summary>
+    /// The live fingerprint is on this side's dashboard, so a caller that sends
+    /// it beside another account's email proves nothing: the owner record names
+    /// whose figures these are.
+    /// </summary>
+    [Fact]
+    public async Task ItRefusesTheLiveFingerprintPairedWithAnAccountItsRecordDoesNotName()
+    {
+        RefreshTokenFingerprint live = await _factory.Roots.WriteLiveAsync(Email, "refresh-a", Token);
+        await new LiveOwnerRecord(_factory.Roots.AppData, _factory.Roots.Clock, NullLogger.Instance)
+            .WriteAsync(live, Account(Email), account: null, Token);
+
+        Result<PeerUsageRead, string> read = await Side().ReadUsageAsync(Account("b@example.com"), live, Token);
+
+        read.Value.Outcome.ShouldBe(PeerUsageOutcome.NotHeld);
+        _factory.Usage.Calls.ShouldBe(0);
+    }
+
     /// <summary>An expired access token is the session's to renew: nothing is sent and nothing is refreshed.</summary>
     [Fact]
     public async Task AnExpiredAccessTokenIsLeftToTheSessionAndNothingIsSent()

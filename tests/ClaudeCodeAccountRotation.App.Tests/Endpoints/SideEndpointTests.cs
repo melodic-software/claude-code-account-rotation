@@ -318,6 +318,40 @@ public sealed class SideEndpointTests
         card["usage"]!["source"].ShouldBeNull();
     }
 
+    /// <summary>
+    /// A hand-off whose commit answer was lost stays journaled and is finished
+    /// by a later poll, after the swap already ran over there. The guard has to
+    /// be standing then too, or the outgoing windows land on the incoming card.
+    /// </summary>
+    [Fact]
+    public async Task TheGuardStandsForAHandOffAPollFinishesAfterTheSwitchRequestFailed()
+    {
+        await using FollowerAppFactory follower = new();
+        PeerLink link = new() { OfflineFrom = "/api/import/commit" };
+        await using AppFactory leader = LeaderOver(follower, link);
+        await follower.Roots.WriteLiveAsync(Outgoing, "refresh-a", Token);
+        await CredentialFiles.WriteAsync(leader.LiveDirectory, "refresh-w", Token);
+        await leader.WriteStateFileAsync("w@example.com", Token);
+        await leader.ParkedProfileAsync(Incoming, "refresh-b", Token);
+        string tee = Path.Combine(follower.Roots.LiveDirectory, "rate-limit-guard", "rate-limits.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(tee)!);
+        await File.WriteAllTextAsync(tee, RateLimitGuardTeeFileReaderTests.Tee(Outgoing), Token);
+        using HttpClient client = leader.CreateMutatingClient();
+        (await client.PostAsync(SwitchUri(Incoming), content: null, Token)).IsSuccessStatusCode.ShouldBeFalse();
+
+        // The link comes back; the next polls finish the hand-off from the journal.
+        link.Offline = false;
+        link.OfflineFrom = null;
+        await File.WriteAllTextAsync(tee, RateLimitGuardTeeFileReaderTests.Tee(Incoming), Token);
+        JsonObject card = [];
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            card = Card((await client.GetFromJsonAsync<JsonObject>(_dashboard, Token))!, Incoming);
+        }
+
+        card["usage"]!["source"].ShouldBeNull();
+    }
+
     [Fact]
     public async Task AMutationCarryingTheCustomHeaderAndNoOriginIsNeitherRefusedNorRejected()
     {

@@ -405,12 +405,19 @@ internal sealed partial class FollowerImport : IDisposable, IStaleIdentityRepair
                 return new PeerUsageRead(PeerUsageOutcome.NotHeld, null, null, "this side holds no live pair");
             }
 
-            // The leader's record names the pair it handed over; the CLI here
-            // rotates it on its first refresh, so this side's own record of the
-            // live pair's owner also counts.
+            // Whose pair this is decides whose figures these are. This side's own
+            // owner record, written at import and re-bound across the CLI's
+            // rotations, is the authority whenever it exists: a fingerprint the
+            // caller sends is no proof of the account it names, since this
+            // side's dashboard publishes the live fingerprint. Only a side with
+            // no record (one that predates it) falls back to the fingerprint
+            // the leader handed over together with a state file naming the account.
             OAuthAccountBlock? named = await _stateFile.ReadAccountBlockAsync(cancellationToken);
-            if (live.Fingerprint != expected
-                && !await LiveOwnerRecord.At(_liveOwnerPath, _timeProvider, _logger).NamesOwnerAsync(email, live.Fingerprint, named, cancellationToken))
+            var owner = LiveOwnerRecord.At(_liveOwnerPath, _timeProvider, _logger);
+            bool owned = File.Exists(owner.Path)
+                ? await owner.NamesOwnerAsync(email, live.Fingerprint, named, cancellationToken)
+                : live.Fingerprint == expected && named?.Email == email;
+            if (!owned)
             {
                 return new PeerUsageRead(PeerUsageOutcome.NotHeld, null, null, "this side's live pair is not " + email.Value + "'s");
             }

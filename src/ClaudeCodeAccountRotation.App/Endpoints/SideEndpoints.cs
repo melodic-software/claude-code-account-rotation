@@ -60,7 +60,10 @@ internal static class SideEndpoints
             StatuslineSnapshot? before = (await coordinator.ReadSideAsync(named, cancellationToken)).Usage;
             Result<WslSwitchOutcome, SwitchRefusal> outcome =
                 await coordinator.SwitchToAsync(named, target.Value, quarantineForeignFamily == true, cancellationToken);
-            if (outcome.IsSuccess)
+            // Also when the hand-off was left in flight: the crash table can
+            // finish it on a later poll, and the swap may already have happened
+            // over there, so the guard has to be standing by then.
+            if (outcome.IsSuccess || await coordinator.HandOffInFlightAsync(cancellationToken))
             {
                 PreSwitchWindows? windows = before is null ? null : new PreSwitchWindows(before.FiveHourResetsAt, before.SevenDayResetsAt);
                 state.Publish(current => current.WithSidePreSwitchWindows(named, windows));

@@ -634,6 +634,10 @@ internal sealed partial class WslSwitch : IDisposable
         }
     }
 
+    /// <summary>Whether a hand-off's journal is open, so the crash table may still finish it.</summary>
+    public async Task<bool> HandOffInFlightAsync(CancellationToken cancellationToken) =>
+        await _journal.ReadOpenAsync(cancellationToken) is not null;
+
     /// <summary>The one line of side state the page shows. A side that does not answer is offline, not an error.</summary>
     public async Task<WslSideState> ReadSideAsync(SideName side, CancellationToken cancellationToken) =>
         _peers.For(side) is Peer peer
