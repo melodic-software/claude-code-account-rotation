@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Dashboard;
 using ClaudeCodeAccountRotation.App.Quota;
@@ -655,10 +656,15 @@ internal sealed partial class WslSwitch : IDisposable
         return sides;
     }
 
-    private static async Task<WslSideState> ReadSideAsync(Peer peer, CancellationToken cancellationToken)
+    private async Task<WslSideState> ReadSideAsync(Peer peer, CancellationToken cancellationToken)
     {
         bool canStart = peer.Host is not null;
         Result<PeerDashboard, string> dashboard = await peer.Instance.ReadDashboardAsync(cancellationToken);
+        if (dashboard.IsSuccess)
+        {
+            dashboard = Result<PeerDashboard, string>.Success(await TrustFingerprintAsync(peer.Side, dashboard.Value, cancellationToken));
+        }
+
         return dashboard.Match(
             live => Incompatible(live) is string mismatch
                 ? new WslSideState(peer.Side, Online: false, live.LiveAccount, "incompatible: " + mismatch, canStart)
@@ -672,6 +678,46 @@ internal sealed partial class WslSwitch : IDisposable
                     live.LoginExpiresAt,
                     live.LiveLoginDead),
             reason => new WslSideState(peer.Side, Online: false, null, "offline: " + reason, canStart));
+    }
+
+    /// <summary>
+    /// The other side's dashboard with its live account taken from its pair
+    /// rather than from its state file, where the two disagree. A Claude Code
+    /// session running on that side since before a hand-off writes its older
+    /// identity back over the one the import put there, so the name the side
+    /// reports can be stale while its pair is exactly the one this store handed
+    /// it. A slot whose holder record names that side and that pair's
+    /// fingerprint, and which holds no pair of its own, is the account that is
+    /// really live there: the name and the block are taken from that slot.
+    /// A rotated pair matches no record and the side's own word stands.
+    /// </summary>
+    private async Task<PeerDashboard> TrustFingerprintAsync(SideName side, PeerDashboard remote, CancellationToken cancellationToken)
+    {
+        if (!_slots.Enabled || remote.LiveFingerprint is not RefreshTokenFingerprint fingerprint)
+        {
+            return remote;
+        }
+
+        foreach (ParkedProfile profile in await _profiles.ListAsync(cancellationToken))
+        {
+            if (profile.HasCredentials
+                || await HolderRecordFile.ReadAsync(profile.FolderPath, cancellationToken) is not HolderRecord record
+                || record.Side != side
+                || record.Fingerprint != fingerprint)
+            {
+                continue;
+            }
+
+            if (profile.Email == remote.LiveAccount)
+            {
+                return remote;
+            }
+
+            LogSideNameStale(side.Value, remote.LiveAccount?.Value ?? "(none)", profile.Email.Value, fingerprint.Sha256Hex[..12]);
+            return remote with { LiveAccount = profile.Email, LiveAccountBlock = profile.Account?.Raw.DeepClone() as JsonObject };
+        }
+
+        return remote;
     }
 
     /// <summary>Why this leader will not hand a pair to that follower, or null when it will.</summary>
@@ -775,6 +821,7 @@ internal sealed partial class WslSwitch : IDisposable
             return Refuse(SwitchRefusal.SideOffline);
         }
 
+        remote = await TrustFingerprintAsync(peer.Side, remote, cancellationToken);
         if (target is null && remote.LiveAccount is null)
         {
             // A release of nothing. Not AlreadyOnTarget, which names a target
@@ -913,10 +960,14 @@ internal sealed partial class WslSwitch : IDisposable
             }
 
             // An occupied slot with nothing explaining it is the duplicate the
-            // whole design refuses, and no click overrides it.
+            // whole design refuses, and no click overrides it. A stale name whose
+            // pair a holder record accounts for was already resolved above, so
+            // this is a side naming a parked account beside a pair nothing here
+            // recognizes.
             if (outgoingSlotHoldsPair && !foreign)
             {
-                return Refuse(SwitchRefusal.LiveIdentityUnverified);
+                LogSideLiveAccountAmbiguous(peer.Side.Value, outgoing.Value, remote.LiveFingerprint?.Sha256Hex[..12] ?? "none");
+                return Refuse(SwitchRefusal.SideLiveAccountAmbiguous);
             }
 
             if (_slots.HasTransitFile(outgoingFolder))
@@ -1559,6 +1610,12 @@ internal sealed partial class WslSwitch : IDisposable
 
     private static Result<T, SwitchRefusal> Refuse<T>(SwitchRefusal refusal) =>
         Result<T, SwitchRefusal>.Failure(refusal);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the {Side} side names {Named} as live, but its pair {Fingerprint} is the one this store handed it for {Holder}, which is taken as live there")]
+    private partial void LogSideNameStale(string side, string named, string holder, string fingerprint);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the {Side} side names {Named} as live, but that account's slot here still holds a parked pair and the side's pair {Fingerprint} matches no holder record; nothing can say which account would leave")]
+    private partial void LogSideLiveAccountAmbiguous(string side, string named, string fingerprint);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "claimed {Incoming} for {Side}; {Outgoing} is expected back")]
     private partial void LogClaimed(string side, string incoming, string outgoing);

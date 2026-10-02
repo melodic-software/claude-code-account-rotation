@@ -304,6 +304,8 @@ internal sealed record SwitchRefusalView(string Refusal, string Message)
         SwitchRefusal.PeerDidNotImport => "That side did not complete the import, so the account has been put back in its slot.",
         SwitchRefusal.ForeignFamily => "That side is signed in to that account with a second token family, made when it was logged in again here while that side was unreachable. Switching that side away would hand the family back, and the store keeps one family per account. Switch again with quarantine to move that family into quarantine instead, where it is kept and never used.",
         SwitchRefusal.NothingToRelease => "That side is answering and holds no account, so there is nothing to hand back.",
+        SwitchRefusal.LiveNameStale => "The state file names a different account from the one whose pair is live: a running Claude Code session wrote an older identity back, and no saved identity for the live account was found to put it right. Log in again from the CLI, or switch from a session that names the live account; the log names both accounts.",
+        SwitchRefusal.SideLiveAccountAmbiguous => "That side names an account as live whose pair is still parked here, and the pair it reports matches nothing this store handed it, so nothing can say which account would leave. Restart that side's Claude Code sessions or log in again there; the log names the account and the pair.",
         SwitchRefusal.MutationInProgress => "Another credential change is in progress.",
         SwitchRefusal.RefreshInProgress => "A usage refresh is reading this machine's accounts right now; switch again when it finishes.",
         SwitchRefusal.LoginInProgress => "A login is running against one of those folders; finish it or let it expire first.",

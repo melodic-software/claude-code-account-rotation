@@ -240,6 +240,7 @@ internal static class AppComposition
             provider.GetRequiredService<TimeProvider>(),
             provider.GetRequiredService<ILogger<ClaudeCliLoginSessionRunner>>()));
         services.AddSingleton<LiveDirectorySwitch>();
+        services.AddSingleton<IStaleIdentityRepair>(static provider => provider.GetRequiredService<LiveDirectorySwitch>());
         ComposePeers(services, configuration);
         services.AddSingleton(new WslSwitchJournal(configuration.AppDataDirectory));
         services.AddSingleton<WslSwitch>();
@@ -486,7 +487,12 @@ internal static class AppComposition
             provider.GetRequiredService<CredentialMutationGate>(),
             provider.GetRequiredService<TimeProvider>(),
             provider.GetRequiredService<ILogger<FollowerImport>>()));
+        services.AddSingleton<IStaleIdentityRepair>(static provider => provider.GetRequiredService<FollowerImport>());
         services.AddHostedService<InstanceLockHolder>();
+        // A session on this side that predates an import writes its older
+        // identity back over the one the import put there, exactly as on the
+        // leader, so this side runs the same watcher over its own state file.
+        services.AddHostedService<StateFileWatcher>();
         services.AddHealthChecks();
     }
 
