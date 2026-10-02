@@ -343,11 +343,18 @@ internal sealed partial class LiveDirectorySwitch
         // different lineage from the live pair is that older family, and it is
         // set aside below, before the journal is written. Anything else in the
         // slot is not moved, and the planner refuses.
-        CredentialPair? olderFamily = outgoingSlot is null ? null : await ReadOutgoingSlotAsync(outgoingSlot, cancellationToken);
+        // A folder whose recorded identity differs from its name can put the
+        // target in the very slot the live pair would be parked in. Its pair is
+        // the target's, not an older family, so it is never set aside.
+        bool targetIsOutgoingSlot = outgoingSlot is not null && string.Equals(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(outgoingSlot)),
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(targetProfile.FolderPath)),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        CredentialPair? olderFamily = outgoingSlot is null || targetIsOutgoingSlot ? null : await ReadOutgoingSlotAsync(outgoingSlot, cancellationToken);
         bool setAsideOlderFamily = olderFamily is not null && liveCredentials is not null && olderFamily.Fingerprint != liveCredentials.Fingerprint;
         bool outgoingSlotHoldsPair = outgoingSlot is not null
             && !setAsideOlderFamily
-            && File.Exists(Path.Combine(outgoingSlot, FileSystemCredentialPairStore.FileName));
+            && (targetIsOutgoingSlot || File.Exists(Path.Combine(outgoingSlot, FileSystemCredentialPairStore.FileName)));
 
         Result<SwitchPlan, SwitchRefusal> planned = SwitchPlanner.Plan(new SwitchPlanningInput(
             live, targetProfile, liveCredentials, targetCredentials, policy, journalOpen, liveOwner, _options.ProfilesRoot, now, targetStranded,
@@ -466,14 +473,14 @@ internal sealed partial class LiveDirectorySwitch
         return Result<SwitchOutcome, SwitchRefusal>.Success(new SwitchOutcome(plan.Incoming, plan.Outgoing, verification, mismatch, _timeProvider.GetUtcNow()));
     }
 
-    /// <summary>The pair in the slot the live pair would be parked in, or null when the slot is empty or its file is not a pair.</summary>
+    /// <summary>The pair in the slot the live pair would be parked in, or null when the slot is empty or its file cannot be read as a pair.</summary>
     private async Task<CredentialPair?> ReadOutgoingSlotAsync(string slot, CancellationToken cancellationToken)
     {
         try
         {
             return await _pairs.ReadParkedAsync(slot, cancellationToken);
         }
-        catch (Exception exception) when (exception is InvalidDataException or JsonException)
+        catch (Exception exception) when (exception is InvalidDataException or JsonException or IOException or UnauthorizedAccessException)
         {
             return null;
         }
