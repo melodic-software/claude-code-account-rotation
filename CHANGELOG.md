@@ -6,6 +6,27 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [2.0.7] - 2026-10-02
+
+### Changed
+
+- **An account at its Fable weekly limit is no longer recommended.** Its card says "Fable weekly
+  limit reached, resets in ..." instead of "Usable now". The "Next up" badge, each side's switch
+  button, and the "switch now" prompt (also shown after the rate-limit stop hook) skip it, and it
+  is listed after every account with Fable headroom, ahead of the 5-hour-limited ones. You can
+  still switch to it by hand for work on another model. The tool cannot know which model a
+  session runs, so the rule applies to every session. The same holds for any other model's weekly
+  window the usage endpoint reports (#191).
+- A side whose account reaches its Fable weekly limit now gets the "switch now" prompt, as it
+  already did at the 5-hour and 7-day limits (#191).
+- `GET /api/dashboard`: `accounts[].standing` has a new value, `model-limited`, and a card in it
+  carries `accounts[].limitedModel`, the window's label (#191).
+
+### Fixed
+
+- The README no longer says the leader reads no usage for an account the other side holds; since
+  2.0.5, Refresh usage asks that side to read it (#191).
+
 ## [2.0.6] - 2026-10-02
 
 ### Fixed

@@ -291,10 +291,11 @@ public sealed class AccountAvailabilityTests
     }
 
     [Fact]
-    public void AScopedBucketDoesNotChangeTheStandingOrTheKey()
+    public void AnAccountAtItsFableWeeklyLimitIsModelLimitedUntilThatWindowResets()
     {
-        // An account can hold several scoped windows at once, so there is no one
-        // scoped reset to key on; the card keeps the row and the order ignores it.
+        // The 5-hour and 7-day windows are open, so other models still work, but
+        // the operator works mostly on Fable and the tool cannot tell which model
+        // a session runs: the account is not usable, and it names the window.
         AvailabilityKey key = AccountAvailability.KeyFor(
             Read(
                 "a@example.com",
@@ -303,8 +304,47 @@ public sealed class AccountAvailabilityTests
                 Scoped("Fable", 100, _now.AddDays(2))),
             _now);
 
-        key.Standing.ShouldBe(AvailabilityStanding.Usable);
-        key.NextResetAt.ShouldBe(_now.AddDays(5));
+        key.Standing.ShouldBe(AvailabilityStanding.ModelLimited);
+        key.NextResetAt.ShouldBe(_now.AddDays(2));
+        key.LimitedModel.ShouldBe("Fable");
+    }
+
+    [Fact]
+    public void AFableWindowUnderItsLimitOrAlreadyResetLeavesTheAccountUsable()
+    {
+        AvailabilityKey under = AccountAvailability.KeyFor(
+            Read("a@example.com", Session(10, _now.AddHours(3)), Weekly(40, _now.AddDays(5)), Scoped("Fable", 99, _now.AddDays(2))),
+            _now);
+        under.Standing.ShouldBe(AvailabilityStanding.Usable);
+        under.NextResetAt.ShouldBe(_now.AddDays(5));
+        under.LimitedModel.ShouldBeNull();
+
+        AccountAvailability.KeyFor(
+            Read("a@example.com", Session(10, _now.AddHours(3)), Weekly(40, _now.AddDays(5)), Scoped("Fable", 100, _now.AddHours(-1))),
+            _now).Standing.ShouldBe(AvailabilityStanding.Usable);
+    }
+
+    [Fact]
+    public void AnAccountWithFableHeadroomIsListedAheadOfOneWithoutAndAModelLimitedOneAheadOfALimitedOne()
+    {
+        // b turns over first and would lead on its weekly reset, but its Fable
+        // window is spent; it still sits above c, which can run nothing for hours.
+        Order(
+            Read("c@example.com", Session(100, _now.AddHours(2)), Weekly(10, _now.AddDays(1))),
+            Read("b@example.com", Session(0), Weekly(10, _now.AddDays(1)), Scoped("Fable", 100, _now.AddDays(1))),
+            Read("a@example.com", Session(0), Weekly(10, _now.AddDays(6)), Scoped("Fable", 50, _now.AddDays(6))))
+            .ShouldBe(["a@example.com", "b@example.com", "c@example.com"]);
+    }
+
+    [Fact]
+    public void ASpentSessionOrWeeklyWindowOutranksASpentFableWindow()
+    {
+        AccountAvailability.KeyFor(
+            Read("a@example.com", Session(100, _now.AddHours(3)), Weekly(40, _now.AddDays(5)), Scoped("Fable", 100, _now.AddDays(5))),
+            _now).Standing.ShouldBe(AvailabilityStanding.Limited);
+        AccountAvailability.KeyFor(
+            Read("a@example.com", Session(10, _now.AddHours(3)), Weekly(100, _now.AddDays(5)), Scoped("Fable", 100, _now.AddDays(5))),
+            _now).Standing.ShouldBe(AvailabilityStanding.Exhausted);
     }
 
     [Fact]
@@ -347,8 +387,9 @@ public sealed class AccountAvailabilityTests
             Read("e@example.com", Session(4, At(13, 5, 20)), Weekly(31, At(18, 8, 0))),
             Read("f@example.com", Session(3, At(13, 5, 20)), Weekly(58, At(16, 7, 0))),
             Read("g@example.com", Session(0), Weekly(0, At(18, 23, 0))),
-            // The one scoped window in the fixture, at a hundred per cent: h is
-            // out of Fable quota and still the account that frees up next.
+            // The one scoped window in the fixture, at a hundred per cent: h frees
+            // up next on its weekly window but is out of Fable quota, so it is
+            // listed after every account with Fable headroom.
             Read("h@example.com", Session(0, At(13, 5, 30)), Weekly(93, At(13, 16, 0)), Scoped("Fable", 100, At(13, 16, 0))),
             Read("i@example.com", Session(0), Weekly(30, At(16, 10, 0))),
             Read("j@example.com", Session(0), Weekly(38, At(17, 23, 59))),
@@ -358,7 +399,6 @@ public sealed class AccountAvailabilityTests
 
         arranged.Select(account => account.Key.Email.Value).ShouldBe(
         [
-            "h@example.com",
             "a@example.com",
             "c@example.com",
             "b@example.com",
@@ -368,6 +408,7 @@ public sealed class AccountAvailabilityTests
             "j@example.com",
             "e@example.com",
             "g@example.com",
+            "h@example.com",
         ]);
 
         ArrangedAccount live = arranged.Single(account => account.Standing.IsLive);

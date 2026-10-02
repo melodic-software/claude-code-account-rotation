@@ -6,20 +6,27 @@ namespace ClaudeCodeAccountRotation.Core.Routing;
 /// <summary>
 /// Where an account stands, and in declaration order, because that order is the
 /// order the accounts are listed in: the ones that can be worked now, then the
-/// ones back within hours, then the ones back within days, then the ones nothing
-/// is known about, then the ones the operator took out of the rotation. Adding a
+/// ones whose only spent window is scoped to one model, then the ones back within
+/// hours, then the ones back within days, then the ones nothing is known about,
+/// then the ones the operator took out of the rotation. Adding a
 /// member in the middle moves every account below it, so a new member belongs
 /// where it should be read. One exception: an unread account that is in use is
 /// listed right after the usable ones (<see cref="AvailabilityKey.InUse"/>).
 /// <para>
 /// <see cref="Limited"/> is a spent five-hour window with weekly quota left: a
 /// pause of hours, not an exhausted account. <see cref="Exhausted"/> is a spent
-/// weekly window and nothing else.
+/// weekly window and nothing else. <see cref="ModelLimited"/> is a spent weekly
+/// window scoped to one model (the endpoint's "Fable" row) with the 5-hour and
+/// 7-day windows still open. Other models can still be worked, so it is not
+/// limited; but the tool cannot know which model a session will run, and the
+/// operator works mostly on that one, so it is not usable either and nothing
+/// recommends it. It stays switchable by hand.
 /// </para>
 /// </summary>
 public enum AvailabilityStanding
 {
     Usable,
+    ModelLimited,
     Limited,
     Exhausted,
     Unread,
@@ -31,7 +38,9 @@ public enum AvailabilityStanding
 /// when there is no wait to state, or none that can be dated), and its address
 /// as the final tie-break. <paramref name="InUse"/> is set only on an unread
 /// account that is live here or held by another side, which the comparer lifts
-/// above the limited and exhausted groups.
+/// above the limited and exhausted groups. <paramref name="LimitedModel"/> is
+/// set only on a <see cref="AvailabilityStanding.ModelLimited"/> key: the label
+/// of the spent scoped window, so the card names it without re-deriving it.
 /// <para>
 /// The key carries no comparison of its own. A record cannot generate the
 /// comparison operators the analyzer demands alongside one, and the order here
@@ -44,7 +53,8 @@ public sealed record AvailabilityKey(
     AvailabilityStanding Standing,
     DateTimeOffset? NextResetAt,
     AccountEmail Email,
-    bool InUse = false);
+    bool InUse = false,
+    string? LimitedModel = null);
 
 /// <summary>
 /// One account beside the key it sorted by, so a caller reads the group and the
@@ -65,7 +75,8 @@ public sealed record ArrangedAccount(AvailabilityKey Key, AccountStanding Standi
 /// It is a total order, and over every account, so that a ranked queue is a
 /// filter and a truncation over this one list rather than a second ordering that
 /// can disagree with the page: keep only the `Usable`
-/// accounts (a paused, limited, exhausted or unread one is not offered next),
+/// accounts (a paused, model-limited, limited, exhausted or unread one is not
+/// offered next),
 /// take as many of them as are wanted. The
 /// eligibility figures are parameters for the same reason, so a policy can move
 /// them without changing a signature here.
@@ -86,7 +97,11 @@ public static class AccountAvailability
     /// of them turns over, and by no instant at all when one of those windows
     /// carries no reset, because the later of them is then unknown; then
     /// limited, on the five-hour window alone being spent, keyed by its reset;
-    /// else usable, keyed by the weekly reset.
+    /// then model-limited, on a weekly window scoped to one model being spent at
+    /// the 7-day threshold, keyed by when it turns over under the same later-of
+    /// rule; else usable, keyed by the weekly reset. A scoped figure alone still
+    /// leaves an account unread: it says nothing of the two windows every model
+    /// draws on.
     /// </summary>
     public static AvailabilityKey KeyFor(
         AccountStanding standing,
@@ -118,7 +133,15 @@ public static class AccountAvailability
         bool weeklySpent = (weekly?.Percent ?? 0) >= eligibleSevenDayMaxPercent;
         if (!sessionSpent && !weeklySpent)
         {
-            return new AvailabilityKey(AvailabilityStanding.Usable, weekly?.ResetsAt, standing.Email);
+            List<UsageLimit> scopedSpent = [.. standing.Latest!.Limits.Where(limit =>
+                limit.Kind == LimitKind.WeeklyScoped && !limit.HasResetBy(now) && limit.Percent >= eligibleSevenDayMaxPercent)];
+            return scopedSpent.Count == 0
+                ? new AvailabilityKey(AvailabilityStanding.Usable, weekly?.ResetsAt, standing.Email)
+                : new AvailabilityKey(
+                    AvailabilityStanding.ModelLimited,
+                    LatestOrUnknown(scopedSpent.Select(static limit => limit.ResetsAt)),
+                    standing.Email,
+                    LimitedModel: string.Join(", ", scopedSpent.Select(static limit => limit.Label).Distinct(StringComparer.Ordinal)));
         }
 
         if (!weeklySpent)
@@ -141,10 +164,13 @@ public static class AccountAvailability
             frees.Add(weekly?.ResetsAt);
         }
 
-        return new AvailabilityKey(
-            AvailabilityStanding.Exhausted,
-            frees.Contains(null) ? null : frees.Max(),
-            standing.Email);
+        return new AvailabilityKey(AvailabilityStanding.Exhausted, LatestOrUnknown(frees), standing.Email);
+    }
+
+    private static DateTimeOffset? LatestOrUnknown(IEnumerable<DateTimeOffset?> resets)
+    {
+        List<DateTimeOffset?> all = [.. resets];
+        return all.Contains(null) ? null : all.Max();
     }
 
     private static UsageLimit? Bucket(AccountStanding standing, LimitKind kind) =>

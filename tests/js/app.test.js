@@ -111,7 +111,7 @@ test("the prompt for another side ranks a current account ahead of a stale one e
     [{ side: "wsl", from: "w@x", to: "new@x", unverified: null }]);
 });
 
-test("no prompt while the live account is under 100% on both windows, whatever the scoped row says", () => {
+test("no prompt while the live account is under 100% on both windows and the server places it usable", () => {
   const accounts = [card("b@x", {}, 10, 10), card("a@x", { isLive: true, canSwitchHere: false }, 99, 99)];
   assert.deepStrictEqual(switchPrompts(accounts, [], NOW), []);
 });
@@ -152,6 +152,41 @@ test("a limited card is never recommended or offered as a switch target, even ah
   ];
   assert.strictEqual(recommended(accounts, (account) => account.canSwitchHere, NOW).email, "u@x");
   assert.deepStrictEqual(switchPrompts(accounts, [], NOW), [{ side: null, from: "a@x", to: "u@x", unverified: null }]);
+});
+
+test("a card at its Fable weekly limit is never recommended or offered by a prompt, on this side or another", () => {
+  const accounts = [
+    card("f@x", { standing: "model-limited", limitedModel: "Fable", offeredTo: ["wsl"] }, 0, 0),
+    card("u@x", { offeredTo: ["wsl"] }, 0, 0),
+    card("a@x", { isLive: true, canSwitchHere: false }, 100, 0),
+    card("w@x", { canSwitchHere: false, standing: "exhausted" }, 100, 0)
+  ];
+  assert.strictEqual(recommended(accounts, (account) => account.canSwitchHere, NOW).email, "u@x");
+  assert.deepStrictEqual(
+    switchPrompts(accounts, [{ side: "wsl", online: true, liveAccount: "w@x" }], NOW),
+    [{ side: null, from: "a@x", to: "u@x", unverified: null }, { side: "wsl", from: "w@x", to: "u@x", unverified: null }]);
+  assert.strictEqual(recommended([accounts[0]], () => true, NOW), null);
+});
+
+test("a live account at its Fable weekly limit prompts a switch to an account with Fable headroom", () => {
+  const accounts = [
+    card("f@x", { standing: "model-limited", limitedModel: "Fable" }, 0, 0),
+    card("u@x", {}, 0, 0),
+    card("a@x", { isLive: true, canSwitchHere: false, standing: "model-limited", limitedModel: "Fable" }, 10, 10)
+  ];
+  assert.deepStrictEqual(switchPrompts(accounts, [], NOW), [{ side: null, from: "a@x", to: "u@x", unverified: null }]);
+});
+
+test("a card at its Fable weekly limit says so with its reset instead of Usable now", () => {
+  const account = card("f@x", {
+    standing: "model-limited",
+    limitedModel: "Fable",
+    nextResetAt: new Date(NOW + 3 * 3600 * 1000).toISOString(),
+    hasCredentials: true,
+    roster: null,
+    refresh: { state: "read" }
+  }, 0, 0);
+  assert.deepStrictEqual(sentence(account, NOW), { kind: "crit", text: "Fable weekly limit reached, resets in 3 h 0 min" });
 });
 
 test("a 100% row whose window has reset raises no prompt", () => {

@@ -77,7 +77,7 @@ truncates rather than re-sorts.
 - Exhausted means, after that rule: 5-hour `>= 90` or 7-day `>= 100`. Both numbers are parameters
   with those defaults (`EligibleFiveHourMaxPercent`, `EligibleSevenDayMaxPercent`), so Phase 3.1's
   `RoutingPolicy` binds to them later without a signature change. The scoped (Fable) bucket is not
-  in the key; the card keeps its row.
+  in the key; the card keeps its row. (Superseded by Decisions row 6 as revised 2026-10-02.)
 - Each card carries `standing` (`usable` | `exhausted` | `unread` | `paused`) and `nextResetAt`
   (an instant or null), and the page renders one short line under the existing "as of" line:
   `usable now` / `usable in 2 h 14 min` / `no usage read yet` / `paused`, the countdown measured
@@ -513,7 +513,7 @@ writes above both guards beside the header ones, since neither lives inside `#ca
 | Key off `QuotaState.LatestFor` alone, leaving the merge in the assembler | The live card's key would be computed from the on-demand read while its rows show tee figures; the two can disagree, and 3.2 would inherit an `AccountStanding.Latest` that is not what the card shows | If lifting the merge forces a behavior change in any existing assembler fact, keep the merge in the App for this issue and record the live-card discrepancy as a residual for 3.2 |
 | Sort in `app.js` instead of the server | Two orderings, one of them untestable in this repo (no JavaScript harness exists) and neither reusable by 3.2 | Never for ordering; only if a future issue needs a per-viewer order the server cannot know |
 | One blanket exhaustion threshold instead of two parameters | 3.1 binds two distinct numbers (90 and 100); one number now means a signature change later, which is the thing this issue exists to avoid | If the operator reports the two-number rule reads confusingly on the card before 3.1 lands |
-| Include the scoped (Fable) bucket in the key | An account can hold several scoped windows, keyed by raw kind plus display name, so "the" scoped reset is not a single instant; parent 3.1 and 3.2 name only the two windows. Rejected pending Decisions row 6, which the operator has not yet confirmed | If the operator overrides row 6, or reports scoped exhaustion driving real switches; it then arrives as a policy flag, not a change to the key's shape |
+| Include the scoped (Fable) bucket in the key | An account can hold several scoped windows, keyed by raw kind plus display name, so "the" scoped reset is not a single instant; parent 3.1 and 3.2 name only the two windows. Rejected pending Decisions row 6 | Met 2026-10-02: the operator overrode row 6 (#191). It arrived as a new standing rather than a policy flag, because the page's recommendations filter on `usable` and a flag would have left them naming a Fable-spent account |
 | Pin the live card to the top | No pin exists today, and the issue asks for the opposite ("identifiable wherever it lands", already true via the `live` class and badge) | Only on an explicit operator request |
 | A visual paused section in the page | New DOM structure belongs to the visual design pass (#50); paused-last server-side already delivers the ordering half | If #50 lands first and wants the grouping driven by the `standing` field this issue already emits |
 | Name the primitive `AccountOrder` / `RotationOrder` / anything with "queue" | The parent glossary reserves `queue` for `QueueCandidate` / `AccountRanking.Rank` and lists `Order` and `Rotation` as rejected synonyms | None; the alternative name held in reserve is `NextAvailability` |
@@ -646,7 +646,7 @@ the later phases are unaffected because nothing runs concurrently.
 
 Every row below was settled by the brief owner before planning, except the rows tagged
 `[EXEC-SHAPE]`, which are this plan's own (rows 5, 8, 9, 10, 15, 18, 20, 21 and 22 wholly; rows 1,
-11 and 12 in the part noted). Row 6 is the one row nobody has confirmed and is tagged accordingly.
+11 and 12 in the part noted). Row 6 was revised by the operator on 2026-10-02 and is tagged accordingly.
 
 | # | Decision | Tag |
 |---|---|---|
@@ -655,7 +655,7 @@ Every row below was settled by the brief owner before planning, except the rows 
 | 3 | Exhausted = 5-hour `>= 90` or 7-day `>= 100`, as parameters with those defaults; no config binding here (3.1 binds later) | brief |
 | 4 | The window-reset rule runs before the exhaustion test; a reset bucket counts as 0 / usable | brief |
 | 5 | A reset bucket also contributes **no** key instant, and a null instant sorts after every known instant within its group | `[EXEC-SHAPE]` |
-| 6 | The scoped (Fable) bucket is out of the key; the card keeps its row. Confirmed by the operator at approval on 2026-09-12, knowing that three live accounts sit at 100 percent Fable with weekly headroom and sort `usable` under this rule | brief, confirmed at approval |
+| 6 | **Superseded 2026-10-02 (#191).** Was: the scoped (Fable) bucket is out of the key, confirmed at approval on 2026-09-12. Now: a scoped weekly window at the 7-day threshold and not yet reset, with the 5-hour and 7-day windows open, puts the account in its own standing, `ModelLimited` (wire `model-limited`), between `Usable` and `Limited`, keyed by the later reset of the spent scoped windows (none when one is undated) and carrying their label for the card ("Fable weekly limit reached"). It is never recommended or offered by a prompt, stays switchable by hand, and a live account in it raises the "switch now" prompt. Why: the operator works mostly on Fable, and on 2026-10-02 switched to an account the page showed as usable that was already rate-limited, then asked for this rule; the tool cannot know which model a session runs, so it applies to every session. Several scoped windows no longer block the rule: the latest-reset rule from row 19 dates them | brief, revised by the operator 2026-10-02 |
 | 7 | The per-bucket merge is lifted into Core and feeds both the rows and the key | brief |
 | 8 | The merge returns `MergedUsage(Merged, Card, Rows)`, not a bare `UsageSnapshot`: `Row()` needs per-row attribution and compares the winning source by reference | `[EXEC-SHAPE]` — deviation from the brief's literal wording, same intent |
 | 9 | `AvailabilityKey` does not implement `IComparable<T>` (CA1036 under `AnalysisMode=All`); a static `IComparer<AvailabilityKey>` carries the order | `[EXEC-SHAPE]` |
@@ -682,8 +682,10 @@ are carried in the Decisions table above. Two things were put to the operator at
 1. **Decisions row 6, the scoped (Fable) bucket staying out of the key.** Three live accounts sit
    at 100 percent Fable with weekly headroom; under this rule each sorts `usable`. The operator
    accepted that; a third threshold is the switch condition in Alternatives if it reads wrong.
+   Overridden on 2026-10-02 (#191): see row 6.
 2. **The golden-order sequence**, Phase 1 work item 7: ten accounts in the operator's own roster
    shape ordering `h, a, c, b, d, f, i, j, e, g`, the account nearest its weekly boundary first.
+   Under the revised row 6, `h` (100 percent Fable) moves to the end of that list.
 
 None remain open.
 
@@ -696,7 +698,7 @@ None remain open.
   brief's literal wording and is surfaced in the PR body as well.
 - Row 6, the scoped (Fable) bucket staying out of the key, and the golden-order sequence in Phase 1
   work item 7 were both put to the operator at approval on 2026-09-12 and both approved as
-  written.
+  written. Both were revised on 2026-10-02 (#191).
 - Anything that would edit the parent plan beyond the single dated note under 3.2, or that would
   change `SwitchEndpointTests.cs`, stops and asks.
 - Any need to start, restart, or read the operator's live dashboard stops and asks; nothing in this
