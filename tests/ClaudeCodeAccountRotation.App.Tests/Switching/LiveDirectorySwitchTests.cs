@@ -215,6 +215,125 @@ public sealed class LiveDirectorySwitchTests : IDisposable
     }
 
     [Fact]
+    public async Task SwitchSetsAsideAnOlderFamilyInTheOutgoingSlotAndParksTheLivePair()
+    {
+        // The CLI was logged in as a@example.com by hand while that account's
+        // earlier pair was parked: two families of one account, one live and one
+        // in its slot. The park's rename refused the occupied slot after the
+        // journal was written, which left every later switch refused until a
+        // restart.
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a-new", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        string outgoingFolder = await ParkedProfileAsync("a@example.com", "refresh-a-old");
+        await ParkedProfileAsync("b@example.com", "refresh-b");
+        _cli.Email = "b@example.com";
+
+        Result<SwitchOutcome, SwitchRefusal> result = await Switch().SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken);
+
+        result.IsSuccess.ShouldBeTrue(result.IsFailure ? result.Error.ToString() : "");
+        result.Value.ParkedAs.ShouldBe(Email("a@example.com"));
+        (await CredentialFiles.FingerprintAsync(_liveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
+        (await CredentialFiles.FingerprintAsync(outgoingFolder, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-a-new").Fingerprint);
+        RefreshTokenFingerprint older = CredentialFiles.Pair("refresh-a-old").Fingerprint;
+        string setAside = Path.Combine(_appData, "quarantine", "superseded", "a@example.com-" + older.Sha256Hex[..12]);
+        (await CredentialFiles.FingerprintAsync(setAside, TestContext.Current.CancellationToken)).ShouldBe(older);
+        File.Exists(Path.Combine(_appData, "state", "switch-journal.json")).ShouldBeFalse();
+
+        // The superseded quarantine does not stop the machine: the way back works.
+        _cli.Email = "a@example.com";
+        Result<SwitchOutcome, SwitchRefusal> back = await Switch().SwitchToAsync(Email("a@example.com"), TestContext.Current.CancellationToken);
+
+        back.IsSuccess.ShouldBeTrue(back.IsFailure ? back.Error.ToString() : "");
+        (await CredentialFiles.FingerprintAsync(_liveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-a-new").Fingerprint);
+    }
+
+    [Fact]
+    public async Task SwitchRefusesAnOutgoingSlotHoldingTheLivePairsOwnLineageAndJournalsNothing()
+    {
+        // One refresh token in two files is the duplicate lineage, not an older
+        // family: neither copy can be called the spare, so neither is moved.
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        string outgoingFolder = await ParkedProfileAsync("a@example.com", "refresh-a");
+        string incomingFolder = await ParkedProfileAsync("b@example.com", "refresh-b");
+
+        Result<SwitchOutcome, SwitchRefusal> result = await Switch().SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken);
+
+        result.IsFailure.ShouldBeTrue();
+        result.Error.ShouldBe(SwitchRefusal.OutgoingSlotHoldsPair);
+        (await CredentialFiles.FingerprintAsync(_liveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
+        (await CredentialFiles.FingerprintAsync(outgoingFolder, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
+        (await CredentialFiles.FingerprintAsync(incomingFolder, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
+        Directory.Exists(Path.Combine(_appData, "quarantine")).ShouldBeFalse();
+        File.Exists(Path.Combine(_appData, "state", "switch-journal.json")).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task SwitchRefusesATargetWhoseFolderIsTheOutgoingSlotAndMovesNothing()
+    {
+        // The folder name is a label: the folder named for a@example.com holds
+        // b@example.com's identity and pair. That pair is the target's, so it is
+        // never set aside as a's older family.
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        string folder = Path.Combine(_profilesRoot, "a@example.com");
+        await CredentialFiles.WriteAsync(folder, "refresh-b", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(folder, "profile.json"), AccountJson("b@example.com").ToJsonString(), TestContext.Current.CancellationToken);
+
+        Result<SwitchOutcome, SwitchRefusal> result = await Switch().SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken);
+
+        result.IsFailure.ShouldBeTrue();
+        result.Error.ShouldBe(SwitchRefusal.OutgoingSlotHoldsPair);
+        (await CredentialFiles.FingerprintAsync(_liveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
+        (await CredentialFiles.FingerprintAsync(folder, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
+        Directory.Exists(Path.Combine(_appData, "quarantine")).ShouldBeFalse();
+        File.Exists(Path.Combine(_appData, "state", "switch-journal.json")).ShouldBeFalse();
+    }
+
+    [Fact(SkipUnless = nameof(OnWindows), Skip = "An exclusive open blocks other readers only on Windows")]
+    public async Task SwitchRefusesAnOutgoingSlotFileItCannotOpenAndJournalsNothing()
+    {
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        string outgoingFolder = await ParkedProfileAsync("a@example.com", "refresh-a-old");
+        await ParkedProfileAsync("b@example.com", "refresh-b");
+
+        Result<SwitchOutcome, SwitchRefusal> result;
+        using (new FileStream(Path.Combine(outgoingFolder, FileSystemCredentialPairStore.FileName), FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            result = await Switch().SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken);
+        }
+
+        result.IsFailure.ShouldBeTrue();
+        result.Error.ShouldBe(SwitchRefusal.OutgoingSlotHoldsPair);
+        (await CredentialFiles.FingerprintAsync(_liveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
+        (await CredentialFiles.FingerprintAsync(outgoingFolder, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-a-old").Fingerprint);
+        File.Exists(Path.Combine(_appData, "state", "switch-journal.json")).ShouldBeFalse();
+    }
+
+    public static bool OnWindows => OperatingSystem.IsWindows();
+
+    [Fact]
+    public async Task SwitchRefusesAnOutgoingSlotHoldingAFileThatIsNotAPairAndJournalsNothing()
+    {
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        string outgoingFolder = await ParkedProfileAsync("a@example.com", "refresh-a-old");
+        string slotFile = Path.Combine(outgoingFolder, FileSystemCredentialPairStore.FileName);
+        await File.WriteAllTextAsync(slotFile, "{\"claudeAiOauth\":{\"refre", TestContext.Current.CancellationToken);
+        await ParkedProfileAsync("b@example.com", "refresh-b");
+
+        Result<SwitchOutcome, SwitchRefusal> result = await Switch().SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken);
+
+        result.IsFailure.ShouldBeTrue();
+        result.Error.ShouldBe(SwitchRefusal.OutgoingSlotHoldsPair);
+        (await CredentialFiles.FingerprintAsync(_liveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
+        File.Exists(slotFile).ShouldBeTrue();
+        Directory.Exists(Path.Combine(_appData, "quarantine")).ShouldBeFalse();
+        File.Exists(Path.Combine(_appData, "state", "switch-journal.json")).ShouldBeFalse();
+    }
+
+    [Fact]
     public async Task SwitchRefusesToParkIntoAFolderALoginIsRunningAgainst()
     {
         // The other direction: the outgoing account's folder is the one being written.

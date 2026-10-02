@@ -279,6 +279,30 @@ public sealed class SwitchPlannerTests
     }
 
     [Fact]
+    public void AnOutgoingAccountWhoseSlotAlreadyHoldsAPairIsRefused()
+    {
+        // Parking the live pair needs its account's slot empty. The App sets an
+        // older family aside itself; a file it cannot set aside reaches the
+        // planner as this flag and is refused before anything is journaled.
+        SwitchPlanner.Plan(Baseline() with { OutgoingSlotHoldsPair = true }).Error.ShouldBe(SwitchRefusal.OutgoingSlotHoldsPair);
+    }
+
+    [Fact]
+    public void AnOutgoingSlotHoldingAPairDoesNotRefuseASwitchWithNothingToPark()
+    {
+        SwitchPlanningInput input = Baseline();
+        input = input with
+        {
+            Live = input.Live with { HasCredentials = false, Fingerprint = null },
+            LiveCredentials = null,
+            LiveFingerprintOwner = null,
+            OutgoingSlotHoldsPair = true,
+        };
+
+        SwitchPlanner.Plan(input).IsSuccess.ShouldBeTrue();
+    }
+
+    [Fact]
     public void AnUnverifiedLiveIdentityOutranksEveryOtherAnswer()
     {
         // The state file already names the target, but with a switch unreconciled that

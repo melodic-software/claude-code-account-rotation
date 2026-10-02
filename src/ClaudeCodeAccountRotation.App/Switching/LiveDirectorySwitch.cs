@@ -334,12 +334,31 @@ internal sealed partial class LiveDirectorySwitch
         // top of that would put a second copy of the outgoing lineage in the
         // store while the first is still in flight. A store that is not shared
         // answers false, so this costs the unshared case nothing.
-        bool outgoingInTransit = live.Account?.Email is AccountEmail outgoingAccount
-            && _slots.HasTransitFile(_profiles.FolderPathFor(outgoingAccount));
+        string? outgoingSlot = live.Account?.Email is AccountEmail outgoingAccount ? _profiles.FolderPathFor(outgoingAccount) : null;
+        bool outgoingInTransit = outgoingSlot is not null && _slots.HasTransitFile(outgoingSlot);
+
+        // "Empty by definition" fails after a login the CLI ran by itself as an
+        // account whose pair was parked: that slot still holds the older family,
+        // and the park's rename refuses to write over it. A file that reads as a
+        // different lineage from the live pair is that older family, and it is
+        // set aside below, before the journal is written. Anything else in the
+        // slot is not moved, and the planner refuses.
+        // A folder whose recorded identity differs from its name can put the
+        // target in the very slot the live pair would be parked in. Its pair is
+        // the target's, not an older family, so it is never set aside.
+        bool targetIsOutgoingSlot = outgoingSlot is not null && string.Equals(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(outgoingSlot)),
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(targetProfile.FolderPath)),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        CredentialPair? olderFamily = outgoingSlot is null || targetIsOutgoingSlot ? null : await ReadOutgoingSlotAsync(outgoingSlot, cancellationToken);
+        bool setAsideOlderFamily = olderFamily is not null && liveCredentials is not null && olderFamily.Fingerprint != liveCredentials.Fingerprint;
+        bool outgoingSlotHoldsPair = outgoingSlot is not null
+            && !setAsideOlderFamily
+            && (targetIsOutgoingSlot || File.Exists(Path.Combine(outgoingSlot, FileSystemCredentialPairStore.FileName)));
 
         Result<SwitchPlan, SwitchRefusal> planned = SwitchPlanner.Plan(new SwitchPlanningInput(
             live, targetProfile, liveCredentials, targetCredentials, policy, journalOpen, liveOwner, _options.ProfilesRoot, now, targetStranded,
-            targetSlot?.State ?? SlotState.Parked, outgoingInTransit));
+            targetSlot?.State ?? SlotState.Parked, outgoingInTransit, outgoingSlotHoldsPair));
         if (planned.IsFailure)
         {
             LogRefused(target.Value, planned.Error);
@@ -378,6 +397,16 @@ internal sealed partial class LiveDirectorySwitch
             {
                 LogRefused(target.Value, SwitchRefusal.LiveIdentityUnverified);
                 return Result<SwitchOutcome, SwitchRefusal>.Failure(SwitchRefusal.LiveIdentityUnverified);
+            }
+
+            // Before the journal: a quarantine that cannot take the file is then a
+            // refusal with nothing written, not a switch left open.
+            if (setAsideOlderFamily
+                && plan.OutgoingFolderPath is string occupiedSlot
+                && (lockedLive?.Fingerprint == olderFamily!.Fingerprint || !await SetAsideOlderFamilyAsync(occupiedSlot, olderFamily.Fingerprint, cancellationToken)))
+            {
+                LogRefused(target.Value, SwitchRefusal.OutgoingSlotHoldsPair);
+                return Result<SwitchOutcome, SwitchRefusal>.Failure(SwitchRefusal.OutgoingSlotHoldsPair);
             }
 
             SwitchJournalEntry entry = new(
@@ -442,6 +471,47 @@ internal sealed partial class LiveDirectorySwitch
             && !string.Equals(reported.Trim(), plan.Incoming.Value, StringComparison.OrdinalIgnoreCase);
         LogSwitched(plan.Outgoing?.Value, plan.Incoming.Value, mismatch);
         return Result<SwitchOutcome, SwitchRefusal>.Success(new SwitchOutcome(plan.Incoming, plan.Outgoing, verification, mismatch, _timeProvider.GetUtcNow()));
+    }
+
+    /// <summary>The pair in the slot the live pair would be parked in, or null when the slot is empty or its file cannot be read as a pair.</summary>
+    private async Task<CredentialPair?> ReadOutgoingSlotAsync(string slot, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _pairs.ReadParkedAsync(slot, cancellationToken);
+        }
+        catch (Exception exception) when (exception is InvalidDataException or JsonException or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Moves the older family out of the slot the live pair is about to be parked
+    /// in, into the superseded quarantine: a second, distinct family of an account
+    /// that is kept and named on the page, never used, and does not stop the
+    /// machine. The directory is named after the slot and the lineage, as a
+    /// hand-off's quarantine is. False when the quarantine could not take it,
+    /// and nothing has moved then.
+    /// </summary>
+    private async Task<bool> SetAsideOlderFamilyAsync(string slot, RefreshTokenFingerprint fingerprint, CancellationToken cancellationToken)
+    {
+        string lineage = fingerprint.Sha256Hex[..12];
+        string destinationDirectory = Path.Combine(
+            _options.SupersededQuarantineDirectory,
+            Path.GetFileName(Path.TrimEndingDirectorySeparator(slot)) + "-" + lineage);
+        try
+        {
+            await _pairs.MoveParkedToQuarantineAsync(slot, destinationDirectory, cancellationToken);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            LogOlderFamilyNotSetAside(slot, lineage, exception.Message);
+            return false;
+        }
+
+        LogOlderFamilySetAside(slot, lineage, destinationDirectory);
+        return true;
     }
 
     private async Task<LiveAccountState> SnapshotLiveAsync(CancellationToken cancellationToken)
@@ -932,6 +1002,12 @@ internal sealed partial class LiveDirectorySwitch
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "quarantined a duplicate credential lineage {Fingerprint}: {Source} -> {Destination}")]
     private partial void LogQuarantined(string source, string destination, string fingerprint);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "set aside the older credential family {Fingerprint} found in {Slot}, whose account is live from a login made outside this tool: moved to {Destination}")]
+    private partial void LogOlderFamilySetAside(string slot, string fingerprint, string destination);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the older credential family {Fingerprint} in {Slot} could not be set aside, so the live pair has nowhere to be parked: {Reason}")]
+    private partial void LogOlderFamilyNotSetAside(string slot, string fingerprint, string reason);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "skipped an unreadable credential file in {Folder} during startup reconciliation: {Reason}")]
     private partial void LogUnreadableCredential(string folder, string reason);
