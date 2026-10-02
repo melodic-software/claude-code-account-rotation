@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [2.0.4] - 2026-10-02
+
 ### Fixed
 
 - A switch away from an account that was logged in from the CLI itself, while
