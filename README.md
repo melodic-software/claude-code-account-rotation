@@ -100,8 +100,10 @@ it.
 When a session stops on a usage limit, Claude Code waits for the reset. The optional hook
 `hooks/rate-limit-stop.sh` tells the running dashboard, which reads the live account's usage once
 (at most once a minute per account). When a side's account is at 100% of its 5-hour or 7-day
-window, the dashboard shows a "switch now" prompt naming the first usable account in its order.
-Nothing switches until you click it.
+window, the dashboard shows a "switch now" prompt naming the first usable account in its order
+whose usage was read in the last 30 minutes. When every usable account's figures are older than
+that, the prompt names none: it says which account is unverified and how old its figures are, and
+offers Refresh usage. Nothing switches until you click it.
 
 Install it on the side the leader runs on. The follower has no refresh route, and the leader reads
 no usage for an account the other side holds; that side's card shows its own statusline figures.
