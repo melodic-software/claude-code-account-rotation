@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const { takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, promptWording, uniqueName, renameLabel, nearestLimit, tier } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+const { takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, promptWording, uniqueName, renameLabel, nearestLimit, tier, asOf, usageAge, sentence } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
 
 function limit(kind, percent, fields) {
   return Object.assign({ kind, percent, known: true, windowReset: false }, fields);
@@ -176,4 +176,47 @@ test("a name another account shares gives way to the address, in buttons and in 
     text: "Lee is at its usage limit. No other account has headroom.",
     button: null
   });
+});
+
+const NOW = Date.parse("2026-10-02T20:00:00Z");
+
+function readCard(minutesOld, session, weekly) {
+  const capturedAt = new Date(NOW - minutesOld * 60000).toISOString();
+  return {
+    email: "a@x",
+    isLive: false,
+    hasCredentials: true,
+    standing: "usable",
+    roster: null,
+    refresh: { state: "read" },
+    usage: {
+      source: "refresh",
+      capturedAt,
+      limits: [limit("session", session), limit("weekly_all", weekly), { kind: "weekly_scoped", known: false, percent: null }]
+    }
+  };
+}
+
+test("every as-of line says how old its figure is", () => {
+  const line = asOf(new Date(NOW - 7 * 60000).toISOString(), "refresh", NOW);
+  assert.match(line, /^as of .+, 7 min ago via refresh$/);
+});
+
+test("a figure older than half an hour says it may be out of date", () => {
+  assert.match(asOf(new Date(NOW - 31 * 60000).toISOString(), "snapshot", NOW), /, 31 min ago via snapshot; may be out of date$/);
+  assert.doesNotMatch(asOf(new Date(NOW - 29 * 60000).toISOString(), "snapshot", NOW), /out of date/);
+});
+
+test("a card never reads Usable now on a stale figure", () => {
+  assert.deepStrictEqual(sentence(readCard(5, 10, 20), NOW), { kind: "ok", text: "Usable now" });
+  assert.deepStrictEqual(sentence(readCard(45, 10, 20), NOW), { kind: "warn", text: "Was usable; read 45 min ago, may be out of date" });
+  assert.match(sentence(readCard(45, 80, 20), NOW).text, /^Near the .+; read 45 min ago, may be out of date$/);
+});
+
+test("the oldest figure behind the standing dates the card, a row from another source by its own time", () => {
+  const account = readCard(5, 10, 20);
+  account.usage.limits[1].capturedAt = new Date(NOW - 50 * 60000).toISOString();
+  assert.strictEqual(usageAge(account, NOW), 50 * 60);
+  account.usage.limits[1].windowReset = true;
+  assert.strictEqual(usageAge(account, NOW), 5 * 60);
 });
