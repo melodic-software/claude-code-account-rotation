@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core.Quota;
 using ClaudeCodeAccountRotation.Core.Switching;
@@ -354,10 +355,29 @@ internal sealed record LoginSessionView(
 internal sealed record DashboardSnapshot(
     ReconciliationReport? LastReconciliation,
     string? HandOffBanner,
-    PreSwitchWindows? PreSwitchWindows)
+    PreSwitchWindows? PreSwitchWindows,
+    ImmutableDictionary<SideName, PreSwitchWindows>? SidePreSwitchWindows = null)
 {
     /// <summary>Nothing published yet.</summary>
     public static DashboardSnapshot Empty { get; } = new(null, null, null);
+
+    /// <summary>
+    /// The same marker for another side of this machine: the windows that
+    /// side's tee held just before the leader switched it. A session there that
+    /// was mid-turn writes them back under the incoming account's name exactly
+    /// as on Windows. Null removes the side's marker.
+    /// </summary>
+    public DashboardSnapshot WithSidePreSwitchWindows(SideName side, PreSwitchWindows? windows)
+    {
+        ImmutableDictionary<SideName, PreSwitchWindows> markers = SidePreSwitchWindows ?? ImmutableDictionary<SideName, PreSwitchWindows>.Empty;
+        return this with { SidePreSwitchWindows = windows is null ? markers.Remove(side) : markers.SetItem(side, windows) };
+    }
+
+    /// <summary>Drops a side's marker when it is still the instance <paramref name="observed"/> names.</summary>
+    public DashboardSnapshot WithoutObservedSidePreSwitchWindows(SideName side, PreSwitchWindows observed) =>
+        SidePreSwitchWindows is { } markers && markers.TryGetValue(side, out PreSwitchWindows? current) && ReferenceEquals(current, observed)
+            ? this with { SidePreSwitchWindows = markers.Remove(side) }
+            : this;
 
     /// <summary>
     /// Drops the pre-switch marker when it is the instance <paramref name="observed"/>
