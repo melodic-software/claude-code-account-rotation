@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core.Quota;
 using ClaudeCodeAccountRotation.Core.Switching;
@@ -304,6 +305,8 @@ internal sealed record SwitchRefusalView(string Refusal, string Message)
         SwitchRefusal.PeerDidNotImport => "That side did not complete the import, so the account has been put back in its slot.",
         SwitchRefusal.ForeignFamily => "That side is signed in to that account with a second token family, made when it was logged in again here while that side was unreachable. Switching that side away would hand the family back, and the store keeps one family per account. Switch again with quarantine to move that family into quarantine instead, where it is kept and never used.",
         SwitchRefusal.NothingToRelease => "That side is answering and holds no account, so there is nothing to hand back.",
+        SwitchRefusal.LiveNameStale => "The state file names a different account from the one whose pair is live: a running Claude Code session wrote an older identity back, and no saved identity for the live account was found to put it right. Log in again from the CLI, or switch from a session that names the live account; the log names both accounts.",
+        SwitchRefusal.SideLiveAccountAmbiguous => "That side names an account as live whose pair is still parked here, and the pair it reports matches nothing this store handed it, so nothing can say which account would leave. Restart that side's Claude Code sessions or log in again there; the log names the account and the pair.",
         SwitchRefusal.MutationInProgress => "Another credential change is in progress.",
         SwitchRefusal.RefreshInProgress => "A usage refresh is reading this machine's accounts right now; switch again when it finishes.",
         SwitchRefusal.LoginInProgress => "A login is running against one of those folders; finish it or let it expire first.",
@@ -352,10 +355,29 @@ internal sealed record LoginSessionView(
 internal sealed record DashboardSnapshot(
     ReconciliationReport? LastReconciliation,
     string? HandOffBanner,
-    PreSwitchWindows? PreSwitchWindows)
+    PreSwitchWindows? PreSwitchWindows,
+    ImmutableDictionary<SideName, PreSwitchWindows>? SidePreSwitchWindows = null)
 {
     /// <summary>Nothing published yet.</summary>
     public static DashboardSnapshot Empty { get; } = new(null, null, null);
+
+    /// <summary>
+    /// The same marker for another side of this machine: the windows that
+    /// side's tee held just before the leader switched it. A session there that
+    /// was mid-turn writes them back under the incoming account's name exactly
+    /// as on Windows. Null removes the side's marker.
+    /// </summary>
+    public DashboardSnapshot WithSidePreSwitchWindows(SideName side, PreSwitchWindows? windows)
+    {
+        ImmutableDictionary<SideName, PreSwitchWindows> markers = SidePreSwitchWindows ?? ImmutableDictionary<SideName, PreSwitchWindows>.Empty;
+        return this with { SidePreSwitchWindows = windows is null ? markers.Remove(side) : markers.SetItem(side, windows) };
+    }
+
+    /// <summary>Drops a side's marker when it is still the instance <paramref name="observed"/> names.</summary>
+    public DashboardSnapshot WithoutObservedSidePreSwitchWindows(SideName side, PreSwitchWindows observed) =>
+        SidePreSwitchWindows is { } markers && markers.TryGetValue(side, out PreSwitchWindows? current) && ReferenceEquals(current, observed)
+            ? this with { SidePreSwitchWindows = markers.Remove(side) }
+            : this;
 
     /// <summary>
     /// Drops the pre-switch marker when it is the instance <paramref name="observed"/>

@@ -24,7 +24,9 @@ namespace ClaudeCodeAccountRotation.App.Tests.Quota;
 /// </summary>
 internal sealed class RefreshHarness : IDisposable
 {
-    public RefreshHarness(bool sharedStore = false)
+    private readonly PeerRegistry? _peers;
+
+    public RefreshHarness(bool sharedStore = false, Core.Peers.IPeerRotationInstance? side = null)
     {
         Root = Path.Combine(Path.GetTempPath(), "claude-code-account-rotation-tests", Guid.NewGuid().ToString("N"));
         LiveDirectory = Path.Combine(Root, "live");
@@ -85,7 +87,8 @@ internal sealed class RefreshHarness : IDisposable
             // The gate wait production spends two seconds on. A test that holds
             // the gate against a pass asserts the refusal, not the patience, and
             // the two seconds would be two seconds of a test suite's life.
-            GateWait);
+            GateWait,
+            _peers = side is null ? null : new PeerRegistry([new Peer(side, null, ProfilesRoot)]));
     }
 
     /// <summary>How long this harness's engine waits for the mutation gate before it gives the turn up.</summary>
@@ -202,6 +205,7 @@ internal sealed class RefreshHarness : IDisposable
 
     public void Dispose()
     {
+        _peers?.Dispose();
         _roster.Dispose();
         Gate.Dispose();
         Cache.Dispose();

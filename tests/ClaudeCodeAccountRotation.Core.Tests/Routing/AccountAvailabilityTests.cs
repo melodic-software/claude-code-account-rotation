@@ -74,6 +74,29 @@ public sealed class AccountAvailabilityTests
             .ShouldBe(["b@example.com", "a@example.com"]);
     }
 
+    /// <summary>
+    /// The account someone just switched to, here or on another side, has no
+    /// figures only because nothing has reported on it yet. It is listed right
+    /// after the usable accounts instead of below every limited and exhausted
+    /// one (#184), and it is still not offered as usable.
+    /// </summary>
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void AnUnreadAccountInUseIsListedRightAfterTheUsableOnes(bool live, bool heldElsewhere)
+    {
+        AccountStanding inUse = NeverRead("a@example.com") with { IsLive = live, HeldElsewhere = heldElsewhere };
+
+        Order(
+            NeverRead("b@example.com"),
+            Read("c@example.com", Weekly(100, _now.AddDays(2))),
+            Read("d@example.com", Session(100, _now.AddHours(3))),
+            inUse,
+            Read("e@example.com", Weekly(10, _now.AddDays(2))))
+            .ShouldBe(["e@example.com", "a@example.com", "d@example.com", "c@example.com", "b@example.com"]);
+        AccountAvailability.KeyFor(inUse, _now).Standing.ShouldBe(AvailabilityStanding.Unread);
+    }
+
     [Fact]
     public void AnAccountWhoseOnlyFigureIsScopedIsUnread()
     {

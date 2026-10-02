@@ -240,6 +240,7 @@ internal static class AppComposition
             provider.GetRequiredService<TimeProvider>(),
             provider.GetRequiredService<ILogger<ClaudeCliLoginSessionRunner>>()));
         services.AddSingleton<LiveDirectorySwitch>();
+        services.AddSingleton<IStaleIdentityRepair>(static provider => provider.GetRequiredService<LiveDirectorySwitch>());
         ComposePeers(services, configuration);
         services.AddSingleton(new WslSwitchJournal(configuration.AppDataDirectory));
         services.AddSingleton<WslSwitch>();
@@ -462,10 +463,12 @@ internal static class AppComposition
     {
         services.AddSingleton(new ClaudeStateFile(configuration.StateFilePath));
         services.AddSingleton<CredentialMutationGate>();
-        // The follower reads its own tee and nothing else about usage: it makes
-        // no usage request of its own, and this file is what the leader's card
-        // for an account this side holds is built from (design 12).
+        // The follower's tee, which the leader's card for an account this side
+        // holds reads between Refresh clicks, and the usage client a Refresh
+        // click reads through (design 12). No token client: this side never
+        // POSTs a refresh token, so nothing here could rotate one.
         services.AddSingleton(new RateLimitGuardTeeFileReader(configuration.StatuslineTeePath));
+        AddUsageClient(services, AnthropicEndpoints.UserAgent(configuration.UserAgentProductToken, Version));
         services.AddSingleton(new ImportJournal(configuration.AppDataDirectory));
         services.AddSingleton(provider => new StagedImportCredentialPairStore(
             configuration.LiveConfigDirectory,
@@ -486,7 +489,12 @@ internal static class AppComposition
             provider.GetRequiredService<CredentialMutationGate>(),
             provider.GetRequiredService<TimeProvider>(),
             provider.GetRequiredService<ILogger<FollowerImport>>()));
+        services.AddSingleton<IStaleIdentityRepair>(static provider => provider.GetRequiredService<FollowerImport>());
         services.AddHostedService<InstanceLockHolder>();
+        // A session on this side that predates an import writes its older
+        // identity back over the one the import put there, exactly as on the
+        // leader, so this side runs the same watcher over its own state file.
+        services.AddHostedService<StateFileWatcher>();
         services.AddHealthChecks();
     }
 
@@ -503,19 +511,29 @@ internal static class AppComposition
     /// </summary>
     internal static void AddOutboundClients(IServiceCollection services, string userAgent)
     {
+        AddUsageClient(services, userAgent);
+        services.AddHttpClient(nameof(ClaudeOAuthTokenRefreshClient))
+            .ConfigurePrimaryHttpMessageHandler(static () => OutboundPrimaryHandler.Create())
+            .AddTypedClient<ITokenRefreshClient>((http, provider) => new ClaudeOAuthTokenRefreshClient(http, userAgent, provider.GetRequiredService<TimeProvider>()));
+    }
+
+    /// <summary>
+    /// The usage client alone, which is all the follower registers: it reads
+    /// usage when the leader asks, with its own live access token, and has no
+    /// token client to refresh anything with.
+    /// </summary>
+    internal static void AddUsageClient(IServiceCollection services, string userAgent)
+    {
         ArgumentNullException.ThrowIfNull(services);
         // The clock comes from the container, not from TimeProvider.System: a
         // Retry-After given as an absolute date is turned into a wait against it,
         // and a test that moves the clock must be able to move that too. TryAdd,
         // so the composition root's own registration (or a test's replacement of
-        // it) stands and a caller wiring only these two clients still gets a clock.
+        // it) stands and a caller wiring only these clients still gets a clock.
         services.TryAddSingleton(TimeProvider.System);
         services.AddHttpClient(nameof(AnthropicUsageEndpointClient))
             .ConfigurePrimaryHttpMessageHandler(static () => OutboundPrimaryHandler.Create())
             .AddTypedClient<IUsageEndpointClient>((http, provider) => new AnthropicUsageEndpointClient(http, userAgent, provider.GetRequiredService<TimeProvider>()));
-        services.AddHttpClient(nameof(ClaudeOAuthTokenRefreshClient))
-            .ConfigurePrimaryHttpMessageHandler(static () => OutboundPrimaryHandler.Create())
-            .AddTypedClient<ITokenRefreshClient>((http, provider) => new ClaudeOAuthTokenRefreshClient(http, userAgent, provider.GetRequiredService<TimeProvider>()));
     }
 
     /// <summary>

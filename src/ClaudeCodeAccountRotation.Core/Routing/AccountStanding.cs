@@ -15,7 +15,9 @@ namespace ClaudeCodeAccountRotation.Core.Routing;
 /// because an untouched window and an unknown one call for different treatment.
 /// </para>
 /// <para>
-/// The last two carry defaults so a caller that knows neither compiles unchanged.
+/// The last three carry defaults so a caller that knows none of them compiles
+/// unchanged. <paramref name="HeldElsewhere"/> is an account another side of this
+/// machine is using or is being handed to: in use, like <paramref name="IsLive"/>.
 /// </para>
 /// </summary>
 public sealed record AccountStanding(
@@ -24,4 +26,5 @@ public sealed record AccountStanding(
     bool IsPaused,
     bool HasCredentials,
     UsageSnapshot? Latest = null,
-    DateTimeOffset? LoginExpiresAt = null);
+    DateTimeOffset? LoginExpiresAt = null,
+    bool HeldElsewhere = false);

@@ -128,6 +128,32 @@ internal sealed class HttpPeerRotationInstance : IPeerRotationInstance
             static view => new LogOutAnswer(view.LoggedOut, view.Detail),
             cancellationToken);
 
+    /// <summary>
+    /// What a usage read through that side may cost. Longer than a dashboard
+    /// read, because that side makes its own call to the usage endpoint
+    /// (20 s at worst, the adapter's bound) before it answers.
+    /// </summary>
+    public TimeSpan UsageReadTimeout { get; init; } = TimeSpan.FromSeconds(30);
+
+    public async Task<Result<PeerUsageRead, string>> ReadUsageAsync(AccountEmail email, RefreshTokenFingerprint? expected, CancellationToken cancellationToken)
+    {
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        bounded.CancelAfter(UsageReadTimeout);
+        Result<PeerUsageRead, string> answer = await PostAsync<ImportEndpoints.UsageReadBody, ImportEndpoints.UsageReadView, PeerUsageRead>(
+            "/api/usage/read",
+            new ImportEndpoints.UsageReadBody(email.Value, expected?.Sha256Hex),
+            static view => new PeerUsageRead(
+                Enum.TryParse(view.Outcome, ignoreCase: false, out PeerUsageOutcome outcome) ? outcome : PeerUsageOutcome.Failed,
+                view.Body,
+                view.RetryAfterSeconds is double seconds ? TimeSpan.FromSeconds(seconds) : null,
+                view.Detail),
+            bounded.Token);
+        // The caller's own cancellation is the host stopping, and it goes on
+        // being one; only the bound running out is a side that did not answer.
+        cancellationToken.ThrowIfCancellationRequested();
+        return answer;
+    }
+
     public Task<Result<ImportStatus, string>> ImportStatusAsync(AccountEmail email, CancellationToken cancellationToken) =>
         GetAsync<ImportEndpoints.ImportStatusView, ImportStatus>(
             "/api/import-status?email=" + Uri.EscapeDataString(email.Value),

@@ -55,7 +55,7 @@ It is simpler on every axis except the one the user decided on.
 | Depends on 9P | no | yes, `/mnt/c` for the mailbox |
 | Cross-side lock | none needed | none used; single slot writer plus fingerprint verification |
 | Distro off | nothing stranded | WSL-held accounts unavailable on Windows until the escape hatch |
-| Held-account usage on the page | one usage read serves both | tee-only for WSL-held accounts |
+| Held-account usage on the page | one usage read serves both | the WSL tee between clicks; a Refresh click reads through the follower with its own live access token |
 | Concurrent logins per account per device | 2 | 1 |
 
 The deciding number is the second row, and it rests on section 2: the login window does not slide, so
@@ -404,16 +404,32 @@ files. Because the leader is the only slot writer, the existing `Rename` `FileNo
 
 ## 12. Usage and rate-limit data across sides
 
-- The leader reads the usage endpoint for all ten accounts from the store or its own live pair, as
-  today. The WSL side makes **no** usage reads and **no** token POSTs (one honest-UA bucket; whether
-  it keys per token or per client is still open, spike 02b).
+- The leader reads the usage endpoint for every account it holds, from the store or its own live
+  pair, as today. The WSL side makes **no** token POSTs, ever, and makes a usage read only when the
+  leader asks for one (one honest-UA bucket; whether it keys per token or per client is still open,
+  spike 02b).
 - **Held-by-WSL accounts:** their pair is in the WSL live dir, which the leader does not read. The
   leader's card for that account uses the follower's tee (tier 1, `rate-limit-guard/rate-limits.json`
   inside the WSL live dir, attributed by `account.email`), surfaced through the follower's
-  `GET /api/dashboard`; `UsageMerge` merges per bucket. A held account with no WSL session since the
-  last reset shows `via snapshot` with its age, or `unknown`, and the card says
-  `in use by wsl; figures come from wsl sessions`. On-demand refresh of a WSL-held account is
-  deferred: it would spend a read from the shared bucket on the follower.
+  `GET /api/dashboard`. The leader keeps the newest tee observation per account in memory, so a tee
+  that has moved on to another account does not take this one's figures with it.
+- **Refresh of a held-by-WSL account** (amended 2026-10-02, #185): usage calls happen only when asked
+  (decision #164), and a Refresh click is asking, so "Refresh all accounts" and a card's Refresh read
+  every account. For one the WSL side holds, the leader posts `POST /api/usage/read` (email and the
+  holder record's fingerprint) to the follower, which reads its live pair under its import lock,
+  accepts it when the fingerprint matches or its own `state/live-owner.json` names that account for
+  the live pair (the CLI there rotates the token after a hand-off), and calls the usage endpoint with
+  its own live **access** token. An expired or rejected access token answers `SessionWillRefresh`;
+  nothing on either side refreshes the token. The leader keeps its budget reservation, pacing and
+  429 lockout for that read, records it as an on-demand read, and a side that is offline, mid
+  hand-off, or no longer holding the account leaves the card a sentence saying so. The follower
+  registers the usage client only; it cannot resolve a token client.
+- **Every card** merges, per bucket, the newest tee observation from either side with the newest
+  endpoint read, whatever the slot state: a switch or hand-off never discards known figures. Every
+  figure carries its source and age, a window that has reset since loses its percentage, and the page
+  marks a figure stale past its threshold. The WSL tee gets the same pre-switch guard as Windows: the
+  windows that side's tee held when the leader switched it are not attributed to the incoming account.
+  A held card says `in use by wsl; figures come from wsl sessions and from Refresh`.
 - **Login expiry:** one family per account, so one `loginExpiresAt` per card, read from the slot
   (parked), from the Windows live pair, or from the follower's dashboard (WSL-held).
 - Per-card chips: `live here`, `in use by wsl`, `in transit to wsl`, `parked`, beside the existing

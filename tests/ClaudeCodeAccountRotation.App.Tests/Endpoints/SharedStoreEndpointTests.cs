@@ -312,6 +312,9 @@ public sealed class SharedStoreEndpointTests
 
         public Task<Result<LogOutAnswer, string>> LogOutAsync(AccountEmail email, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+
+        public Task<Result<PeerUsageRead, string>> ReadUsageAsync(AccountEmail email, RefreshTokenFingerprint? expected, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 
     [Fact]

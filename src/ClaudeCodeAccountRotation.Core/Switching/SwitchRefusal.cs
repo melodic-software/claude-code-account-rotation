@@ -136,4 +136,21 @@ public enum SwitchRefusal
     /// this tool could not read. Nothing was removed and its holder record stays.
     /// </summary>
     SideLoggedInAgain,
+
+    /// <summary>
+    /// The state file names an account other than the one the live pair was put
+    /// in place for: a running session wrote its older identity back. The switch
+    /// repairs that itself from the owner's recorded block; this refusal is what
+    /// is left when no block for the owner is recorded or stored, so the file
+    /// cannot be put right and nothing can say which slot the live pair belongs in.
+    /// </summary>
+    LiveNameStale,
+
+    /// <summary>
+    /// The other side names, as live, an account whose own slot here still holds
+    /// a parked pair, and the fingerprint it reports matches no holder record for
+    /// that side. Whichever account that pair belongs to, parking it under the
+    /// name the side gave would put it in a slot that already holds a family.
+    /// </summary>
+    SideLiveAccountAmbiguous,
 }

@@ -1,5 +1,6 @@
 using System.Globalization;
 using ClaudeCodeAccountRotation.Core.Identity;
+using ClaudeCodeAccountRotation.Core.Switching;
 
 namespace ClaudeCodeAccountRotation.App.Quota;
 
@@ -81,7 +82,9 @@ internal static class RefreshMessages
     public const string LiveIdentityBusy = "a credential change was running; refresh again";
     public const string SessionWillRefresh = "session will refresh";
     public const string NeedsLogin = "no credentials on this machine; log in again";
+    public const string CliLoggedOut = "the CLI logged out of this account; log in again";
     public const string HeldElsewhere = "in use by the other side of this machine";
+    public const string InTransit = "a hand-off is in flight; refresh again when it lands";
     public const string Read = "read just now";
     public const string TokenRefreshFailed = "the token endpoint did not answer with new credentials";
     public const string Stranded = "credentials stranded in recovery";
@@ -104,6 +107,18 @@ internal static class RefreshMessages
     /// </summary>
     public static string ReadRecently(TimeSpan sinceLastRead) =>
         "read " + Seconds(sinceLastRead) + " s ago";
+
+    /// <summary>A read another side made for the leader, with its own live access token.</summary>
+    public static string ReadBy(SideName side) => "read just now through " + side.Value;
+
+    /// <summary>The other side's live access token is expired or was rejected; its session renews it.</summary>
+    public static string SessionWillRefreshOn(SideName side) => "the session on " + side.Value + " will refresh; refresh again after it does";
+
+    /// <summary>The side the holder record names did not answer.</summary>
+    public static string SideUnreachable(SideName side) => "in use by " + side.Value + ", which did not answer; start it and refresh again";
+
+    /// <summary>The side the holder record names answered that it does not hold this account.</summary>
+    public static string NotHeldBy(SideName side) => "in use by " + side.Value + ", which does not hold it now; refresh again after the hand-off settles";
 
     /// <summary>The refusal for an account that spent its window rather than its gap.</summary>
     public const string BudgetSpent = "the read budget for this account is spent for now";

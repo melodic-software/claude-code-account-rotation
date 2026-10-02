@@ -135,11 +135,19 @@ internal sealed partial class DashboardAssembler(
         // One publication for the whole payload: the report, the hand-off line,
         // and the pre-switch windows below are this snapshot's, not a second read.
         DashboardSnapshot published = state.Read();
+        // Before any card is built, so each one reads the newest observation of
+        // its account whichever side's tee it came from and whenever it came.
+        ObserveSides(sides, published);
         if (liveEmail is AccountEmail live)
         {
             ParkedProfile? ownFolder = parked.FirstOrDefault(profile => profile.Email == live);
             string liveFolder = ownFolder?.FolderPath ?? profiles.FolderPathFor(live);
             (UsageSnapshot? observed, string? note) = Attribute(snapshot, live, published.PreSwitchWindows);
+            if (observed is not null)
+            {
+                quota.RecordObservation(observed);
+            }
+
             built.Add(Card(
                 live,
                 isLive: true,
@@ -362,20 +370,32 @@ internal sealed partial class DashboardAssembler(
     {
         WslSideState? holder = Holder(slot, sides);
         bool heldAway = slot?.State is SlotState.HeldElsewhere or SlotState.InTransit;
+        // Every figure known for this account, whichever slot state it is in:
+        // the newest tee observation from either side, and the newest read of
+        // the endpoint, merged per bucket so the newer figure wins. A switch
+        // or a hand-off changes who holds the pair, not what is known about
+        // its usage; the card states each figure's source and age, and a
+        // window that has reset since loses its percentage (Row).
         List<UsageSnapshot> sources = [];
+        if (observed is not null)
+        {
+            sources.Add(observed);
+        }
+
+        if (quota.ObservedFor(email) is UsageSnapshot seen && !ReferenceEquals(seen, observed))
+        {
+            sources.Add(seen);
+        }
+
+        if (quota.LatestFor(email) is UsageSnapshot read)
+        {
+            sources.Add(read);
+        }
+
         if (slot?.State == SlotState.HeldElsewhere)
         {
-            // Design 12: the leader reads no usage for a pair it does not hold,
-            // so this card carries that side's tee and nothing else. What this
-            // side read while it still held the pair is from before the hand-off
-            // and would be a figure the account has since moved past.
-            if (holder?.Usage is StatuslineSnapshot tee && tee.Account == email)
-            {
-                sources.Add(UsageSnapshot.FromStatusline(tee, email));
-            }
-
             string side = Named(slot, holder);
-            note = "in use by " + side + "; figures come from " + side + " sessions";
+            note = "in use by " + side + "; figures come from " + side + " sessions and from Refresh";
             // One family per account, so the expiry of a pair this side does not
             // hold can only come from the side that does, and only while that
             // side says this is the account it holds. Nothing to say beats a
@@ -384,18 +404,6 @@ internal sealed partial class DashboardAssembler(
             loginExpiresAt = holder is { Online: true } && holder.LiveAccount == email
                 ? holder.LoginExpiresAt
                 : null;
-        }
-        else
-        {
-            if (observed is not null)
-            {
-                sources.Add(observed);
-            }
-
-            if (quota.LatestFor(email) is UsageSnapshot read)
-            {
-                sources.Add(read);
-            }
         }
 
         MergedUsage? merged = UsageMerge.Merge(sources);
@@ -439,7 +447,7 @@ internal sealed partial class DashboardAssembler(
                     ? cliLoggedOutSentence
                     : loggedOutOn is null ? null : "The CLI on " + loggedOutOn + " logged out of this account; log in again.",
                 LoggedOutOn: loggedOutOn),
-            new AccountStanding(email, isLive, entry?.Paused ?? false, hasCredentials, merged?.Merged, loginExpiresAt));
+            new AccountStanding(email, isLive, entry?.Paused ?? false, hasCredentials, merged?.Merged, loginExpiresAt, HeldElsewhere: heldAway));
     }
 
     /// <summary>
@@ -830,6 +838,41 @@ internal sealed partial class DashboardAssembler(
         }
 
         return kebab.ToString();
+    }
+
+    /// <summary>
+    /// Keeps every other side's tee observation under the account it names, so
+    /// the card for that account still has it after the side moves on. The
+    /// same pre-switch rule as <see cref="Attribute"/>: a tee still carrying
+    /// the windows that side's tee held when the leader switched it belongs to
+    /// the account that left, whatever name it carries, and is not kept. The
+    /// marker is cleared by the first observation of the incoming account whose
+    /// windows differ.
+    /// </summary>
+    private void ObserveSides(IReadOnlyList<WslSideState> sides, DashboardSnapshot published)
+    {
+        foreach (WslSideState side in sides)
+        {
+            if (side.Usage is not StatuslineSnapshot tee || tee.Account is not AccountEmail named)
+            {
+                continue;
+            }
+
+            if (published.SidePreSwitchWindows?.GetValueOrDefault(side.Side) is PreSwitchWindows before)
+            {
+                if (before.FiveHourResetsAt == tee.FiveHourResetsAt && before.SevenDayResetsAt == tee.SevenDayResetsAt)
+                {
+                    continue;
+                }
+
+                if (named == side.LiveAccount)
+                {
+                    state.Publish(current => current.WithoutObservedSidePreSwitchWindows(side.Side, before));
+                }
+            }
+
+            quota.RecordObservation(UsageSnapshot.FromStatusline(tee, named));
+        }
     }
 
     /// <summary>

@@ -21,9 +21,8 @@ namespace ClaudeCodeAccountRotation.App.Switching;
 /// reconciliation quarantines duplicate lineages and finishes or unwinds a
 /// switch a crash left half done.
 /// </summary>
-internal sealed partial class LiveDirectorySwitch
+internal sealed partial class LiveDirectorySwitch : IStaleIdentityRepair
 {
-    private const string LiveOwnerFileName = "live-owner.json";
     private static readonly TimeSpan _secondaryLockGuardAge = TimeSpan.FromSeconds(60);
 
     // AttributesToSkip is cleared because the default hides Hidden and System
@@ -57,7 +56,8 @@ internal sealed partial class LiveDirectorySwitch
     private readonly Func<string, string, int>? _rename;
     private readonly CliLogoutMonitor? _cliLogout;
     private readonly string _quarantineDirectory;
-    private readonly string _liveOwnerPath;
+    private readonly LiveOwnerRecord _owner;
+    private readonly StaleIdentityRepair _repair;
 
     public LiveDirectorySwitch(
         ICredentialPairStore pairs,
@@ -134,7 +134,19 @@ internal sealed partial class LiveDirectorySwitch
         _rename = rename;
         _cliLogout = cliLogout;
         _quarantineDirectory = options.QuarantineDirectory;
-        _liveOwnerPath = Path.Combine(options.AppDataDirectory, "state", LiveOwnerFileName);
+        _owner = new LiveOwnerRecord(options.AppDataDirectory, timeProvider, logger);
+        _repair = new StaleIdentityRepair(
+            gate,
+            stateFile,
+            _owner,
+            async cancellationToken => (await pairs.ReadLiveAsync(cancellationToken))?.Fingerprint,
+            async (owner, cancellationToken) =>
+            {
+                string folder = Path.Combine(options.ProfilesRoot, ProfileFolderName.FromEmail(owner));
+                return Directory.Exists(folder) ? await profiles.ReadAccountAsync(folder, cancellationToken) : null;
+            },
+            transactionOpen: null,
+            logger);
     }
 
     public async Task<Result<SwitchOutcome, SwitchRefusal>> SwitchToAsync(AccountEmail target, CancellationToken cancellationToken)
@@ -184,49 +196,8 @@ internal sealed partial class LiveDirectorySwitch
         RepairStaleIdentityAsync(TimeSpan.Zero, cancellationToken);
 
     /// <inheritdoc cref="RepairStaleIdentityAsync(CancellationToken)"/>
-    public async Task<IdentityRepair> RepairStaleIdentityAsync(TimeSpan gateWait, CancellationToken cancellationToken)
-    {
-        IDisposable? permit = null;
-        try
-        {
-            try
-            {
-                permit = await _gate.AcquireAsync(gateWait, cancellationToken);
-            }
-            catch (TimeoutException)
-            {
-                return IdentityRepair.Busy;
-            }
-
-            LiveAccountState live = await SnapshotLiveAsync(cancellationToken);
-            if (!live.HasCredentials)
-            {
-                return IdentityRepair.NotNeeded;
-            }
-
-            AccountEmail? owner = await ReadLiveOwnerAsync(live, cancellationToken);
-            if (owner is not AccountEmail recorded || live.Account?.Email == recorded)
-            {
-                return IdentityRepair.NotNeeded;
-            }
-
-            string folder = Path.Combine(_options.ProfilesRoot, ProfileFolderName.FromEmail(recorded));
-            OAuthAccountBlock? block = Directory.Exists(folder) ? await _profiles.ReadAccountAsync(folder, cancellationToken) : null;
-            if (block is null)
-            {
-                LogRepairImpossible(recorded.Value, folder);
-                return IdentityRepair.NoProfileBlock;
-            }
-
-            await _stateFile.PatchAccountBlockAsync(block, CancellationToken.None);
-            LogRepatched(recorded.Value, live.Account?.Email?.Value ?? "(none)");
-            return IdentityRepair.Repatched;
-        }
-        finally
-        {
-            permit?.Dispose();
-        }
-    }
+    public Task<IdentityRepair> RepairStaleIdentityAsync(TimeSpan gateWait, CancellationToken cancellationToken) =>
+        _repair.RepairAsync(gateWait, cancellationToken);
 
     public async Task<ReconciliationReport> ReconcileAsync(CancellationToken cancellationToken)
     {
@@ -275,6 +246,25 @@ internal sealed partial class LiveDirectorySwitch
             return Result<SwitchOutcome, SwitchRefusal>.Failure(SwitchRefusal.CliLoggedOut);
         }
 
+        // A session that wrote its older block back leaves the state file naming
+        // an account whose pair is not live. The watcher repairs that within a
+        // second, but a switch landing first, or one the watcher could not repair,
+        // must not plan from the stale name: it is repaired here, under the gate
+        // this switch already holds, and the plan reads the repaired file. With a
+        // journal open the files are the reconciliation's to decide.
+        if (await _journal.ReadOpenAsync(cancellationToken) is null
+            && await _owner.ResolveAsync(live.Fingerprint, live.Account, cancellationToken) is LiveOwner recorded
+            && live.Account?.Email != recorded.Email)
+        {
+            if (await _repair.RepairUnderGateAsync(cancellationToken) is not IdentityRepair.Repatched)
+            {
+                LogRefused(target.Value, SwitchRefusal.LiveNameStale);
+                return Result<SwitchOutcome, SwitchRefusal>.Failure(SwitchRefusal.LiveNameStale);
+            }
+
+            live = await SnapshotLiveAsync(cancellationToken);
+        }
+
         IReadOnlyList<ParkedProfile> profiles = await _profiles.ListAsync(cancellationToken);
         ParkedProfile? targetProfile = profiles.FirstOrDefault(profile => profile.Email == target);
         if (targetProfile is null)
@@ -305,7 +295,7 @@ internal sealed partial class LiveDirectorySwitch
         bool journalOpen = await _journal.ReadOpenAsync(cancellationToken) is not null
             || QuarantineHoldsFiles()
             || strandedTemporary is not null;
-        AccountEmail? liveOwner = await ReadLiveOwnerAsync(live, cancellationToken);
+        AccountEmail? liveOwner = (await _owner.ResolveAsync(live.Fingerprint, live.Account, cancellationToken))?.Email;
         DateTimeOffset now = _timeProvider.GetUtcNow();
 
         // Read here, under the gate, with every other planning input: a refresh
@@ -449,7 +439,7 @@ internal sealed partial class LiveDirectorySwitch
             await _stateFile.PatchAccountBlockAsync(plan.IncomingAccount, committed);
             await _journal.WriteAsync(entry with { StepReached = SwitchStep.Patched }, committed);
 
-            await WriteLiveOwnerAsync(targetCredentials.Fingerprint, plan.Incoming, committed);
+            await _owner.WriteAsync(targetCredentials.Fingerprint, plan.Incoming, plan.IncomingAccount, committed);
 
             // Last, because a record left on a slot that holds its pair again is
             // the one disagreement the reconciliation table heals by itself,
@@ -822,9 +812,10 @@ internal sealed partial class LiveDirectorySwitch
                 }
 
                 await _stateFile.PatchAccountBlockAsync(incomingAccount, cancellationToken);
+                current = incomingAccount;
             }
 
-            await WriteLiveOwnerAsync(liveNow, entry.Incoming, cancellationToken);
+            await _owner.WriteAsync(liveNow, entry.Incoming, current, cancellationToken);
             await _journal.ClearAsync(cancellationToken);
             LogReconciled("completed", entry.Incoming.Value);
             return ("completed the switch to " + entry.Incoming.Value, false);
@@ -894,102 +885,6 @@ internal sealed partial class LiveDirectorySwitch
         Directory.Exists(_quarantineDirectory)
         && Directory.EnumerateFiles(_quarantineDirectory, "*", SearchOption.AllDirectories)
             .Any(path => !path.StartsWith(_options.SupersededQuarantineDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
-
-    /// <summary>
-    /// The account the live pair was unparked for, from the owner record. The CLI
-    /// rotates the refresh token on its first refresh after every unpark, so a
-    /// record whose fingerprint no longer matches is the normal case within seconds
-    /// of a switch: while the state file still names the recorded owner the record
-    /// is re-bound to the new fingerprint. When the state file names another
-    /// account, a block the CLI stamped after the record was written means a login
-    /// replaced the pair and the record is released; an older block means a
-    /// session wrote a stale identity back, and the recorded owner stands so the
-    /// planner refuses. Every transition is logged; the guard never lapses silently.
-    /// </summary>
-    private async Task<AccountEmail?> ReadLiveOwnerAsync(LiveAccountState live, CancellationToken cancellationToken)
-    {
-        if (live.Fingerprint is not RefreshTokenFingerprint liveFingerprint || !File.Exists(_liveOwnerPath))
-        {
-            return null;
-        }
-
-        string? fingerprint;
-        string? email;
-        JsonObject? record;
-        try
-        {
-            record = JsonNode.Parse(await SharedFileReader.ReadAllBytesAsync(_liveOwnerPath, cancellationToken)) as JsonObject;
-            fingerprint = record?["fingerprint"] is JsonValue fingerprintValue && fingerprintValue.TryGetValue(out string? fingerprintText) ? fingerprintText : null;
-            email = record?["email"] is JsonValue emailValue && emailValue.TryGetValue(out string? emailText) ? emailText : null;
-        }
-        catch (JsonException)
-        {
-            // A corrupt record is no recorded owner; the next switch writes a fresh one.
-            return null;
-        }
-
-        if (fingerprint is null || email is null)
-        {
-            return null;
-        }
-
-        AccountEmail owner = new(email);
-        if (new RefreshTokenFingerprint(fingerprint) == liveFingerprint)
-        {
-            return owner;
-        }
-
-        if (live.Account?.Email == owner)
-        {
-            await WriteLiveOwnerAsync(liveFingerprint, owner, cancellationToken);
-            LogOwnerRebound(owner.Value, liveFingerprint.Sha256Hex[..12]);
-            return owner;
-        }
-
-        DateTimeOffset? recordedAt = record?["at"] is JsonValue atValue
-            && atValue.TryGetValue(out string? at)
-            && DateTimeOffset.TryParse(at, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTimeOffset parsed)
-            ? parsed
-            : null;
-        if (live.Account?.ProfileFetchedAt is DateTimeOffset fetchedAt && recordedAt is DateTimeOffset writtenAt && fetchedAt > writtenAt)
-        {
-            LogOwnerReleased(owner.Value, live.Account.Email?.Value ?? "(none)");
-            await AtomicBytesFile.DeleteWithRetryAsync(_liveOwnerPath, cancellationToken);
-            return null;
-        }
-
-        LogOwnerStale(owner.Value, live.Account?.Email?.Value ?? "(none)");
-        return owner;
-    }
-
-    private Task WriteLiveOwnerAsync(RefreshTokenFingerprint fingerprint, AccountEmail owner, CancellationToken cancellationToken)
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(_liveOwnerPath)!);
-        return AtomicJsonFile.WriteAsync(
-            _liveOwnerPath,
-            new JsonObject
-            {
-                ["fingerprint"] = fingerprint.Sha256Hex,
-                ["email"] = owner.Value,
-                ["at"] = _timeProvider.GetUtcNow().ToString("O", CultureInfo.InvariantCulture),
-            },
-            cancellationToken);
-    }
-
-    [LoggerMessage(Level = LogLevel.Information, Message = "live owner record re-bound to the rotated pair {Fingerprint} for {Owner}")]
-    private partial void LogOwnerRebound(string owner, string fingerprint);
-
-    [LoggerMessage(Level = LogLevel.Information, Message = "live owner record for {Owner} released: the CLI stamped a login as {Named} after it was written")]
-    private partial void LogOwnerReleased(string owner, string named);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "live owner record for {Owner} disagrees with the state file, which names {Named} from before the record; switching refuses until they agree")]
-    private partial void LogOwnerStale(string owner, string named);
-
-    [LoggerMessage(Level = LogLevel.Information, Message = "state file re-patched to {Owner}: a session had written back its older block naming {Named}")]
-    private partial void LogRepatched(string owner, string named);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "state file is stale but {Owner} has no profile block under {Folder} to restore it from")]
-    private partial void LogRepairImpossible(string owner, string folder);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "switched {From} -> {To} (cli mismatch: {Mismatch})")]
     private partial void LogSwitched(string? from, string to, bool mismatch);

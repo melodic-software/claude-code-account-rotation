@@ -2,10 +2,12 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
+using ClaudeCodeAccountRotation.App.Dashboard;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Identity;
+using ClaudeCodeAccountRotation.Core.Peers;
 using ClaudeCodeAccountRotation.Core.Ports;
 using ClaudeCodeAccountRotation.Core.Quota;
 using ClaudeCodeAccountRotation.Core.Switching;
@@ -85,6 +87,7 @@ internal sealed partial class QuotaRefresh
     private readonly Func<TimeSpan, CancellationToken, Task> _pace;
     private readonly ILogger<QuotaRefresh> _logger;
     private readonly TimeSpan _gateWait;
+    private readonly PeerRegistry? _peers;
 
     public QuotaRefresh(
         ICredentialPairStore pairs,
@@ -104,8 +107,10 @@ internal sealed partial class QuotaRefresh
         TimeProvider timeProvider,
         Func<TimeSpan, CancellationToken, Task> pace,
         ILogger<QuotaRefresh> logger,
-        TimeSpan? gateWait = null)
+        TimeSpan? gateWait = null,
+        PeerRegistry? peers = null)
     {
+        _peers = peers;
         _pairs = pairs;
         _profiles = profiles;
         _rosterFile = rosterFile;
@@ -198,16 +203,38 @@ internal sealed partial class QuotaRefresh
         Dictionary<RefreshOutcomeKind, int> summary,
         CancellationToken stopping)
     {
-        IdentityRepair repair = await _executor.RepairStaleIdentityAsync(_gateWait, stopping);
+        // A logged-out live file costs the live account its turn and nothing
+        // more: the repair and the live read both throw on it, and letting that
+        // end the pass would leave every parked account unread too.
+        IdentityRepair? repair;
+        try
+        {
+            repair = await _executor.RepairStaleIdentityAsync(_gateWait, stopping);
+        }
+        catch (InvalidDataException exception) when (CliLogoutMonitor.IsTokenAbsence(exception))
+        {
+            repair = null;
+        }
+
+        RefreshTokenFingerprint? liveFingerprint = repair is null ? null : await LiveFingerprintAsync(stopping);
         AccountEmail? liveEmail = (await _stateFile.ReadAccountBlockAsync(stopping))?.Email;
         IReadOnlyList<ParkedProfile> parked = await _profiles.ListAsync(stopping);
         Roster roster = await _rosterFile.ReadAsync(stopping);
         bool Wanted(AccountEmail email) => request.Account is null || request.Account == email;
+        // The reading of what this side holds the page makes too: the account the
+        // state file names, and the live pair's fingerprint for when the CLI has
+        // rotated past a record. Judging slots on the name alone could call a
+        // slot held elsewhere here and parked on the page.
+        WindowsHold hold = new(liveEmail, liveFingerprint);
 
         List<Candidate> candidates = [];
         if (liveEmail is AccountEmail live && Wanted(live))
         {
-            if (repair is IdentityRepair.Busy)
+            if (repair is null)
+            {
+                Record(live, Outcome(RefreshOutcomeKind.NeedsLogin, RefreshMessages.CliLoggedOut), summary);
+            }
+            else if (repair is IdentityRepair.Busy)
             {
                 LogLiveRepairBusy(live.Value);
                 Record(live, Outcome(RefreshOutcomeKind.Skipped, RefreshMessages.LiveIdentityBusy), summary);
@@ -234,10 +261,27 @@ internal sealed partial class QuotaRefresh
             // empty slot would otherwise report "log in again" for an account
             // that is merely in use on the other side. Nothing is sent for it
             // either way.
-            if (await _slots.ReadAsync(profile.Email, profile.FolderPath, profile.HasCredentials, new WindowsHold(liveEmail, null), stopping)
-                is { State: SlotState.HeldElsewhere or SlotState.InTransit })
+            if (await _slots.ReadAsync(profile.Email, profile.FolderPath, profile.HasCredentials, hold, stopping)
+                is { State: SlotState.HeldElsewhere or SlotState.InTransit } away)
             {
-                Record(profile.Email, Outcome(RefreshOutcomeKind.HeldElsewhere, RefreshMessages.HeldElsewhere), summary);
+                // A pair the other side holds is read there, with that side's
+                // own live access token, when that side is configured here. A
+                // pair in transit belongs to neither side until the hand-off
+                // lands, so there is no one to ask.
+                if (away is { State: SlotState.HeldElsewhere, Record: HolderRecord record }
+                    && _peers?.For(record.Side) is Peer peer
+                    && roster.Find(profile.Email) is not { Paused: true })
+                {
+                    candidates.Add(new Candidate(profile.Email, profile.FolderPath, IsLive: false, peer, record.Fingerprint));
+                }
+                else
+                {
+                    Record(
+                        profile.Email,
+                        Outcome(RefreshOutcomeKind.HeldElsewhere, away.State == SlotState.InTransit ? RefreshMessages.InTransit : RefreshMessages.HeldElsewhere),
+                        summary);
+                }
+
                 continue;
             }
 
@@ -272,6 +316,19 @@ internal sealed partial class QuotaRefresh
         return [.. order.Select(ordered => candidates.First(candidate => candidate.Email == ordered.Email))];
     }
 
+    /// <summary>The live pair's fingerprint, or null when there is no pair to name: absent, logged out, or torn.</summary>
+    private async Task<RefreshTokenFingerprint?> LiveFingerprintAsync(CancellationToken stopping)
+    {
+        try
+        {
+            return (await _pairs.ReadLiveAsync(stopping))?.Fingerprint;
+        }
+        catch (Exception exception) when (exception is InvalidDataException or JsonException or IOException)
+        {
+            return null;
+        }
+    }
+
     /// <summary>
     /// One account's turn. The order of the guards is the whole of the safety
     /// argument: nothing is sent while a lockout stands, a stranded folder is
@@ -287,6 +344,11 @@ internal sealed partial class QuotaRefresh
             if (_state.LockedUntil(now) is not null)
             {
                 return new Turn(LockedOut());
+            }
+
+            if (candidate.Remote is Peer remote)
+            {
+                return await RemoteReadAsync(candidate, remote, sentRead, stopping);
             }
 
             if (!candidate.IsLive
@@ -404,6 +466,97 @@ internal sealed partial class QuotaRefresh
         _state.RecordSnapshot(snapshot);
         await _cache.SaveAsync(candidate.Email, snapshot);
         return new Turn(Outcome(RefreshOutcomeKind.Read, RefreshMessages.Read), SentRead: true);
+    }
+
+    /// <summary>
+    /// The read of a pair another side holds, made by that side with its own
+    /// live access token. Every guard a local read passes is kept: the lockout
+    /// was checked by the caller, the budget is reserved here, the spacing is
+    /// paced here, and a 429 that side relays sets this side's usage lockout.
+    /// Nothing refreshes a token: an expired one is that session's to renew.
+    /// </summary>
+    private async Task<Turn> RemoteReadAsync(Candidate candidate, Peer peer, bool sentRead, CancellationToken stopping)
+    {
+        if (!_budget.TryReserve(candidate.Email))
+        {
+            return new Turn(BudgetRefused(candidate.Email));
+        }
+
+        if (sentRead)
+        {
+            try
+            {
+                await _pace(_spacing, stopping);
+            }
+            catch (OperationCanceledException)
+            {
+                _budget.Release(candidate.Email);
+                throw;
+            }
+        }
+
+        Result<PeerUsageRead, string> asked = await peer.Instance.ReadUsageAsync(candidate.Email, candidate.Expected, stopping);
+        if (asked.IsFailure)
+        {
+            // Nothing reached the usage host, so nothing is spent.
+            _budget.Release(candidate.Email);
+            LogRemoteUnreachable(candidate.Email.Value, peer.Side.Value, asked.Error);
+            return new Turn(Outcome(RefreshOutcomeKind.HeldElsewhere, RefreshMessages.SideUnreachable(peer.Side)));
+        }
+
+        PeerUsageRead read = asked.Value;
+        switch (read.Outcome)
+        {
+            case PeerUsageOutcome.Read when read.Body is JsonObject answer:
+                {
+                    using var body = JsonDocument.Parse(answer.ToJsonString());
+                    Result<IReadOnlyList<UsageLimit>, string> limits = UsageResponseParser.ParseLimits(body.RootElement);
+                    if (limits.IsFailure)
+                    {
+                        LogReadUnparsable(candidate.Email.Value, limits.Error);
+                        return new Turn(Outcome(RefreshOutcomeKind.ReadFailed, RefreshMessages.ReadFailedMalformed), SentRead: true);
+                    }
+
+                    UsageSnapshot snapshot = new(
+                        candidate.Email,
+                        _timeProvider.GetUtcNow(),
+                        QuotaSource.OnDemandRefresh,
+                        limits.Value,
+                        UsageResponseParser.ParseExtraUsage(body.RootElement));
+                    _state.RecordSnapshot(snapshot);
+                    await _cache.SaveAsync(candidate.Email, snapshot);
+                    return new Turn(Outcome(RefreshOutcomeKind.Read, RefreshMessages.ReadBy(peer.Side)), SentRead: true);
+                }
+
+            case PeerUsageOutcome.SessionWillRefresh:
+                // The same refund the live pair's 401 earns: the endpoint
+                // rejected the token rather than serving the read.
+                _budget.RecordUnauthorized(candidate.Email);
+                return new Turn(Outcome(RefreshOutcomeKind.SessionWillRefresh, RefreshMessages.SessionWillRefreshOn(peer.Side)), SentRead: true);
+
+            case PeerUsageOutcome.NotHeld:
+                _budget.Release(candidate.Email);
+                LogRemoteNotHeld(candidate.Email.Value, peer.Side.Value, read.Detail);
+                return new Turn(Outcome(RefreshOutcomeKind.HeldElsewhere, RefreshMessages.NotHeldBy(peer.Side)));
+
+            case PeerUsageOutcome.RateLimited:
+                {
+                    // One usage host whichever side asked it, so one lockout.
+                    TimeSpan retryAfter = Lockout(read.RetryAfter);
+                    DateTimeOffset until = _timeProvider.GetUtcNow() + retryAfter;
+                    _budget.RecordLockout(candidate.Email, retryAfter);
+                    _state.UsageLockedUntil = until;
+                    LogRateLimited(candidate.Email.Value, (int)retryAfter.TotalSeconds);
+                    return new Turn(
+                        Outcome(RefreshOutcomeKind.RateLimited, RefreshMessages.RateLimited(retryAfter), until),
+                        EndsPass: true,
+                        SentRead: true);
+                }
+
+            default:
+                LogReadFailed(candidate.Email.Value, read.Outcome.ToString(), read.Detail);
+                return new Turn(Outcome(RefreshOutcomeKind.ReadFailed, RefreshMessages.ReadFailedTransport), SentRead: true);
+        }
     }
 
     private async Task<Turn> FailedReadAsync(Candidate candidate, UsageReadFailure failure, bool retried, CancellationToken stopping)
@@ -745,8 +898,12 @@ internal sealed partial class QuotaRefresh
         summary[outcome.Kind] = summary.GetValueOrDefault(outcome.Kind) + 1;
     }
 
-    /// <summary>One account the pass will read, and which pair it reads.</summary>
-    private sealed record Candidate(AccountEmail Email, string? FolderPath, bool IsLive);
+    /// <summary>
+    /// One account the pass will read, and which pair it reads: the live one,
+    /// a parked one, or, with <paramref name="Remote"/> set, the one that side
+    /// holds, expected to be <paramref name="Expected"/> or its rotation.
+    /// </summary>
+    private sealed record Candidate(AccountEmail Email, string? FolderPath, bool IsLive, Peer? Remote = null, RefreshTokenFingerprint? Expected = null);
 
     /// <summary>How one account's turn ended, and what it cost the pass.</summary>
     private sealed record Turn(RefreshOutcome Outcome, bool EndsPass = false, bool SentRead = false);
@@ -808,4 +965,10 @@ internal sealed partial class QuotaRefresh
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "the usage response for {Account} did not parse: {Reason}")]
     private partial void LogReadUnparsable(string account, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the usage read of {Account} through {Side} could not be made: {Reason}")]
+    private partial void LogRemoteUnreachable(string account, string side, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "{Side} did not read {Account}: {Reason}")]
+    private partial void LogRemoteNotHeld(string account, string side, string reason);
 }

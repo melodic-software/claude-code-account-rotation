@@ -106,6 +106,33 @@ public sealed class QuotaRefreshTests
         harness.OutcomeFor("live@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.SessionWillRefresh);
     }
 
+    /// <summary>
+    /// A CLI logout leaves a live file with no tokens. The pass used to throw
+    /// building its candidates and read nobody; the logged-out account now says
+    /// why it was not read and every parked account is read as usual.
+    /// </summary>
+    [Fact]
+    public async Task ALoggedOutLiveFileCostsOnlyTheLiveAccountItsTurn()
+    {
+        using RefreshHarness harness = new();
+        await harness.WriteLiveIdentityAsync("live@example.com", Token);
+        await harness.WriteLivePairAsync("refresh-live", harness.Valid, Token);
+        string live = Path.Combine(harness.LiveDirectory, CredentialFiles.FileName);
+        JsonObject raw = JsonNode.Parse(await File.ReadAllTextAsync(live, Token))!.AsObject();
+        raw["claudeAiOauth"]!.AsObject().Remove("accessToken");
+        raw["claudeAiOauth"]!.AsObject().Remove("refreshToken");
+        await File.WriteAllTextAsync(live, raw.ToJsonString(), Token);
+        await harness.ParkAsync("b@example.com", "refresh-b", harness.Valid, Token);
+        harness.Usage.Answers.Enqueue(ScriptedUsage.Ok());
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.OutcomeFor("live@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.NeedsLogin);
+        harness.OutcomeFor("live@example.com")!.Message.ShouldBe(RefreshMessages.CliLoggedOut);
+        harness.OutcomeFor("b@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.Read);
+        harness.Usage.Calls.ShouldBe(1);
+    }
+
     [Fact]
     public async Task AnUnauthorizedLiveReadDoesNotStartTheGapClock()
     {

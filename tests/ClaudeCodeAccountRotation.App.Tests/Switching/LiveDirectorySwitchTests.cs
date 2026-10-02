@@ -902,6 +902,71 @@ public sealed class LiveDirectorySwitchTests : IDisposable
     }
 
     [Fact]
+    public async Task ASwitchLandingBeforeTheWatcherRepairsAStaleBlockRepairsItAndParksTheRealOwner()
+    {
+        // The stale name used to refuse the switch with LiveIdentityUnverified until
+        // the watcher got there, or for good when it could not.
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        await ParkedProfileAsync("b@example.com", "refresh-b");
+        await ParkedProfileAsync("c@example.com", "refresh-c");
+        _cli.Email = "b@example.com";
+        (await Switch().SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken)).IsSuccess.ShouldBeTrue();
+        await WriteStateFileAsync("a@example.com", startups: 8);
+        _cli.Email = "c@example.com";
+
+        Result<SwitchOutcome, SwitchRefusal> result = await Switch().SwitchToAsync(Email("c@example.com"), TestContext.Current.CancellationToken);
+
+        result.IsSuccess.ShouldBeTrue(result.IsFailure ? result.Error.ToString() : "");
+        (await CredentialFiles.FingerprintAsync(Path.Combine(_profilesRoot, "b@example.com"), TestContext.Current.CancellationToken))
+            .ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
+        (await CredentialFiles.FingerprintAsync(Path.Combine(_profilesRoot, "a@example.com"), TestContext.Current.CancellationToken))
+            .ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
+        (await StateFileEmailAsync()).ShouldBe("c@example.com");
+    }
+
+    [Fact]
+    public async Task AStaleNameWithNoBlockToRestoreIsRefusedWithItsOwnReason()
+    {
+        // A record from before the record carried a block, and an owner with no
+        // profile folder: nothing can put the state file right.
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-b", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        await ParkedProfileAsync("c@example.com", "refresh-c");
+        Directory.CreateDirectory(Path.Combine(_appData, "state"));
+        JsonObject record = new()
+        {
+            ["fingerprint"] = CredentialFiles.Pair("refresh-b").Fingerprint.Sha256Hex,
+            ["email"] = "b@example.com",
+            ["at"] = DateTimeOffset.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+        };
+        await File.WriteAllTextAsync(Path.Combine(_appData, "state", "live-owner.json"), record.ToJsonString(), TestContext.Current.CancellationToken);
+
+        Result<SwitchOutcome, SwitchRefusal> result = await Switch().SwitchToAsync(Email("c@example.com"), TestContext.Current.CancellationToken);
+
+        result.Error.ShouldBe(SwitchRefusal.LiveNameStale);
+        (await CredentialFiles.FingerprintAsync(_liveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
+    }
+
+    [Fact]
+    public async Task TheOwnerRecordCarriesTheBlockItRestoresFrom()
+    {
+        // Restored from the record even after the owner's profile folder is gone.
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        await ParkedProfileAsync("b@example.com", "refresh-b");
+        _cli.Email = "b@example.com";
+        (await Switch().SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken)).IsSuccess.ShouldBeTrue();
+        Directory.Delete(Path.Combine(_profilesRoot, "b@example.com"), recursive: true);
+        await WriteStateFileAsync("a@example.com", startups: 8);
+
+        IdentityRepair outcome = await Switch().RepairStaleIdentityAsync(TestContext.Current.CancellationToken);
+
+        outcome.ShouldBe(IdentityRepair.Repatched);
+        (await StateFileEmailAsync()).ShouldBe("b@example.com");
+    }
+
+    [Fact]
     public async Task ABlockTheCliStampedAfterTheSwitchIsALoginAndIsAdopted()
     {
         await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
