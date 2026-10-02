@@ -105,7 +105,10 @@ bucket counting as 0 and contributing no instant; then exhausted when 5-hour `>=
 parameter or 7-day `>=` the second, keyed by the **latest** live reset among the buckets that
 exhausted it, since an account exhausted on both frees up only when the later window turns over;
 else usable, keyed by the live `weekly_all` reset. The comparer orders group, then instant with null
-after every known instant, then ordinal e-mail.
+after every known instant, then ordinal e-mail. Amended 2026-10-02 (#184): an unread account that
+is live here or held by another side ranks right after the usable group rather than after the
+exhausted one, so the account just switched to does not sink to the bottom while nothing has reported
+on it yet; its standing stays `unread`, so a usable-only queue still skips it.
 
 Phase 3.2's `Rank` is then filter-plus-truncate over `Arrange`: drop `Paused`, drop `Exhausted`,
 drop rows with `HasCredentials == false` (the dashboard shows such an account, a queue cannot switch
