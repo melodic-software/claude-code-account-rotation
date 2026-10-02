@@ -5,6 +5,7 @@ using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Peers;
+using ClaudeCodeAccountRotation.Core.Ports;
 using ClaudeCodeAccountRotation.Core.Quota;
 using ClaudeCodeAccountRotation.Core.Switching;
 using Microsoft.AspNetCore.Builder;
@@ -103,6 +104,28 @@ internal static class ImportEndpoints
                 static reason => Results.Json(new { error = reason }, statusCode: StatusCodes.Status409Conflict));
         });
 
+        // A Refresh on the leader for the account this side holds. The leader
+        // has no pair to read with, so this side reads with its own live access
+        // token and answers with the endpoint's figures. A POST in the mutation
+        // group because it spends a request from the usage host's budget, the
+        // same thing the leader's own refresh routes guard.
+        mutations.MapPost("/usage/read", static async (
+            UsageReadBody body,
+            FollowerImport import,
+            IUsageEndpointClient usage,
+            CancellationToken cancellationToken) =>
+        {
+            Result<AccountEmail, string> email = AccountEmail.Parse(body?.Email ?? string.Empty);
+            if (email.IsFailure)
+            {
+                return Results.BadRequest(new { error = email.Error });
+            }
+
+            RefreshTokenFingerprint? expected = string.IsNullOrWhiteSpace(body!.Fingerprint) ? null : new RefreshTokenFingerprint(body.Fingerprint);
+            PeerUsageRead read = await import.ReadUsageAsync(email.Value, expected, usage, cancellationToken);
+            return Results.Ok(new UsageReadView(read.Outcome.ToString(), read.Body, read.RetryAfter?.TotalSeconds, read.Detail));
+        });
+
         routes.MapGet("/api/import-status", static async (string? email, FollowerImport import, CancellationToken cancellationToken) =>
         {
             AccountEmail? about = string.IsNullOrWhiteSpace(email) ? null : AccountEmail.Parse(email).Match(static parsed => (AccountEmail?)parsed, static _ => null);
@@ -132,8 +155,8 @@ internal static class ImportEndpoints
             // or a commit in flight had not yet patched, beside the fingerprint of
             // the pair that replaced it.
             ImportStatus status = await import.StatusAsync(cancellationToken);
-            // The tee beside it: the leader reads no usage for a pair this side
-            // holds, so these are the only figures its card can carry. A session
+            // The tee beside it: between Refresh clicks these are the only new
+            // figures the leader's card for this side's account gets. A session
             // that has written nothing, or nothing it could attribute, is an
             // absent block rather than an empty one.
             StatuslineSnapshot? observed = await tee.ReadAsync(cancellationToken);
@@ -238,6 +261,11 @@ internal static class ImportEndpoints
         bool LiveLoginDead = false);
 
     internal sealed record LogOutView(bool LoggedOut, string Detail);
+
+    internal sealed record UsageReadBody(string? Email, string? Fingerprint);
+
+    /// <summary>A usage read's answer on the wire: the outcome by name, the endpoint's own body when it answered, and the 429's wait in seconds.</summary>
+    internal sealed record UsageReadView(string Outcome, JsonObject? Body, double? RetryAfterSeconds, string Detail);
 
     /// <summary>
     /// This side's rate-limit-guard observation in plain wire types: the account

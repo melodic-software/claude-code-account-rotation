@@ -9,7 +9,8 @@ namespace ClaudeCodeAccountRotation.Core.Routing;
 /// ones back within hours, then the ones back within days, then the ones nothing
 /// is known about, then the ones the operator took out of the rotation. Adding a
 /// member in the middle moves every account below it, so a new member belongs
-/// where it should be read.
+/// where it should be read. One exception: an unread account that is in use is
+/// listed right after the usable ones (<see cref="AvailabilityKey.InUse"/>).
 /// <para>
 /// <see cref="Limited"/> is a spent five-hour window with weekly quota left: a
 /// pause of hours, not an exhausted account. <see cref="Exhausted"/> is a spent
@@ -28,7 +29,9 @@ public enum AvailabilityStanding
 /// <summary>
 /// What one account sorts by: the group it is in, the instant it frees up (null
 /// when there is no wait to state, or none that can be dated), and its address
-/// as the final tie-break.
+/// as the final tie-break. <paramref name="InUse"/> is set only on an unread
+/// account that is live here or held by another side, which the comparer lifts
+/// above the limited and exhausted groups.
 /// <para>
 /// The key carries no comparison of its own. A record cannot generate the
 /// comparison operators the analyzer demands alongside one, and the order here
@@ -40,7 +43,8 @@ public enum AvailabilityStanding
 public sealed record AvailabilityKey(
     AvailabilityStanding Standing,
     DateTimeOffset? NextResetAt,
-    AccountEmail Email);
+    AccountEmail Email,
+    bool InUse = false);
 
 /// <summary>
 /// One account beside the key it sorted by, so a caller reads the group and the
@@ -100,7 +104,7 @@ public static class AccountAvailability
         UsageLimit? weekly = Bucket(standing, LimitKind.WeeklyAll);
         if (session is null && weekly is null)
         {
-            return new AvailabilityKey(AvailabilityStanding.Unread, NextResetAt: null, standing.Email);
+            return new AvailabilityKey(AvailabilityStanding.Unread, NextResetAt: null, standing.Email, standing.IsLive || standing.HeldElsewhere);
         }
 
         // A window that has turned over since it was read is a window at zero
@@ -185,7 +189,7 @@ public static class AccountAvailability
     {
         ArgumentNullException.ThrowIfNull(left);
         ArgumentNullException.ThrowIfNull(right);
-        int byStanding = left.Standing.CompareTo(right.Standing);
+        int byStanding = Rank(left).CompareTo(Rank(right));
         if (byStanding != 0)
         {
             return byStanding;
@@ -196,6 +200,21 @@ public static class AccountAvailability
             ? byInstant
             : StringComparer.Ordinal.Compare(left.Email.Value, right.Email.Value);
     }
+
+    /// <summary>
+    /// The group's place in the list. An unread account that is in use, live
+    /// here or held by another side, sits right after the usable ones rather than
+    /// below every limited and exhausted account: someone chose it a moment ago,
+    /// usually because it was usable, and its figures are only missing because
+    /// no read or session has reported on it since. Sinking it to the bottom
+    /// would hide the one card the operator is most likely to be looking for.
+    /// It is still not <see cref="AvailabilityStanding.Usable"/>, so a ranked
+    /// queue keeping only usable accounts does not offer it.
+    /// </summary>
+    private static int Rank(AvailabilityKey key) =>
+        key.Standing == AvailabilityStanding.Unread && key.InUse
+            ? (2 * (int)AvailabilityStanding.Usable) + 1
+            : 2 * (int)key.Standing;
 
     /// <summary>
     /// Earliest first, and an unknown instant after every known one. The default

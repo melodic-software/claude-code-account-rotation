@@ -116,6 +116,17 @@ internal sealed partial class LiveOwnerRecord
         return new LiveOwner(record.Email, record.Account, FingerprintMatched: false);
     }
 
+    /// <summary>
+    /// Whether the record names <paramref name="owner"/> for the live pair, by
+    /// the rule <see cref="ResolveAsync"/> applies and without re-binding or
+    /// releasing anything: the record's fingerprint is the live one, or the
+    /// state file still names the recorded owner after the CLI rotated it.
+    /// </summary>
+    public async Task<bool> NamesOwnerAsync(AccountEmail owner, RefreshTokenFingerprint liveFingerprint, OAuthAccountBlock? named, CancellationToken cancellationToken) =>
+        await ReadAsync(cancellationToken) is { } record
+        && record.Email == owner
+        && (record.Fingerprint == liveFingerprint || named?.Email == owner);
+
     private async Task<Recorded?> ReadAsync(CancellationToken cancellationToken)
     {
         if (!File.Exists(Path))

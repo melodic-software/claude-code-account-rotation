@@ -1,6 +1,15 @@
 (function () {
   "use strict";
 
+  // How old a usage figure may be before the page stops treating it as
+  // current: older than this, the line says "may be out of date" and a card
+  // never reads "Usable now" on it. Basis: judgment. The five-hour window is
+  // the one that moves fastest, and a heavy session can spend a large share of
+  // it within half an hour, so a figure older than that may no longer be true;
+  // a shorter limit would mark every parked card stale between Refresh clicks,
+  // since usage is read only when asked (decision #164).
+  var STALE_SECONDS = 30 * 60;
+
   // Loaded by Node for tests/js, which has no page: export the pure helpers and stop.
   if (typeof document === "undefined") {
     module.exports = {
@@ -13,7 +22,10 @@
       uniqueName: uniqueName,
       renameLabel: renameLabel,
       nearestLimit: nearestLimit,
-      tier: tier
+      tier: tier,
+      asOf: asOf,
+      usageAge: usageAge,
+      sentence: sentence
     };
     return;
   }
@@ -893,11 +905,37 @@
   // alone reads as today: a figure cached before midnight, or a card nobody has
   // refreshed since last week, would look hours old instead of days, which is
   // the exact deceit this line exists to prevent. Same day, the time; any other
-  // day, the date with it.
+  // day, the date with it. The age follows, so nobody has to subtract, and a
+  // figure past STALE_SECONDS says it may be out of date.
   function asOf(capturedAt, source, from) {
     var taken = new Date(capturedAt);
     var sameDay = taken.toDateString() === new Date(from).toDateString();
-    return "as of " + (sameDay ? taken.toLocaleTimeString() : taken.toLocaleString()) + " via " + source;
+    return "as of " + (sameDay ? taken.toLocaleTimeString() : taken.toLocaleString()) + ", " + ago(capturedAt, from)
+      + " via " + source + (stale(capturedAt, from) ? "; may be out of date" : "");
+  }
+
+  function stale(capturedAt, from) {
+    return (from - new Date(capturedAt).getTime()) / 1000 > STALE_SECONDS;
+  }
+
+  // The class an "as of" line carries: muted when current, marked when stale.
+  function asOfClass(capturedAt, from) {
+    return stale(capturedAt, from) ? "asof stale" : "asof";
+  }
+
+  // How old, in seconds, the oldest figure behind the card's standing is: the
+  // 5-hour and 7-day rows that still carry a percentage, each dated by its own
+  // source or the card's. Null when no such figure exists.
+  function usageAge(account, from) {
+    var oldest = null;
+    account.usage.limits.forEach(function (limit) {
+      if ((limit.kind !== "session" && limit.kind !== "weekly_all") || !limit.known || limit.windowReset || limit.percent === null) { return; }
+      var taken = limit.capturedAt || account.usage.capturedAt;
+      if (!taken) { return; }
+      var age = Math.max(0, Math.round((from - new Date(taken).getTime()) / 1000));
+      oldest = oldest === null || age > oldest ? age : oldest;
+    });
+    return oldest;
   }
 
   // Unknown first: no source carried this bucket at all. Then a window that has
@@ -971,7 +1009,7 @@
     box.appendChild(bar(limit));
     var reset = resetLine(limit, at);
     if (reset) { box.appendChild(element("small", null, reset)); }
-    if (limit.source) { box.appendChild(element("small", null, asOf(limit.capturedAt, limit.source, at))); }
+    if (limit.source) { box.appendChild(element("small", stale(limit.capturedAt, at) ? "stale" : null, asOf(limit.capturedAt, limit.source, at))); }
     return box;
   }
 
@@ -996,11 +1034,16 @@
     }
     if (chip === "paused" || account.standing === "paused") { return { kind: "paused", text: "Paused" }; }
     if (account.standing === "unread") { return { kind: "", text: "No usage read yet" }; }
+    // A figure older than STALE_SECONDS may no longer be true, so the card
+    // says how old it is instead of claiming the account is usable now.
+    var age = usageAge(account, at);
+    var outOfDate = age !== null && age > STALE_SECONDS ? "; read " + span(age) + " ago, may be out of date" : "";
     var near = nearestLimit(account.usage.limits);
     if (near) {
       var reset = resetLine(near, at);
-      return { kind: meterTone(near), text: "Near the " + near.label + " limit" + (reset ? ", " + reset : "") };
+      return { kind: meterTone(near), text: "Near the " + near.label + " limit" + (reset ? ", " + reset : "") + outOfDate };
     }
+    if (outOfDate) { return { kind: "warn", text: "Was usable" + outOfDate }; }
     return { kind: "ok", text: "Usable now" };
   }
 
@@ -1021,7 +1064,7 @@
   function statusLines(account, dashboard, at) {
     var lines = element("div", "lines");
     if (account.cliLoggedOut) { lines.appendChild(element("p", "cli-logout", account.cliLoggedOut)); }
-    if (account.usage.source) { lines.appendChild(element("p", "asof", asOf(account.usage.capturedAt, account.usage.source, at))); }
+    if (account.usage.source) { lines.appendChild(element("p", asOfClass(account.usage.capturedAt, at), asOf(account.usage.capturedAt, account.usage.source, at))); }
     // The row's two columns are the 5-hour and 7-day windows; any other window
     // the endpoint reported, and a column taken from another source, say so here.
     account.usage.limits.forEach(function (limit) {
@@ -1030,7 +1073,7 @@
         var reset = resetLine(limit, at);
         lines.appendChild(element("p", "asof", limit.label + " " + reading(limit) + (reset ? ", " + reset : "")));
       }
-      if (limit.source) { lines.appendChild(element("p", "asof", limit.label + " " + asOf(limit.capturedAt, limit.source, at))); }
+      if (limit.source) { lines.appendChild(element("p", asOfClass(limit.capturedAt, at), limit.label + " " + asOf(limit.capturedAt, limit.source, at))); }
     });
     if (account.usage.credits) { lines.appendChild(element("p", "asof", creditsLine(account.usage.credits))); }
     if (account.usageNote) { lines.appendChild(element("p", "muted", account.usageNote)); }

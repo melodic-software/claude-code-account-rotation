@@ -27,6 +27,7 @@ internal sealed class QuotaState
     // page's read must see one consistent picture anyway.
     private readonly Lock _mutex = new();
     private readonly Dictionary<AccountEmail, UsageSnapshot> _latest = [];
+    private readonly Dictionary<AccountEmail, UsageSnapshot> _observed = [];
     private readonly Dictionary<AccountEmail, RefreshOutcome> _outcomes = [];
     private readonly Dictionary<string, string> _recoveryWarnings =
         new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
@@ -193,6 +194,39 @@ internal sealed class QuotaState
         lock (_mutex)
         {
             _latest[snapshot.Account] = snapshot;
+        }
+    }
+
+    /// <summary>
+    /// The newest statusline observation the page attributed to this account,
+    /// from either side's tee. Kept apart from <see cref="LatestFor"/>: an
+    /// observation cost the endpoint nothing, so it must not move the budget's
+    /// notion of when an account was last read, and it is never written to the
+    /// cache file as if the endpoint had said it.
+    /// </summary>
+    public UsageSnapshot? ObservedFor(AccountEmail account)
+    {
+        lock (_mutex)
+        {
+            return _observed.GetValueOrDefault(account);
+        }
+    }
+
+    /// <summary>
+    /// Keeps <paramref name="snapshot"/> unless an observation captured later is
+    /// already held. A tee is last-writer-wins and stops naming an account the
+    /// moment a session on another account writes it, so this is what keeps a
+    /// parked or switched-away account's newest figures on its card.
+    /// </summary>
+    public void RecordObservation(UsageSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        lock (_mutex)
+        {
+            if (_observed.GetValueOrDefault(snapshot.Account) is not { } held || snapshot.CapturedAt > held.CapturedAt)
+            {
+                _observed[snapshot.Account] = snapshot;
+            }
         }
     }
 
