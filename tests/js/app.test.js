@@ -168,6 +168,14 @@ test("a card at its Fable weekly limit is never recommended or offered by a prom
   assert.strictEqual(recommended([accounts[0]], () => true, NOW), null);
 });
 
+test("a Fable row read longer ago than the threshold leaves the card unverified beside fresh 5-hour and 7-day rows", () => {
+  const account = card("a@x", {}, 10, 10);
+  account.usage.limits[2] = { kind: "weekly_scoped", percent: 99, known: true, capturedAt: minutesAgo(45) };
+  assert.strictEqual(recommended([account], () => true, NOW), null);
+  account.usage.limits[2] = { kind: "weekly_scoped", percent: 0, known: false };
+  assert.strictEqual(recommended([account], () => true, NOW).email, "a@x");
+});
+
 test("a live account at its Fable weekly limit prompts a switch to an account with Fable headroom", () => {
   const accounts = [
     card("f@x", { standing: "model-limited", limitedModel: "Fable" }, 0, 0),

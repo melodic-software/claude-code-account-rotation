@@ -986,14 +986,17 @@
   }
 
   // How old, in seconds, the oldest figure behind the card's standing is: the
-  // 5-hour and 7-day rows a source carried, each dated by its own source or the
-  // card's. A row whose window has reset since counts too: the reset says the
+  // 5-hour, 7-day and model-scoped weekly rows a source carried, each dated by
+  // its own source or the card's. The scoped row counts because a spent one
+  // makes the account model-limited, and the statusline never refreshes it, so
+  // fresh 5-hour and 7-day figures can sit beside an old Fable one (#191). A
+  // row whose window has reset since counts too: the reset says the
   // old figure no longer applies, not that nothing has used the account since,
   // so it is only as current as the read (#188). Null when no such row exists.
   function usageAge(account, from) {
     var oldest = null;
     account.usage.limits.forEach(function (limit) {
-      if ((limit.kind !== "session" && limit.kind !== "weekly_all") || !limit.known) { return; }
+      if ((limit.kind !== "session" && limit.kind !== "weekly_all" && limit.kind !== "weekly_scoped") || !limit.known) { return; }
       var taken = limit.capturedAt || account.usage.capturedAt;
       if (!taken) { return; }
       var age = Math.max(0, Math.round((from - new Date(taken).getTime()) / 1000));
