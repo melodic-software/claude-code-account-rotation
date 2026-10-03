@@ -493,6 +493,33 @@ public sealed class DashboardAssemblerTests
     }
 
     [Fact]
+    public async Task AnAccountAtItsFableWeeklyLimitIsModelLimitedAndListedAfterOneWithFableHeadroom()
+    {
+        // The account nearest its weekly boundary would lead the list, but its
+        // Fable window is spent: the page must name it as such, carry the label
+        // and when that window turns over, and list the account with Fable
+        // headroom ahead of it.
+        await using AppFactory factory = new();
+        DateTimeOffset now = factory.Clock.GetUtcNow();
+        await factory.WriteStateFileAsync(FirstEmail, TestContext.Current.CancellationToken);
+        await RosterAsync(factory, Entry(FirstEmail), Entry(SecondEmail), Entry(ThirdEmail));
+        Record(factory, FirstEmail, now.AddMinutes(-1), Weekly(42, now.AddDays(3)), Scoped("Fable", 10, now.AddDays(3)));
+        Record(factory, SecondEmail, now.AddMinutes(-1), Weekly(5, now.AddDays(1)), Scoped("Fable", 100, now.AddDays(1)));
+        Record(factory, ThirdEmail, now.AddMinutes(-1), Weekly(30, now.AddDays(4)), Scoped("Fable", 20, now.AddDays(4)));
+
+        Payload dashboard = await DashboardAsync(factory);
+
+        dashboard.Element.GetProperty("accounts").EnumerateArray()
+            .Select(static card => card.GetProperty("email").GetString())
+            .ShouldBe([FirstEmail, ThirdEmail, SecondEmail]);
+        JsonElement spent = Card(dashboard, SecondEmail);
+        spent.GetProperty("standing").GetString().ShouldBe("model-limited");
+        spent.GetProperty("limitedModel").GetString().ShouldBe("Fable");
+        spent.GetProperty("nextResetAt").GetDateTimeOffset().ShouldBe(now.AddDays(1));
+        Card(dashboard, ThirdEmail).GetProperty("standing").GetString().ShouldBe("usable");
+    }
+
+    [Fact]
     public async Task TwoProfileFoldersNamingTheSameAccountBothShowACard()
     {
         // ProfileFolderStore.ListAsync does not de-duplicate by e-mail, so a

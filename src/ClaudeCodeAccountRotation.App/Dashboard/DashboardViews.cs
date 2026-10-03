@@ -34,7 +34,8 @@ internal sealed record LiveAccountView(string? Email, bool HasCredentials, strin
 /// <c>Standing</c> is the group the account is in, a lower-case word because the
 /// app configures no JSON enum converter, and <c>NextResetAt</c> is the instant
 /// the card sorted by: when the account frees up, or null when there is no wait
-/// to state or none that can be dated.
+/// to state or none that can be dated. <c>LimitedModel</c> is the label of the
+/// spent model-scoped window ("Fable") on a <c>model-limited</c> card, else null.
 /// </para>
 /// <para>
 /// <c>LoginExpiresAt</c> is when the login itself runs out: the
@@ -103,7 +104,8 @@ internal sealed record AccountCardView(
     bool HeldAway = false,
     IReadOnlyList<string>? OfferedTo = null,
     string? CliLoggedOut = null,
-    string? LoggedOutOn = null);
+    string? LoggedOutOn = null,
+    string? LimitedModel = null);
 
 /// <summary>
 /// The roster entry behind a card, or null when the account is on the machine

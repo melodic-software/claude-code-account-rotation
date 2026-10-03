@@ -220,6 +220,7 @@ internal sealed partial class DashboardAssembler(
             {
                 Standing = Wire(arranged.Key.Standing),
                 NextResetAt = arranged.Key.NextResetAt,
+                LimitedModel = arranged.Key.LimitedModel,
             })];
 
         if (liveEmail is null && livePair is not null)
@@ -779,6 +780,7 @@ internal sealed partial class DashboardAssembler(
     private static string Wire(AvailabilityStanding standing) => standing switch
     {
         AvailabilityStanding.Usable => "usable",
+        AvailabilityStanding.ModelLimited => "model-limited",
         AvailabilityStanding.Limited => "limited",
         AvailabilityStanding.Exhausted => "exhausted",
         AvailabilityStanding.Unread => "unread",

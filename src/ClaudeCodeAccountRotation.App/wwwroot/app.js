@@ -149,7 +149,8 @@
   }
 
   // One "switch now" prompt per side whose account is at 100% of its 5-hour or
-  // 7-day window: { side, from, to, unverified }, side null for this side. To is
+  // 7-day window, or that the server placed as model-limited (its Fable weekly
+  // window spent): { side, from, to, unverified }, side null for this side. To is
   // the recommendation, null when no account that side can take has headroom on
   // current figures; unverified is then the first usable card whose figures are
   // too old to steer by, or null. Nothing switches on its own; the prompt is a
@@ -157,9 +158,9 @@
   function switchPrompts(accounts, sides, at) {
     function atLimit(email) {
       var account = accounts.filter(function (candidate) { return candidate.email === email; })[0];
-      return !!account && account.usage.limits.some(function (limit) {
+      return !!account && (account.standing === "model-limited" || account.usage.limits.some(function (limit) {
         return (limit.kind === "session" || limit.kind === "weekly_all") && limit.percent >= 100 && !limit.windowReset;
-      });
+      }));
     }
     function prompt(side, from, takes) {
       var to = recommended(accounts, takes, at);
@@ -985,14 +986,17 @@
   }
 
   // How old, in seconds, the oldest figure behind the card's standing is: the
-  // 5-hour and 7-day rows a source carried, each dated by its own source or the
-  // card's. A row whose window has reset since counts too: the reset says the
+  // 5-hour, 7-day and model-scoped weekly rows a source carried, each dated by
+  // its own source or the card's. The scoped row counts because a spent one
+  // makes the account model-limited, and the statusline never refreshes it, so
+  // fresh 5-hour and 7-day figures can sit beside an old Fable one (#191). A
+  // row whose window has reset since counts too: the reset says the
   // old figure no longer applies, not that nothing has used the account since,
   // so it is only as current as the read (#188). Null when no such row exists.
   function usageAge(account, from) {
     var oldest = null;
     account.usage.limits.forEach(function (limit) {
-      if ((limit.kind !== "session" && limit.kind !== "weekly_all") || !limit.known) { return; }
+      if ((limit.kind !== "session" && limit.kind !== "weekly_all" && limit.kind !== "weekly_scoped") || !limit.known) { return; }
       var taken = limit.capturedAt || account.usage.capturedAt;
       if (!taken) { return; }
       var age = Math.max(0, Math.round((from - new Date(taken).getTime()) / 1000));
@@ -1094,6 +1098,11 @@
     }
     if (account.standing === "limited") {
       return { kind: "crit", text: "5-hour limit reached" + (account.nextResetAt ? ", resets " + relative(account.nextResetAt, at) : "") };
+    }
+    // A spent model-scoped weekly window, the other windows open: never
+    // recommended, still switchable by hand for work on another model.
+    if (account.standing === "model-limited") {
+      return { kind: "crit", text: (account.limitedModel || "Model") + " weekly limit reached" + (account.nextResetAt ? ", resets " + relative(account.nextResetAt, at) : "") };
     }
     if (chip === "paused" || account.standing === "paused") { return { kind: "paused", text: "Paused" }; }
     if (account.standing === "unread") { return { kind: "", text: "No usage read yet" }; }
