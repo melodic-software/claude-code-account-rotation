@@ -19,6 +19,9 @@ All notable changes to this project are documented in this file. The format foll
   window the usage endpoint reports (#191).
 - A side whose account reaches its Fable weekly limit now gets the "switch now" prompt, as it
   already did at the 5-hour and 7-day limits (#191).
+- A card's Fable figure now counts toward the age of its figures. A card whose Fable figure is
+  older than 30 minutes is unverified and not recommended, even when a session has just updated
+  its 5-hour and 7-day figures (#191).
 - `GET /api/dashboard`: `accounts[].standing` has a new value, `model-limited`, and a card in it
   carries `accounts[].limitedModel`, the window's label (#191).
 
