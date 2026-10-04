@@ -318,6 +318,21 @@ internal sealed class FakePeerRotationInstance(string mailbox) : IPeerRotationIn
             : Result<LogOutAnswer, string>.Success(new LogOutAnswer(true, email.Value + " is logged out of this side"));
     }
 
+    /// <summary>The usage reads the leader asked this side for, in order, with the fingerprint each named.</summary>
+    public List<(AccountEmail Email, RefreshTokenFingerprint? Expected)> UsageReads { get; } = [];
+
+    /// <summary>The answers to those reads, in order. An empty queue is a side that does not answer.</summary>
+    public Queue<Result<PeerUsageRead, string>> UsageAnswers { get; } = new();
+
+    public Task<Result<PeerUsageRead, string>> ReadUsageAsync(AccountEmail email, RefreshTokenFingerprint? expected, CancellationToken cancellationToken)
+    {
+        Calls.Add("ReadUsage");
+        UsageReads.Add((email, expected));
+        return Task.FromResult(UsageAnswers.Count > 0
+            ? UsageAnswers.Dequeue()
+            : Result<PeerUsageRead, string>.Failure("no usage answer scripted"));
+    }
+
     /// <summary>The commit's answer: which account left this side, and the block the leader's park needs. A dead login leaves none.</summary>
     public ImportResult Result() => new(
         OutgoingEmail is null || LiveLoginDead ? null : WslSwitchHarness.Email(OutgoingEmail),

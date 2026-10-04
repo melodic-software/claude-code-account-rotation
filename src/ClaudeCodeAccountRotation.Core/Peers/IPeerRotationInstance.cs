@@ -122,10 +122,11 @@ public sealed record LogOutAnswer(bool LoggedOut, string Detail);
 /// </remarks>
 /// <param name="Tee">
 /// That side's own rate-limit-guard observation, the free tier of the refresh
-/// contract as its live sessions wrote it. The leader reads no usage for a pair
-/// it does not hold — design 12 — so this is where a held account's figures on
-/// the Windows page come from, and it is null when that side has no snapshot or
-/// none it could attribute.
+/// contract as its live sessions wrote it. Between Refresh clicks, which read a
+/// held account through <see cref="IPeerRotationInstance.ReadUsageAsync"/>
+/// (design 12), this is where a held account's newest figures on the Windows
+/// page come from. Null when that side has no snapshot or none it could
+/// attribute.
 /// </param>
 /// <param name="LiveLoginDead">
 /// That side's live file is a logout rather than a pair. <see cref="LiveAccount"/>
@@ -142,6 +143,37 @@ public sealed record PeerDashboard(
     StatuslineSnapshot? Tee = null,
     DateTimeOffset? LoginExpiresAt = null,
     bool LiveLoginDead = false);
+
+/// <summary>How a usage read the leader asked another side to make came out.</summary>
+public enum PeerUsageOutcome
+{
+    /// <summary>The usage endpoint answered; <see cref="PeerUsageRead.Body"/> is its answer.</summary>
+    Read,
+
+    /// <summary>
+    /// That side's live access token is expired or was rejected. The session
+    /// there owns the lineage and renews it; no side refreshes it for a read.
+    /// </summary>
+    SessionWillRefresh,
+
+    /// <summary>That side does not hold this account's pair, holds nothing, or is mid hand-off.</summary>
+    NotHeld,
+
+    /// <summary>The usage host answered 429; <see cref="PeerUsageRead.RetryAfter"/> is its wait, when it gave one.</summary>
+    RateLimited,
+
+    /// <summary>The usage endpoint could not be read for any other reason.</summary>
+    Failed,
+}
+
+/// <summary>
+/// The answer to <see cref="IPeerRotationInstance.ReadUsageAsync"/>.
+/// <paramref name="Body"/> is the usage endpoint's own JSON answer, passed
+/// through for the leader to parse with the same parser its own reads use; it
+/// holds percentages and reset instants and no token. <paramref name="Detail"/>
+/// is a sentence the leader logs, never a token or a path.
+/// </summary>
+public sealed record PeerUsageRead(PeerUsageOutcome Outcome, JsonObject? Body, TimeSpan? RetryAfter, string Detail);
 
 /// <summary>
 /// The other side of this machine, as the leader's coordinator talks to it:
@@ -181,4 +213,14 @@ public interface IPeerRotationInstance
 
     /// <summary>A release of a dead login: remove that side's logged-out live file and forget the account.</summary>
     Task<Result<LogOutAnswer, string>> LogOutAsync(AccountEmail email, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// One usage read of <paramref name="email"/>, made by that side with its
+    /// own live access token, because the leader does not hold that pair. That
+    /// side never refreshes a token for it. <paramref name="expected"/> is the
+    /// fingerprint the leader's holder record names; that side also accepts its
+    /// own record of the owner, since its CLI rotates the pair after a hand-off.
+    /// The failure is an unreachable side.
+    /// </summary>
+    Task<Result<PeerUsageRead, string>> ReadUsageAsync(AccountEmail email, RefreshTokenFingerprint? expected, CancellationToken cancellationToken);
 }

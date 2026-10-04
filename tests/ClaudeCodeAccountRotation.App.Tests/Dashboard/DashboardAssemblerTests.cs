@@ -70,6 +70,31 @@ public sealed class DashboardAssemblerTests
         card.GetProperty("usageNote").ValueKind.ShouldBe(JsonValueKind.Null);
     }
 
+    /// <summary>
+    /// After a switch the tee names the incoming account, so it says nothing
+    /// about the outgoing one any more. The figures it carried while that
+    /// account was live stay on its card, with their age (#184).
+    /// </summary>
+    [Fact]
+    public async Task TheOutgoingAccountKeepsItsLastTeeFiguresAfterASwitch()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await using AppFactory factory = new();
+        await factory.WriteStateFileAsync(LiveEmail, cancellationToken);
+        await CredentialFiles.WriteAsync(factory.LiveDirectory, "live-token", cancellationToken);
+        await WriteTeeAsync(factory, RateLimitGuardTeeFileReaderTests.Tee(LiveEmail));
+        _ = await LiveCardAsync(factory);
+        _ = await factory.ParkedProfileAsync(LiveEmail, "parked-token", cancellationToken);
+        await factory.WriteStateFileAsync(OtherEmail, cancellationToken);
+        await WriteTeeAsync(factory, RateLimitGuardTeeFileReaderTests.Tee(OtherEmail));
+
+        JsonElement card = await CardAsync(factory, LiveEmail);
+
+        card.GetProperty("isLive").GetBoolean().ShouldBeFalse();
+        Usage(card).GetProperty("source").GetString().ShouldBe("snapshot");
+        Limit(card, 0).GetProperty("percent").GetDouble().ShouldBe(69);
+    }
+
     [Fact]
     public async Task AnAbsentTeeFileLeavesTheCardWithoutNumbersAndWithoutANote()
     {
@@ -468,6 +493,33 @@ public sealed class DashboardAssemblerTests
     }
 
     [Fact]
+    public async Task AnAccountAtItsFableWeeklyLimitIsModelLimitedAndListedAfterOneWithFableHeadroom()
+    {
+        // The account nearest its weekly boundary would lead the list, but its
+        // Fable window is spent: the page must name it as such, carry the label
+        // and when that window turns over, and list the account with Fable
+        // headroom ahead of it.
+        await using AppFactory factory = new();
+        DateTimeOffset now = factory.Clock.GetUtcNow();
+        await factory.WriteStateFileAsync(FirstEmail, TestContext.Current.CancellationToken);
+        await RosterAsync(factory, Entry(FirstEmail), Entry(SecondEmail), Entry(ThirdEmail));
+        Record(factory, FirstEmail, now.AddMinutes(-1), Weekly(42, now.AddDays(3)), Scoped("Fable", 10, now.AddDays(3)));
+        Record(factory, SecondEmail, now.AddMinutes(-1), Weekly(5, now.AddDays(1)), Scoped("Fable", 100, now.AddDays(1)));
+        Record(factory, ThirdEmail, now.AddMinutes(-1), Weekly(30, now.AddDays(4)), Scoped("Fable", 20, now.AddDays(4)));
+
+        Payload dashboard = await DashboardAsync(factory);
+
+        dashboard.Element.GetProperty("accounts").EnumerateArray()
+            .Select(static card => card.GetProperty("email").GetString())
+            .ShouldBe([FirstEmail, ThirdEmail, SecondEmail]);
+        JsonElement spent = Card(dashboard, SecondEmail);
+        spent.GetProperty("standing").GetString().ShouldBe("model-limited");
+        spent.GetProperty("limitedModel").GetString().ShouldBe("Fable");
+        spent.GetProperty("nextResetAt").GetDateTimeOffset().ShouldBe(now.AddDays(1));
+        Card(dashboard, ThirdEmail).GetProperty("standing").GetString().ShouldBe("usable");
+    }
+
+    [Fact]
     public async Task TwoProfileFoldersNamingTheSameAccountBothShowACard()
     {
         // ProfileFolderStore.ListAsync does not de-duplicate by e-mail, so a
@@ -852,17 +904,18 @@ public sealed class DashboardAssemblerTests
         Usage(card).GetProperty("capturedAt").GetDateTimeOffset().ShouldBe(_teeCapturedAt);
         Limit(card, 0).GetProperty("percent").GetDouble().ShouldBe(31);
         Limit(card, 1).GetProperty("percent").GetDouble().ShouldBe(12);
-        card.GetProperty("usageNote").GetString().ShouldBe("in use by wsl; figures come from wsl sessions");
+        card.GetProperty("usageNote").GetString().ShouldBe("in use by wsl; figures come from wsl sessions and from Refresh");
     }
 
     /// <summary>
-    /// No session has run on that side since this account's windows last reset,
-    /// so its tee names some other account (or nothing at all) and the card has
-    /// no figures for this one. Every row admits it rather than showing what
-    /// Windows last read before the pair left.
+    /// A switch hands the pair to the other side before any session there has
+    /// written the tee for it, so the tee still names another account. What
+    /// the leader read before the switch is still the newest thing known about
+    /// this account, and the card keeps it with its source and age instead of
+    /// reading "unknown" (#184).
     /// </summary>
     [Fact]
-    public async Task AWslHeldAccountWithNoSessionSinceItsResetReadsUnknownRatherThanAStalePercentage()
+    public async Task AWslHeldAccountKeepsTheLeadersReadUntilFresherFiguresArrive()
     {
         FakePeerRotationInstance side = Side();
         side.Tee = new StatuslineSnapshot(
@@ -874,15 +927,89 @@ public sealed class DashboardAssemblerTests
             SevenDayPercent: 77,
             SevenDayResetsAt: _teeCapturedAt.AddDays(4));
         await using AppFactory factory = await SharedStoreAsync(side);
-        // What Windows read while it still held the pair, which is exactly the
-        // stale percentage this card must not show.
+        DateTimeOffset readAt = _teeCapturedAt.AddDays(-1);
+        Record(factory, HeldEmail, readAt, Weekly(64, _teeCapturedAt.AddDays(6)));
+
+        JsonElement card = await CardAsync(factory, HeldEmail);
+
+        Usage(card).GetProperty("source").GetString().ShouldBe("refresh");
+        Usage(card).GetProperty("capturedAt").GetDateTimeOffset().ShouldBe(readAt);
+        Limit(card, 1).GetProperty("percent").GetDouble().ShouldBe(64);
+        card.GetProperty("standing").GetString().ShouldBe("usable");
+    }
+
+    /// <summary>
+    /// The newer of the two wins per bucket: once a session on that side writes
+    /// the tee for this account, its figures replace the leader's older read.
+    /// </summary>
+    [Fact]
+    public async Task AWslHeldAccountsNewerTeeOutranksAnOlderLeaderRead()
+    {
+        FakePeerRotationInstance side = Side();
+        side.Tee = new StatuslineSnapshot(
+            _teeCapturedAt,
+            SessionId: null,
+            AccountEmail.Parse(HeldEmail).Value,
+            FiveHourPercent: 31,
+            FiveHourResetsAt: _teeCapturedAt.AddHours(5),
+            SevenDayPercent: 12,
+            SevenDayResetsAt: _teeCapturedAt.AddDays(4));
+        await using AppFactory factory = await SharedStoreAsync(side);
         Record(factory, HeldEmail, _teeCapturedAt.AddDays(-1), Weekly(64, _teeCapturedAt.AddDays(6)));
 
         JsonElement card = await CardAsync(factory, HeldEmail);
 
+        Usage(card).GetProperty("source").GetString().ShouldBe("snapshot");
+        Limit(card, 1).GetProperty("percent").GetDouble().ShouldBe(12);
+    }
+
+    /// <summary>
+    /// The tee is last-writer-wins: once a session on another account writes
+    /// it, it no longer names this one. The figures it carried for this account
+    /// stay on the card rather than vanishing with the next write.
+    /// </summary>
+    [Fact]
+    public async Task AWslTeeObservationOutlivesTheNextWriteForAnotherAccount()
+    {
+        FakePeerRotationInstance side = Side();
+        side.Tee = new StatuslineSnapshot(
+            _teeCapturedAt,
+            SessionId: null,
+            AccountEmail.Parse(HeldEmail).Value,
+            FiveHourPercent: 31,
+            FiveHourResetsAt: _teeCapturedAt.AddHours(5),
+            SevenDayPercent: 12,
+            SevenDayResetsAt: _teeCapturedAt.AddDays(4));
+        await using AppFactory factory = await SharedStoreAsync(side);
+        _ = await CardAsync(factory, HeldEmail);
+        side.Tee = side.Tee with { CapturedAt = _teeCapturedAt.AddMinutes(5), Account = AccountEmail.Parse(ParkedEmail).Value };
+
+        JsonElement card = await CardAsync(factory, HeldEmail);
+
+        Usage(card).GetProperty("source").GetString().ShouldBe("snapshot");
+        Usage(card).GetProperty("capturedAt").GetDateTimeOffset().ShouldBe(_teeCapturedAt);
+        Limit(card, 0).GetProperty("percent").GetDouble().ShouldBe(31);
+    }
+
+    /// <summary>
+    /// The WSL half of the pre-switch guard: a session on that side mid-turn at
+    /// the switch writes the outgoing account's windows under the incoming
+    /// account's name. Those windows are not shown on the incoming card.
+    /// </summary>
+    [Fact]
+    public async Task AWslTeeStillCarryingTheOutgoingWindowsIsNotShownUnderTheIncomingAccount()
+    {
+        FakePeerRotationInstance side = Side();
+        DateTimeOffset fiveHour = _teeCapturedAt.AddHours(5);
+        DateTimeOffset sevenDay = _teeCapturedAt.AddDays(4);
+        side.Tee = new StatuslineSnapshot(_teeCapturedAt, null, AccountEmail.Parse(HeldEmail).Value, 99, fiveHour, 98, sevenDay);
+        await using AppFactory factory = await SharedStoreAsync(side);
+        factory.Services.GetRequiredService<DashboardState>()
+            .Publish(current => current.WithSidePreSwitchWindows(SideName.Wsl, new PreSwitchWindows(fiveHour, sevenDay)));
+
+        JsonElement card = await CardAsync(factory, HeldEmail);
+
         ShouldBeAllUnknown(card);
-        Usage(card).GetProperty("source").ValueKind.ShouldBe(JsonValueKind.Null);
-        card.GetProperty("usageNote").GetString().ShouldBe("in use by wsl; figures come from wsl sessions");
     }
 
     /// <summary>

@@ -1,6 +1,15 @@
 (function () {
   "use strict";
 
+  // How old a usage figure may be before the page stops treating it as
+  // current: older than this, the line says "may be out of date" and a card
+  // never reads "Usable now" on it. Basis: judgment. The five-hour window is
+  // the one that moves fastest, and a heavy session can spend a large share of
+  // it within half an hour, so a figure older than that may no longer be true;
+  // a shorter limit would mark every parked card stale between Refresh clicks,
+  // since usage is read only when asked (decision #164).
+  var STALE_SECONDS = 30 * 60;
+
   // Loaded by Node for tests/js, which has no page: export the pure helpers and stop.
   if (typeof document === "undefined") {
     module.exports = {
@@ -13,7 +22,10 @@
       uniqueName: uniqueName,
       renameLabel: renameLabel,
       nearestLimit: nearestLimit,
-      tier: tier
+      tier: tier,
+      asOf: asOf,
+      usageAge: usageAge,
+      sentence: sentence
     };
     return;
   }
@@ -94,40 +106,75 @@
     return used.length ? Math.max(0, Math.round(100 - Math.max.apply(null, used))) : null;
   }
 
+  // Whether a card's figures are recent enough to steer by: both the 5-hour and
+  // the 7-day row are known and were read within STALE_SECONDS. A usable
+  // standing read longer ago may be limited by now, and one with a window no
+  // source carried may be spent on it, so nothing recommends either (#188).
+  function current(account, at) {
+    var age = usageAge(account, at);
+    return age !== null && age <= STALE_SECONDS && unknownWindow(account) === null;
+  }
+
+  // The label of the first of the 5-hour and 7-day windows no source carried,
+  // or null when both are known.
+  function unknownWindow(account) {
+    var missing = [["session", "5-hour"], ["weekly_all", "7-day"]].filter(function (window) {
+      return !account.usage.limits.some(function (limit) { return limit.kind === window[0] && limit.known; });
+    })[0];
+    return missing ? missing[1] : null;
+  }
+
+  function usableFor(accounts, takes) {
+    return accounts.filter(function (account) { return account.standing === "usable" && takes(account); });
+  }
+
+  // Which accounts a side may take: this side's Switch, or another side's offer.
+  function takesHere(account) { return account.canSwitchHere; }
+
+  function takesOn(side) {
+    return function (account) { return (account.offeredTo || []).indexOf(side) !== -1; };
+  }
+
   // The account a side should take next: the first usable card in the server's
-  // order, which is the soonest weekly reset, among those that side may take.
-  function recommended(accounts, takes) {
-    return accounts.filter(function (account) { return account.standing === "usable" && takes(account); })[0] || null;
+  // order, which is the soonest weekly reset, among those that side may take
+  // and whose figures are current. None when no such card exists.
+  function recommended(accounts, takes, at) {
+    return usableFor(accounts, takes).filter(function (account) { return current(account, at); })[0] || null;
+  }
+
+  // The card that would have been recommended had its figures been current:
+  // named, with their age, when nothing current is left, and never as a target.
+  function unverified(accounts, takes, at) {
+    return usableFor(accounts, takes).filter(function (account) { return !current(account, at); })[0] || null;
   }
 
   // One "switch now" prompt per side whose account is at 100% of its 5-hour or
-  // 7-day window: { side, from, to }, side null for this side and to null when
-  // no account that side can take has headroom. The recommendation is the first
-  // usable card in the server's order, which is the soonest weekly reset. Nothing
-  // switches on its own; the prompt is a button the operator clicks.
-  function switchPrompts(accounts, sides) {
+  // 7-day window, or that the server placed as model-limited (its Fable weekly
+  // window spent): { side, from, to, unverified }, side null for this side. To is
+  // the recommendation, null when no account that side can take has headroom on
+  // current figures; unverified is then the first usable card whose figures are
+  // too old to steer by, or null. Nothing switches on its own; the prompt is a
+  // button the operator clicks.
+  function switchPrompts(accounts, sides, at) {
     function atLimit(email) {
       var account = accounts.filter(function (candidate) { return candidate.email === email; })[0];
-      return !!account && account.usage.limits.some(function (limit) {
+      return !!account && (account.standing === "model-limited" || account.usage.limits.some(function (limit) {
         return (limit.kind === "session" || limit.kind === "weekly_all") && limit.percent >= 100 && !limit.windowReset;
-      });
+      }));
     }
-    function firstUsable(takes) {
-      var found = recommended(accounts, takes);
-      return found ? found.email : null;
+    function prompt(side, from, takes) {
+      var to = recommended(accounts, takes, at);
+      var old = to ? null : unverified(accounts, takes, at);
+      return { side: side, from: from, to: to ? to.email : null, unverified: old ? old.email : null };
     }
     var prompts = [];
     var live = accounts.filter(function (account) { return account.isLive; })[0];
     if (live && atLimit(live.email)) {
-      prompts.push({ side: null, from: live.email, to: firstUsable(function (account) { return account.canSwitchHere; }) });
+      prompts.push(prompt(null, live.email, takesHere));
     }
     sides.forEach(function (side) {
       if (side.online && side.liveAccount && atLimit(side.liveAccount)) {
-        prompts.push({
-          side: side.side,
-          from: side.liveAccount,
-          to: firstUsable(function (account) { return (account.offeredTo || []).indexOf(side.side) !== -1; })
-        });
+        prompts.push(prompt(side.side, side.liveAccount, takesOn(side.side)));
       }
     });
     return prompts;
@@ -421,16 +468,28 @@
 
   // The "switch now" prompt's wording, all of it here: it is to follow the
   // operator's test at the next real limit (#148).
-  function promptWording(prompt, accounts) {
+  function promptWording(prompt, accounts, at) {
     function named(email) {
       var account = accounts.filter(function (candidate) { return candidate.email === email; })[0];
       return account ? uniqueName(account, accounts) : email;
     }
     var line = (prompt.side ? prompt.side + " side: " : "") + named(prompt.from) + " is at its usage limit.";
+    var old = prompt.unverified ? accounts.filter(function (candidate) { return candidate.email === prompt.unverified; })[0] : null;
     return {
-      text: prompt.to ? line : line + " No other account has headroom.",
+      text: prompt.to ? line : line + " " + (old ? unverifiedLine(old, accounts, at) : "No other account has headroom."),
       button: prompt.to ? "Switch now to " + named(prompt.to) : null
     };
+  }
+
+  // Said instead of a recommendation when the only accounts left were read too
+  // long ago to steer by: no target, the best of them with its age, and Refresh.
+  function unverifiedLine(account, accounts, at) {
+    var age = usageAge(account, at);
+    var gap = unknownWindow(account);
+    return "No account to switch to has usage read in the last " + span(STALE_SECONDS) + ". "
+      + uniqueName(account, accounts) + " is unverified, "
+      + (gap ? "its " + gap + " figure unknown" : age === null ? "with no figures" : "figures " + span(age) + " old")
+      + "; refresh before switching.";
   }
 
   function sidePath(side, suffix) {
@@ -584,24 +643,39 @@
     // The #148 "switch now" prompt, when this side's account is at a limit. It
     // names the same account the recommended button would, so it takes that
     // button's place rather than sitting beside it.
-    var prompt = switchPrompts(lastAccounts, lastSides).filter(function (candidate) { return candidate.side === name; })[0];
-    var wording = prompt ? promptWording(prompt, lastAccounts) : null;
+    var prompt = switchPrompts(lastAccounts, lastSides, at).filter(function (candidate) { return candidate.side === name; })[0];
+    var wording = prompt ? promptWording(prompt, lastAccounts, at) : null;
     if (wording) { strip.appendChild(element("p", "prompt", wording.text)); }
     var urgent = !!wording || (!!say && say.kind === "crit");
+    // With no current target, the account that would have been named is said
+    // to be unverified, with its age, and the strip offers Refresh in place of
+    // a switch: a read the operator asks for, never one started here (#164).
+    function refreshInstead(takes) {
+      var old = unverified(lastAccounts, takes, at);
+      if (!old) { return; }
+      if (!wording) { strip.appendChild(element("p", "prompt", unverifiedLine(old, lastAccounts, at))); }
+      go.appendChild(blockable(actionButton("Refresh usage", "lg " + (urgent ? "primary" : "secondary"), function () {
+        mutate("/api/refresh", "POST", null, started);
+      }), false));
+    }
     if (!side) {
-      var here = recommended(lastAccounts, function (candidate) { return candidate.canSwitchHere; });
+      var here = recommended(lastAccounts, takesHere, at);
       if (here) {
         go.appendChild(takeButton(wording ? wording.button : "Switch to " + uniqueName(here, lastAccounts), here, at, urgent,
           switchBlocked(here, lastDashboard, false), function () { switchTo(here.email); }));
+      } else {
+        refreshInstead(takesHere);
       }
     } else if (side.online) {
       if (account && account.roster && account.loggedOutOn === side.side) {
         go.appendChild(actionButton("Log in again on " + sideLabel(name), "primary lg", function () { loginFromSide(side.side, account.email); }));
       }
-      var there = recommended(lastAccounts, function (candidate) { return (candidate.offeredTo || []).indexOf(side.side) !== -1; });
+      var there = recommended(lastAccounts, takesOn(side.side), at);
       if (there) {
         go.appendChild(takeButton(wording ? wording.button : "Switch " + sideLabel(name) + " to " + uniqueName(there, lastAccounts), there, at, urgent,
           blocked, function () { switchSide(side.side, there.email); }));
+      } else {
+        refreshInstead(takesOn(side.side));
       }
       // Read at click time, and re-read by the server before anything moves.
       if (side.liveAccount) {
@@ -893,11 +967,42 @@
   // alone reads as today: a figure cached before midnight, or a card nobody has
   // refreshed since last week, would look hours old instead of days, which is
   // the exact deceit this line exists to prevent. Same day, the time; any other
-  // day, the date with it.
+  // day, the date with it. The age follows, so nobody has to subtract, and a
+  // figure past STALE_SECONDS says it may be out of date.
   function asOf(capturedAt, source, from) {
     var taken = new Date(capturedAt);
     var sameDay = taken.toDateString() === new Date(from).toDateString();
-    return "as of " + (sameDay ? taken.toLocaleTimeString() : taken.toLocaleString()) + " via " + source;
+    return "as of " + (sameDay ? taken.toLocaleTimeString() : taken.toLocaleString()) + ", " + ago(capturedAt, from)
+      + " via " + source + (stale(capturedAt, from) ? "; may be out of date" : "");
+  }
+
+  function stale(capturedAt, from) {
+    return (from - new Date(capturedAt).getTime()) / 1000 > STALE_SECONDS;
+  }
+
+  // The class an "as of" line carries: muted when current, marked when stale.
+  function asOfClass(capturedAt, from) {
+    return stale(capturedAt, from) ? "asof stale" : "asof";
+  }
+
+  // How old, in seconds, the oldest figure behind the card's standing is: the
+  // 5-hour, 7-day and model-scoped weekly rows a source carried, each dated by
+  // its own source or the card's. The scoped row counts because a spent one
+  // makes the account model-limited, and the statusline never refreshes it, so
+  // fresh 5-hour and 7-day figures can sit beside an old Fable one (#191). A
+  // row whose window has reset since counts too: the reset says the
+  // old figure no longer applies, not that nothing has used the account since,
+  // so it is only as current as the read (#188). Null when no such row exists.
+  function usageAge(account, from) {
+    var oldest = null;
+    account.usage.limits.forEach(function (limit) {
+      if ((limit.kind !== "session" && limit.kind !== "weekly_all" && limit.kind !== "weekly_scoped") || !limit.known) { return; }
+      var taken = limit.capturedAt || account.usage.capturedAt;
+      if (!taken) { return; }
+      var age = Math.max(0, Math.round((from - new Date(taken).getTime()) / 1000));
+      oldest = oldest === null || age > oldest ? age : oldest;
+    });
+    return oldest;
   }
 
   // Unknown first: no source carried this bucket at all. Then a window that has
@@ -971,7 +1076,7 @@
     box.appendChild(bar(limit));
     var reset = resetLine(limit, at);
     if (reset) { box.appendChild(element("small", null, reset)); }
-    if (limit.source) { box.appendChild(element("small", null, asOf(limit.capturedAt, limit.source, at))); }
+    if (limit.source) { box.appendChild(element("small", stale(limit.capturedAt, at) ? "stale" : null, asOf(limit.capturedAt, limit.source, at))); }
     return box;
   }
 
@@ -994,13 +1099,26 @@
     if (account.standing === "limited") {
       return { kind: "crit", text: "5-hour limit reached" + (account.nextResetAt ? ", resets " + relative(account.nextResetAt, at) : "") };
     }
+    // A spent model-scoped weekly window, the other windows open: never
+    // recommended, still switchable by hand for work on another model.
+    if (account.standing === "model-limited") {
+      return { kind: "crit", text: (account.limitedModel || "Model") + " weekly limit reached" + (account.nextResetAt ? ", resets " + relative(account.nextResetAt, at) : "") };
+    }
     if (chip === "paused" || account.standing === "paused") { return { kind: "paused", text: "Paused" }; }
     if (account.standing === "unread") { return { kind: "", text: "No usage read yet" }; }
+    // A figure older than STALE_SECONDS may no longer be true, so the card
+    // says how old it is instead of claiming the account is usable now.
+    var age = usageAge(account, at);
+    var outOfDate = age !== null && age > STALE_SECONDS ? "; read " + span(age) + " ago, may be out of date" : "";
     var near = nearestLimit(account.usage.limits);
     if (near) {
       var reset = resetLine(near, at);
-      return { kind: meterTone(near), text: "Near the " + near.label + " limit" + (reset ? ", " + reset : "") };
+      return { kind: meterTone(near), text: "Near the " + near.label + " limit" + (reset ? ", " + reset : "") + outOfDate };
     }
+    if (outOfDate) { return { kind: "warn", text: "Was usable" + outOfDate }; }
+    // A window no source carried may be the spent one.
+    var gap = unknownWindow(account);
+    if (gap) { return { kind: "warn", text: "Not verified: " + gap + " figure unknown" }; }
     return { kind: "ok", text: "Usable now" };
   }
 
@@ -1021,7 +1139,7 @@
   function statusLines(account, dashboard, at) {
     var lines = element("div", "lines");
     if (account.cliLoggedOut) { lines.appendChild(element("p", "cli-logout", account.cliLoggedOut)); }
-    if (account.usage.source) { lines.appendChild(element("p", "asof", asOf(account.usage.capturedAt, account.usage.source, at))); }
+    if (account.usage.source) { lines.appendChild(element("p", asOfClass(account.usage.capturedAt, at), asOf(account.usage.capturedAt, account.usage.source, at))); }
     // The row's two columns are the 5-hour and 7-day windows; any other window
     // the endpoint reported, and a column taken from another source, say so here.
     account.usage.limits.forEach(function (limit) {
@@ -1030,7 +1148,7 @@
         var reset = resetLine(limit, at);
         lines.appendChild(element("p", "asof", limit.label + " " + reading(limit) + (reset ? ", " + reset : "")));
       }
-      if (limit.source) { lines.appendChild(element("p", "asof", limit.label + " " + asOf(limit.capturedAt, limit.source, at))); }
+      if (limit.source) { lines.appendChild(element("p", asOfClass(limit.capturedAt, at), limit.label + " " + asOf(limit.capturedAt, limit.source, at))); }
     });
     if (account.usage.credits) { lines.appendChild(element("p", "asof", creditsLine(account.usage.credits))); }
     if (account.usageNote) { lines.appendChild(element("p", "muted", account.usageNote)); }
@@ -1435,7 +1553,7 @@
     var at = new Date(dashboard.capturedAt).getTime();
     var next = recommended(dashboard.accounts, function (account) {
       return account.canSwitchHere || (account.offeredTo || []).length > 0;
-    });
+    }, at);
     cards.innerHTML = "";
     cardNodes = {};
     renderedOrder = arriving;

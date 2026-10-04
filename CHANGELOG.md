@@ -6,6 +6,104 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [2.0.7] - 2026-10-02
+
+### Changed
+
+- **An account at its Fable weekly limit is no longer recommended.** Its card says "Fable weekly
+  limit reached, resets in ..." instead of "Usable now". The "Next up" badge, each side's switch
+  button, and the "switch now" prompt (also shown after the rate-limit stop hook) skip it, and it
+  is listed after every account with Fable headroom, ahead of the 5-hour-limited ones. You can
+  still switch to it by hand for work on another model. The tool cannot know which model a
+  session runs, so the rule applies to every session. The same holds for any other model's weekly
+  window the usage endpoint reports (#191).
+- A side whose account reaches its Fable weekly limit now gets the "switch now" prompt, as it
+  already did at the 5-hour and 7-day limits (#191).
+- A card's Fable figure now counts toward the age of its figures. A card whose Fable figure is
+  older than 30 minutes is unverified and not recommended, even when a session has just updated
+  its 5-hour and 7-day figures (#191).
+- `GET /api/dashboard`: `accounts[].standing` has a new value, `model-limited`, and a card in it
+  carries `accounts[].limitedModel`, the window's label (#191).
+
+### Fixed
+
+- The README no longer says the leader reads no usage for an account the other side holds; since
+  2.0.5, Refresh usage asks that side to read it (#191).
+
+## [2.0.6] - 2026-10-02
+
+### Fixed
+
+- **The page recommends only accounts whose usage figures are current.** The
+  "Next up" badge, each side's switch button, and the "switch now" prompt (also
+  shown after the rate-limit stop hook) used to name the first usable account
+  however old its figures were, so the page could send you to an account that
+  was already rate-limited. They now name only an account whose 5-hour and
+  7-day figures were read in the last 30 minutes, ranked ahead of any that were
+  not. When none is current, the page names no target: it says which account is
+  unverified and how old its figures are, and offers Refresh usage (#188).
+- A card whose windows have reset since an old read no longer says "Usable now".
+  The reset means the old figure no longer applies. It does not mean the account
+  is unused now, so the card shows the read's age and is not recommended (#188).
+- A card with a 5-hour or 7-day figure that no source carried no longer says
+  "Usable now" and is not recommended. It reads "Not verified" and names the
+  missing window, because that window may be the spent one (#188).
+
+## [2.0.5] - 2026-10-02
+
+### Fixed
+
+- **Refresh now reads accounts held by the WSL side.** "Refresh all accounts"
+  and a card's own Refresh used to skip them. The leader now asks the WSL side
+  to read the usage itself with its live access token. The WSL side never
+  renews a token, and it reads only when the leader asks. If an account still
+  cannot be read, its card says why: the side is offline, its session has to
+  refresh first, it no longer holds the account, or a hand-off is in flight
+  (#185).
+- **Every usage figure shows its age.** A figure older than 30 minutes is marked
+  "may be out of date", and the card no longer says "Usable now" on figures
+  that old (#185).
+- **A switch keeps the usage already known for an account.** After a switch, a
+  card keeps its last figures, from Refresh or from a session on either side,
+  until fresher ones arrive. Before, a card for an account the WSL side held
+  showed only "unknown". A WSL session still on the outgoing account no longer
+  puts that account's figures on the incoming account's card. An account in use
+  with no figures yet is listed right after the usable ones, not at the bottom
+  (#184).
+- **A Windows CLI logout no longer stops the whole refresh pass.** The live
+  account is reported as logged out and every other account is still read
+  (#186).
+
+- The WSL side now repairs its own state file when a Claude Code session that
+  started under an earlier account writes that account's identity back. Before,
+  only Windows did this, so the WSL side kept the wrong name and every WSL
+  switch was refused as "live identity unverified" until the file was edited by
+  hand. The repair restores the identity recorded with the live pair at import
+  and runs at start and on every change to the file. Before it names the
+  account that is leaving, an import now first corrects the name (#182).
+- A stale name no longer blocks a switch when the credentials show which
+  account is really live:
+  - **WSL:** when the WSL side's live pair matches the pair this store handed it
+    for an account, the leader treats that account as live there, whatever name
+    the WSL side reports. The leader also no longer writes an identity block
+    naming a different account into the slot it parks a pair in.
+  - **Windows:** a Windows switch repairs a stale name itself before it plans.
+  - **When neither applies:** the switch is refused with its own reason,
+    `LiveNameStale` or `SideLiveAccountAmbiguous`, instead of "see the banner"
+    when no banner explains it (#183).
+
+## [2.0.4] - 2026-10-02
+
+### Fixed
+
+- A switch away from an account that was logged in from the CLI itself, while
+  that account's earlier pair was still parked, answered 500 and left the switch
+  journal open, so every later switch was refused as "live identity unverified"
+  and Stop was refused until the leader was killed. The switch now moves the
+  older pair to the superseded quarantine, where it is kept and never used, and
+  goes ahead. A file in that folder that it cannot set aside is refused before
+  anything is journaled or moved, as `OutgoingSlotHoldsPair` (#180).
+
 ## [2.0.3] - 2026-09-29
 
 ### Changed

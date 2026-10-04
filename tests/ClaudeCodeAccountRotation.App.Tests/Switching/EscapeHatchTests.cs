@@ -113,7 +113,7 @@ public sealed class EscapeHatchTests
         Result<WslSwitchOutcome, SwitchRefusal> result =
             await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), quarantineForeignFamily: true, Token);
 
-        result.Error.ShouldBe(SwitchRefusal.LiveIdentityUnverified);
+        result.Error.ShouldBe(SwitchRefusal.SideLiveAccountAmbiguous);
         harness.MailboxFiles().ShouldBeEmpty();
         QuarantinedFiles(harness).ShouldBeEmpty();
     }

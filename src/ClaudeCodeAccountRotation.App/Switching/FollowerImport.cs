@@ -1,11 +1,15 @@
 using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Peers;
+using ClaudeCodeAccountRotation.Core.Ports;
+using ClaudeCodeAccountRotation.Core.Quota;
 using ClaudeCodeAccountRotation.Core.Switching;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeCodeAccountRotation.App.Switching;
 
@@ -42,7 +46,7 @@ namespace ClaudeCodeAccountRotation.App.Switching;
 /// re-stamped every <see cref="HeartbeatInterval"/> while it is held.
 /// </para>
 /// </summary>
-internal sealed partial class FollowerImport : IDisposable
+internal sealed partial class FollowerImport : IDisposable, IStaleIdentityRepair
 {
     private readonly SwitchOptions _options;
     private readonly StagedImportCredentialPairStore _pairs;
@@ -55,6 +59,7 @@ internal sealed partial class FollowerImport : IDisposable
     private readonly string _liveOwnerPath;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<FollowerImport> _logger;
+    private readonly StaleIdentityRepair _repair;
 
     /// <summary>Guards the hold: two requests never see it half built or half unwound.</summary>
     private readonly SemaphoreSlim _sync = new(1, 1);
@@ -89,9 +94,65 @@ internal sealed partial class FollowerImport : IDisposable
         _gate = gate;
         _refreshLock = new OAuthRefreshLock(options.LiveConfigDirectory, timeProvider);
         _refreshLockDirectory = Path.Combine(Path.GetFullPath(options.LiveConfigDirectory), OAuthRefreshLock.DirectoryName);
-        _liveOwnerPath = Path.Combine(Path.GetFullPath(options.AppDataDirectory), "state", "live-owner.json");
+        _liveOwnerPath = LiveOwnerRecord.PathUnder(options.AppDataDirectory);
         _timeProvider = timeProvider;
         _logger = logger;
+        _repair = new StaleIdentityRepair(
+            gate,
+            stateFile,
+            new LiveOwnerRecord(options.AppDataDirectory, timeProvider, logger),
+            async cancellationToken => (await pairs.ReadLiveAsync(cancellationToken))?.Fingerprint,
+            StoredBlockAsync,
+            async cancellationToken => await journal.ReadOpenAsync(cancellationToken) is not null,
+            logger);
+    }
+
+    /// <summary>
+    /// Restores this side's state file when a session writes an older identity
+    /// back over the one the import put there. The same repair the leader runs,
+    /// with a zero wait so it never delays an import, which patches the file
+    /// itself and wakes the watcher again.
+    /// <para>
+    /// Taken behind the same semaphore every request takes before the gate. This
+    /// side's gate timeout is zero, so a repair holding the gate on its own would
+    /// fail a request that arrived during it; holding the semaphore as well makes
+    /// that request wait its turn instead.
+    /// </para>
+    /// </summary>
+    public async Task<IdentityRepair> RepairStaleIdentityAsync(CancellationToken cancellationToken)
+    {
+        if (!await _sync.WaitAsync(TimeSpan.Zero, cancellationToken))
+        {
+            return IdentityRepair.Busy;
+        }
+
+        try
+        {
+            return await _repair.RepairAsync(TimeSpan.Zero, cancellationToken);
+        }
+        finally
+        {
+            _sync.Release();
+        }
+    }
+
+    /// <summary>
+    /// The owner's block for a record written before the record carried one: the
+    /// store slot the account was claimed from keeps its <c>profile.json</c>, and
+    /// the mailbox sits two levels under the store's root.
+    /// </summary>
+    private async Task<OAuthAccountBlock?> StoredBlockAsync(AccountEmail owner, CancellationToken cancellationToken)
+    {
+        string? transit = string.IsNullOrWhiteSpace(_options.Mailbox) ? null : Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(_options.Mailbox)));
+        string? store = transit is null ? null : Path.GetDirectoryName(transit);
+        if (store is null)
+        {
+            return null;
+        }
+
+        ProfileFolderStore slots = new(store, NullLogger<ProfileFolderStore>.Instance);
+        string folder = slots.FolderPathFor(owner);
+        return Directory.Exists(folder) ? await slots.ReadAccountAsync(folder, cancellationToken) : null;
     }
 
     /// <summary>The window between the <c>Exported</c> answer and the commit. A later commit is refused.</summary>
@@ -311,6 +372,82 @@ internal sealed partial class FollowerImport : IDisposable
         {
             _sync.Release();
         }
+    }
+
+    /// <summary>
+    /// One usage read the leader asked for, of the account this side holds,
+    /// with this side's own live access token. The pair is read under the same
+    /// lock as a commit, so an import cannot swap it between the ownership check
+    /// and the read, and the lock is released before the request goes out.
+    /// Nothing here refreshes a token: an expired or rejected access token is
+    /// the session's to renew, and the answer says so.
+    /// </summary>
+    public async Task<PeerUsageRead> ReadUsageAsync(
+        AccountEmail email,
+        RefreshTokenFingerprint? expected,
+        IUsageEndpointClient usage,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(usage);
+        await ReconcileOnceAsync(cancellationToken);
+        CredentialPair? live;
+        await _sync.WaitAsync(cancellationToken);
+        try
+        {
+            if (_hold is not null || await _journal.ReadOpenAsync(cancellationToken) is not null)
+            {
+                return new PeerUsageRead(PeerUsageOutcome.NotHeld, null, null, "a hand-off is in flight on this side");
+            }
+
+            live = await _pairs.ReadLiveAsync(cancellationToken);
+            if (live is null)
+            {
+                return new PeerUsageRead(PeerUsageOutcome.NotHeld, null, null, "this side holds no live pair");
+            }
+
+            // Whose pair this is decides whose figures these are. This side's own
+            // owner record, written at import and re-bound across the CLI's
+            // rotations, is the authority whenever it exists: a fingerprint the
+            // caller sends is no proof of the account it names, since this
+            // side's dashboard publishes the live fingerprint. Only a side with
+            // no record (one that predates it) falls back to the fingerprint
+            // the leader handed over together with a state file naming the account.
+            OAuthAccountBlock? named = await _stateFile.ReadAccountBlockAsync(cancellationToken);
+            var owner = LiveOwnerRecord.At(_liveOwnerPath, _timeProvider, _logger);
+            bool owned = File.Exists(owner.Path)
+                ? await owner.NamesOwnerAsync(email, live.Fingerprint, named, cancellationToken)
+                : live.Fingerprint == expected && named?.Email == email;
+            if (!owned)
+            {
+                return new PeerUsageRead(PeerUsageOutcome.NotHeld, null, null, "this side's live pair is not " + email.Value + "'s");
+            }
+        }
+        finally
+        {
+            _sync.Release();
+        }
+
+        if (live.AccessTokenExpiresAt <= _timeProvider.GetUtcNow())
+        {
+            return new PeerUsageRead(PeerUsageOutcome.SessionWillRefresh, null, null, "the live access token has expired");
+        }
+
+        Result<JsonDocument, UsageReadFailure> read = await usage.ReadUsageAsync(live.AccessToken, cancellationToken);
+        if (read.IsSuccess)
+        {
+            using JsonDocument body = read.Value;
+            return JsonNode.Parse(body.RootElement.GetRawText()) is JsonObject answer
+                ? new PeerUsageRead(PeerUsageOutcome.Read, answer, null, "read")
+                : new PeerUsageRead(PeerUsageOutcome.Failed, null, null, "the usage endpoint answered something other than an object");
+        }
+
+        LogUsageReadFailed(email.Value, read.Error.Kind.ToString());
+        return read.Error.Kind switch
+        {
+            UsageReadFailureKind.Unauthorized => new PeerUsageRead(PeerUsageOutcome.SessionWillRefresh, null, null, "the live access token was rejected"),
+            UsageReadFailureKind.RateLimited => new PeerUsageRead(PeerUsageOutcome.RateLimited, null, read.Error.RetryAfter, "rate limited"),
+            _ => new PeerUsageRead(PeerUsageOutcome.Failed, null, null, read.Error.Kind.ToString()),
+        };
     }
 
     /// <summary>
@@ -572,7 +709,11 @@ internal sealed partial class FollowerImport : IDisposable
         try
         {
             // F2: what is leaving, if anything. Both may be absent, which is the
-            // first real hand-off's own starting state and not an error.
+            // first real hand-off's own starting state and not an error. A name a
+            // session wrote back over the import's is put right first, under the
+            // gate this hold already took, so the export is named for the account
+            // whose pair it is rather than for the one the stale block names.
+            await _repair.RepairUnderGateAsync(cancellationToken);
             CredentialPair? live = await _pairs.ReadLiveAsync(cancellationToken);
             OAuthAccountBlock? outgoingAccount = live is null ? null : await _stateFile.ReadAccountBlockAsync(cancellationToken);
             if (live is not null && outgoingAccount?.Email is null)
@@ -806,9 +947,14 @@ internal sealed partial class FollowerImport : IDisposable
             {
                 await stateFile.PatchAccountBlockAndOnboardingAsync(account, cancellationToken);
             }
+            // The block goes into the owner record with the name: this side has
+            // no profile folder of its own, so the record is where the state
+            // file watcher restores it from when a session writes an older
+            // identity back over it.
             if (entry.Incoming is AccountEmail incoming && entry.IncomingFingerprint is RefreshTokenFingerprint arriving)
             {
-                await WriteLiveOwnerAsync(liveOwnerPath, arriving, incoming, timeProvider, cancellationToken);
+                await LiveOwnerRecord.At(liveOwnerPath, timeProvider, NullLogger.Instance)
+                    .WriteAsync(arriving, incoming, account.Email == incoming ? account : null, cancellationToken);
             }
             else
             {
@@ -834,31 +980,6 @@ internal sealed partial class FollowerImport : IDisposable
         await journal.ClearAsync(cancellationToken);
         pairs.DeleteStaging();
         return new ImportResult(entry.Outgoing, entry.OutgoingFingerprint, entry.OutgoingAccount, AlreadyImported: false);
-    }
-
-    /// <summary>
-    /// The owner record <see cref="LiveDirectorySwitch"/> writes on the leader,
-    /// in the same shape and the same place, so the follower's live pair carries
-    /// the same statement of who it belongs to.
-    /// </summary>
-    internal static Task WriteLiveOwnerAsync(
-        string liveOwnerPath,
-        RefreshTokenFingerprint fingerprint,
-        AccountEmail owner,
-        TimeProvider timeProvider,
-        CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(timeProvider);
-        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(liveOwnerPath))!);
-        return AtomicJsonFile.WriteAsync(
-            liveOwnerPath,
-            new JsonObject
-            {
-                ["fingerprint"] = fingerprint.Sha256Hex,
-                ["email"] = owner.Value,
-                ["at"] = timeProvider.GetUtcNow().ToString("O", CultureInfo.InvariantCulture),
-            },
-            cancellationToken);
     }
 
     /// <summary>
@@ -1009,6 +1130,9 @@ internal sealed partial class FollowerImport : IDisposable
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "the import of {Incoming} was asked to unwind after the swap had already run; it was finished instead, because the outgoing pair exists only as the export")]
     private partial void LogFinishedInsteadOfUnwound(string incoming);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the usage read the leader asked for of {Account} failed ({Kind})")]
+    private partial void LogUsageReadFailed(string account, string kind);
 
     /// <summary>
     /// The state that spans the two calls: what was asked, what was exported,

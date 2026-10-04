@@ -99,11 +99,17 @@ it.
 When a session stops on a usage limit, Claude Code waits for the reset. The optional hook
 `hooks/rate-limit-stop.sh` tells the running dashboard, which reads the live account's usage once
 (at most once a minute per account). When a side's account is at 100% of its 5-hour or 7-day
-window, the dashboard shows a "switch now" prompt naming the first usable account in its order.
-Nothing switches until you click it.
+window, or of a model's weekly window such as Fable's, the dashboard shows a "switch now" prompt
+naming the first usable account in its order whose usage was read in the last 30 minutes. An
+account at its Fable weekly limit is never named, because the tool cannot know which model a
+session will run; you can still switch to it by hand. When every usable account's figures are
+older than that, the prompt names none: it says which account is unverified and how old its
+figures are, and offers Refresh usage. Nothing switches until you click it.
 
-Install it on the side the leader runs on. The follower has no refresh route, and the leader reads
-no usage for an account the other side holds; that side's card shows its own statusline figures.
+Install it on the side the leader runs on. The follower has no hook route, and the hook reads only
+the account the leader's side is logged in as. For an account the other side holds, Refresh usage
+asks that side to read it with its own access token, and its card also shows that side's
+statusline figures.
 
 1. Save `hooks/rate-limit-stop.sh` from the release tag you run, and on Linux run `chmod +x` on it.
    It needs `bash` and `curl`. On Windows, Git Bash is required: without it Claude Code runs
@@ -138,11 +144,13 @@ refresh is already running).
 a change to any of them is a breaking change in the CHANGELOG. Everything else may change
 without notice.
 
-- `accounts[]`, in the dashboard's order: grouped `usable`, then `limited`, then `exhausted`, then
-  `unread`, then `paused`. Within a group, accounts sort by `nextResetAt` (the weekly reset for a
+- `accounts[]`, in the dashboard's order: grouped `usable`, then `model-limited`, then `limited`,
+  then `exhausted`, then `unread`, then `paused`. Within a group, accounts sort by `nextResetAt` (the weekly reset for a
   usable account), earliest first, with an undated one after every dated one, then by e-mail.
 - `accounts[].email`.
-- `accounts[].standing`: `usable`, `limited` (the 5-hour window is at 100% and the 7-day is not;
+- `accounts[].standing`: `usable`, `model-limited` (a model's weekly window, such as Fable's, is at
+  100% and the 5-hour and 7-day are not; `nextResetAt` is that window's reset and
+  `accounts[].limitedModel` names it), `limited` (the 5-hour window is at 100% and the 7-day is not;
   `nextResetAt` is the 5-hour reset), `exhausted` (the 7-day window is at 100%), `unread`, or
   `paused`.
 - `accounts[].nextResetAt`: when the account frees up (ISO 8601), or null when there is no wait

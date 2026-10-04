@@ -4,6 +4,7 @@ using ClaudeCodeAccountRotation.App.Security;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
+using ClaudeCodeAccountRotation.Core.Quota;
 using ClaudeCodeAccountRotation.Core.Switching;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -41,6 +42,7 @@ internal static class SideEndpoints
             bool? quarantineForeignFamily,
             WslSwitch coordinator,
             QuotaRefreshWorker worker,
+            DashboardState state,
             CancellationToken cancellationToken) =>
         {
             Result<AccountEmail, string> target = AccountEmail.Parse(email);
@@ -51,8 +53,22 @@ internal static class SideEndpoints
 
             await worker.YieldAsync(cancellationToken);
 
+            // That side's windows before the swap, for the same reason the
+            // Windows switch keeps its own: a session there mid-turn writes the
+            // outgoing account's windows back under the incoming account's name.
+            SideName named = new(side);
+            StatuslineSnapshot? before = (await coordinator.ReadSideAsync(named, cancellationToken)).Usage;
             Result<WslSwitchOutcome, SwitchRefusal> outcome =
-                await coordinator.SwitchToAsync(new SideName(side), target.Value, quarantineForeignFamily == true, cancellationToken);
+                await coordinator.SwitchToAsync(named, target.Value, quarantineForeignFamily == true, cancellationToken);
+            // Also when the hand-off was left in flight: the crash table can
+            // finish it on a later poll, and the swap may already have happened
+            // over there, so the guard has to be standing by then.
+            if (outcome.IsSuccess || await coordinator.HandOffInFlightAsync(cancellationToken))
+            {
+                PreSwitchWindows? windows = before is null ? null : new PreSwitchWindows(before.FiveHourResetsAt, before.SevenDayResetsAt);
+                state.Publish(current => current.WithSidePreSwitchWindows(named, windows));
+            }
+
             return View(outcome);
         });
 

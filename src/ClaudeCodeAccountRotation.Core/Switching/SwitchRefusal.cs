@@ -4,7 +4,8 @@ namespace ClaudeCodeAccountRotation.Core.Switching;
 /// Why a switch is not planned or not executed. Ordered as the planner checks
 /// them: the spike's guards first, then the three the plan review added and the
 /// one the refresh pass needs for a folder it stranded; then the three the
-/// shared store adds, for a slot this side does not hold; the last are the
+/// shared store adds, for a slot this side does not hold, and one for a live
+/// account whose own slot already holds a pair; the last are the
 /// executor's own, for a second mutation arriving while one runs, for a usage
 /// refresh reading this machine's accounts, for a login that owns one of the
 /// folders the switch would move, and for a live file whose tokens disappeared.
@@ -49,6 +50,18 @@ public enum SwitchRefusal
     /// it ends when the hand-off finishes or the operator cancels it.
     /// </summary>
     SlotInTransit,
+
+    /// <summary>
+    /// The live account's own slot holds a credential file the switch could not
+    /// set aside. A login the CLI ran by itself, as an account whose pair was
+    /// parked, leaves that account with two token families: the one now live
+    /// and the older one in its slot. The switch moves the older one to the
+    /// superseded quarantine and parks the live pair. This refusal is what is
+    /// left: a file that is not a pair, one that is the live pair's own lineage,
+    /// or a quarantine that could not take it. No pair is ever written over
+    /// another, so nothing is journaled or moved.
+    /// </summary>
+    OutgoingSlotHoldsPair,
 
     /// <summary>
     /// The switch is for the other side and that side is not answering, so
@@ -123,4 +136,21 @@ public enum SwitchRefusal
     /// this tool could not read. Nothing was removed and its holder record stays.
     /// </summary>
     SideLoggedInAgain,
+
+    /// <summary>
+    /// The state file names an account other than the one the live pair was put
+    /// in place for: a running session wrote its older identity back. The switch
+    /// repairs that itself from the owner's recorded block; this refusal is what
+    /// is left when no block for the owner is recorded or stored, so the file
+    /// cannot be put right and nothing can say which slot the live pair belongs in.
+    /// </summary>
+    LiveNameStale,
+
+    /// <summary>
+    /// The other side names, as live, an account whose own slot here still holds
+    /// a parked pair, and the fingerprint it reports matches no holder record for
+    /// that side. Whichever account that pair belongs to, parking it under the
+    /// name the side gave would put it in a slot that already holds a family.
+    /// </summary>
+    SideLiveAccountAmbiguous,
 }
