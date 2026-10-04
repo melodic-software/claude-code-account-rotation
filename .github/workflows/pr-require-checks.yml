@@ -1,10 +1,10 @@
-name: ci
+name: pr-require-checks
 
 # Build, test, and gate on every pull request and on main. The org's ci-gate
 # context is the single check `ci-status` below: it aggregates every lane in
 # this file and carries the pull-request contract (title, do-not-merge label,
 # issue linkage) as steps of that one check, through the SHA-pinned
-# ci-workflows composites of the same names.
+# ci-workflows composites `check-contract` and `aggregate-results`.
 
 on:
   push:
@@ -45,7 +45,7 @@ permissions:
 #
 # The cost of the branch: a contract-only run no longer queues behind the full
 # run whose `ci-lanes` status it carries forward, so the two race. The
-# `ci-status` composite closes that with a bounded wait on in-flight sibling
+# `aggregate-results` composite closes that with a bounded wait on in-flight sibling
 # runs on the same head SHA; see `carry-forward-wait-seconds` below.
 concurrency:
   group: >-
@@ -57,7 +57,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-test:
+  build-and-test:
     name: Build and test (${{ matrix.os }})
     # The contract-only gate, verbatim (see the predicate spelled out under
     # `on.pull_request.types`).
@@ -92,7 +92,7 @@ jobs:
         if: matrix.os == 'ubuntu-24.04'
         run: bash eng/smoke-linux-publish.sh
 
-  gates:
+  check-repository:
     name: Repository gates
     # The contract-only gate, verbatim.
     if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (contains(fromJSON('["labeled","unlabeled"]'), github.event.action) || (github.event.action == 'edited' && !github.event.changes.base))) }}
@@ -132,13 +132,13 @@ jobs:
     # required check reports success to branch protection.
     if: always()
     needs:
-      - build-test
-      - gates
+      - build-and-test
+      - check-repository
     runs-on: ubuntu-24.04
     # Derived from this repository's own measured full run, per the composite's
-    # README: the last twelve `ci` runs took 152-221 s wall including queue, so
+    # README: the last twelve `pr-require-checks` runs took 152-221 s wall including queue, so
     # a contract-only event arriving as one starts waits up to that long, and
-    # `build-test`'s own 20-minute cap leaves room for a slower Windows lane.
+    # `build-and-test`'s own 20-minute cap leaves room for a slower Windows lane.
     # 10 minutes covers the measured p95 plus that headroom and the job's own
     # work; `carry-forward-wait-seconds` below is then `10 * 60 - 60`.
     timeout-minutes: 10
@@ -149,14 +149,14 @@ jobs:
       # default is none, so the Actions reads would 403 and the composite would
       # degrade to the unwaited status read.
       actions: read # Lists in-flight sibling runs for the carry-forward wait.
-      # pr-contract upserts the advisory linkage comment and moves the linkage
+      # check-contract upserts the advisory linkage comment and moves the linkage
       # label; ci-status records the `ci-lanes` commit status the carry-forward
       # branch reads back on the next contract-only event.
       pull-requests: write # Advisory linkage comment and label writes.
       statuses: write # Records and reads back the `ci-lanes` commit status.
     steps:
       - name: Check the pull-request contract
-        uses: melodic-software/ci-workflows/.github/actions/pr-contract@4610c31e92eb1c4b24981e2f200ac87bdb2a1753 # v0.27.1
+        uses: melodic-software/ci-workflows/.github/actions/pr-require-checks/check-contract@7446b5165511796b7b0d30b68d341689ebb8de61 # v0.34.0
         with:
           token: ${{ github.token }}
           # The standards sync and Dependabot open pull requests that close no
@@ -168,11 +168,11 @@ jobs:
           # skipped.
           exempt-authors: 'dependabot[bot],melodic-standards-sync[bot]'
       - name: Aggregate lane results
-        # `!cancelled()` so a failing pr-contract step does not skip the
+        # `!cancelled()` so a failing check-contract step does not skip the
         # aggregation: the job still fails on the contract step's exit code, and
         # the `ci-lanes` status is on the SHA for the next contract-only run.
         if: ${{ !cancelled() }}
-        uses: melodic-software/ci-workflows/.github/actions/ci-status@4610c31e92eb1c4b24981e2f200ac87bdb2a1753 # v0.27.1
+        uses: melodic-software/ci-workflows/.github/actions/pr-require-checks/aggregate-results@7446b5165511796b7b0d30b68d341689ebb8de61 # v0.34.0
         with:
           # Derived from the needs graph above — the single source of truth for
           # the lane list. Adding a lane to needs automatically extends this

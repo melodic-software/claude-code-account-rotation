@@ -1,4 +1,4 @@
-name: release
+name: release-publish-binaries
 
 # Publishes the two executables a machine installs: the Windows leader and the
 # linux-x64 follower the WSL side runs (#73 installs the follower from this
@@ -22,7 +22,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
+  publish:
     name: Publish and upload
     runs-on: ubuntu-24.04
     timeout-minutes: 20
