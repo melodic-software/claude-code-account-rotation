@@ -1,0 +1,39 @@
+# Dependabot keeps this repository's SHA-pinned GitHub Actions current with
+# REVIEWED pull requests: GitHub-native, no third-party app and no token. Only
+# the github-actions ecosystem is configured; this repository's NuGet packages
+# are not covered by an entry here.
+#
+# Merge lanes follow the standards dependabot-policy component: the
+# `vendor-actions` group (non-major only) is the auto-merge lane armed by
+# pr-automerge-dependabot.yml; every other PR is reviewed by hand. A dependency
+# joins the first group that matches it, so majors fall through to the
+# reviewed `github-actions` group.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    labels: ["dependencies"]
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: build
+    # Let a brand-new release settle before proposing it (supply-chain caution);
+    # security-advisory updates bypass cooldown and still surface immediately.
+    cooldown:
+      default-days: 3
+    # Every melodic-software/ci-workflows ref (reusable workflows AND composite
+    # actions) moves only through deliberate reviewed PRs per the standards
+    # runner-policy selector-revision lockstep, so all of them are ignored here.
+    ignore:
+      - dependency-name: "melodic-software/ci-workflows/*"
+    groups:
+      vendor-actions:
+        patterns:
+          - actions/*
+          - github/*
+          - anthropics/*
+        update-types: [minor, patch]
+      github-actions:
+        patterns:
+          - "*"
