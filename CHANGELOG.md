@@ -6,6 +6,11 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Changed
+
+- Docs: the README has a terms of service and compliance section under Posture, with sources, an
+  operator checklist, and how the tool compares.
+
 ## [2.0.7] - 2026-10-02
 
 ### Changed
