@@ -52,4 +52,5 @@ WebApplication app = builder.Build();
 AppComposition.MapRoutes(app);
 AppComposition.AnnounceDashboard(app, parsed.Value.Open);
 await app.RunAsync();
-return 0;
+// Zero unless a follower stopped to take an installed build (FollowerUpgrade.ExitCode).
+return Environment.ExitCode;

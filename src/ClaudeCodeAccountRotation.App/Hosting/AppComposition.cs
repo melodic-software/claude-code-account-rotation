@@ -12,6 +12,7 @@ using ClaudeCodeAccountRotation.App.Security;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Configuration;
+using ClaudeCodeAccountRotation.Core.Peers;
 using ClaudeCodeAccountRotation.Core.Ports;
 using ClaudeCodeAccountRotation.Core.Quota;
 using ClaudeCodeAccountRotation.Core.Switching;
@@ -24,6 +25,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace ClaudeCodeAccountRotation.App.Hosting;
@@ -249,6 +251,15 @@ internal static class AppComposition
         AddRefresh(services);
         services.AddHostedService<InstanceLockHolder>();
         services.AddHostedService<StartupReconciliation>();
+        // After reconciliation, because hosted services start in registration order.
+        // Registered twice over one instance, like the refresh worker, because the
+        // page's Start route calls it too.
+        services.AddSingleton(static provider => new SideSupervisor(
+            provider.GetRequiredService<PeerRegistry>(),
+            Version,
+            provider.GetRequiredService<ILogger<SideSupervisor>>(),
+            provider.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping));
+        services.AddHostedService(static provider => provider.GetRequiredService<SideSupervisor>());
         services.AddHostedService<StateFileWatcher>();
         // The worker is registered twice over one instance because the refresh
         // routes call TryStart on it: AddHostedService alone registers it as an
@@ -446,7 +457,7 @@ internal static class AppComposition
                     provider.GetRequiredService<IHttpClientFactory>().CreateClient(PeerClientName(peer.Side))),
                 peer.Launch is null
                     ? null
-                    : new WslDistributionPeerHost(peer.Side, peer.Launch, provider.GetRequiredService<ILogger<WslDistributionPeerHost>>()),
+                    : new WslDistributionPeerHost(peer.Side, peer.Launch, Version, provider.GetRequiredService<ILogger<WslDistributionPeerHost>>()),
                 peer.StorePathFromPeer)),
         ]));
     }
@@ -495,6 +506,18 @@ internal static class AppComposition
         // identity back over the one the import put there, exactly as on the
         // leader, so this side runs the same watcher over its own state file.
         services.AddHostedService<StateFileWatcher>();
+        services.AddHostedService(static provider => new FollowerUpgradeWatcher(
+            Environment.GetEnvironmentVariable(FollowerUpgrade.LeaderVersionVariable),
+            Environment.ProcessPath,
+            Version,
+            FollowerUpgradeWatcher.ReadInstalledVersionAsync,
+            cancellationToken => FollowerUpgradeWatcher.TryExitAsync(
+                provider.GetRequiredService<CredentialMutationGate>(),
+                provider.GetRequiredService<ImportJournal>(),
+                provider.GetRequiredService<IHostApplicationLifetime>(),
+                cancellationToken),
+            TimeSpan.FromSeconds(15),
+            provider.GetRequiredService<ILogger<FollowerUpgradeWatcher>>()));
         services.AddHealthChecks();
     }
 

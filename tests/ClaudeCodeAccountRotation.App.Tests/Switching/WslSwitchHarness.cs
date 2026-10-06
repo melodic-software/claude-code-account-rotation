@@ -307,8 +307,16 @@ internal sealed class FakePeerRotationInstance(string mailbox) : IPeerRotationIn
             : Result<ImportStatus, string>.Success(Status));
     }
 
-    public Task<Result<string, string>> ShutdownAsync(CancellationToken cancellationToken) =>
-        throw new NotSupportedException();
+    /// <summary>What <c>/api/shutdown</c> answers; unset, a call is a test error.</summary>
+    public Func<Result<string, string>>? OnShutdown { get; set; }
+
+    public Task<Result<string, string>> ShutdownAsync(CancellationToken cancellationToken)
+    {
+        Calls.Add("Shutdown");
+        return OnShutdown is { } answer
+            ? Task.FromResult(answer())
+            : throw new NotSupportedException();
+    }
 
     public async Task<Result<LogOutAnswer, string>> LogOutAsync(AccountEmail email, CancellationToken cancellationToken)
     {

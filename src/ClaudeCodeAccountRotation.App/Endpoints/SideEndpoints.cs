@@ -1,4 +1,5 @@
 using ClaudeCodeAccountRotation.App.Dashboard;
+using ClaudeCodeAccountRotation.App.Hosting;
 using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.App.Security;
 using ClaudeCodeAccountRotation.App.Switching;
@@ -102,11 +103,14 @@ internal static class SideEndpoints
                 static reason => Results.Json(new SwitchRefusalView("CancelUnavailable", reason), statusCode: StatusCodes.Status409Conflict));
         });
 
-        mutations.MapPost("/sides/{side}/start", static async (string side, WslSwitch coordinator, CancellationToken cancellationToken) =>
+        // Starts a side that is not running, and stops and starts one running
+        // another version, so the button also finishes a release installed on
+        // the leader first.
+        mutations.MapPost("/sides/{side}/start", static async (string side, SideSupervisor supervisor, CancellationToken cancellationToken) =>
         {
-            Result<Unit, string> started = await coordinator.StartSideAsync(new SideName(side), cancellationToken);
+            Result<string, string> started = await supervisor.BringUpAsync(new SideName(side), cancellationToken);
             return started.Match(
-                static _ => Results.Ok(new { started = true }),
+                static detail => Results.Ok(new { started = true, detail }),
                 static reason => Results.Json(new { error = reason }, statusCode: StatusCodes.Status409Conflict));
         });
 

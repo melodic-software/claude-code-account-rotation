@@ -4,6 +4,7 @@ using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Adapters.Peers;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core.Configuration;
+using ClaudeCodeAccountRotation.Core.Peers;
 using ClaudeCodeAccountRotation.Core.Switching;
 using Shouldly;
 
@@ -82,6 +83,24 @@ public sealed class PeerTests
             "--config", "/mnt/c/tmp/follower.json",
         ]);
         arguments.TakeLast(2).ShouldBe(["--config", "/mnt/c/tmp/follower.json"]);
+    }
+
+    [Theory]
+    [InlineData(null, FollowerUpgrade.LeaderVersionVariable + "/u")]
+    [InlineData("", FollowerUpgrade.LeaderVersionVariable + "/u")]
+    [InlineData("USERPROFILE/p", "USERPROFILE/p:" + FollowerUpgrade.LeaderVersionVariable + "/u")]
+    public void TheLaunchHandsTheFollowerTheLeadersVersionThroughWslEnv(string? inherited, string expected)
+    {
+        // wsl.exe passes a Windows variable into the distribution only when
+        // WSLENV lists it, and a list the leader inherited must survive.
+        ProcessStartInfo start = WslDistributionPeerHost.StartInfo(
+            new PeerLaunch("Some-Distribution", "someone", "/opt/rotation/claude-code-account-rotation", 48212),
+            "2.1.0+abc",
+            inherited);
+
+        start.FileName.ShouldBe("wsl.exe");
+        start.Environment[FollowerUpgrade.LeaderVersionVariable].ShouldBe("2.1.0+abc");
+        start.Environment["WSLENV"].ShouldBe(expected);
     }
 
     public static bool OnLinux => OperatingSystem.IsLinux();

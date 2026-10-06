@@ -8,6 +8,19 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- **A release can be installed on either side first, and both sides end up running it with no
+  click.** When the leader starts, it starts each side with `peers[].launch`. A side already on
+  the leader's version is left alone. A side on another version is stopped through its own
+  `/api/shutdown` and started again. The leader hands the follower its version through
+  `WSLENV`. A follower whose binary is replaced by a build of that version stops when no import
+  is in flight, with exit code 75, and the leader starts the new build. A refused stop leaves
+  the side running and shows it as incompatible. Only one of these passes runs at a time per
+  side. No account moves. "Upgrading a release" in the README covers both orders (#173).
+- Start WSL side, and `POST /api/sides/{side}/start`, now also stop and start a side on another
+  version. Before, they did nothing for a side that was running. The 200 answer carries a
+  `detail` (#173).
+- Upgrading onto this release with Windows first needs one Start WSL side click after both
+  installs, because older followers do not stop for a new build. Installing WSL first needs none.
 - Docs: the README has a terms of service and compliance section under Posture, with sources, an
   operator checklist, and how the tool compares.
 - Docs: the README says Claude Desktop is out of scope, and why: Desktop keeps its own login,

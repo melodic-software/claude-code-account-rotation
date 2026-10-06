@@ -730,19 +730,6 @@ internal sealed partial class WslSwitch : IDisposable
             ? null
             : "the side reports version " + (remote.Version ?? "(none)") + " and this one is " + Hosting.AppComposition.Version;
 
-    /// <summary>The page's <c>Start WSL side</c>: spawn the follower, which is the leader's child.</summary>
-    public async Task<Result<Unit, string>> StartSideAsync(SideName side, CancellationToken cancellationToken)
-    {
-        if (_peers.For(side) is not Peer peer)
-        {
-            return Result<Unit, string>.Failure("no peer is configured for " + side.Value);
-        }
-
-        return peer.Host is null
-            ? Result<Unit, string>.Failure("the " + side.Value + " side has no launch configured, so it cannot be started from here")
-            : await peer.Host.StartAsync(cancellationToken);
-    }
-
     /// <summary>L1's guards and L2's claim, both under the leader's mutation gate.</summary>
     private async Task<Result<WslSwitchJournalEntry, SwitchRefusal>> ClaimAsync(
         Peer peer,
