@@ -115,7 +115,7 @@ its terms at any time.
 | Model inference outside `claude` | No | [Posture](#posture), first bullet |
 | Proxy between `claude` and Anthropic | No | [Posture](#posture), first bullet |
 | Background timer for reads, refreshes or switches | No | [Posture](#posture), switch and read bullets; [`QuotaRefresh.cs`](src/ClaudeCodeAccountRotation.App/Quota/QuotaRefresh.cs) |
-| Refreshes a parked token | Only when it has expired, during a requested read, under the tool's own write gate; a switch holds Claude Code's own refresh lock | [`QuotaRefresh.cs`](src/ClaudeCodeAccountRotation.App/Quota/QuotaRefresh.cs), [`OAuthRefreshLock.cs`](src/ClaudeCodeAccountRotation.App/Adapters/FileSystem/OAuthRefreshLock.cs) |
+| Refreshes a parked token | Only during a requested read: when its recorded expiry has passed, or once when the usage endpoint answers 401, followed by one retried read. Done under the tool's own write gate; a switch holds Claude Code's own refresh lock | [`QuotaRefresh.cs`](src/ClaudeCodeAccountRotation.App/Quota/QuotaRefresh.cs), [`OAuthRefreshLock.cs`](src/ClaudeCodeAccountRotation.App/Adapters/FileSystem/OAuthRefreshLock.cs) |
 | Usage reads | Bounded: at most once a minute per account, only on request | [Posture](#posture), read bullet; [`RefreshBudget.cs`](src/ClaudeCodeAccountRotation.Core/Quota/RefreshBudget.cs) |
 | User-Agent | Its own, on every request | [`AnthropicEndpoints.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Http/AnthropicEndpoints.cs) |
 | OAuth `client_id` for parked refreshes | Claude Code's public one | [Posture](#posture); [`AnthropicEndpoints.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Http/AnthropicEndpoints.cs) |
