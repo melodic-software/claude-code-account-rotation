@@ -35,7 +35,15 @@ internal sealed partial class FollowerUpgradeWatcher(
     ILogger<FollowerUpgradeWatcher> logger) : BackgroundService
 {
     private readonly ILogger<FollowerUpgradeWatcher> _logger = logger;
-    private BinaryStamp? _baseline = Stamp(executablePath);
+
+    // Held from an upgrade exit until the process ends, so no credential change
+    // starts while the host drains.
+    private static IDisposable? _heldForShutdown;
+
+    // None until the first tick has asked the installed build for its version:
+    // a build renamed in between this process starting and this watcher being
+    // built is not the image this process runs, so it must not be the baseline.
+    private BinaryStamp? _baseline;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -108,7 +116,8 @@ internal sealed partial class FollowerUpgradeWatcher(
     /// <summary>
     /// The stop <c>POST /api/shutdown</c> makes, with the upgrade exit code:
     /// refused while another credential change holds the gate or an import
-    /// journal is open.
+    /// journal is open. A stop keeps the gate for the rest of the process, so
+    /// an import waiting on it times out instead of starting mid-shutdown.
     /// </summary>
     internal static async Task<bool> TryExitAsync(
         CredentialMutationGate gate,
@@ -134,6 +143,8 @@ internal sealed partial class FollowerUpgradeWatcher(
             }
 
             Environment.ExitCode = FollowerUpgrade.ExitCode;
+            _heldForShutdown = permit;
+            permit = null;
             lifetime.StopApplication();
             return true;
         }
