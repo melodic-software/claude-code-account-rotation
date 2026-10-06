@@ -28,6 +28,118 @@ Status: a tagged release exists.
 - Running the loop lanes (`work-loop`, `babysit-loop`, `attend-queue`) while rotating accounts is
   outside V1 because reader-side invalidation of a latched window is still an open problem.
 
+### Terms of service and compliance
+
+Last reviewed: 2026-10-05.
+
+This is the maintainer's reading of public sources, not legal advice. Anthropic "reserves the right
+to take measures to enforce these restrictions and may do so without prior notice"
+([legal and compliance](https://code.claude.com/docs/en/legal-and-compliance)), and it can change
+its terms at any time.
+
+#### Sources
+
+| Source | URL | Effective or checked |
+| --- | --- | --- |
+| Consumer Terms | <https://www.anthropic.com/legal/consumer-terms> | effective 2025-10-08, checked 2026-10-05 |
+| Commercial Terms | <https://www.anthropic.com/legal/commercial-terms> | effective 2025-06-17, checked 2026-10-05 |
+| Usage Policy | <https://www.anthropic.com/legal/aup> | effective 2025-09-15, checked 2026-10-05 |
+| Claude Code legal and compliance | <https://code.claude.com/docs/en/legal-and-compliance> | checked 2026-10-05 |
+| Claude Code authentication | <https://code.claude.com/docs/en/authentication> | checked 2026-10-05 |
+| Claude Code GitHub Actions | <https://code.claude.com/docs/en/github-actions> | checked 2026-10-05 |
+| Supported countries | <https://www.anthropic.com/supported-countries> | checked 2026-10-05 |
+| Safeguards warnings and appeals | <https://support.claude.com/en/articles/8241253-safeguards-warnings-and-appeals> | checked 2026-10-05 |
+
+#### What the terms say
+
+- Consumer Terms §2: "You may not share your Account login information, Anthropic API key, or
+  Account credentials with anyone else." and "You also may not make your Account available to
+  anyone else."
+- Consumer Terms §3 forbids access "through automated or non-human means, whether through a bot,
+  script, or otherwise", "Except when you are accessing our Services via an Anthropic API Key or
+  where we otherwise explicitly permit it".
+- Legal and compliance: "Advertised usage limits for Pro and Max plans assume ordinary, individual
+  usage of Claude Code and the Agent SDK."
+- Legal and compliance: "developers may not collect, store, or intermediate Claude.ai credentials
+  or session tokens — sign-in to a Claude account must complete through Anthropic's own flow".
+- Legal and compliance: the restriction does not "prevent an end user from signing in to the
+  unmodified Claude Code binary with their own Claude subscription".
+- Usage Policy: no coordinating "malicious activity across multiple accounts to avoid detection or
+  circumvent product guardrails", and no circumventing "a ban through the use of a different
+  account".
+- Authentication docs: "To stay signed in to multiple accounts at once, such as work and personal
+  accounts, give each account its own configuration directory."
+- GitHub Actions docs: a `CLAUDE_CODE_OAUTH_TOKEN` generated with `claude setup-token` works on
+  Pro, Max, Team and Enterprise plans. For a secret shared across repositories the docs advise an
+  API key instead, "since an OAuth token is tied to the subscription of the person who ran
+  `claude setup-token`."
+- No term in these sources limits how many subscriptions one person may hold, and none names
+  usage-limit or rate-limit circumvention.
+
+#### Operator checklist
+
+- [ ] Every account in the roster belongs to you and is paid by you. Never share, lend or pool
+  accounts or credentials: [Consumer Terms §2](https://www.anthropic.com/legal/consumer-terms).
+- [ ] Keep Team and Enterprise seats out of the roster; the tool refuses them
+  ([`MaxTierAdmission.cs`](src/ClaudeCodeAccountRotation.Core/Accounts/MaxTierAdmission.cs)), and
+  they fall under the [Commercial Terms](https://www.anthropic.com/legal/commercial-terms).
+- [ ] Use only the unmodified `claude` binary for model requests, with no proxy and no third-party
+  harness on subscription credentials: the
+  [legal page](https://code.claude.com/docs/en/legal-and-compliance) allows signing in to "the
+  unmodified Claude Code binary".
+- [ ] Sign in through Claude Code's own login flow (`claude auth login`), never by pasting tokens
+  taken from somewhere else: sign-in "must complete through Anthropic's own flow"
+  ([legal page](https://code.claude.com/docs/en/legal-and-compliance)).
+- [ ] Switch by hand. Do not add automatic rotation at usage limits: limits "assume ordinary,
+  individual usage" ([legal page](https://code.claude.com/docs/en/legal-and-compliance)); see the
+  human-click bullet under [Posture](#posture).
+- [ ] Keep the tool's own User-Agent and never imitate Claude Code's: Anthropic has banned tools
+  that spoofed the Claude Code client ([public report](https://x.com/trq212/status/2009689809875591565)).
+- [ ] Read usage only when asked, inside the existing budget: the usage endpoint is undocumented;
+  see the read-budget bullet under [Posture](#posture).
+- [ ] CI: one `claude setup-token` token per account, generated by the account owner, stored as a
+  repository or organization secret that only the owner's workflows can use. Re-read the
+  [GitHub Actions docs](https://code.claude.com/docs/en/github-actions) before you share a secret
+  across repositories: the token "is tied to the subscription of the person who ran
+  `claude setup-token`".
+- [ ] Use Claude only from a [supported country](https://www.anthropic.com/supported-countries),
+  and avoid VPN exits that change your region: account creation from an unsupported location is a
+  listed [suspension reason](https://support.claude.com/en/articles/8241253-safeguards-warnings-and-appeals).
+- [ ] Re-check the sources table whenever Anthropic announces a terms, limits or enforcement
+  change, and at least once a quarter, then update the "Last reviewed" date above.
+
+#### How this tool compares
+
+| Behavior | Does it? | Where |
+| --- | --- | --- |
+| Model inference outside `claude` | No | [Posture](#posture), first bullet |
+| Proxy between `claude` and Anthropic | No | [Posture](#posture), first bullet |
+| Background timer for reads, refreshes or switches | No | [Posture](#posture), switch and read bullets; [`QuotaRefresh.cs`](src/ClaudeCodeAccountRotation.App/Quota/QuotaRefresh.cs) |
+| Refreshes a parked token | Only during a requested read: when its recorded expiry has passed, or once when the usage endpoint answers 401, followed by one retried read. Done under the tool's own write gate; a switch holds Claude Code's own refresh lock | [`QuotaRefresh.cs`](src/ClaudeCodeAccountRotation.App/Quota/QuotaRefresh.cs), [`OAuthRefreshLock.cs`](src/ClaudeCodeAccountRotation.App/Adapters/FileSystem/OAuthRefreshLock.cs) |
+| Usage reads | Bounded: at most once a minute per account, only on request | [Posture](#posture), read bullet; [`RefreshBudget.cs`](src/ClaudeCodeAccountRotation.Core/Quota/RefreshBudget.cs) |
+| User-Agent | Its own, on every request | [`AnthropicEndpoints.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Http/AnthropicEndpoints.cs) |
+| OAuth `client_id` for parked refreshes | Claude Code's public one | [Posture](#posture); [`AnthropicEndpoints.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Http/AnthropicEndpoints.cs) |
+
+Two points are gray:
+
+- The usage endpoint is undocumented. No Anthropic statement allows or forbids reading it.
+- The [legal page](https://code.claude.com/docs/en/legal-and-compliance) says "developers may not
+  collect, store, or intermediate Claude.ai credentials or session tokens". The tool stores and
+  moves your own tokens between your own folders, and refreshes parked ones with Claude Code's
+  `client_id`. That sentence is addressed to "developers" building products that offer Claude
+  sign-in to their users, which this tool does not do, but the page does not address a person
+  managing their own credentials.
+
+#### Known enforcement (public reports)
+
+- Anthropic confirmed in January 2026 that it banned use of third-party tools that spoofed the
+  Claude Code client: <https://x.com/trq212/status/2009689809875591565>.
+- Account creation from an unsupported location is a listed reason for suspension:
+  [safeguards warnings and appeals](https://support.claude.com/en/articles/8241253-safeguards-warnings-and-appeals).
+- Unconfirmed anecdote, not confirmed by Anthropic: community reports link bans to automatic
+  multi-account rotation that refreshes tokens in the background and polls usage for idle
+  accounts: <https://www.reddit.com/r/ClaudeCode/comments/1uouvo8/> (2026-07-06).
+
 ## Install
 
 Download the release from
