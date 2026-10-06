@@ -184,7 +184,12 @@ blocks the stop: any other follower answer, or none within 10 s, lets the leader
 page shows what the follower said. With more than one side in `peers[]` it refuses before
 stopping anything; stop each process with `POST /api/shutdown` instead. The page cannot start
 the tool again: run `claude-code-account-rotation --open`, or on Windows use the Start-menu
-shortcut, then Start WSL side on the page.
+shortcut.
+
+When the leader starts, it starts every side that has `peers[].launch` set, once. It moves no
+account. If that start fails, the leader logs why and keeps running, and the side reads
+offline. Start WSL side on the page starts it again. A side that is already running is left
+alone.
 
 Scripts use routes. `POST /api/shutdown` stops only the process it is sent to, on either side,
 which is what an upgrade that replaces one side's binary wants. `POST /api/stop` on the leader
@@ -352,8 +357,12 @@ The app does not call the GitHub API, and the dashboard has no "update available
    and `SHA256SUMS`. Check each binary and the wrapper against the digest that
    file lists for it. Replace nothing until they match. Place
    `claude-code-account-rotation-follower-log` in the same directory as the Linux binary.
-5. Replace both binaries and the wrapper, then start them. A version mismatch marks the other
-   side incompatible, so both sides have to be the release you just checked.
+5. Replace both binaries and the wrapper, then start the leader. It starts the follower from the
+   Linux binary that is in place at that moment. A version mismatch marks the other side
+   incompatible, so both sides have to be the release you just checked. If the leader started
+   before you replaced the Linux binary, the follower is still the old release: stop it with
+   `POST /api/shutdown`, then start it again with Start WSL side or
+   `POST /api/sides/wsl/start` on the leader.
 
 ## Uninstall
 

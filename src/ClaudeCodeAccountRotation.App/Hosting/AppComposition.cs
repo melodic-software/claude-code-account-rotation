@@ -249,6 +249,8 @@ internal static class AppComposition
         AddRefresh(services);
         services.AddHostedService<InstanceLockHolder>();
         services.AddHostedService<StartupReconciliation>();
+        // After reconciliation, because hosted services start in registration order.
+        services.AddHostedService<SideAutoStart>();
         services.AddHostedService<StateFileWatcher>();
         // The worker is registered twice over one instance because the refresh
         // routes call TryStart on it: AddHostedService alone registers it as an

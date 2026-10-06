@@ -8,6 +8,10 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- **The leader starts the WSL side when it starts.** You no longer click Start WSL side after
+  a reboot, the logon task or a release upgrade. Every side with `peers[].launch` is started
+  once, after startup reconciliation. A start that fails is logged, the side reads offline, and
+  the button still works. Nothing switches on its own (#173).
 - Docs: the README has a terms of service and compliance section under Posture, with sources, an
   operator checklist, and how the tool compares.
 
