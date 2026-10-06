@@ -47,6 +47,8 @@ its terms at any time.
 | Claude Code legal and compliance | <https://code.claude.com/docs/en/legal-and-compliance> | checked 2026-10-05 |
 | Claude Code authentication | <https://code.claude.com/docs/en/authentication> | checked 2026-10-05 |
 | Claude Code GitHub Actions | <https://code.claude.com/docs/en/github-actions> | checked 2026-10-05 |
+| Claude Code desktop app | <https://code.claude.com/docs/en/desktop> | checked 2026-10-06 |
+| Log in to your Claude account | <https://support.claude.com/en/articles/13189465-log-in-to-your-claude-account> | checked 2026-10-06 |
 | Supported countries | <https://www.anthropic.com/supported-countries> | checked 2026-10-05 |
 | Safeguards warnings and appeals | <https://support.claude.com/en/articles/8241253-safeguards-warnings-and-appeals> | checked 2026-10-05 |
 
@@ -139,6 +141,56 @@ Two points are gray:
 - Unconfirmed anecdote, not confirmed by Anthropic: community reports link bans to automatic
   multi-account rotation that refreshes tokens in the background and polls usage for idle
   accounts: <https://www.reddit.com/r/ClaudeCode/comments/1uouvo8/> (2026-07-06).
+
+#### Claude Desktop is out of scope
+
+Last checked: 2026-10-06.
+
+The tool switches the Claude Code CLI only. A switch leaves the Claude Desktop app, including its
+Code tab, on whatever account it last signed in to. To change Desktop's account, sign out and back
+in from Desktop itself.
+
+What Desktop does:
+
+- **It has its own login, not the CLI's.** The authentication docs say "Claude Desktop and cloud
+  sessions do not call `apiKeyHelper` or read these environment variables: they use OAuth"
+  ([authentication](https://code.claude.com/docs/en/authentication)). Desktop and the CLI share
+  settings, MCP servers and `CLAUDE.md`, and the docs list no shared login
+  ([desktop](https://code.claude.com/docs/en/desktop#coming-from-the-cli)). A request to share the
+  CLI's login with Desktop was closed as not planned
+  ([anthropics/claude-code#62206](https://github.com/anthropics/claude-code/issues/62206)).
+- **Its Code tab counts against Desktop's account.** Desktop's usage ring shows "your plan usage
+  for the period", and "plan usage is shared across all your Claude Code surfaces"
+  ([desktop](https://code.claude.com/docs/en/desktop#check-usage)).
+- **Anthropic documents one account switch only.** An individual account and a Team or Enterprise
+  account on the same email can be switched from the initials menu
+  ([log in to your Claude account](https://support.claude.com/en/articles/13189465-log-in-to-your-claude-account)).
+  Desktop has no documented counterpart to the CLI's per-account configuration directory.
+
+Community tools take two approaches:
+
+- **Swapping Desktop's files.** These tools save and restore Desktop's stored login while it is
+  closed: its cookie file, which holds the claude.ai web session, and the sign-in token entries in
+  its `config.json`. Some also decrypt those tokens to read usage on a timer, or switch accounts
+  automatically.
+- **One data folder per account.** These tools start the official app with Chromium's
+  `--user-data-dir` launch option, so each account signs in and refreshes inside its own folder and
+  the tool never touches a credential. Anthropic does not document the option for Desktop. An open
+  report in its tracker says a sign-in started in a second instance completes in the first one
+  ([anthropics/claude-code#98549](https://github.com/anthropics/claude-code/issues/98549)).
+
+Why the tool does neither:
+
+- **Swapping files parks more than the CLI does.** Moving the CLI's credential files is already
+  gray (see [How this tool compares](#how-this-tool-compares)). Desktop's cookie is a full claude.ai
+  web session, the "Claude.ai credentials or session tokens" the
+  [legal page](https://code.claude.com/docs/en/legal-and-compliance) names, and its storage layout
+  is undocumented and can change with any Desktop update.
+- **A data folder per account rests on an undocumented launch option.** It keeps credentials inside
+  the official app, so it is the lower-risk route, but it has no Anthropic statement behind it and
+  has open sign-in bugs. It stays out of scope until Anthropic documents it.
+- **No public report ties a ban to either approach, and no Anthropic source allows either.** The
+  absence of reports is weak evidence: these tools have few users.
 
 ## Install
 

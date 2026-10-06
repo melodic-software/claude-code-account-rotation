@@ -23,6 +23,9 @@ All notable changes to this project are documented in this file. The format foll
   installs, because older followers do not stop for a new build. Installing WSL first needs none.
 - Docs: the README has a terms of service and compliance section under Posture, with sources, an
   operator checklist, and how the tool compares.
+- Docs: the README says Claude Desktop is out of scope, and why: Desktop keeps its own login,
+  swapping its files would park a full claude.ai web session, and a data folder per account rests
+  on an undocumented launch option (#219).
 
 ## [2.0.7] - 2026-10-02
 
