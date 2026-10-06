@@ -134,7 +134,9 @@ summary::-webkit-details-marker { display: none; }
 }
 .badge.next { color: var(--text); background: color-mix(in srgb, var(--accent) 18%, transparent); }
 .badge.store, .badge.live, .badge.off-roster { color: var(--info); background: color-mix(in srgb, var(--info) 10%, transparent); }
-.badge.needs-login { color: var(--warn); background: color-mix(in srgb, var(--warn-fill) 12%, transparent); }
+.badge.needs-login, .badge.ci-token.warn { color: var(--warn); background: color-mix(in srgb, var(--warn-fill) 12%, transparent); }
+.badge.ci-token.crit { color: var(--crit); background: color-mix(in srgb, var(--crit) 10%, transparent); }
+.field[hidden] { display: none; }
 .badge.login-expired, .badge.error, .badge.logged-out { color: var(--crit); background: color-mix(in srgb, var(--crit) 10%, transparent); }
 
 /* ---------- the ledger ---------- */

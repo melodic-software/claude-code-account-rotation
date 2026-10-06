@@ -6,6 +6,24 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Added
+
+- **Generate CI token.** A card's ··· menu has "Generate CI token". It runs `claude setup-token`
+  for that account. You sign in on Anthropic's page in the account's mapped browser profile and
+  paste the code, as with Login. The tool then pipes the token to `gh secret set` for the
+  repository or organization secret you chose. The token is never shown, logged, stored, or put
+  on a command line. The card then names the secret it backs and warns in the last 30 days of the
+  token's one year. `setup-token` needs a terminal, so the tool runs it under a pseudo-terminal:
+  ConPTY on Windows, a POSIX pseudo-terminal on Linux (macOS is not supported). It needs `gh`
+  on PATH and signed in, and
+  checks that before a token is made (#221).
+- `POST /api/accounts/{email}/ci-token`, `POST /api/ci-token-sessions/{id}/code` and
+  `GET /api/ci-token-sessions/{id}`, the routes behind that action (#221).
+- `roster.json` entries can carry `ciTokenSecret` (`name` plus `repository` or `organization`),
+  and `GET /api/dashboard` returns it as `accounts[].roster.ciTokenSecret`. Edit and
+  `PATCH /api/accounts/{email}` can set it by hand, which is the repair when the secret was set
+  but the roster write failed. A roster an earlier release wrote reads as before (#221).
+
 ### Changed
 
 - **A release can be installed on either side first, and both sides end up running it with no
@@ -21,6 +39,9 @@ All notable changes to this project are documented in this file. The format foll
   `detail` (#173).
 - Upgrading onto this release with Windows first needs one Start WSL side click after both
   installs, because older followers do not stop for a new build. Installing WSL first needs none.
+- One account backs each CI secret, not one account in all. Marking an account clears the marker
+  only from the account that backed the same secret. Markers set by hand in Edit, which name no
+  secret, still replace each other as before (#221).
 - Docs: the README has a terms of service and compliance section under Posture, with sources, an
   operator checklist, and how the tool compares.
 - Docs: the README says Claude Desktop is out of scope, and why: Desktop keeps its own login,

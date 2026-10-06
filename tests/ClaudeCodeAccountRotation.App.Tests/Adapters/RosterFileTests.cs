@@ -75,6 +75,41 @@ public sealed class RosterFileTests : IDisposable
     }
 
     [Fact]
+    public async Task TheCiSecretRoundTripsForBothScopes()
+    {
+        using RosterFile file = new(_appData);
+        CiTokenSecret repository = CiTokenSecret.Parse("CLAUDE_CODE_OAUTH_TOKEN", "octo/lane-one", null).Value;
+        CiTokenSecret organization = CiTokenSecret.Parse("LANE_TWO_TOKEN", null, "octo").Value;
+        DateOnly day = new(2026, 10, 6);
+
+        await file.UpdateAsync(
+            roster => roster
+                .With(new RosterEntry(Email("a@example.com"), CiTokenGeneratedOn: day, CiTokenSecret: repository))
+                .With(new RosterEntry(Email("b@example.com"), CiTokenGeneratedOn: day, CiTokenSecret: organization)),
+            TestContext.Current.CancellationToken);
+        Roster stored = await file.ReadAsync(TestContext.Current.CancellationToken);
+
+        stored.Find(Email("a@example.com"))!.CiTokenSecret.ShouldBe(repository);
+        stored.Find(Email("b@example.com"))!.CiTokenSecret.ShouldBe(organization);
+    }
+
+    [Fact]
+    public async Task AHandEditedSecretGitHubWouldRefuseReadsAsNoSecret()
+    {
+        Directory.CreateDirectory(_appData);
+        await File.WriteAllTextAsync(
+            Path.Combine(_appData, RosterFile.FileName),
+            """{ "accounts": [ { "email": "a@example.com", "ciTokenGeneratedOn": "2026-10-06", "ciTokenSecret": { "name": "GITHUB_X", "repository": "octo/repo" } } ] }""",
+            TestContext.Current.CancellationToken);
+        using RosterFile file = new(_appData);
+
+        RosterEntry stored = (await file.ReadAsync(TestContext.Current.CancellationToken)).Find(Email("a@example.com"))!;
+
+        stored.CiTokenGeneratedOn.ShouldBe(new DateOnly(2026, 10, 6));
+        stored.CiTokenSecret.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task AnUnparsableFileReadsAsEmptyRatherThanThrowing()
     {
         Directory.CreateDirectory(_appData);

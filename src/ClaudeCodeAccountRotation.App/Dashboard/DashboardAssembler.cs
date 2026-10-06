@@ -87,7 +87,13 @@ internal sealed partial class DashboardAssembler(
             entry.BrowserProfileDirectory,
             entry.Paused,
             entry.Notes,
-            entry.CiTokenGeneratedOn);
+            entry.CiTokenGeneratedOn,
+            entry.CiTokenSecret is CiTokenSecret secret
+                ? new CiTokenSecretView(
+                    secret.Name,
+                    secret.Scope == CiSecretScope.Repository ? secret.Owner : null,
+                    secret.Scope == CiSecretScope.Organization ? secret.Owner : null)
+                : null);
 
     public async Task<DashboardView> AssembleAsync(CancellationToken cancellationToken)
     {

@@ -369,6 +369,79 @@ public sealed class RosterEndpointTests
     }
 
     [Fact]
+    public async Task PatchNamesTheCiSecretAndMovesItFromItsPreviousHolder()
+    {
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        await client.PostAsJsonAsync(_accounts, new { email = NewEmail }, TestContext.Current.CancellationToken);
+        await client.PostAsJsonAsync(_accounts, new { email = ParkedEmail }, TestContext.Current.CancellationToken);
+        var secret = new { name = "CLAUDE_CODE_OAUTH_TOKEN", repository = "octo/lane-one" };
+        await client.PatchAsJsonAsync(Account(NewEmail), new { ciTokenGeneratedOn = "2026-01-15", ciTokenSecret = secret }, TestContext.Current.CancellationToken);
+
+        // The repair a failed roster write asks for: the same secret, named on the account it now comes from.
+        using HttpResponseMessage response = await client.PatchAsJsonAsync(
+            Account(ParkedEmail),
+            new { ciTokenGeneratedOn = "2026-10-06", ciTokenSecret = secret },
+            TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        Roster stored = await StoredRosterAsync(factory, TestContext.Current.CancellationToken);
+        stored.Find(Email(ParkedEmail))!.CiTokenSecret.ShouldBe(new CiTokenSecret("CLAUDE_CODE_OAUTH_TOKEN", CiSecretScope.Repository, "octo/lane-one"));
+        stored.Find(Email(NewEmail))!.CiTokenSecret.ShouldBeNull();
+        stored.Find(Email(NewEmail))!.CiTokenGeneratedOn.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task PatchRefusesACiSecretWithoutADate()
+    {
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        await client.PostAsJsonAsync(_accounts, new { email = NewEmail }, TestContext.Current.CancellationToken);
+
+        using HttpResponseMessage response = await client.PatchAsJsonAsync(
+            Account(NewEmail),
+            new { ciTokenSecret = new { name = "TOKEN", organization = "octo" } },
+            TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
+        (await StoredRosterAsync(factory, TestContext.Current.CancellationToken)).Find(Email(NewEmail))!.CiTokenSecret.ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData("{\"ciTokenGeneratedOn\":\"2026-10-06\",\"ciTokenSecret\":\"TOKEN\"}")]
+    [InlineData("{\"ciTokenGeneratedOn\":\"2026-10-06\",\"ciTokenSecret\":{\"name\":\"GITHUB_X\",\"organization\":\"octo\"}}")]
+    [InlineData("{\"ciTokenGeneratedOn\":\"2026-10-06\",\"ciTokenSecret\":{\"name\":\"TOKEN\"}}")]
+    public async Task PatchRefusesACiSecretGitHubWouldRefuse(string json)
+    {
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        await client.PostAsJsonAsync(_accounts, new { email = NewEmail }, TestContext.Current.CancellationToken);
+        using StringContent content = new(json, System.Text.Encoding.UTF8, "application/json");
+
+        using HttpResponseMessage response = await client.PatchAsync(Account(NewEmail), content, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
+        (await StoredRosterAsync(factory, TestContext.Current.CancellationToken)).Find(Email(NewEmail))!.CiTokenGeneratedOn.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task ClearingTheCiTokenDateClearsItsSecret()
+    {
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        await client.PostAsJsonAsync(_accounts, new { email = NewEmail }, TestContext.Current.CancellationToken);
+        await client.PatchAsJsonAsync(
+            Account(NewEmail),
+            new { ciTokenGeneratedOn = "2026-01-15", ciTokenSecret = new { name = "TOKEN", organization = "octo" } },
+            TestContext.Current.CancellationToken);
+
+        using HttpResponseMessage response = await client.PatchAsJsonAsync(Account(NewEmail), new { ciTokenGeneratedOn = (string?)null }, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        (await StoredRosterAsync(factory, TestContext.Current.CancellationToken)).Find(Email(NewEmail))!.CiTokenSecret.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task PatchOnAnAccountThatIsNotOnTheRosterIsNotFound()
     {
         await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);

@@ -107,6 +107,12 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
 
     public BrowserRecorder Browser { get; } = new();
 
+    /// <summary>The scripted <c>claude setup-token</c> every CI token test drives.</summary>
+    public SetupTokenScript SetupToken { get; } = new();
+
+    /// <summary>What would have been handed to <c>gh secret set</c>.</summary>
+    public RecordingSecretWriter Secrets { get; } = new();
+
     /// <summary>
     /// What the machine's browsers are said to publish. Doubled like every other
     /// out-of-process port: the real reader would read this developer's own
@@ -240,6 +246,15 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
                 provider.GetRequiredService<IClaudeCliLogout>(),
                 Clock,
                 provider.GetRequiredService<ILogger<ClaudeCliLoginSessionRunner>>())));
+            // The same for "Generate CI token": the real runner, a scripted
+            // setup-token, and a gh that only records what it was handed.
+            services.Replace(ServiceDescriptor.Singleton<ICiSecretWriter>(Secrets));
+            services.Replace(ServiceDescriptor.Singleton<ICiTokenSessionRunner>(provider => new ClaudeCliSetupTokenRunner(
+                SetupToken.Start,
+                Secrets,
+                provider.GetRequiredService<RosterFile>(),
+                Clock,
+                provider.GetRequiredService<ILogger<ClaudeCliSetupTokenRunner>>())));
             Overrides?.Invoke(services);
         });
     }

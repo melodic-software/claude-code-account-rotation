@@ -26,10 +26,11 @@ public sealed class Roster
 
     /// <summary>
     /// Adds <paramref name="entry"/>, replacing any entry for the same account.
-    /// One account holds <see cref="RosterEntry.CiTokenGeneratedOn"/> at a time:
-    /// marking <paramref name="entry"/> as the CI token holder clears the marker
-    /// from every other entry, the way adopting a new live account elsewhere
-    /// already leaves only one seat live.
+    /// One account backs each CI secret at a time: marking <paramref name="entry"/>
+    /// as the holder of a secret clears the marker from every other entry that
+    /// held the same one, the way adopting a new live account elsewhere already
+    /// leaves only one seat live. Markers set by hand, with no secret named,
+    /// count as one secret among themselves, so they keep their old behavior.
     /// </summary>
     public Roster With(RosterEntry entry)
     {
@@ -37,13 +38,16 @@ public sealed class Roster
         IEnumerable<RosterEntry> others = _entries.Where(existing => existing.Email != entry.Email);
         if (entry.CiTokenGeneratedOn is not null)
         {
-            others = others.Select(static existing => existing.CiTokenGeneratedOn is null
-                ? existing
-                : existing with { CiTokenGeneratedOn = null });
+            others = others.Select(existing => existing.CiTokenGeneratedOn is not null && SameSecret(existing.CiTokenSecret, entry.CiTokenSecret)
+                ? existing with { CiTokenGeneratedOn = null, CiTokenSecret = null }
+                : existing);
         }
 
         return new Roster(others.Append(entry));
     }
+
+    private static bool SameSecret(CiTokenSecret? left, CiTokenSecret? right) =>
+        left is null ? right is null : left.SameSecretAs(right);
 
     public Roster Without(AccountEmail email) => new(_entries.Where(entry => entry.Email != email));
 }

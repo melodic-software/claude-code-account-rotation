@@ -25,7 +25,9 @@
       tier: tier,
       asOf: asOf,
       usageAge: usageAge,
-      sentence: sentence
+      sentence: sentence,
+      ciTokenBadge: ciTokenBadge,
+      ciSecretBody: ciSecretBody
     };
     return;
   }
@@ -841,6 +843,174 @@
       .then(function () { busy = false; setButtonsDisabled(false); });
   }
 
+  // Generate CI token: pick the secret, then the same sign-in as a login, in
+  // the account's mapped browser profile. The token goes from the CLI to
+  // `gh secret set` on the server and never reaches this page. The panel is a
+  // details.login, so an open one holds the poll's re-render the same way.
+  function openCiTokenPanel(account) {
+    var card = cardNodes[account.email];
+    if (!card) { return; }
+    var existing = card.querySelector("details.ci-token");
+    if (existing) { existing.parentNode.removeChild(existing); }
+
+    var previous = (account.roster && account.roster.ciTokenSecret) || null;
+    var panel = element("details", "login ci-token");
+    panel.open = true;
+    panel.appendChild(element("summary", null, "CI token for " + account.email));
+    panel.appendChild(element("p", "muted",
+      "Runs `claude setup-token` for this account and stores the token as a GitHub Actions secret with `gh secret set`. "
+      + "You sign in on Anthropic's page as this account; the token is never shown here or written to disk."));
+
+    var form = element("form", "roster-form");
+    var name = element("input");
+    name.type = "text";
+    name.value = (previous && previous.name) || "CLAUDE_CODE_OAUTH_TOKEN";
+    labeled(form, "Secret name", name);
+    var scope = element("select");
+    [["repository", "Repository secret"], ["organization", "Organization secret"]].forEach(function (pair) {
+      var option = element("option", null, pair[1]);
+      option.value = pair[0];
+      scope.appendChild(option);
+    });
+    scope.value = previous && previous.organization ? "organization" : "repository";
+    labeled(form, "Where", scope);
+    var owner = element("input");
+    owner.type = "text";
+    owner.value = (previous && (previous.repository || previous.organization)) || "";
+    var ownerRow = labeled(form, "Repository (owner/name)", owner);
+    var visibility = element("select");
+    [["private", "Private repositories"], ["all", "All repositories"], ["selected", "Selected repositories"]].forEach(function (pair) {
+      var option = element("option", null, pair[1]);
+      option.value = pair[0];
+      visibility.appendChild(option);
+    });
+    var visibilityRow = labeled(form, "Visible to", visibility);
+    var repositories = element("input");
+    repositories.type = "text";
+    repositories.placeholder = "repo-one, repo-two";
+    var repositoriesRow = labeled(form, "Repositories (names, comma separated)", repositories);
+    function shape() {
+      var org = scope.value === "organization";
+      ownerRow.firstChild.textContent = org ? "Organization" : "Repository (owner/name)";
+      visibilityRow.hidden = !org;
+      repositoriesRow.hidden = !org || visibility.value !== "selected";
+    }
+    scope.addEventListener("change", shape);
+    visibility.addEventListener("change", shape);
+    shape();
+
+    var start = element("button", null, "Start");
+    start.type = "submit";
+    form.appendChild(start);
+    form.appendChild(actionButton("Cancel", "secondary", function () { panel.parentNode.removeChild(panel); }));
+    var status = element("p", "muted");
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      var body = { secretName: name.value.trim() };
+      if (scope.value === "organization") {
+        body.organization = owner.value.trim();
+        body.visibility = visibility.value;
+        if (visibility.value === "selected") {
+          body.repositories = repositories.value.split(",").map(function (item) { return item.trim(); }).filter(Boolean);
+        }
+      } else {
+        body.repository = owner.value.trim();
+      }
+      startCiToken(account.email, body, form, status, panel);
+    });
+    panel.appendChild(form);
+    panel.appendChild(status);
+    card.appendChild(panel);
+    owner.focus();
+  }
+
+  function startCiToken(email, body, form, status, panel) {
+    busy = true;
+    setButtonsDisabled(true);
+    status.textContent = "Starting claude setup-token...";
+    return send(accountPath(email, "/ci-token"), "POST", body)
+      .then(function (result) {
+        if (!result.ok) {
+          status.textContent = refused(result.body);
+          return;
+        }
+        var session = result.body;
+        form.parentNode.removeChild(form);
+        var link = element("a", null, "Open the sign-in page");
+        link.href = session.signInUrl;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        panel.insertBefore(link, status);
+        if (session.browserError) {
+          panel.insertBefore(element("p", "muted", "The mapped browser did not open: " + session.browserError + " Use the link above."), status);
+        }
+        status.textContent = "Sign in as " + email + ", then paste the code that page shows. This expires in ten minutes.";
+        var codeForm = element("form", "roster-form");
+        var code = element("input");
+        code.type = "text";
+        code.autocomplete = "off";
+        code.placeholder = "paste the code here";
+        var submit = element("button", null, "Submit code");
+        submit.type = "submit";
+        codeForm.appendChild(code);
+        codeForm.appendChild(submit);
+        codeForm.addEventListener("submit", function (event) {
+          event.preventDefault();
+          submitCiTokenCode(session.id, email, code, status, panel, codeForm);
+        });
+        panel.appendChild(codeForm);
+        code.focus();
+      })
+      .catch(function (error) { status.textContent = "Request failed: " + error; })
+      .then(function () { busy = false; setButtonsDisabled(false); });
+  }
+
+  function submitCiTokenCode(id, email, field, status, panel, codeForm) {
+    var code = field.value.trim();
+    if (!code) { return Promise.resolve(); }
+    busy = true;
+    setButtonsDisabled(true);
+    status.textContent = "Checking that code and setting the secret...";
+    return send("/api/ci-token-sessions/" + encodeURIComponent(id) + "/code", "POST", { code: code })
+      .then(function (result) {
+        field.value = "";
+        if (!result.ok) {
+          status.textContent = refused(result.body);
+          return null;
+        }
+        // One code per session: whatever the answer, this session takes no other.
+        codeForm.parentNode.removeChild(codeForm);
+        return settleCiToken(id, email, result.body, status, panel);
+      })
+      .catch(function (error) { status.textContent = "Request failed: " + error; })
+      .then(function () { busy = false; setButtonsDisabled(false); });
+  }
+
+  // The code call answers once the CLI and gh have, or after its own wait runs
+  // out; a session still pending then is read again every two seconds until it
+  // settles or its ten minutes end.
+  function settleCiToken(id, email, session, status, panel) {
+    if (session.state === "Pending") {
+      status.textContent = "Still working: waiting on claude setup-token and gh...";
+      return new Promise(function (resolve) { setTimeout(resolve, 2000); })
+        .then(function () { return send("/api/ci-token-sessions/" + encodeURIComponent(id), "GET", null); })
+        .then(function (result) {
+          if (!result.ok) {
+            status.textContent = refused(result.body);
+            return null;
+          }
+          return settleCiToken(id, email, result.body, status, panel);
+        });
+    }
+    if (session.state !== "Completed") {
+      status.textContent = session.message || "That did not work. Start again.";
+      return null;
+    }
+    if (panel.parentNode) { panel.parentNode.removeChild(panel); }
+    showToast(session.message || ("CI token set from " + email), "ok");
+    return refresh(true);
+  }
+
   function editPanel(account, offerLogin) {
     var panel = element("details", "edit");
     panel.appendChild(element("summary", null, "Edit"));
@@ -853,14 +1023,26 @@
     notes.value = (account.roster && account.roster.notes) || "";
     notes.placeholder = "warnings belong here, not in the name";
     labeled(form, "Notes", notes);
-    // One account at a time: setting this clears it on whichever other card
-    // carried it, the way adopting a live account elsewhere already leaves only
-    // one seat live. The date is the operator's own record of when they ran
-    // `claude setup-token`; nothing here reads GitHub or the token itself.
+    // Generate CI token sets this itself. By hand it is the operator's own
+    // record of when they ran `claude setup-token`; clearing it also clears the
+    // secret it named. Nothing here reads GitHub or the token itself.
     var ciToken = element("input");
     ciToken.type = "date";
     ciToken.value = (account.roster && account.roster.ciTokenGeneratedOn) || "";
-    labeled(form, "CI token generated on (this account backs CLAUDE_CODE_OAUTH_TOKEN)", ciToken);
+    labeled(form, "CI token generated on", ciToken);
+    // The secret that token went to. Generate CI token fills these in; by hand
+    // they repair a card whose secret was set but whose roster write failed.
+    var secret = (account.roster && account.roster.ciTokenSecret) || null;
+    var ciSecretName = element("input");
+    ciSecretName.type = "text";
+    ciSecretName.value = secret ? secret.name : "";
+    ciSecretName.placeholder = "CLAUDE_CODE_OAUTH_TOKEN";
+    labeled(form, "CI secret name", ciSecretName);
+    var ciSecretWhere = element("input");
+    ciSecretWhere.type = "text";
+    ciSecretWhere.value = secret ? (secret.repository || secret.organization) : "";
+    ciSecretWhere.placeholder = "owner/repository, or an organization";
+    labeled(form, "CI secret in", ciSecretWhere);
     var save = element("button", null, "Save");
     save.type = "submit";
     form.appendChild(save);
@@ -877,6 +1059,7 @@
       // a blank one, is what lets the operator take a warning back off the card.
       body.notes = notes.value.trim() || null;
       body.ciTokenGeneratedOn = ciToken.value || null;
+      body.ciTokenSecret = ciSecretBody(ciSecretName.value, ciSecretWhere.value);
       mutate(accountPath(account.email), "PATCH", body, function (result) {
         showToast(result.ok ? account.email + " updated" : refused(result.body), result.ok ? "ok" : "error");
       });
@@ -1083,6 +1266,41 @@
   // The account's state in one sentence, worst first, and the tone it is said
   // in. The credential facts come before the quota: a card whose login has
   // expired is not "usable now" whatever its figures say.
+  // The CI token badge: which secret the account backs, and when its one-year
+  // token runs out. setup-token asks for 365 days, so the expiry is reckoned
+  // from the generation date; within 30 days the badge warns, and past it the
+  // badge says so. Null when the account backs no secret.
+  function ciTokenBadge(roster, at) {
+    if (!roster || !roster.ciTokenGeneratedOn) { return null; }
+    var made = Date.parse(roster.ciTokenGeneratedOn + "T00:00:00Z");
+    if (isNaN(made)) { return null; }
+    var expires = new Date(made + 365 * 86400000);
+    var expiresOn = expires.toISOString().slice(0, 10);
+    var days = Math.floor((expires.getTime() - at) / 86400000);
+    // The badge sits in a narrow column, so it names the lane (the repository,
+    // or the organization) and the hover says the rest.
+    var secret = roster.ciTokenSecret;
+    var name = !secret ? "CI token"
+      : "CI · " + (secret.repository ? secret.repository.split("/")[1] : "org " + secret.organization);
+    var title = (secret ? secret.name + " in " + (secret.repository || "org " + secret.organization) + ". " : "")
+      + "Generated " + roster.ciTokenGeneratedOn + "; expires about " + expiresOn + ".";
+    if (days < 0) { return { kind: "crit", text: name + " · expired", title: title }; }
+    if (days <= 30) { return { kind: "warn", text: name + " · " + days + " d left", title: title }; }
+    return { kind: "ok", text: secret ? name : name + " · " + roster.ciTokenGeneratedOn, title: title };
+  }
+
+  // The CI secret an Edit names: null when either field is blank, else its name
+  // and, by whether it holds a slash, a repository or an organization. The
+  // server holds both to GitHub's rules.
+  function ciSecretBody(name, where) {
+    var trimmedName = (name || "").trim();
+    var trimmedWhere = (where || "").trim();
+    if (!trimmedName || !trimmedWhere) { return null; }
+    return trimmedWhere.indexOf("/") >= 0
+      ? { name: trimmedName, repository: trimmedWhere }
+      : { name: trimmedName, organization: trimmedWhere };
+  }
+
   function sentence(account, at) {
     if (account.cliLoggedOut) {
       return { kind: "crit", text: "Logged out" + (account.loggedOutOn ? " on " + sideLabel(account.loggedOutOn) : "") };
@@ -1432,8 +1650,11 @@
       badges.appendChild(element("span", "badge " + chip.replace(/ /g, "-"), chip));
     }
     if (!roster) { badges.appendChild(element("span", "badge off-roster", "not on roster")); }
-    if (roster && roster.ciTokenGeneratedOn) {
-      badges.appendChild(element("span", "badge ci-token", "CI token · " + roster.ciTokenGeneratedOn));
+    var ci = ciTokenBadge(roster, at);
+    if (ci) {
+      var ciBadge = element("span", "badge ci-token " + ci.kind, ci.text);
+      ciBadge.title = ci.title;
+      badges.appendChild(ciBadge);
     }
     title.appendChild(badges);
     who.appendChild(title);
@@ -1487,6 +1708,9 @@
       }));
     }
     menu.appendChild(blockable(menuItem(more, "Refresh usage", "quiet sm", function () { refreshAccount(account.email); }), false));
+    if (roster) {
+      menu.appendChild(menuItem(more, "Generate CI token", "quiet sm", function () { openCiTokenPanel(account); }));
+    }
     if (roster) {
       menu.appendChild(menuItem(more, paused ? "Resume rotation" : "Pause rotation", "quiet sm", function () { setPaused(account.email, !paused); }));
     }

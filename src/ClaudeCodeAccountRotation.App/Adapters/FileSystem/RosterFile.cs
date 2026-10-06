@@ -79,6 +79,7 @@ internal sealed class RosterFile : IDisposable
                 ["paused"] = entry.Paused,
                 ["notes"] = entry.Notes,
                 ["ciTokenGeneratedOn"] = entry.CiTokenGeneratedOn?.ToString(CiTokenDateFormat, CultureInfo.InvariantCulture),
+                ["ciTokenSecret"] = SecretToJson(entry.CiTokenSecret),
             });
         }
 
@@ -102,7 +103,32 @@ internal sealed class RosterFile : IDisposable
                 Text(entry, "browserProfileDirectory"),
                 entry["paused"] is JsonValue paused && paused.TryGetValue(out bool value) && value,
                 Text(entry, "notes"),
-                ParseCiTokenDate(Text(entry, "ciTokenGeneratedOn")));
+                ParseCiTokenDate(Text(entry, "ciTokenGeneratedOn")),
+                SecretFromJson(entry["ciTokenSecret"]));
+    }
+
+    private static JsonObject? SecretToJson(CiTokenSecret? secret) => secret is null
+        ? null
+        : new JsonObject
+        {
+            ["name"] = secret.Name,
+            [secret.Scope == CiSecretScope.Repository ? "repository" : "organization"] = secret.Owner,
+        };
+
+    /// <summary>
+    /// The secret an entry's CI token went to, or null for an entry an earlier
+    /// release wrote (it has no such key) and for one hand-edited past the rules
+    /// <see cref="CiTokenSecret.Parse"/> holds a new one to.
+    /// </summary>
+    private static CiTokenSecret? SecretFromJson(JsonNode? node)
+    {
+        if (node is not JsonObject secret)
+        {
+            return null;
+        }
+
+        Result<CiTokenSecret, string> parsed = CiTokenSecret.Parse(Text(secret, "name"), Text(secret, "repository"), Text(secret, "organization"));
+        return parsed.IsSuccess ? parsed.Value : null;
     }
 
     private static DateOnly? ParseCiTokenDate(string? value) =>
