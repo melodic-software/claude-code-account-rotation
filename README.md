@@ -177,8 +177,7 @@ Community tools take two approaches:
   `--user-data-dir` launch option, so each account signs in and refreshes inside its own folder and
   the tool never touches a credential. Anthropic does not document the option for Desktop. An open
   report in its tracker says a sign-in started in a second instance completes in the first one
-  ([anthropics/claude-code#98549](https://github.com/anthropics/claude-code/issues/98549)), and
-  only one instance at a time can run Cowork.
+  ([anthropics/claude-code#98549](https://github.com/anthropics/claude-code/issues/98549)).
 
 Why the tool does neither:
 
