@@ -36,14 +36,30 @@ public sealed class FollowerUpgradeWatcherTests : IDisposable
     public void Dispose() => Directory.Delete(_directory, recursive: true);
 
     [Fact]
-    public async Task AnUnchangedBinaryIsNotProbed()
+    public async Task TheFirstTickAsksTheInstalledBuildOnceAndAnUnchangedOneIsNotAskedAgain()
     {
         using FollowerUpgradeWatcher watcher = Watcher(Leader);
+        _probes.Enqueue(Result<string, string>.Success(Own));
 
         (await watcher.CheckOnceAsync(TestContext.Current.CancellationToken)).ShouldBeFalse();
+        (await watcher.CheckOnceAsync(TestContext.Current.CancellationToken)).ShouldBeFalse();
 
-        _probeCount.ShouldBe(0);
+        _probeCount.ShouldBe(1);
         _exitCount.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task TheLeadersBuildInstalledBeforeTheWatcherExistedStillStopsTheFollower()
+    {
+        // The rename lands between the process starting on the old image and
+        // the host building this watcher: the file on disk is already new.
+        Replace("new build");
+        using FollowerUpgradeWatcher watcher = Watcher(Leader);
+        _probes.Enqueue(Result<string, string>.Success(Leader));
+
+        (await watcher.CheckOnceAsync(TestContext.Current.CancellationToken)).ShouldBeTrue();
+
+        _exitCount.ShouldBe(1);
     }
 
     [Fact]
@@ -160,6 +176,10 @@ public sealed class FollowerUpgradeWatcherTests : IDisposable
             (await FollowerUpgradeWatcher.TryExitAsync(gate, journal, lifetime, TestContext.Current.CancellationToken)).ShouldBeTrue();
             lifetime.Stopped.ShouldBeTrue();
             Environment.ExitCode.ShouldBe(FollowerUpgrade.ExitCode);
+
+            // The gate stays closed while the host drains: an import that was
+            // waiting on it times out rather than starting mid-shutdown.
+            await Should.ThrowAsync<TimeoutException>(() => gate.AcquireAsync(TimeSpan.Zero, TestContext.Current.CancellationToken));
         }
         finally
         {
