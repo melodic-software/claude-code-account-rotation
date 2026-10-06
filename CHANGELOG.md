@@ -10,8 +10,9 @@ All notable changes to this project are documented in this file. The format foll
 
 - Docs: the README has a terms of service and compliance section under Posture, with sources, an
   operator checklist, and how the tool compares.
-- Docs: the README says Claude Desktop is out of scope, and why: Desktop keeps its own claude.ai
-  login, and moving it would mean the tool stores a claude.ai session token (#219).
+- Docs: the README says Claude Desktop is out of scope, and why: Desktop keeps its own login,
+  swapping its files would park a full claude.ai web session, and a data folder per account rests
+  on an undocumented launch option (#219).
 
 ## [2.0.7] - 2026-10-02
 

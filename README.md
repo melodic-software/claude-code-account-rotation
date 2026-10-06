@@ -148,42 +148,50 @@ Last checked: 2026-10-06.
 
 The tool switches the Claude Code CLI only. A switch leaves the Claude Desktop app, including its
 Code tab, on whatever account it last signed in to. To change Desktop's account, sign out and back
-in from Desktop itself. Rotating Desktop logins does not fit the posture above, for these reasons:
+in from Desktop itself.
 
-- **Desktop has its own login, not the CLI's.** The authentication docs say "Claude Desktop and
-  cloud sessions do not call `apiKeyHelper` or read these environment variables: they use OAuth"
+What Desktop does:
+
+- **It has its own login, not the CLI's.** The authentication docs say "Claude Desktop and cloud
+  sessions do not call `apiKeyHelper` or read these environment variables: they use OAuth"
   ([authentication](https://code.claude.com/docs/en/authentication)). Desktop and the CLI share
   settings, MCP servers and `CLAUDE.md`, and the docs list no shared login
   ([desktop](https://code.claude.com/docs/en/desktop#coming-from-the-cli)). A request to share the
   CLI's login with Desktop was closed as not planned
   ([anthropics/claude-code#62206](https://github.com/anthropics/claude-code/issues/62206)).
-- **What Desktop stores is a claude.ai session token.** Anthropic does not document this. Community
-  reverse engineering reports a claude.ai `sessionKey` cookie in Desktop's Chromium cookie store
-  (`~/Library/Application Support/Claude/Cookies` on macOS), valid for about a month
-  ([xsmyile/sissy#131](https://github.com/xsmyile/sissy/issues/131)). It also reports a separate
-  OAuth token for the Code tab in Desktop's `config.json` under `oauth:tokenCacheV2`
-  ([yhm138/ai-quota-tray#6](https://github.com/yhm138/ai-quota-tray/pull/6)). Both reports say the
-  values are encrypted with a key Desktop owns: the "Claude Safe Storage" Keychain item on macOS,
-  DPAPI on Windows.
-- **Moving that login means storing a session token.** The
-  [legal page](https://code.claude.com/docs/en/legal-and-compliance) names "Claude.ai credentials
-  or session tokens" among what developers "may not collect, store, or intermediate". The CLI case
-  is gray because the tool moves Claude Code's own credential files and never reads a claude.ai web
-  session. Parking a Desktop login means taking the token out of Desktop's encrypted store, or
-  renaming Desktop's whole data folder, which also moves its sessions and Cowork data and uses a
-  layout Anthropic does not document. Either way, the tool holds a claude.ai session.
-- **A parked Desktop login cannot be kept fresh honestly.** Only Desktop refreshes its own session.
-  For the tool to keep a parked one alive, it would have to send that session to claude.ai, acting
-  as the app. That conflicts with honest identification under [Posture](#posture).
-- **Anthropic documents no Desktop account switching beyond one case.** An individual account and
-  a Team or Enterprise account on the same email can be switched from the initials menu
+- **Its Code tab counts against Desktop's account.** Desktop's usage ring shows "your plan usage
+  for the period", and "plan usage is shared across all your Claude Code surfaces"
+  ([desktop](https://code.claude.com/docs/en/desktop#check-usage)).
+- **Anthropic documents one account switch only.** An individual account and a Team or Enterprise
+  account on the same email can be switched from the initials menu
   ([log in to your Claude account](https://support.claude.com/en/articles/13189465-log-in-to-your-claude-account)).
   Desktop has no documented counterpart to the CLI's per-account configuration directory.
-- **Desktop already shows plan usage, so the tool has nothing to read there.** Desktop's usage ring
-  shows "your plan usage for the period", and "plan usage is shared across all your Claude Code
-  surfaces" ([desktop](https://code.claude.com/docs/en/desktop#check-usage)). That figure is for
-  Desktop's own account. Work in Desktop's Code tab counts against that account, not the one the
-  tool switched the CLI to.
+
+Community tools take two approaches:
+
+- **Swapping Desktop's files.** These tools save and restore Desktop's stored login while it is
+  closed: its cookie file, which holds the claude.ai web session, and the sign-in token entries in
+  its `config.json`. Some also decrypt those tokens to read usage on a timer, or switch accounts
+  automatically.
+- **One data folder per account.** These tools start the official app with Chromium's
+  `--user-data-dir` launch option, so each account signs in and refreshes inside its own folder and
+  the tool never touches a credential. Anthropic does not document the option for Desktop. An open
+  report in its tracker says a sign-in started in a second instance completes in the first one
+  ([anthropics/claude-code#98549](https://github.com/anthropics/claude-code/issues/98549)), and
+  only one instance at a time can run Cowork.
+
+Why the tool does neither:
+
+- **Swapping files parks more than the CLI does.** Moving the CLI's credential files is already
+  gray (see [How this tool compares](#how-this-tool-compares)). Desktop's cookie is a full claude.ai
+  web session, the "Claude.ai credentials or session tokens" the
+  [legal page](https://code.claude.com/docs/en/legal-and-compliance) names, and its storage layout
+  is undocumented and can change with any Desktop update.
+- **A data folder per account rests on an undocumented launch option.** It keeps credentials inside
+  the official app, so it is the lower-risk route, but it has no Anthropic statement behind it and
+  has open sign-in bugs. It stays out of scope until Anthropic documents it.
+- **No public report ties a ban to either approach, and no Anthropic source allows either.** The
+  absence of reports is weak evidence: these tools have few users.
 
 ## Install
 
