@@ -16,4 +16,7 @@ public interface IPeerProcessHost
 
     /// <summary>Starts the child if it is not already running. A start that fails answers why.</summary>
     Task<Result<Unit, string>> StartAsync(CancellationToken cancellationToken);
+
+    /// <summary>Raised once when a child this host started exits, with its exit code.</summary>
+    event EventHandler<PeerExitedEventArgs>? Exited;
 }

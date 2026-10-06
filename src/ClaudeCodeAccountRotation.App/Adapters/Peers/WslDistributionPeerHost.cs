@@ -28,20 +28,26 @@ namespace ClaudeCodeAccountRotation.App.Adapters.Peers;
 internal sealed partial class WslDistributionPeerHost : IPeerProcessHost, IDisposable
 {
     private readonly PeerLaunch _launch;
+    private readonly string _leaderVersion;
     private readonly ILogger<WslDistributionPeerHost> _logger;
     private readonly Lock _mutex = new();
     private System.Diagnostics.Process? _child;
+    private bool _disposed;
 
-    public WslDistributionPeerHost(SideName side, PeerLaunch launch, ILogger<WslDistributionPeerHost> logger)
+    public WslDistributionPeerHost(SideName side, PeerLaunch launch, string leaderVersion, ILogger<WslDistributionPeerHost> logger)
     {
         ArgumentNullException.ThrowIfNull(launch);
+        ArgumentException.ThrowIfNullOrWhiteSpace(leaderVersion);
         ArgumentNullException.ThrowIfNull(logger);
         Side = side;
         _launch = launch;
+        _leaderVersion = leaderVersion;
         _logger = logger;
     }
 
     public SideName Side { get; }
+
+    public event EventHandler<PeerExitedEventArgs>? Exited;
 
     public bool IsRunning
     {
@@ -64,37 +70,65 @@ internal sealed partial class WslDistributionPeerHost : IPeerProcessHost, IDispo
                 return Task.FromResult(Result<Unit, string>.Success(Unit.Value));
             }
 
+            if (_disposed)
+            {
+                return Task.FromResult(Result<Unit, string>.Failure("the leader is stopping"));
+            }
+
             _child?.Dispose();
             _child = null;
 
-            ProcessStartInfo start = new("wsl.exe")
+            System.Diagnostics.Process child = new()
             {
-                UseShellExecute = false,
-                CreateNoWindow = true,
+                StartInfo = StartInfo(_launch, _leaderVersion, Environment.GetEnvironmentVariable("WSLENV")),
+                EnableRaisingEvents = true,
             };
-            foreach (string argument in Arguments(_launch))
-            {
-                start.ArgumentList.Add(argument);
-            }
-
+            child.Exited += OnChildExited;
             try
             {
-                _child = System.Diagnostics.Process.Start(start);
+                if (!child.Start())
+                {
+                    child.Dispose();
+                    return Task.FromResult(Result<Unit, string>.Failure("the " + Side.Value + " side could not be started: wsl.exe did not start"));
+                }
             }
             catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or InvalidOperationException)
             {
+                child.Dispose();
                 LogStartFailed(Side.Value, exception.Message);
                 return Task.FromResult(Result<Unit, string>.Failure("the " + Side.Value + " side could not be started: " + exception.Message));
             }
 
-            if (_child is null)
-            {
-                return Task.FromResult(Result<Unit, string>.Failure("the " + Side.Value + " side could not be started: wsl.exe did not start"));
-            }
-
+            _child = child;
             LogStarted(Side.Value, _launch.Distribution);
             return Task.FromResult(Result<Unit, string>.Success(Unit.Value));
         }
+    }
+
+    /// <summary>
+    /// The <c>wsl.exe</c> start, separated so a test can assert it without
+    /// spawning anything. The leader's version crosses into the distribution in
+    /// <see cref="FollowerUpgrade.LeaderVersionVariable"/>, which
+    /// <c>WSLENV</c> must list for <c>wsl.exe</c> to pass it. Any list the
+    /// leader inherited is kept. A follower that predates the variable ignores it.
+    /// </summary>
+    public static ProcessStartInfo StartInfo(PeerLaunch launch, string leaderVersion, string? inheritedWslEnv)
+    {
+        ArgumentNullException.ThrowIfNull(launch);
+        ProcessStartInfo start = new("wsl.exe")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (string argument in Arguments(launch))
+        {
+            start.ArgumentList.Add(argument);
+        }
+
+        const string shared = FollowerUpgrade.LeaderVersionVariable + "/u";
+        start.Environment[FollowerUpgrade.LeaderVersionVariable] = leaderVersion;
+        start.Environment["WSLENV"] = string.IsNullOrEmpty(inheritedWslEnv) ? shared : inheritedWslEnv + ":" + shared;
+        return start;
     }
 
     /// <summary>
@@ -147,6 +181,8 @@ internal sealed partial class WslDistributionPeerHost : IPeerProcessHost, IDispo
     {
         lock (_mutex)
         {
+            // Before the kill, so the exit it causes is not reported as one to act on.
+            _disposed = true;
             try
             {
                 if (_child is { HasExited: false })
@@ -163,6 +199,37 @@ internal sealed partial class WslDistributionPeerHost : IPeerProcessHost, IDispo
             _child = null;
         }
     }
+
+    /// <summary>
+    /// Reports the exit of the child this host still tracks. An exit after
+    /// <see cref="Dispose"/>, or of a child a later start has replaced, is not reported.
+    /// </summary>
+    private void OnChildExited(object? sender, EventArgs e)
+    {
+        int exitCode;
+        lock (_mutex)
+        {
+            if (_disposed || sender is not System.Diagnostics.Process exited || !ReferenceEquals(exited, _child))
+            {
+                return;
+            }
+
+            try
+            {
+                exitCode = exited.ExitCode;
+            }
+            catch (InvalidOperationException)
+            {
+                return;
+            }
+        }
+
+        LogExited(Side.Value, exitCode);
+        Exited?.Invoke(this, new PeerExitedEventArgs(exitCode));
+    }
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "the {Side} side exited with code {ExitCode}")]
+    private partial void LogExited(string side, int exitCode);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "started the {Side} side in {Distribution}")]
     private partial void LogStarted(string side, string distribution);

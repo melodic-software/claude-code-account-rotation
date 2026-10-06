@@ -186,10 +186,12 @@ stopping anything; stop each process with `POST /api/shutdown` instead. The page
 the tool again: run `claude-code-account-rotation --open`, or on Windows use the Start-menu
 shortcut.
 
-When the leader starts, it starts every side that has `peers[].launch` set, once. It moves no
-account. If that start fails, the leader logs why and keeps running, and the side reads
-offline. Start WSL side on the page starts it again. A side that is already running is left
-alone.
+When the leader starts, it brings up every side that has `peers[].launch` set. It leaves a side
+that is on its own version alone. It starts a side that is not running. A side on another
+version is stopped and started again. It moves no account. If a side cannot be brought up, the
+leader logs why and keeps running, and the side reads offline or incompatible. Start WSL side
+on the page tries again. [Upgrading a release](#upgrading-a-release) says how this lets either
+side be installed first.
 
 Scripts use routes. `POST /api/shutdown` stops only the process it is sent to, on either side,
 which is what an upgrade that replaces one side's binary wants. `POST /api/stop` on the leader
@@ -344,25 +346,53 @@ The app does not call the GitHub API, and the dashboard has no "update available
 `claude-code-account-rotation --version` with
 <https://github.com/melodic-software/claude-code-account-rotation/releases/latest>.
 
-1. If the logon task from melodic-software/provisioning#552 is installed, disable it first. This
-   repository does not name that task.
-2. The page must show no blocking banner, so no switch or import is in flight. Look while the
-   tool is still running.
-3. Stop the leader and the follower with `POST /api/shutdown`. Send
-   `Authorization: Bearer` with the token on the second line of that side's `instance.url`,
-   and the same `X-Claude-Code-Account-Rotation: 1` header as the other dashboard writes.
-   A 409 means a switch or import is still in flight, so the process was left running.
-4. Download `claude-code-account-rotation-win-x64.exe`,
+Install the two sides in either order. Neither install has to wait for the other, and neither
+has to stop the other side.
+
+1. Download `claude-code-account-rotation-win-x64.exe`,
    `claude-code-account-rotation-linux-x64`, `claude-code-account-rotation-follower-log`,
    and `SHA256SUMS`. Check each binary and the wrapper against the digest that
    file lists for it. Replace nothing until they match. Place
    `claude-code-account-rotation-follower-log` in the same directory as the Linux binary.
-5. Replace both binaries and the wrapper, then start the leader. It starts the follower from the
-   Linux binary that is in place at that moment. A version mismatch marks the other side
-   incompatible, so both sides have to be the release you just checked. If the leader started
-   before you replaced the Linux binary, the follower is still the old release: stop it with
-   `POST /api/shutdown`, then start it again with Start WSL side or
-   `POST /api/sides/wsl/start` on the leader.
+2. **Windows side.** Stop the leader with `POST /api/shutdown`, replace the `.exe`, and start the
+   leader. Send `Authorization: Bearer` with the token on the second line of the leader's
+   `instance.url`, and the same `X-Claude-Code-Account-Rotation: 1` header as the other
+   dashboard writes. A 409 means a switch or import is in flight, so the leader was left
+   running: try again once it finishes. If the logon task from
+   melodic-software/provisioning#552 is installed, disable it before the stop and enable it after
+   the start. This repository does not name that task.
+3. **WSL side.** Replace the Linux binary and the wrapper while the follower runs. Rename a new
+   file over each one, as chezmoi does. Do not copy over the running binary: Linux refuses that
+   with "Text file busy". Do not stop the follower.
+
+What happens after each order:
+
+- **Windows first.** The new leader finds the follower on the old version. It stops the follower
+  with that side's own `/api/shutdown` and starts it again. The Linux binary installed at that
+  moment is still the old one, so the old build starts again, but now it knows the new leader's
+  version. When the WSL install lands, the follower sees the new build is the leader's version.
+  Within about 15 seconds, once no import is in flight, it stops with exit code 75, and the
+  leader starts the new build. Hand-offs are refused between the two installs, because the
+  versions differ.
+- **WSL first.** The follower keeps running the old build, which still matches the old leader,
+  so hand-offs keep working. It knows the leader runs the old version, so it does not stop for
+  the new build. When the new leader starts, it finds the follower on the old version, stops it,
+  and starts the new build.
+
+Either way, a side is stopped only through its own `/api/shutdown`, which refuses while a switch
+or import is in flight. A refused stop leaves that side running on its old version, and the
+page shows it as incompatible. Start WSL side, or `POST /api/sides/wsl/start` on the leader,
+tries again: it stops and starts a side on another version, and starts one that is not running.
+The leader runs one of these passes at a time per side, so its startup, the button, and a
+follower's exit cannot overlap. Only exit code 75 makes the leader start the side again. A
+crash, or a stop you sent, is left for you.
+
+Upgrading onto this release from an earlier one, Windows first: the old follower does not stop
+for a new build by itself, so click Start WSL side once after both installs. Installing WSL
+first needs no click.
+
+When both sides are done, `claude-code-account-rotation --version` prints the same version on
+each, and the page shows the WSL side online.
 
 ## Uninstall
 
