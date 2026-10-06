@@ -47,6 +47,8 @@ its terms at any time.
 | Claude Code legal and compliance | <https://code.claude.com/docs/en/legal-and-compliance> | checked 2026-10-05 |
 | Claude Code authentication | <https://code.claude.com/docs/en/authentication> | checked 2026-10-05 |
 | Claude Code GitHub Actions | <https://code.claude.com/docs/en/github-actions> | checked 2026-10-05 |
+| Claude Code desktop app | <https://code.claude.com/docs/en/desktop> | checked 2026-10-06 |
+| Log in to your Claude account | <https://support.claude.com/en/articles/13189465-log-in-to-your-claude-account> | checked 2026-10-06 |
 | Supported countries | <https://www.anthropic.com/supported-countries> | checked 2026-10-05 |
 | Safeguards warnings and appeals | <https://support.claude.com/en/articles/8241253-safeguards-warnings-and-appeals> | checked 2026-10-05 |
 
@@ -139,6 +141,49 @@ Two points are gray:
 - Unconfirmed anecdote, not confirmed by Anthropic: community reports link bans to automatic
   multi-account rotation that refreshes tokens in the background and polls usage for idle
   accounts: <https://www.reddit.com/r/ClaudeCode/comments/1uouvo8/> (2026-07-06).
+
+#### Claude Desktop is out of scope
+
+Last checked: 2026-10-06.
+
+The tool switches the Claude Code CLI only. A switch leaves the Claude Desktop app, including its
+Code tab, on whatever account it last signed in to. To change Desktop's account, sign out and back
+in from Desktop itself. Rotating Desktop logins does not fit the posture above, for these reasons:
+
+- **Desktop has its own login, not the CLI's.** The authentication docs say "Claude Desktop and
+  cloud sessions do not call `apiKeyHelper` or read these environment variables: they use OAuth"
+  ([authentication](https://code.claude.com/docs/en/authentication)). Desktop and the CLI share
+  settings, MCP servers and `CLAUDE.md`, and the docs list no shared login
+  ([desktop](https://code.claude.com/docs/en/desktop#coming-from-the-cli)). A request to share the
+  CLI's login with Desktop was closed as not planned
+  ([anthropics/claude-code#62206](https://github.com/anthropics/claude-code/issues/62206)).
+- **What Desktop stores is a claude.ai session token.** Anthropic does not document this. Community
+  reverse engineering reports a claude.ai `sessionKey` cookie in Desktop's Chromium cookie store
+  (`~/Library/Application Support/Claude/Cookies` on macOS), valid for about a month
+  ([xsmyile/sissy#131](https://github.com/xsmyile/sissy/issues/131)). It also reports a separate
+  OAuth token for the Code tab in Desktop's `config.json` under `oauth:tokenCacheV2`
+  ([yhm138/ai-quota-tray#6](https://github.com/yhm138/ai-quota-tray/pull/6)). Both reports say the
+  values are encrypted with a key Desktop owns: the "Claude Safe Storage" Keychain item on macOS,
+  DPAPI on Windows.
+- **Moving that login means storing a session token.** The
+  [legal page](https://code.claude.com/docs/en/legal-and-compliance) names "Claude.ai credentials
+  or session tokens" among what developers "may not collect, store, or intermediate". The CLI case
+  is gray because the tool moves Claude Code's own credential files and never reads a claude.ai web
+  session. Parking a Desktop login means taking the token out of Desktop's encrypted store, or
+  renaming Desktop's whole data folder, which also moves its sessions and Cowork data and uses a
+  layout Anthropic does not document. Either way, the tool holds a claude.ai session.
+- **A parked Desktop login cannot be kept fresh honestly.** Only Desktop refreshes its own session.
+  For the tool to keep a parked one alive, it would have to send that session to claude.ai, acting
+  as the app. That conflicts with honest identification under [Posture](#posture).
+- **Anthropic documents no Desktop account switching beyond one case.** An individual account and
+  a Team or Enterprise account on the same email can be switched from the initials menu
+  ([log in to your Claude account](https://support.claude.com/en/articles/13189465-log-in-to-your-claude-account)).
+  Desktop has no documented counterpart to the CLI's per-account configuration directory.
+- **Desktop already shows plan usage, so the tool has nothing to read there.** Desktop's usage ring
+  shows "your plan usage for the period", and "plan usage is shared across all your Claude Code
+  surfaces" ([desktop](https://code.claude.com/docs/en/desktop#check-usage)). That figure is for
+  Desktop's own account. Work in Desktop's Code tab counts against that account, not the one the
+  tool switched the CLI to.
 
 ## Install
 
