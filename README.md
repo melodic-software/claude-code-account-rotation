@@ -121,6 +121,7 @@ its terms at any time.
 | Usage reads | Bounded: at most once a minute per account, only on request | [Posture](#posture), read bullet; [`RefreshBudget.cs`](src/ClaudeCodeAccountRotation.Core/Quota/RefreshBudget.cs) |
 | User-Agent | Its own, on every request | [`AnthropicEndpoints.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Http/AnthropicEndpoints.cs) |
 | OAuth `client_id` for parked refreshes | Claude Code's public one | [Posture](#posture); [`AnthropicEndpoints.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Http/AnthropicEndpoints.cs) |
+| CI tokens | Only on a click: the unmodified `claude setup-token` makes the token, you sign in on Anthropic's page and paste the code, and the token goes from the CLI's output to `gh secret set` in memory, never to disk, a log, or the page | [Rotating the CI token](#rotating-the-ci-token); [`ClaudeCliSetupTokenRunner.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Process/ClaudeCliSetupTokenRunner.cs) |
 
 Two points are gray:
 
@@ -343,19 +344,47 @@ returns one entry per configured side (an empty list when none is). Supported fi
 
 ## Rotating the CI token
 
-The org secret `CLAUDE_CODE_OAUTH_TOKEN` authenticates Claude Code in GitHub Actions. The
-account behind it is marked on its card with a `CI token · <date>` badge. CI draws on that
-account's 5-hour and 7-day limits alongside your interactive sessions on it.
+A `CLAUDE_CODE_OAUTH_TOKEN` secret authenticates Claude Code in GitHub Actions. Each lane can
+have its own: one account per repository or organization secret. A card that backs a secret
+shows a `CI · <repository>` badge (hover it for the secret name and dates). The badge warns in
+the last 30 days of the token's one year and says when it has expired. CI draws on that account's
+5-hour and 7-day limits alongside your interactive sessions on it.
+
+Prerequisite: the GitHub CLI (`gh`) on PATH, signed in (`gh auth login`) as someone who may write
+that secret. The tool checks this before a token is made.
 
 1. Pick the card with the most 7-day headroom.
-2. Signed in as that account, run `claude setup-token`.
-3. Set the new value with `gh secret set CLAUDE_CODE_OAUTH_TOKEN --org melodic-software`. `gh`
-   sets an org secret to private visibility unless told otherwise, so pass the `--visibility` or
-   `--repos` the secret has now.
-4. On that account's card, open Edit, set "CI token generated on" to today, and Save. Marking it
-   clears the badge from the previous account. The same write is
-   `PATCH /api/accounts/{email}` with `{"ciTokenGeneratedOn":"yyyy-MM-dd"}`, sent with the
-   headers `POST /api/shutdown` takes.
+2. Open its ··· menu, then Generate CI token. Enter the secret name, then the repository
+   (`owner/name`) or the organization and who may read it (private, all, or selected
+   repositories). Choose Start.
+3. Anthropic's sign-in page opens in the account's mapped browser profile. Sign in as that
+   account, then paste the code it shows into the card and choose Submit code.
+4. The tool hands the token to `gh secret set` on its standard input and marks the account on its
+   card. Marking it clears the badge from the account that backed the same secret before.
+
+The token never leaves memory: it is not shown, logged, written to disk, or passed as an
+argument. A failure (a rejected code, `gh` refusing the write, or a CLI release whose screen the
+tool cannot read) ends the session without storing anything, and the message gives the manual
+commands: `claude setup-token`, then `gh secret set <name> --repo <owner/name>` (or
+`--org <org>`).
+
+`claude setup-token` draws its screen only when its input is a terminal, so the tool runs it
+under one: a pseudoconsole (ConPTY, Windows 10 1809 or later) on Windows, and a POSIX
+pseudo-terminal on Linux. On macOS the action refuses and you run the commands by hand. The
+terminal is 1,000 columns wide, so nothing on it wraps. The tool reads only two things from that
+screen: the sign-in URL, which must be whole (with its `code_challenge` and `state`), and the
+token, matched by its `sk-ant-oat01-` prefix. Exactly one token must appear, standing alone on
+its row. CI runs the real CLI under that host on both Windows and Linux, so a release that
+changes either one fails a check.
+
+To mark an account by hand instead (for a token made outside the tool, or when the tool set the
+secret but could not update the roster), open Edit and set "CI token generated on". Optionally
+also set "CI secret name" and "CI secret in" (`owner/repository`, or an organization), then
+Save. The same write is `PATCH /api/accounts/{email}` with
+`{"ciTokenGeneratedOn":"yyyy-MM-dd","ciTokenSecret":{"name":"...","repository":"owner/name"}}`
+(or `"organization"` in place of `"repository"`), sent with the headers `POST /api/shutdown`
+takes. A marker that names no secret replaces the other markers that name none. Clearing the date
+clears the secret too.
 
 ## Build
 

@@ -16,10 +16,12 @@ public enum BrowserFamily
 /// whatever the operator wrote about it. No token field exists here; the
 /// credential pair lives in the profile folder, never in the roster.
 /// <para>
-/// <see cref="CiTokenGeneratedOn"/> is the operator's own marker: the date they
-/// ran <c>claude setup-token</c> on this account for the org secret
-/// <c>CLAUDE_CODE_OAUTH_TOKEN</c>, not read or verified against GitHub. At most
-/// one entry on a <see cref="Roster"/> carries it; see <see cref="Roster.With"/>.
+/// <see cref="CiTokenGeneratedOn"/> is the date a <c>claude setup-token</c>
+/// token for this account was made, and <see cref="CiTokenSecret"/> the GitHub
+/// secret it went to, when the dashboard set it. Neither is read back from
+/// GitHub. A marker with no secret is one the operator set by hand, for the
+/// secret the README names. At most one entry on a <see cref="Roster"/> backs
+/// each secret; see <see cref="Roster.With"/>.
 /// </para>
 /// </summary>
 public sealed record RosterEntry(
@@ -29,4 +31,5 @@ public sealed record RosterEntry(
     string? BrowserProfileDirectory = null,
     bool Paused = false,
     string? Notes = null,
-    DateOnly? CiTokenGeneratedOn = null);
+    DateOnly? CiTokenGeneratedOn = null,
+    CiTokenSecret? CiTokenSecret = null);

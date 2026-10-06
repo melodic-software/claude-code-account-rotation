@@ -150,6 +150,12 @@ internal static partial class RosterEndpoints
                 return Results.BadRequest(new { error = ciTokenGeneratedOn.Error });
             }
 
+            Result<CiTokenSecret?, string> ciTokenSecret = ParseCiTokenSecret(body);
+            if (ciTokenSecret.IsFailure)
+            {
+                return Results.BadRequest(new { error = ciTokenSecret.Error });
+            }
+
             // Presence-based, key by key: a record of nullable fields cannot tell
             // "clear the alias" from "leave the alias alone", and an edit that
             // silently reset the fields it did not mention would be worse than
@@ -162,7 +168,18 @@ internal static partial class RosterEndpoints
                 Paused = Flag(body, "paused") ?? existing.Paused,
                 Notes = body.ContainsKey("notes") ? Text(body, "notes") : existing.Notes,
                 CiTokenGeneratedOn = body.ContainsKey("ciTokenGeneratedOn") ? ciTokenGeneratedOn.Value : existing.CiTokenGeneratedOn,
+                // Named by hand, it is the repair for a CI token whose secret was
+                // set but whose roster write failed. A cleared date leaves no token
+                // behind the secret, so the secret goes with it.
+                CiTokenSecret = body.ContainsKey("ciTokenGeneratedOn") && ciTokenGeneratedOn.Value is null
+                    ? null
+                    : body.ContainsKey("ciTokenSecret") ? ciTokenSecret.Value : existing.CiTokenSecret,
             };
+            if (updated.CiTokenSecret is not null && updated.CiTokenGeneratedOn is null)
+            {
+                return Results.BadRequest(new { error = "a CI secret needs the date its token was generated (ciTokenGeneratedOn)" });
+            }
+
             await rosterFile.UpdateAsync(roster => roster.With(updated), cancellationToken);
             return Results.Ok(DashboardAssembler.View(updated));
         });
@@ -484,6 +501,30 @@ internal static partial class RosterEndpoints
         return DateOnly.TryParseExact(text, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateOnly parsed)
             ? Result<DateOnly?, string>.Success(parsed)
             : Result<DateOnly?, string>.Failure(invalid);
+    }
+
+    /// <summary>
+    /// The CI secret a body names: an object with <c>name</c> and exactly one of
+    /// <c>repository</c> or <c>organization</c>, held to GitHub's rules, or null
+    /// when the key is absent or JSON null. Anything else is refused rather than
+    /// read as absent, for the same reason <see cref="RequiredString"/> refuses.
+    /// </summary>
+    private static Result<CiTokenSecret?, string> ParseCiTokenSecret(JsonObject body)
+    {
+        if (!body.TryGetPropertyValue("ciTokenSecret", out JsonNode? node) || node is null)
+        {
+            return Result<CiTokenSecret?, string>.Success(null);
+        }
+
+        if (node is not JsonObject secret)
+        {
+            return Result<CiTokenSecret?, string>.Failure("ciTokenSecret must be an object with name and repository or organization");
+        }
+
+        Result<CiTokenSecret, string> parsed = CiTokenSecret.Parse(Text(secret, "name"), Text(secret, "repository"), Text(secret, "organization"));
+        return parsed.IsSuccess
+            ? Result<CiTokenSecret?, string>.Success(parsed.Value)
+            : Result<CiTokenSecret?, string>.Failure("ciTokenSecret: " + parsed.Error);
     }
 
     /// <summary>

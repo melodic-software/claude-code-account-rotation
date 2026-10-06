@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const { takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, promptWording, uniqueName, renameLabel, nearestLimit, tier, asOf, usageAge, sentence } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+const { takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, promptWording, uniqueName, renameLabel, nearestLimit, tier, asOf, usageAge, sentence, ciTokenBadge, ciSecretBody } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
 
 function limit(kind, percent, fields) {
   return Object.assign({ kind, percent, known: true, windowReset: false }, fields);
@@ -335,4 +335,34 @@ test("the oldest figure behind the standing dates the card, a row from another s
   assert.strictEqual(usageAge(account, NOW), 50 * 60);
   account.usage.limits[1].known = false;
   assert.strictEqual(usageAge(account, NOW), 5 * 60);
+});
+
+test("ciTokenBadge names the secret and counts down to the one-year expiry", () => {
+  const roster = {
+    ciTokenGeneratedOn: "2026-01-01",
+    ciTokenSecret: { name: "CLAUDE_CODE_OAUTH_TOKEN", repository: "octo/lane-one", organization: null }
+  };
+  assert.deepStrictEqual(ciTokenBadge(roster, Date.parse("2026-06-01T00:00:00Z")), {
+    kind: "ok",
+    text: "CI · lane-one",
+    title: "CLAUDE_CODE_OAUTH_TOKEN in octo/lane-one. Generated 2026-01-01; expires about 2027-01-01."
+  });
+  assert.strictEqual(ciTokenBadge(roster, Date.parse("2026-12-12T00:00:00Z")).text, "CI · lane-one · 20 d left");
+  const org = { ciTokenGeneratedOn: "2026-01-01", ciTokenSecret: { name: "LANE_TOKEN", repository: null, organization: "octo" } };
+  assert.strictEqual(ciTokenBadge(org, Date.parse("2026-06-01T00:00:00Z")).text, "CI · org octo");
+  assert.strictEqual(ciTokenBadge(roster, Date.parse("2026-12-12T00:00:00Z")).kind, "warn");
+  assert.strictEqual(ciTokenBadge(roster, Date.parse("2027-01-02T00:00:00Z")).kind, "crit");
+});
+
+test("ciSecretBody reads a repository by its slash, an organization without one, and blank as none", () => {
+  assert.deepStrictEqual(ciSecretBody(" TOKEN ", " octo/lane-one "), { name: "TOKEN", repository: "octo/lane-one" });
+  assert.deepStrictEqual(ciSecretBody("TOKEN", "octo"), { name: "TOKEN", organization: "octo" });
+  assert.strictEqual(ciSecretBody("TOKEN", "  "), null);
+  assert.strictEqual(ciSecretBody("", "octo"), null);
+});
+
+test("ciTokenBadge keeps a hand-set marker readable and is null with no marker", () => {
+  assert.strictEqual(ciTokenBadge({ ciTokenGeneratedOn: "2026-09-01" }, Date.parse("2026-10-01T00:00:00Z")).text, "CI token · 2026-09-01");
+  assert.strictEqual(ciTokenBadge({ ciTokenGeneratedOn: null }, Date.parse("2026-10-01T00:00:00Z")), null);
+  assert.strictEqual(ciTokenBadge(null, Date.parse("2026-10-01T00:00:00Z")), null);
 });

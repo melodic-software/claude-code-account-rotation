@@ -241,6 +241,21 @@ internal static class AppComposition
             provider.GetRequiredService<IClaudeCliLogout>(),
             provider.GetRequiredService<TimeProvider>(),
             provider.GetRequiredService<ILogger<ClaudeCliLoginSessionRunner>>()));
+        // "Generate CI token": setup-token needs a terminal for its standard
+        // input, and the token goes to gh, found on PATH, never anywhere else.
+        LoginChildFactory setupTokenChild = cli.IsSuccess
+            ? PseudoTerminalChild.Factory(cli.Value)
+            : (_, _) => Result<ILoginChild, string>.Failure(cli.Error);
+        Result<string, string> gh = GhSecretWriter.Locate(Environment.GetEnvironmentVariable("PATH"), OperatingSystem.IsWindows());
+        services.AddSingleton<ICiSecretWriter>(gh.IsSuccess
+            ? new GhSecretWriter(gh.Value, TimeSpan.FromSeconds(60))
+            : new UnavailableCiSecretWriter(gh.Error));
+        services.AddSingleton<ICiTokenSessionRunner>(provider => new ClaudeCliSetupTokenRunner(
+            setupTokenChild,
+            provider.GetRequiredService<ICiSecretWriter>(),
+            provider.GetRequiredService<RosterFile>(),
+            provider.GetRequiredService<TimeProvider>(),
+            provider.GetRequiredService<ILogger<ClaudeCliSetupTokenRunner>>()));
         services.AddSingleton<LiveDirectorySwitch>();
         services.AddSingleton<IStaleIdentityRepair>(static provider => provider.GetRequiredService<LiveDirectorySwitch>());
         ComposePeers(services, configuration);
@@ -369,6 +384,7 @@ internal static class AppComposition
         RosterEndpoints.Map(app);
         RefreshEndpoints.Map(app);
         LoginEndpoints.Map(app);
+        CiTokenEndpoints.Map(app);
         ShutdownEndpoints.Map(app);
         ShutdownEndpoints.MapStop(app);
     }
