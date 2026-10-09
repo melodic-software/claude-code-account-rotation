@@ -165,7 +165,7 @@ jobs:
       statuses: write # Records and reads back the `ci-lanes` commit status.
     steps:
       - name: Check the pull-request contract
-        uses: melodic-software/ci-workflows/.github/actions/pr-require-checks/check-contract@6ba73b97b058602c4dd2bb6e2cce234d11011787 # v0.39.0
+        uses: melodic-software/ci-workflows/.github/actions/pr-require-checks/check-contract@ab83b01273026ab5c23c6f3b40e946d97a863fa2 # v0.39.3
         with:
           token: ${{ github.token }}
           # The standards sync and Dependabot open pull requests that close no
@@ -181,7 +181,7 @@ jobs:
         # aggregation: the job still fails on the contract step's exit code, and
         # the `ci-lanes` status is on the SHA for the next contract-only run.
         if: ${{ !cancelled() }}
-        uses: melodic-software/ci-workflows/.github/actions/pr-require-checks/aggregate-results@6ba73b97b058602c4dd2bb6e2cce234d11011787 # v0.39.0
+        uses: melodic-software/ci-workflows/.github/actions/pr-require-checks/aggregate-results@ab83b01273026ab5c23c6f3b40e946d97a863fa2 # v0.39.3
         with:
           # Derived from the needs graph above — the single source of truth for
           # the lane list. Adding a lane to needs automatically extends this
