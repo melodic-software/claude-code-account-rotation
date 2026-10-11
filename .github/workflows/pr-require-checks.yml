@@ -137,6 +137,22 @@ jobs:
           CI_REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
         run: node .github/standards/runner-policy/runner-policy.mjs --root .
 
+  lychee:
+    name: Offline links
+    # The contract-only gate, verbatim.
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (contains(fromJSON('["labeled","unlabeled"]'), github.event.action) || (github.event.action == 'edited' && !github.event.changes.base))) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check local links and anchors
+        uses: melodic-software/ci-workflows/.github/actions/lychee-offline@594987abe8657a40bccc13d301f1f0d5cccb5348 # v0.39.8
+        with:
+          config: lychee.toml
+
   ci-status:
     name: ci-status
     # `always()`, never a success-guard: a lane failure must still run this
@@ -146,6 +162,7 @@ jobs:
     needs:
       - build-and-test
       - check-repository
+      - lychee
     runs-on: ubuntu-24.04
     # No run waits for another: with `yield-to-full-run` a contract-only run
     # lists in-flight runs once and reads the status once, and a full run's
@@ -188,7 +205,7 @@ jobs:
           # check.
           results: ${{ join(needs.*.result, ' ') }}
           # No lane here is ever legitimately skipped on an event that reaches
-          # the aggregation: both are unconditional apart from the contract-only
+          # the aggregation: each is unconditional apart from the contract-only
           # gate, and on a contract-only run this input is ignored in favour of
           # the recorded status. So a `skipped` lane means one that should have
           # run did not, and must go red.
