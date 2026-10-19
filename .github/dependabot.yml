@@ -1,7 +1,7 @@
-# Dependabot keeps this repository's SHA-pinned GitHub Actions current with
-# REVIEWED pull requests: GitHub-native, no third-party app and no token. Only
-# the github-actions ecosystem is configured; this repository's NuGet packages
-# are not covered by an entry here.
+# Dependabot keeps this repository's SHA-pinned GitHub Actions, the global.json
+# .NET SDK and the centrally managed NuGet packages (Directory.Packages.props)
+# current with REVIEWED pull requests: GitHub-native, no third-party app and no
+# token.
 #
 # Merge lanes follow the standards dependabot-policy component: the
 # `vendor-actions` group (non-major only) is the auto-merge lane armed by
@@ -37,3 +37,36 @@ updates:
       github-actions:
         patterns:
           - "*"
+
+  # GitHub officially supports the dotnet-sdk ecosystem for global.json.
+  - package-ecosystem: dotnet-sdk
+    directory: /
+    labels: ["dependencies"]
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: build
+    cooldown:
+      default-days: 3
+    groups:
+      dotnet-sdk:
+        patterns:
+          - "*"
+
+  # Minor and patch bumps batch into one reviewed PR; majors stay individual.
+  - package-ecosystem: nuget
+    directory: /
+    labels: ["dependencies"]
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: build
+    cooldown:
+      default-days: 3
+    groups:
+      nuget-minor-patch:
+        patterns:
+          - "*"
+        update-types: [minor, patch]
