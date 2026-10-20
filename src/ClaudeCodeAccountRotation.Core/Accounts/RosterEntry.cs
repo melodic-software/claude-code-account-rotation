@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using ClaudeCodeAccountRotation.Core.Identity;
 
 namespace ClaudeCodeAccountRotation.Core.Accounts;
@@ -16,12 +17,12 @@ public enum BrowserFamily
 /// whatever the operator wrote about it. No token field exists here; the
 /// credential pair lives in the profile folder, never in the roster.
 /// <para>
-/// <see cref="CiTokenGeneratedOn"/> is the date a <c>claude setup-token</c>
-/// token for this account was made, and <see cref="CiTokenSecret"/> the GitHub
-/// secret it went to, when the dashboard set it. Neither is read back from
-/// GitHub. A marker with no secret is one the operator set by hand, for the
-/// secret the README names. At most one entry on a <see cref="Roster"/> backs
-/// each secret; see <see cref="Roster.With"/>.
+/// <see cref="CiRoles"/> are the CI funding roles this account backs, and
+/// <see cref="CiTokenGeneratedOn"/> the date of its newest
+/// <c>claude setup-token</c> token. A date with no roles is a marker the
+/// operator set by hand, for the secret the README names. None of it is read
+/// back from GitHub. At most one entry on a <see cref="Roster"/> backs each
+/// role; see <see cref="Roster.With"/>.
 /// </para>
 /// </summary>
 public sealed record RosterEntry(
@@ -31,5 +32,65 @@ public sealed record RosterEntry(
     string? BrowserProfileDirectory = null,
     bool Paused = false,
     string? Notes = null,
-    DateOnly? CiTokenGeneratedOn = null,
-    CiTokenSecret? CiTokenSecret = null);
+    DateOnly? CiTokenGeneratedOn = null)
+{
+    public ImmutableArray<CiRoleAssignment> CiRoles { get; init; } = [];
+
+    /// <summary>The date this account's Console API key was stored, or null when none is.</summary>
+    public DateOnly? ConsoleApiKeySetOn { get; init; }
+
+    /// <summary>The token secret of the role whose token half was set last, or null when no role has one.</summary>
+    public CiTokenSecret? CiTokenSecret => CiRoles
+        .Where(static assignment => assignment.HasToken)
+        .OrderBy(static assignment => assignment.TokenSetOn)
+        .ThenBy(static assignment => assignment.TokenSetAt)
+        .LastOrDefault()?.Role.TokenSecret;
+
+    public bool HasTokenHalf => CiRoles.Any(static assignment => assignment.HasToken);
+
+    /// <summary>
+    /// Records a new token for <paramref name="role"/>, keeping that role's key
+    /// half and every other role as they are. The account's token date becomes
+    /// <paramref name="setOn"/> unless it is already later.
+    /// </summary>
+    public RosterEntry ClaimingToken(CiRole role, DateOnly setOn, DateTimeOffset? setAt)
+    {
+        ArgumentNullException.ThrowIfNull(role);
+        CiRoleAssignment claimed = (CiRoles.FirstOrDefault(assignment => assignment.Role.Equals(role)) ?? new CiRoleAssignment(role))
+            with { Role = role, TokenSetOn = setOn, TokenSetAt = setAt };
+        return this with
+        {
+            CiRoles = CiRoles.Any(assignment => assignment.Role.Equals(role))
+                ? [.. CiRoles.Select(assignment => assignment.Role.Equals(role) ? claimed : assignment)]
+                : CiRoles.Add(claimed),
+            CiTokenGeneratedOn = CiTokenGeneratedOn > setOn ? CiTokenGeneratedOn : setOn,
+        };
+    }
+
+    /// <summary>
+    /// Replaces the roles, and clears <see cref="CiTokenGeneratedOn"/> when the
+    /// last token half goes: with no role left on that token, nothing in CI runs on it.
+    /// </summary>
+    public RosterEntry WithCiRoles(IEnumerable<CiRoleAssignment> roles)
+    {
+        ArgumentNullException.ThrowIfNull(roles);
+        RosterEntry updated = this with { CiRoles = [.. roles] };
+        return HasTokenHalf && !updated.HasTokenHalf ? updated with { CiTokenGeneratedOn = null } : updated;
+    }
+
+    public bool Equals(RosterEntry? other) =>
+        ReferenceEquals(this, other)
+        || (other is not null
+            && Email == other.Email
+            && Alias == other.Alias
+            && Browser == other.Browser
+            && BrowserProfileDirectory == other.BrowserProfileDirectory
+            && Paused == other.Paused
+            && Notes == other.Notes
+            && CiTokenGeneratedOn == other.CiTokenGeneratedOn
+            && ConsoleApiKeySetOn == other.ConsoleApiKeySetOn
+            && CiRoles.SequenceEqual(other.CiRoles));
+
+    public override int GetHashCode() =>
+        HashCode.Combine(Email, Alias, Browser, BrowserProfileDirectory, Paused, Notes, CiTokenGeneratedOn, ConsoleApiKeySetOn);
+}

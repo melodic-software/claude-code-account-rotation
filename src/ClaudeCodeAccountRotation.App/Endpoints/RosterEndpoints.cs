@@ -144,7 +144,9 @@ internal static partial class RosterEndpoints
                 return Results.BadRequest(new { error = directory.Error });
             }
 
-            Result<DateOnly?, string> ciTokenGeneratedOn = ParseCiTokenGeneratedOn(body);
+            // The operator's own record of when they ran `claude setup-token`;
+            // nothing here reads GitHub or the token itself.
+            Result<DateOnly?, string> ciTokenGeneratedOn = ParseDate(body, "ciTokenGeneratedOn");
             if (ciTokenGeneratedOn.IsFailure)
             {
                 return Results.BadRequest(new { error = ciTokenGeneratedOn.Error });
@@ -154,6 +156,12 @@ internal static partial class RosterEndpoints
             if (ciTokenSecret.IsFailure)
             {
                 return Results.BadRequest(new { error = ciTokenSecret.Error });
+            }
+
+            Result<IReadOnlyList<CiRoleAssignment>?, string> ciRoles = ParseCiRoles(body);
+            if (ciRoles.IsFailure)
+            {
+                return Results.BadRequest(new { error = ciRoles.Error });
             }
 
             // Presence-based, key by key: a record of nullable fields cannot tell
@@ -168,16 +176,43 @@ internal static partial class RosterEndpoints
                 Paused = Flag(body, "paused") ?? existing.Paused,
                 Notes = body.ContainsKey("notes") ? Text(body, "notes") : existing.Notes,
                 CiTokenGeneratedOn = body.ContainsKey("ciTokenGeneratedOn") ? ciTokenGeneratedOn.Value : existing.CiTokenGeneratedOn,
-                // Named by hand, it is the repair for a CI token whose secret was
-                // set but whose roster write failed. A cleared date leaves no token
-                // behind the secret, so the secret goes with it.
-                CiTokenSecret = body.ContainsKey("ciTokenGeneratedOn") && ciTokenGeneratedOn.Value is null
-                    ? null
-                    : body.ContainsKey("ciTokenSecret") ? ciTokenSecret.Value : existing.CiTokenSecret,
             };
-            if (updated.CiTokenSecret is not null && updated.CiTokenGeneratedOn is null)
+            if (ciRoles.Value is not null)
             {
-                return Results.BadRequest(new { error = "a CI secret needs the date its token was generated (ciTokenGeneratedOn)" });
+                updated = updated.WithCiRoles(ciRoles.Value);
+            }
+
+            // A single secret named by hand is the repair for a CI token whose
+            // secret was set but whose roster write failed: that role's token
+            // half, set on the token date. Only a token half needs that date.
+            if (ciTokenSecret.Value is CiTokenSecret secret)
+            {
+                if (updated.CiTokenGeneratedOn is not DateOnly setOn)
+                {
+                    return Results.BadRequest(new { error = "a CI secret needs the date its token was generated (ciTokenGeneratedOn)" });
+                }
+
+                updated = updated.ClaimingToken(CiRole.FromTokenSecret(secret), setOn, setAt: null);
+            }
+
+            // A cleared date leaves no token behind any role, so every token half
+            // goes with it, and a role left with no half goes too.
+            if (body.ContainsKey("ciTokenGeneratedOn") && ciTokenGeneratedOn.Value is null)
+            {
+                updated = updated.WithCiRoles(updated.CiRoles
+                    .Select(static assignment => assignment with { TokenSetOn = null, TokenSetAt = null })
+                    .Where(static assignment => assignment.HasKey));
+            }
+
+            // The account's token date goes with its last token half, whatever the
+            // date field said, so a role taken off does not leave a marker behind.
+            if (existing.HasTokenHalf && !updated.HasTokenHalf)
+            {
+                updated = updated with { CiTokenGeneratedOn = null };
+            }
+            else if (updated.CiTokenGeneratedOn is null && updated.HasTokenHalf)
+            {
+                updated = updated with { CiTokenGeneratedOn = updated.CiRoles.Max(static assignment => assignment.TokenSetOn) };
             }
 
             await rosterFile.UpdateAsync(roster => roster.With(updated), cancellationToken);
@@ -480,30 +515,6 @@ internal static partial class RosterEndpoints
     }
 
     /// <summary>
-    /// The date the operator names as when they ran <c>claude setup-token</c> for
-    /// this account, or null when the body names none. Nothing here reads
-    /// GitHub or the token itself; the date is the operator's own record.
-    /// </summary>
-    private static Result<DateOnly?, string> ParseCiTokenGeneratedOn(JsonObject body)
-    {
-        const string invalid = "ciTokenGeneratedOn must be a date (yyyy-mm-dd)";
-        Result<string?, string> value = RequiredString(body, "ciTokenGeneratedOn", invalid);
-        if (value.IsFailure)
-        {
-            return Result<DateOnly?, string>.Failure(value.Error);
-        }
-
-        if (value.Value is not string text)
-        {
-            return Result<DateOnly?, string>.Success(null);
-        }
-
-        return DateOnly.TryParseExact(text, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateOnly parsed)
-            ? Result<DateOnly?, string>.Success(parsed)
-            : Result<DateOnly?, string>.Failure(invalid);
-    }
-
-    /// <summary>
     /// The CI secret a body names: an object with <c>name</c> and exactly one of
     /// <c>repository</c> or <c>organization</c>, held to GitHub's rules, or null
     /// when the key is absent or JSON null. Anything else is refused rather than
@@ -525,6 +536,133 @@ internal static partial class RosterEndpoints
         return parsed.IsSuccess
             ? Result<CiTokenSecret?, string>.Success(parsed.Value)
             : Result<CiTokenSecret?, string>.Failure("ciTokenSecret: " + parsed.Error);
+    }
+
+    /// <summary>
+    /// The whole list of CI roles a body names, or null when it names none.
+    /// Each item is a role (<c>prefix</c>, or <c>tokenSecret</c> for a token-only
+    /// one, and exactly one of <c>repository</c> or <c>organization</c>) and the
+    /// halves set from this account: <c>tokenSetOn</c> and <c>keySetOn</c>, each
+    /// with its optional instant. A half is named by its date, so an instant
+    /// without its date is refused, as is a key half on a role that has none.
+    /// JSON null clears every role.
+    /// </summary>
+    private static Result<IReadOnlyList<CiRoleAssignment>?, string> ParseCiRoles(JsonObject body)
+    {
+        if (!body.TryGetPropertyValue("ciRoles", out JsonNode? node))
+        {
+            return Result<IReadOnlyList<CiRoleAssignment>?, string>.Success(null);
+        }
+
+        if (node is null)
+        {
+            return Result<IReadOnlyList<CiRoleAssignment>?, string>.Success([]);
+        }
+
+        if (node is not JsonArray items)
+        {
+            return Result<IReadOnlyList<CiRoleAssignment>?, string>.Failure("ciRoles must be a list of roles");
+        }
+
+        List<CiRoleAssignment> roles = [];
+        foreach (JsonNode? item in items)
+        {
+            Result<CiRoleAssignment, string> role = ParseCiRole(item);
+            if (role.IsFailure)
+            {
+                return Result<IReadOnlyList<CiRoleAssignment>?, string>.Failure("ciRoles: " + role.Error);
+            }
+
+            if (roles.Exists(held => held.Role.Equals(role.Value.Role)))
+            {
+                return Result<IReadOnlyList<CiRoleAssignment>?, string>.Failure("ciRoles: " + role.Value.Role + " is named twice");
+            }
+
+            roles.Add(role.Value);
+        }
+
+        return Result<IReadOnlyList<CiRoleAssignment>?, string>.Success(roles);
+    }
+
+    private static Result<CiRoleAssignment, string> ParseCiRole(JsonNode? node)
+    {
+        if (node is not JsonObject item)
+        {
+            return Result<CiRoleAssignment, string>.Failure("each role is an object with prefix and repository or organization");
+        }
+
+        const string notText = "prefix, tokenSecret, repository and organization are strings";
+        Result<string?, string> prefix = RequiredString(item, "prefix", notText);
+        Result<string?, string> tokenSecret = RequiredString(item, "tokenSecret", notText);
+        Result<string?, string> repository = RequiredString(item, "repository", notText);
+        Result<string?, string> organization = RequiredString(item, "organization", notText);
+        if (prefix.IsFailure || tokenSecret.IsFailure || repository.IsFailure || organization.IsFailure)
+        {
+            return Result<CiRoleAssignment, string>.Failure(notText);
+        }
+
+        Result<CiRole, string> role = CiRole.Parse(prefix.Value, Blank(tokenSecret.Value), Blank(repository.Value), Blank(organization.Value));
+        if (role.IsFailure)
+        {
+            return Result<CiRoleAssignment, string>.Failure(role.Error);
+        }
+
+        Result<DateOnly?, string> tokenSetOn = ParseDate(item, "tokenSetOn");
+        Result<DateOnly?, string> keySetOn = ParseDate(item, "keySetOn");
+        Result<DateTimeOffset?, string> tokenSetAt = ParseInstant(item, "tokenSetAt");
+        Result<DateTimeOffset?, string> keySetAt = ParseInstant(item, "keySetAt");
+        string? invalid = tokenSetOn.IsFailure ? tokenSetOn.Error
+            : keySetOn.IsFailure ? keySetOn.Error
+            : tokenSetAt.IsFailure ? tokenSetAt.Error
+            : keySetAt.IsFailure ? keySetAt.Error
+            : tokenSetAt.Value is not null && tokenSetOn.Value is null ? "a token half needs the date its token was set (tokenSetOn)"
+            : keySetAt.Value is not null && keySetOn.Value is null ? "a key half needs the date its key was set (keySetOn)"
+            : keySetOn.Value is not null && !role.Value.HasKeyHalf ? role.Value + " has a token secret only"
+            : tokenSetOn.Value is null && keySetOn.Value is null ? role.Value + " names neither half (tokenSetOn or keySetOn)"
+            : null;
+        return invalid is not null
+            ? Result<CiRoleAssignment, string>.Failure(invalid)
+            : Result<CiRoleAssignment, string>.Success(new CiRoleAssignment(role.Value, tokenSetOn.Value, tokenSetAt.Value, keySetOn.Value, keySetAt.Value));
+    }
+
+    private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
+
+    private static Result<DateOnly?, string> ParseDate(JsonObject body, string key)
+    {
+        string invalid = key + " must be a date (yyyy-mm-dd)";
+        Result<string?, string> value = RequiredString(body, key, invalid);
+        if (value.IsFailure)
+        {
+            return Result<DateOnly?, string>.Failure(value.Error);
+        }
+
+        if (value.Value is not string text)
+        {
+            return Result<DateOnly?, string>.Success(null);
+        }
+
+        return DateOnly.TryParseExact(text, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateOnly parsed)
+            ? Result<DateOnly?, string>.Success(parsed)
+            : Result<DateOnly?, string>.Failure(invalid);
+    }
+
+    private static Result<DateTimeOffset?, string> ParseInstant(JsonObject body, string key)
+    {
+        string invalid = key + " must be an ISO 8601 instant with its offset";
+        Result<string?, string> value = RequiredString(body, key, invalid);
+        if (value.IsFailure)
+        {
+            return Result<DateTimeOffset?, string>.Failure(value.Error);
+        }
+
+        if (value.Value is not string text)
+        {
+            return Result<DateTimeOffset?, string>.Success(null);
+        }
+
+        return DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTimeOffset parsed)
+            ? Result<DateTimeOffset?, string>.Success(parsed)
+            : Result<DateTimeOffset?, string>.Failure(invalid);
     }
 
     /// <summary>

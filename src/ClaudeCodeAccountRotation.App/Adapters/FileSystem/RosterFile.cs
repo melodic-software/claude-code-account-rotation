@@ -78,13 +78,38 @@ internal sealed class RosterFile : IDisposable
                 ["browserProfileDirectory"] = entry.BrowserProfileDirectory,
                 ["paused"] = entry.Paused,
                 ["notes"] = entry.Notes,
-                ["ciTokenGeneratedOn"] = entry.CiTokenGeneratedOn?.ToString(CiTokenDateFormat, CultureInfo.InvariantCulture),
-                ["ciTokenSecret"] = SecretToJson(entry.CiTokenSecret),
+                ["ciTokenGeneratedOn"] = DateText(entry.CiTokenGeneratedOn),
+                ["consoleApiKeySetOn"] = DateText(entry.ConsoleApiKeySetOn),
+                ["ciRoles"] = new JsonArray([.. entry.CiRoles.Select(RoleToJson)]),
             });
         }
 
         return new JsonObject { ["accounts"] = accounts };
     }
+
+    private static JsonNode RoleToJson(CiRoleAssignment assignment)
+    {
+        CiRole role = assignment.Role;
+        JsonObject node = new()
+        {
+            ["prefix"] = role.Prefix,
+            [role.Scope == CiSecretScope.Repository ? "repository" : "organization"] = role.Owner,
+        };
+        if (role.TokenSecretOverride is not null)
+        {
+            node["tokenSecret"] = role.TokenSecretOverride;
+        }
+
+        node["tokenSetOn"] = DateText(assignment.TokenSetOn);
+        node["tokenSetAt"] = InstantText(assignment.TokenSetAt);
+        node["keySetOn"] = DateText(assignment.KeySetOn);
+        node["keySetAt"] = InstantText(assignment.KeySetAt);
+        return node;
+    }
+
+    private static string? DateText(DateOnly? value) => value?.ToString(CiTokenDateFormat, CultureInfo.InvariantCulture);
+
+    private static string? InstantText(DateTimeOffset? value) => value?.ToString("O", CultureInfo.InvariantCulture);
 
     private static RosterEntry? FromJson(JsonNode? node)
     {
@@ -94,45 +119,83 @@ internal sealed class RosterFile : IDisposable
         }
 
         Result<AccountEmail, string> email = AccountEmail.Parse(address);
-        return email.IsFailure
-            ? null
-            : new RosterEntry(
-                email.Value,
-                Text(entry, "alias"),
-                ParseBrowser(Text(entry, "browser")),
-                Text(entry, "browserProfileDirectory"),
-                entry["paused"] is JsonValue paused && paused.TryGetValue(out bool value) && value,
-                Text(entry, "notes"),
-                ParseCiTokenDate(Text(entry, "ciTokenGeneratedOn")),
-                SecretFromJson(entry["ciTokenSecret"]));
-    }
-
-    private static JsonObject? SecretToJson(CiTokenSecret? secret) => secret is null
-        ? null
-        : new JsonObject
-        {
-            ["name"] = secret.Name,
-            [secret.Scope == CiSecretScope.Repository ? "repository" : "organization"] = secret.Owner,
-        };
-
-    /// <summary>
-    /// The secret an entry's CI token went to, or null for an entry an earlier
-    /// release wrote (it has no such key) and for one hand-edited past the rules
-    /// <see cref="CiTokenSecret.Parse"/> holds a new one to.
-    /// </summary>
-    private static CiTokenSecret? SecretFromJson(JsonNode? node)
-    {
-        if (node is not JsonObject secret)
+        if (email.IsFailure)
         {
             return null;
         }
 
-        Result<CiTokenSecret, string> parsed = CiTokenSecret.Parse(Text(secret, "name"), Text(secret, "repository"), Text(secret, "organization"));
-        return parsed.IsSuccess ? parsed.Value : null;
+        DateOnly? ciTokenGeneratedOn = ParseCiTokenDate(Text(entry, "ciTokenGeneratedOn"));
+        return new RosterEntry(
+            email.Value,
+            Text(entry, "alias"),
+            ParseBrowser(Text(entry, "browser")),
+            Text(entry, "browserProfileDirectory"),
+            entry["paused"] is JsonValue paused && paused.TryGetValue(out bool value) && value,
+            Text(entry, "notes"),
+            ciTokenGeneratedOn)
+        {
+            CiRoles = entry["ciRoles"] is JsonArray roles
+                ? [.. roles.Select(RoleFromJson).OfType<CiRoleAssignment>().DistinctBy(static assignment => assignment.Role)]
+                : [.. LegacyRole(entry["ciTokenSecret"], ciTokenGeneratedOn)],
+            ConsoleApiKeySetOn = ParseCiTokenDate(Text(entry, "consoleApiKeySetOn")),
+        };
+    }
+
+    /// <summary>
+    /// The one role an earlier release's <c>ciTokenSecret</c> names, with its
+    /// token half set on <c>ciTokenGeneratedOn</c>. None for an entry with no
+    /// such key or no date, or one hand-edited past the rules
+    /// <see cref="CiTokenSecret.Parse"/> holds a new one to.
+    /// </summary>
+    private static IEnumerable<CiRoleAssignment> LegacyRole(JsonNode? node, DateOnly? tokenSetOn)
+    {
+        if (node is JsonObject secret && tokenSetOn is not null)
+        {
+            Result<CiTokenSecret, string> parsed = CiTokenSecret.Parse(Text(secret, "name"), Text(secret, "repository"), Text(secret, "organization"));
+            if (parsed.IsSuccess)
+            {
+                yield return new CiRoleAssignment(CiRole.FromTokenSecret(parsed.Value), tokenSetOn);
+            }
+        }
+    }
+
+    /// <summary>
+    /// One recorded role, or null for one that fails <see cref="CiRole.Parse"/>
+    /// or has neither half set. A key half on a token-only role is not kept.
+    /// </summary>
+    private static CiRoleAssignment? RoleFromJson(JsonNode? node)
+    {
+        if (node is not JsonObject role)
+        {
+            return null;
+        }
+
+        string? prefix = role["prefix"] is JsonValue value && value.TryGetValue(out string? text) ? text : null;
+        Result<CiRole, string> parsed = CiRole.Parse(prefix, Text(role, "tokenSecret"), Text(role, "repository"), Text(role, "organization"));
+        if (parsed.IsFailure)
+        {
+            return null;
+        }
+
+        DateOnly? tokenSetOn = ParseCiTokenDate(Text(role, "tokenSetOn"));
+        DateOnly? keySetOn = parsed.Value.HasKeyHalf ? ParseCiTokenDate(Text(role, "keySetOn")) : null;
+        return tokenSetOn is null && keySetOn is null
+            ? null
+            : new CiRoleAssignment(
+                parsed.Value,
+                tokenSetOn,
+                tokenSetOn is null ? null : ParseInstant(Text(role, "tokenSetAt")),
+                keySetOn,
+                keySetOn is null ? null : ParseInstant(Text(role, "keySetAt")));
     }
 
     private static DateOnly? ParseCiTokenDate(string? value) =>
         value is not null && DateOnly.TryParseExact(value, CiTokenDateFormat, CultureInfo.InvariantCulture, DateTimeStyles.None, out DateOnly parsed)
+            ? parsed
+            : null;
+
+    private static DateTimeOffset? ParseInstant(string? value) =>
+        value is not null && DateTimeOffset.TryParseExact(value, "O", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTimeOffset parsed)
             ? parsed
             : null;
 

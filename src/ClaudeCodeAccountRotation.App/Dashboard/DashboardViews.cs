@@ -111,9 +111,11 @@ internal sealed record AccountCardView(
 /// The roster entry behind a card, or null when the account is on the machine
 /// but not on the roster: that is the state Adopt exists to end.
 /// <para>
-/// <see cref="CiTokenGeneratedOn"/> is null on every card but those backing a CI
-/// secret. <see cref="CiTokenSecret"/> names that secret when the dashboard set
-/// it, and is null for a marker set by hand.
+/// <see cref="CiRoles"/> are the CI roles the account backs.
+/// <see cref="CiTokenGeneratedOn"/> is the date of its newest CI token, and is
+/// null on every card but those backing a token half or carrying a marker set
+/// by hand. <see cref="CiTokenSecret"/> names the token secret set last, and is
+/// null for a marker set by hand.
 /// </para>
 /// </summary>
 internal sealed record RosterEntryView(
@@ -124,10 +126,29 @@ internal sealed record RosterEntryView(
     bool Paused,
     string? Notes,
     DateOnly? CiTokenGeneratedOn = null,
-    CiTokenSecretView? CiTokenSecret = null);
+    CiTokenSecretView? CiTokenSecret = null,
+    IReadOnlyList<CiRoleView>? CiRoles = null,
+    DateOnly? ConsoleApiKeySetOn = null);
 
 /// <summary>A CI secret as the page reads it: its name, and exactly one of a repository or an organization.</summary>
 internal sealed record CiTokenSecretView(string Name, string? Repository, string? Organization);
+
+/// <summary>
+/// One CI role an account backs, as the page reads it: what to call it, where
+/// its secrets live, their names (no key secret for a token-only role), and when
+/// each half was set from this account.
+/// </summary>
+internal sealed record CiRoleView(
+    string Name,
+    string Prefix,
+    string? Repository,
+    string? Organization,
+    string TokenSecret,
+    string? KeySecret,
+    DateOnly? TokenSetOn,
+    DateTimeOffset? TokenSetAt,
+    DateOnly? KeySetOn,
+    DateTimeOffset? KeySetAt);
 
 /// <summary>
 /// One browser profile the machine already has, for the roster's profile

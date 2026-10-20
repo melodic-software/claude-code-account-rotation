@@ -84,8 +84,8 @@ public sealed class RosterFileTests : IDisposable
 
         await file.UpdateAsync(
             roster => roster
-                .With(new RosterEntry(Email("a@example.com"), CiTokenGeneratedOn: day, CiTokenSecret: repository))
-                .With(new RosterEntry(Email("b@example.com"), CiTokenGeneratedOn: day, CiTokenSecret: organization)),
+                .With(new RosterEntry(Email("a@example.com")).ClaimingToken(CiRole.FromTokenSecret(repository), day, null))
+                .With(new RosterEntry(Email("b@example.com")).ClaimingToken(CiRole.FromTokenSecret(organization), day, null)),
             TestContext.Current.CancellationToken);
         Roster stored = await file.ReadAsync(TestContext.Current.CancellationToken);
 

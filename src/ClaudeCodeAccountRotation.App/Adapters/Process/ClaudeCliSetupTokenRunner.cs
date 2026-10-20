@@ -451,12 +451,13 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
             return;
         }
 
+        DateTimeOffset setAt = _clock.GetUtcNow();
         var today = DateOnly.FromDateTime(_clock.GetLocalNow().DateTime);
         try
         {
             await _roster.UpdateAsync(
                 roster => roster.Find(request.Email) is RosterEntry entry
-                    ? roster.With(entry with { CiTokenGeneratedOn = today, CiTokenSecret = request.Secret })
+                    ? roster.With(entry.ClaimingToken(CiRole.FromTokenSecret(request.Secret), today, setAt))
                     : roster,
                 CancellationToken.None);
         }

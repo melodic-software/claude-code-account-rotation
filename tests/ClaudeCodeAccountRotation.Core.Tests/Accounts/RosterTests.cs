@@ -47,8 +47,8 @@ public sealed class RosterTests
         CiTokenSecret laneOne = CiTokenSecret.Parse("CLAUDE_CODE_OAUTH_TOKEN", "octo/lane-one", null).Value;
         CiTokenSecret laneTwo = CiTokenSecret.Parse("CLAUDE_CODE_OAUTH_TOKEN", "octo/lane-two", null).Value;
         Roster roster = Roster.Empty
-            .With(new RosterEntry(Email("a@example.com"), CiTokenGeneratedOn: day, CiTokenSecret: laneOne))
-            .With(new RosterEntry(Email("b@example.com"), CiTokenGeneratedOn: day, CiTokenSecret: laneTwo))
+            .With(new RosterEntry(Email("a@example.com")).ClaimingToken(CiRole.FromTokenSecret(laneOne), day, null))
+            .With(new RosterEntry(Email("b@example.com")).ClaimingToken(CiRole.FromTokenSecret(laneTwo), day, null))
             .With(new RosterEntry(Email("c@example.com"), CiTokenGeneratedOn: day));
 
         roster.Entries.ShouldAllBe(entry => entry.CiTokenGeneratedOn == day);
@@ -61,8 +61,8 @@ public sealed class RosterTests
         CiTokenSecret lower = CiTokenSecret.Parse("claude_code_oauth_token", "Octo/Lane-One", null).Value;
         CiTokenSecret upper = CiTokenSecret.Parse("CLAUDE_CODE_OAUTH_TOKEN", "octo/lane-one", null).Value;
         Roster roster = Roster.Empty
-            .With(new RosterEntry(Email("a@example.com"), CiTokenGeneratedOn: day, CiTokenSecret: lower))
-            .With(new RosterEntry(Email("b@example.com"), CiTokenGeneratedOn: day, CiTokenSecret: upper));
+            .With(new RosterEntry(Email("a@example.com")).ClaimingToken(CiRole.FromTokenSecret(lower), day, null))
+            .With(new RosterEntry(Email("b@example.com")).ClaimingToken(CiRole.FromTokenSecret(upper), day, null));
 
         roster.Find(Email("a@example.com"))!.CiTokenGeneratedOn.ShouldBeNull();
         roster.Find(Email("a@example.com"))!.CiTokenSecret.ShouldBeNull();
