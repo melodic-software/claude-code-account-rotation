@@ -304,14 +304,26 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
 
         public int Restarts { get; private set; }
 
+        /// <summary>Completed when a restart begins.</summary>
+        public TaskCompletionSource RestartEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>When set, a restart waits for it before it answers.</summary>
+        public TaskCompletionSource? HoldRestart { get; set; }
+
         public Task<bool> IsRunningAsync(CancellationToken cancellationToken) => Task.FromResult(Running);
 
-        public Task<Result<Unit, string>> RestartAsync(CancellationToken cancellationToken)
+        public async Task<Result<Unit, string>> RestartAsync(CancellationToken cancellationToken)
         {
             Restarts++;
-            return Task.FromResult(RestartError is string error
+            RestartEntered.TrySetResult();
+            if (HoldRestart is TaskCompletionSource hold)
+            {
+                await hold.Task;
+            }
+
+            return RestartError is string error
                 ? Result<Unit, string>.Failure(error)
-                : Result<Unit, string>.Success(Unit.Value));
+                : Result<Unit, string>.Success(Unit.Value);
         }
     }
 

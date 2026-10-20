@@ -328,7 +328,9 @@ account, the tool restarts the task:
    still running, `claude.exe` first.
 3. It waits up to 15 seconds for the task to stop, then runs it again.
 
-- A task that was not running is left alone, and the switch asks nothing.
+- A task that was not running is left alone, and the switch asks nothing. When the page cannot
+  read the task's state, it still asks, as a condition.
+- A second switch sent while the first one's restart is running is refused (`MutationInProgress`).
 - A switch of the WSL side, and any switch on Linux, restarts nothing.
 - A restart that fails never fails the switch. A process that cannot be ended stops the restart
   before the task runs again, so two servers never run. A running task whose processes cannot be

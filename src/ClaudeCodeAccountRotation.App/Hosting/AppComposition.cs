@@ -270,6 +270,7 @@ internal static class AppComposition
                 ScheduledTaskRemoteControl.StopBound,
                 TimeSpan.FromMilliseconds(500))
             : new NoRemoteControlTask());
+        services.AddSingleton<RemoteControlRestartLock>();
         ComposePeers(services, configuration);
         services.AddSingleton(new WslSwitchJournal(configuration.AppDataDirectory));
         services.AddSingleton<WslSwitch>();

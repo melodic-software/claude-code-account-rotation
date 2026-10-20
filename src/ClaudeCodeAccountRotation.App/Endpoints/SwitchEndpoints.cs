@@ -14,6 +14,21 @@ using Microsoft.AspNetCore.Routing;
 
 namespace ClaudeCodeAccountRotation.App.Endpoints;
 
+/// <summary>
+/// Holds a Windows switch from its Remote Control read through its restart, so
+/// a second switch cannot read or change the account mid-restart.
+/// </summary>
+internal sealed class RemoteControlRestartLock : IDisposable
+{
+    private readonly SemaphoreSlim _semaphore = new(1, 1);
+
+    public bool TryEnter() => _semaphore.Wait(TimeSpan.Zero);
+
+    public void Release() => _semaphore.Release();
+
+    public void Dispose() => _semaphore.Dispose();
+}
+
 internal static class SwitchEndpoints
 {
     public static void Map(IEndpointRouteBuilder routes)
@@ -34,6 +49,7 @@ internal static class SwitchEndpoints
             DashboardState state,
             QuotaRefreshWorker worker,
             IRemoteControlTask remoteControl,
+            RemoteControlRestartLock restartLock,
             CancellationToken cancellationToken) =>
         {
             Result<AccountEmail, string> target = AccountEmail.Parse(email);
@@ -44,47 +60,76 @@ internal static class SwitchEndpoints
 
             await worker.YieldAsync(cancellationToken);
 
-            // Read before the switch: Claude Code may end the session itself once
-            // the account changes, and a task the operator had stopped is not
-            // started on their behalf.
-            bool remoteControlWasRunning = await remoteControl.IsRunningAsync(cancellationToken);
-
-            // Remember the outgoing account's windows before the swap. A session
-            // mid-turn at switch time writes them back under the incoming
-            // account's name, and the dashboard must not read them as its own.
-            StatuslineSnapshot? before = await tee.ReadAsync(cancellationToken);
-            Result<SwitchOutcome, SwitchRefusal> outcome = await executor.SwitchToAsync(target.Value, cancellationToken);
-            if (outcome.IsSuccess)
+            // From the running-state read through the restart, one switch at a
+            // time: the switch's own gate is released before the restart, and a
+            // second switch landing in between would read the task mid-restart
+            // and change the account under the session the first one starts.
+            // Refused rather than queued, as the switch's own gate refuses a
+            // switch already in flight.
+            if (!restartLock.TryEnter())
             {
-                // Assigned on every success, including when the tee could not be
-                // read: leaving an earlier switch's values in place would let them
-                // disown a later account's own snapshot whose reset times happened
-                // to match.
-                PreSwitchWindows? windows = before is null
-                    ? null
-                    : new PreSwitchWindows(before.FiveHourResetsAt, before.SevenDayResetsAt);
-                state.Publish(current => current with { PreSwitchWindows = windows });
+                return Results.Json(SwitchRefusalView.Of(SwitchRefusal.MutationInProgress), statusCode: StatusCodes.Status409Conflict);
             }
 
-            if (outcome.IsFailure)
+            try
             {
-                return Results.Json(SwitchRefusalView.Of(outcome.Error), statusCode: StatusCodes.Status409Conflict);
+                return await SwitchAndRestartAsync(target.Value, executor, tee, state, remoteControl, cancellationToken);
             }
-
-            SwitchOutcome done = outcome.Value;
-            (bool restarted, string? warning) = remoteControlWasRunning
-                ? await RestartRemoteControlAsync(remoteControl, done)
-                : (false, null);
-            return Results.Ok(new SwitchOutcomeView(
-                done.Now.Value,
-                done.ParkedAs?.Value,
-                done.CliVerification.IsSuccess ? done.CliVerification.Value.Email : null,
-                done.CliVerification.IsFailure ? done.CliVerification.Error : null,
-                done.IdentityMismatchWarning,
-                done.At,
-                restarted,
-                warning));
+            finally
+            {
+                restartLock.Release();
+            }
         });
+    }
+
+    private static async Task<IResult> SwitchAndRestartAsync(
+        AccountEmail target,
+        LiveDirectorySwitch executor,
+        RateLimitGuardTeeFileReader tee,
+        DashboardState state,
+        IRemoteControlTask remoteControl,
+        CancellationToken cancellationToken)
+    {
+        // Read before the switch: Claude Code may end the session itself once
+        // the account changes, and a task the operator had stopped is not
+        // started on their behalf.
+        bool remoteControlWasRunning = await remoteControl.IsRunningAsync(cancellationToken);
+
+        // Remember the outgoing account's windows before the swap. A session
+        // mid-turn at switch time writes them back under the incoming
+        // account's name, and the dashboard must not read them as its own.
+        StatuslineSnapshot? before = await tee.ReadAsync(cancellationToken);
+        Result<SwitchOutcome, SwitchRefusal> outcome = await executor.SwitchToAsync(target, cancellationToken);
+        if (outcome.IsSuccess)
+        {
+            // Assigned on every success, including when the tee could not be
+            // read: leaving an earlier switch's values in place would let them
+            // disown a later account's own snapshot whose reset times happened
+            // to match.
+            PreSwitchWindows? windows = before is null
+                ? null
+                : new PreSwitchWindows(before.FiveHourResetsAt, before.SevenDayResetsAt);
+            state.Publish(current => current with { PreSwitchWindows = windows });
+        }
+
+        if (outcome.IsFailure)
+        {
+            return Results.Json(SwitchRefusalView.Of(outcome.Error), statusCode: StatusCodes.Status409Conflict);
+        }
+
+        SwitchOutcome done = outcome.Value;
+        (bool restarted, string? warning) = remoteControlWasRunning
+            ? await RestartRemoteControlAsync(remoteControl, done)
+            : (false, null);
+        return Results.Ok(new SwitchOutcomeView(
+            done.Now.Value,
+            done.ParkedAs?.Value,
+            done.CliVerification.IsSuccess ? done.CliVerification.Value.Email : null,
+            done.CliVerification.IsFailure ? done.CliVerification.Error : null,
+            done.IdentityMismatchWarning,
+            done.At,
+            restarted,
+            warning));
     }
 
     /// <summary>

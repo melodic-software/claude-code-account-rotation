@@ -77,16 +77,28 @@ internal sealed partial class ScheduledTaskRemoteControl(
 
     public async Task<bool> IsRunningAsync(CancellationToken cancellationToken)
     {
+        Result<bool, string> status = await StatusAsync(cancellationToken);
+        return status.IsSuccess && status.Value;
+    }
+
+    /// <summary>Whether the task is Running, or why that could not be read. A restart never takes an unread status for stopped.</summary>
+    private async Task<Result<bool, string>> StatusAsync(CancellationToken cancellationToken)
+    {
         Result<(int ExitCode, string Output), string> query = await schtasks(["/Query", "/TN", name, "/FO", "CSV", "/NH"], cancellationToken);
-        if (query.IsFailure || query.Value.ExitCode != 0)
+        if (query.IsFailure)
         {
-            return false;
+            return Result<bool, string>.Failure(query.Error);
+        }
+
+        if (query.Value.ExitCode != 0)
+        {
+            return Result<bool, string>.Failure("schtasks /Query exited with code " + query.Value.ExitCode + ": " + query.Value.Output.Trim());
         }
 
         // One row per trigger: "\name","next run","status". The status is the last field.
-        return query.Value.Output
+        return Result<bool, string>.Success(query.Value.Output
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Any(static line => line.EndsWith("\"Running\"", StringComparison.Ordinal));
+            .Any(static line => line.EndsWith("\"Running\"", StringComparison.Ordinal)));
     }
 
     public async Task<Result<Unit, string>> RestartAsync(CancellationToken cancellationToken)
@@ -115,12 +127,15 @@ internal sealed partial class ScheduledTaskRemoteControl(
             // A running task whose processes cannot be told apart is left as it
             // is: /End alone would leave its server running, and /Run would then
             // start a second one. A task that has stopped by itself is just run.
-            if (await IsRunningAsync(cancellationToken))
+            Result<bool, string> status = await StatusAsync(cancellationToken);
+            if (status.IsFailure)
             {
-                return Result<Unit, string>.Failure("the task is running but its processes could not be identified");
+                return Result<Unit, string>.Failure("the task's state could not be read: " + status.Error);
             }
 
-            return await StepAsync("/Run", cancellationToken);
+            return status.Value
+                ? Result<Unit, string>.Failure("the task is running but its processes could not be identified")
+                : await StepAsync("/Run", cancellationToken);
         }
 
         Result<Unit, string> ended = await StepAsync("/End", cancellationToken);
@@ -145,18 +160,27 @@ internal sealed partial class ScheduledTaskRemoteControl(
             return Result<Unit, string>.Failure("the task was ended but could not end " + string.Join("; ", survivors));
         }
 
+        // Only a status read as not Running lets the run go: a run sent while the
+        // old instance is still stopping is dropped by IgnoreNew yet exits 0, so a
+        // query that failed is retried, never taken for stopped.
         long started = timeProvider.GetTimestamp();
-        while (await IsRunningAsync(cancellationToken))
+        while (true)
         {
+            Result<bool, string> status = await StatusAsync(cancellationToken);
+            if (status.IsSuccess && !status.Value)
+            {
+                return await StepAsync("/Run", cancellationToken);
+            }
+
             if (timeProvider.GetElapsedTime(started) >= stopBound)
             {
-                return Result<Unit, string>.Failure("the task was still running " + stopBound.TotalSeconds + " s after it was ended");
+                return Result<Unit, string>.Failure(status.IsFailure
+                    ? "the task's state could not be read within " + stopBound.TotalSeconds + " s of ending it: " + status.Error
+                    : "the task was still running " + stopBound.TotalSeconds + " s after it was ended");
             }
 
             await Task.Delay(pollInterval, timeProvider, cancellationToken);
         }
-
-        return await StepAsync("/Run", cancellationToken);
     }
 
     /// <summary>The first <c>Exec</c> action's command and arguments from <c>/Query /XML</c>, or null when it has none.</summary>
@@ -177,6 +201,12 @@ internal sealed partial class ScheduledTaskRemoteControl(
     /// whose image is the action's command and whose command line carries the
     /// action's arguments, and every descendant of those. Empty when the
     /// action has no arguments to tell its process from any other.
+    /// <para>
+    /// Names are compared without <c>.exe</c>, because a task may name its
+    /// command <c>pwsh</c> while the process table says <c>pwsh.exe</c>; and
+    /// the arguments match as written or with environment variables expanded,
+    /// as Task Scheduler starts them.
+    /// </para>
     /// </summary>
     internal static IReadOnlyList<ProcessEntry> TaskTree(IReadOnlyList<ProcessEntry> table, string command, string arguments)
     {
@@ -185,11 +215,12 @@ internal sealed partial class ScheduledTaskRemoteControl(
             return [];
         }
 
-        string image = Path.GetFileName(command.Replace('\\', '/'));
+        string image = ImageName(Environment.ExpandEnvironmentVariables(command));
+        string expanded = Environment.ExpandEnvironmentVariables(arguments);
         List<ProcessEntry> tree = [.. table.Where(process =>
-            string.Equals(process.Name, image, StringComparison.OrdinalIgnoreCase)
+            string.Equals(ImageName(process.Name), image, StringComparison.OrdinalIgnoreCase)
             && process.CommandLine is string line
-            && line.Contains(arguments, StringComparison.OrdinalIgnoreCase))];
+            && (line.Contains(arguments, StringComparison.OrdinalIgnoreCase) || line.Contains(expanded, StringComparison.OrdinalIgnoreCase)))];
         HashSet<int> seen = [.. tree.Select(static process => process.Id)];
         for (int index = 0; index < tree.Count; index++)
         {
@@ -201,6 +232,13 @@ internal sealed partial class ScheduledTaskRemoteControl(
         }
 
         return tree;
+    }
+
+    /// <summary>A path's file name without directory, quotes or a trailing <c>.exe</c>.</summary>
+    private static string ImageName(string path)
+    {
+        string file = Path.GetFileName(path.Trim().Trim('"').Replace('\\', '/'));
+        return file.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? file[..^4] : file;
     }
 
     private async Task<Result<Unit, string>> StepAsync(string verb, CancellationToken cancellationToken)

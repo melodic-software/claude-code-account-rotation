@@ -373,7 +373,12 @@ test("Switch asks first only while the Remote Control task is running", () => {
     "Switch to Work? Remote Control restarts under Work; live Remote Control sessions on this machine drop and reopen in Work's Claude app.");
   assert.strictEqual(remoteControlQuestion({ task: "claude-remote-control", running: false }, "Work"), null);
   assert.strictEqual(remoteControlQuestion({ task: null, running: false }, "Work"), null);
-  assert.strictEqual(remoteControlQuestion(null, "Work"), null);
+});
+
+test("a Remote Control state that could not be read still asks, as a condition", () => {
+  assert.strictEqual(
+    remoteControlQuestion(null, "Work"),
+    "Switch to Work? Remote Control's state could not be read. If it is running, it restarts under Work; live Remote Control sessions on this machine drop and reopen in Work's Claude app.");
 });
 
 test("the switch toast says Remote Control restarted, and a restart that failed warns with its commands", () => {

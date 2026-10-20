@@ -65,6 +65,37 @@ public sealed class SwitchEndpointTests
     }
 
     [Fact]
+    public async Task ASwitchDuringAnotherSwitchsRestartIsRefusedAndMovesNothing()
+    {
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        factory.RemoteControl.Running = true;
+        factory.RemoteControl.HoldRestart = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using HttpClient client = factory.CreateMutatingClient();
+
+        Task<HttpResponseMessage> first = client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+        try
+        {
+            await factory.RemoteControl.RestartEntered.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            factory.Cli.Email = "a@example.com";
+
+            // The first switch's gate is released, but its restart is still running.
+            using HttpResponseMessage second = await client.PostAsync(SwitchUri("a@example.com"), content: null, TestContext.Current.CancellationToken);
+
+            second.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+            (await second.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["refusal"]!.GetValue<string>().ShouldBe("MutationInProgress");
+            (await CredentialFiles.FingerprintAsync(factory.LiveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
+        }
+        finally
+        {
+            factory.RemoteControl.HoldRestart.TrySetResult();
+        }
+
+        using HttpResponseMessage firstResponse = await first;
+        firstResponse.StatusCode.ShouldBe(HttpStatusCode.OK);
+        factory.RemoteControl.Restarts.ShouldBe(1);
+    }
+
+    [Fact]
     public async Task ASwitchLeavesARemoteControlTaskThatWasNotRunningAlone()
     {
         using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);

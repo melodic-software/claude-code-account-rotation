@@ -460,8 +460,8 @@
   // Switch asks first only while Remote Control runs here, because only then
   // does the switch cost anything beyond the account: the task is restarted
   // under the incoming account. Read at the click, not on every poll. A read
-  // that fails asks nothing, and the server, reading the same task, restarts
-  // nothing either. Every button is off from the click, through the read and
+  // that fails still asks, in the conditional: the server reads the task again
+  // and may find it running. Every button is off from the click, through the read and
   // the question, so a second click cannot start a second switch, and with it a
   // second restart, while the first is still being decided.
   function switchTo(email) {
@@ -470,7 +470,7 @@
     busy = true;
     setButtonsDisabled(true);
     return send("/api/remote-control", "GET")
-      .then(function (result) { return result.ok ? remoteControlQuestion(result.body, name) : null; }, function () { return null; })
+      .then(function (result) { return remoteControlQuestion(result.ok ? result.body : null, name); }, function () { return remoteControlQuestion(null, name); })
       .then(function (question) {
         if (question && !window.confirm(question)) {
           busy = false;
@@ -488,8 +488,14 @@
       });
   }
 
+  // Null when the read failed: the state is unknown, so the question is asked
+  // as a condition rather than skipped.
   function remoteControlQuestion(remoteControl, name) {
-    if (!remoteControl || !remoteControl.running) { return null; }
+    if (!remoteControl) {
+      return "Switch to " + name + "? Remote Control's state could not be read. If it is running, it restarts under " + name
+        + "; live Remote Control sessions on this machine drop and reopen in " + name + "'s Claude app.";
+    }
+    if (!remoteControl.running) { return null; }
     return "Switch to " + name + "? Remote Control restarts under " + name
       + "; live Remote Control sessions on this machine drop and reopen in " + name + "'s Claude app.";
   }

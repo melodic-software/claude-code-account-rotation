@@ -14,9 +14,9 @@ public sealed class ScheduledTaskRemoteControlTests
         <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
           <Actions Context="Author">
             <Exec>
-              <Command>C:\Windows\system32\conhost.exe</Command>
-              <Arguments>--headless "C:\Program Files\PowerShell\7\pwsh.exe" -NoProfile -Command "claude remote-control --permission-mode auto"</Arguments>
-              <WorkingDirectory>C:\Users\someone\claude-remote-control</WorkingDirectory>
+              <Command>%SystemRoot%\system32\conhost.exe</Command>
+              <Arguments>--headless "%ProgramFiles%\PowerShell\7\pwsh.exe" -NoProfile -Command "claude remote-control --permission-mode auto"</Arguments>
+              <WorkingDirectory>%USERPROFILE%\claude-remote-control</WorkingDirectory>
             </Exec>
           </Actions>
         </Task>
@@ -31,13 +31,13 @@ public sealed class ScheduledTaskRemoteControlTests
     /// </summary>
     internal static IReadOnlyList<ProcessEntry> Machine { get; } =
     [
-        new(4, 0, "svchost.exe", "C:\\Windows\\system32\\svchost.exe -k netsvcs"),
-        new(10, 4, "conhost.exe", "C:\\Windows\\system32\\conhost.exe --headless \"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -NoProfile -Command \"claude remote-control --permission-mode auto\""),
-        new(20, 10, "pwsh.exe", "\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -NoProfile -Command \"claude remote-control --permission-mode auto\""),
-        new(30, 20, "claude.exe", "C:\\Users\\someone\\.local\\bin\\claude.exe remote-control --permission-mode auto"),
+        new(4, 0, "svchost.exe", "%SystemRoot%\\system32\\svchost.exe -k netsvcs"),
+        new(10, 4, "conhost.exe", "%SystemRoot%\\system32\\conhost.exe --headless \"%ProgramFiles%\\PowerShell\\7\\pwsh.exe\" -NoProfile -Command \"claude remote-control --permission-mode auto\""),
+        new(20, 10, "pwsh.exe", "\"%ProgramFiles%\\PowerShell\\7\\pwsh.exe\" -NoProfile -Command \"claude remote-control --permission-mode auto\""),
+        new(30, 20, "claude.exe", "%USERPROFILE%\\.local\\bin\\claude.exe remote-control --permission-mode auto"),
         new(100, 4, "WindowsTerminal.exe", "wt.exe"),
-        new(110, 100, "pwsh.exe", "\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\""),
-        new(120, 110, "claude.exe", "C:\\Users\\someone\\.local\\bin\\claude.exe remote-control"),
+        new(110, 100, "pwsh.exe", "\"%ProgramFiles%\\PowerShell\\7\\pwsh.exe\""),
+        new(120, 110, "claude.exe", "%USERPROFILE%\\.local\\bin\\claude.exe remote-control"),
     ];
 
     private static ScheduledTaskRemoteControl RemoteControl(Script script, Killer? killer = null, TimeSpan? stopBound = null) =>
@@ -74,8 +74,8 @@ public sealed class ScheduledTaskRemoteControlTests
     public void TheActionIsReadFromTheTaskXml()
     {
         ScheduledTaskRemoteControl.Action(TaskXml).ShouldBe((
-            "C:\\Windows\\system32\\conhost.exe",
-            "--headless \"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -NoProfile -Command \"claude remote-control --permission-mode auto\""));
+            "%SystemRoot%\\system32\\conhost.exe",
+            "--headless \"%ProgramFiles%\\PowerShell\\7\\pwsh.exe\" -NoProfile -Command \"claude remote-control --permission-mode auto\""));
         ScheduledTaskRemoteControl.Action("<Task />").ShouldBeNull();
     }
 
@@ -127,6 +127,44 @@ public sealed class ScheduledTaskRemoteControlTests
         restart.IsFailure.ShouldBeTrue();
         restart.Error.ShouldContain("claude.exe (process 30): Access is denied.");
         script.Calls.ShouldNotContain(static call => call.StartsWith("/Run", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ACommandNamedWithoutExeStillFindsItsProcess()
+    {
+        ScheduledTaskRemoteControl.TaskTree(Machine, "pwsh", "-NoProfile -Command \"claude remote-control --permission-mode auto\"")
+            .Select(static process => process.Id).ShouldBe([20, 30]);
+    }
+
+    [Fact]
+    public async Task AStatusThatCannotBeReadAfterTheEndIsNeverTakenForStopped()
+    {
+        Script script = new Script()
+            .Answer("/XML", 0, TaskXml)
+            .Answer("/End", 0)
+            .Answer("/Query", Result<(int, string), string>.Failure("schtasks.exe did not finish within 20 s"))
+            .Answer("/Run", 0);
+
+        Result<Unit, string> restart = await RemoteControl(script, stopBound: TimeSpan.FromMilliseconds(50)).RestartAsync(Token);
+
+        restart.IsFailure.ShouldBeTrue();
+        restart.Error.ShouldContain("could not be read");
+        script.Calls.ShouldNotContain(static call => call.StartsWith("/Run", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AStatusThatFailsOnceIsReadAgainBeforeTheRun()
+    {
+        Script script = new Script()
+            .Answer("/XML", 0, TaskXml)
+            .Answer("/End", 0)
+            .Answer("/Query", 1, "ERROR: busy").Answer("/Query", 0, Ready)
+            .Answer("/Run", 0);
+
+        Result<Unit, string> restart = await RemoteControl(script).RestartAsync(Token);
+
+        restart.IsSuccess.ShouldBeTrue(restart.IsFailure ? restart.Error : "");
+        script.Calls[^1].ShouldBe("/Run /TN claude-remote-control");
     }
 
     [Fact]
