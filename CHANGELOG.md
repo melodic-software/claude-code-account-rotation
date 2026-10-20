@@ -32,6 +32,12 @@ All notable changes to this project are documented in this file. The format foll
   account also deletes its stored keys. When the roster records a key the store cannot delete,
   both deletes answer 409 with the cause and keep the roster entry and its key record; `?keepStoredKey=true` goes ahead and
   names the key left in the store and the command that removes it (#259).
+- **Check roles.** A header button lists the GitHub Actions secrets of every organization a role
+  names, and of one you type, through `gh api`, only when clicked. It lists each role found from
+  the secret names with its holder, says whether each half the roster records is `ok`, `changed
+  outside the tool`, `unknown` or `missing`, and lists roles no account backs as `unclaimed`. The
+  first rate-limit answer ends the check with no retry. The route is `POST /api/roles/check`
+  (#259).
 - **Lane history.** Every change of which account backs a role half is appended to
   `lane-history.jsonl` under app data (time, role, token or key, account, previous account, route),
   names and dates only. `GET /api/lane-history?since=` returns it, and a History disclosure on the
