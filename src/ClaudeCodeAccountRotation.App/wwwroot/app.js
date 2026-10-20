@@ -33,7 +33,9 @@
       ciTag: ciTag,
       ciSecretBody: ciSecretBody,
       remoteControlQuestion: remoteControlQuestion,
-      switchedToast: switchedToast
+      switchedToast: switchedToast,
+      historyLines: historyLines,
+      historyReadLines: historyReadLines
     };
     return;
   }
@@ -246,6 +248,27 @@
     toast.hidden = false;
     clearTimeout(toastTimer);
     toastTimer = setTimeout(function () { toast.hidden = true; }, 6000);
+  }
+
+  // One line per lane-history entry, newest first: when, which role half, and
+  // which account took it from which. Names and dates only.
+  function historyLines(entries) {
+    return (entries || []).slice().reverse().map(function (entry) {
+      var role = entry.role || {};
+      var name = role.tokenSecret || role.prefix || "legacy (review lanes)";
+      var moved = (entry.previous || "no account") + " \u2192 " + (entry.account || "no account");
+      return String(entry.at).slice(0, 16).replace("T", " ") + " \u00b7 " + name + " " + entry.half + ": " + moved + " (" + entry.via + ")";
+    });
+  }
+
+  // What the History list shows for one read: the entries, the empty text for
+  // a successful empty read, or a failure line (with the status when known).
+  function historyReadLines(read) {
+    if (!read.ok) {
+      return ["Could not read the history" + (read.status ? " (HTTP " + read.status + ")" : "")];
+    }
+    var lines = historyLines(read.entries);
+    return lines.length ? lines : ["No role changes in the last 30 days."];
   }
 
   function element(tag, className, text) {
@@ -2050,6 +2073,7 @@
       showTokenForm();
       return;
     }
+    mountHistory();
     fetch("/api/browser-profiles", { headers: withBearer({ "Accept": "application/json" }) })
       .then(function (response) {
         if (response.status === 401) { loseToken(); return null; }
@@ -2071,6 +2095,33 @@
           send("/api/refresh", "POST", null).then(function () { return refresh(true); }, function () { return null; });
         }
       });
+  }
+
+  // The lane history: read only when the operator opens it, never on load or
+  // by timer, and only the last 30 days.
+  function mountHistory() {
+    if (document.querySelector("details.history")) { return; }
+    var panel = element("details", "history");
+    panel.appendChild(element("summary", "quiet sm", "History"));
+    var list = element("ul", "warnings");
+    panel.appendChild(list);
+    panel.addEventListener("toggle", function () {
+      if (!panel.open) { return; }
+      var since = new Date(Date.now() - 30 * 86400000).toISOString();
+      fetch("/api/lane-history?since=" + encodeURIComponent(since), { headers: withBearer({ "Accept": "application/json" }) })
+        .then(function (response) {
+          if (response.status === 401) { loseToken(); return null; }
+          if (!response.ok) { return { ok: false, status: response.status }; }
+          return response.json().then(function (entries) { return { ok: true, entries: entries }; });
+        })
+        .catch(function () { return { ok: false }; })
+        .then(function (read) {
+          if (read === null) { return; }
+          list.innerHTML = "";
+          historyReadLines(read).forEach(function (line) { list.appendChild(element("li", null, line)); });
+        });
+    });
+    cards.parentNode.appendChild(panel);
   }
 
   // Always taken, so the fragment leaves the address bar even when the meta

@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const { takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, promptWording, uniqueName, renameLabel, nearestLimit, tier, asOf, usageAge, sentence, ciRoleBadges, keptCiRoles, ciTag, ciSecretBody, remoteControlQuestion, switchedToast } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+const { takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, promptWording, uniqueName, renameLabel, nearestLimit, tier, asOf, usageAge, sentence, ciRoleBadges, keptCiRoles, ciTag, ciSecretBody, remoteControlQuestion, switchedToast, historyLines, historyReadLines } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
 
 function limit(kind, percent, fields) {
   return Object.assign({ kind, percent, known: true, windowReset: false }, fields);
@@ -429,6 +429,25 @@ test("the switch toast says Remote Control restarted, and a restart that failed 
   assert.strictEqual(warned.kind, "warn");
   assert.match(warned.text, /Start-ScheduledTask claude-remote-control/);
   assert.deepStrictEqual(switchedToast({ now: "b@example.com" }), { text: "Switched to b@example.com", kind: "ok" });
+});
+
+test("history lines run newest first and name the role half, both accounts and the route", () => {
+  const entries = [
+    { at: "2026-10-01T11:00:00.0000000Z", role: { prefix: "AUTOMATIONS", organization: "octo" }, half: "token", account: "b@example.com", previous: "a@example.com", via: "push" },
+    { at: "2026-10-02T09:30:00.0000000Z", role: { prefix: "", organization: "octo" }, half: "token", account: null, previous: "b@example.com", via: "delete" }
+  ];
+  assert.deepStrictEqual(historyLines(entries), [
+    "2026-10-02 09:30 \u00b7 legacy (review lanes) token: b@example.com \u2192 no account (delete)",
+    "2026-10-01 11:00 \u00b7 AUTOMATIONS token: a@example.com \u2192 b@example.com (push)"
+  ]);
+  assert.deepStrictEqual(historyLines(null), []);
+});
+
+test("a failed history read says so with the status, and only a successful empty read says there were no changes", () => {
+  assert.deepStrictEqual(historyReadLines({ ok: false, status: 500 }), ["Could not read the history (HTTP 500)"]);
+  assert.deepStrictEqual(historyReadLines({ ok: false }), ["Could not read the history"]);
+  assert.deepStrictEqual(historyReadLines({ ok: true, entries: [] }), ["No role changes in the last 30 days."]);
+  assert.strictEqual(historyReadLines({ ok: true, entries: [{ at: "2026-10-01T11:00:00Z", role: { prefix: "A" }, half: "key", account: "b@example.com", previous: null, via: "assign" }] }).length, 1);
 });
 
 const { ciTokenExpiries, ciExpirySentence } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");

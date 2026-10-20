@@ -22,6 +22,10 @@ All notable changes to this project are documented in this file. The format foll
   `ciTokenSecret` (the token secret set last) and `ciTokenGeneratedOn`. `consoleApiKeySetOn` is
   recorded for the upcoming Console key store; nothing sets it yet.
   `PATCH /api/accounts/{email}` accepts `ciRoles`, and requires a date only for a token half (#259).
+- **Lane history.** Every change of which account backs a role half is appended to
+  `lane-history.jsonl` under app data (time, role, token or key, account, previous account, route),
+  names and dates only. `GET /api/lane-history?since=` returns it, and a History disclosure on the
+  page reads the last 30 days when opened (#259).
 
 ### Changed
 

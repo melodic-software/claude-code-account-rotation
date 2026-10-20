@@ -52,6 +52,9 @@ public sealed class ClaudeCliSetupTokenRunnerRoleTests : IDisposable
         role.TokenSetOn.ShouldBe(new DateOnly(2026, 10, 20));
         role.KeySetOn.ShouldBe(keySetOn);
         entry.CiTokenGeneratedOn.ShouldBe(new DateOnly(2026, 10, 20));
+        string history = await File.ReadAllTextAsync(Path.Combine(_appData, LaneHistoryFile.FileName), TestContext.Current.CancellationToken);
+        history.ShouldContain("\"via\":\"assign\"");
+        history.ShouldNotContain(SetupTokenScript.Token);
     }
 
     /// <summary>A fixed clock whose local zone is UTC, so the day it reads is the same on every machine.</summary>
