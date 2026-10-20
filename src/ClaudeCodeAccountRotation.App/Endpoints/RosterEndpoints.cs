@@ -222,6 +222,7 @@ internal static partial class RosterEndpoints
             RecoveryFiles recovery,
             SharedStoreSlots slots,
             SwitchOptions options,
+            ISecretStore secrets,
             ILoggerFactory loggers,
             CancellationToken cancellationToken) =>
         {
@@ -361,6 +362,22 @@ internal static partial class RosterEndpoints
                     // never been logged in carries no identity and so is never listed.
                     await profiles.EnsureFolderAsync(target, committed);
                     await profiles.DeleteFolderAsync(folder, committed);
+                }
+
+                // Both stored keys go with the account. One the store refuses to
+                // remove keeps the entry, so a retry (which finds no folder left
+                // to revoke or delete) comes back here rather than orphaning it.
+                foreach (SecretKind kind in Enum.GetValues<SecretKind>())
+                {
+                    Result<Unit, string> keyDeleted = await secrets.DeleteAsync(kind, target, committed);
+                    if (keyDeleted.IsFailure)
+                    {
+                        LogStoredKeyKept(logger, target.Value);
+                        return Refused(
+                            "StoredKeyKept",
+                            "The OS store would not delete a key stored for that account, so it stays on the roster: " + keyDeleted.Error
+                            + " Fix that and remove the account again.");
+                    }
                 }
 
                 await rosterFile.UpdateAsync(roster => roster.Without(target), committed);
@@ -689,6 +706,9 @@ internal static partial class RosterEndpoints
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "logout for {Account} failed")]
     private static partial void LogLogoutFailed(ILogger logger, string account);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "stored key for {Account} not deleted")]
+    private static partial void LogStoredKeyKept(ILogger logger, string account);
 }
 
 /// <summary>What a removal did, including whether the refresh token was revoked.</summary>
