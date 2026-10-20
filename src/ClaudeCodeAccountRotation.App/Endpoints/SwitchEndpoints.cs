@@ -98,7 +98,10 @@ internal static class SwitchEndpoints
     /// </summary>
     private static async Task<(bool Restarted, string? Warning)> RestartRemoteControlAsync(IRemoteControlTask remoteControl, SwitchOutcome done)
     {
-        string manual = "; restart it by hand: Stop-ScheduledTask " + remoteControl.Name + "; Start-ScheduledTask " + remoteControl.Name;
+        // Stop-ScheduledTask ends only the task's root process, so the claude.exe
+        // under it has to be ended by hand before the start, or two servers run.
+        string manual = "; restart it by hand: Stop-ScheduledTask " + remoteControl.Name
+            + ", end the claude.exe running remote-control that it leaves behind, then Start-ScheduledTask " + remoteControl.Name;
         bool reportsIncoming = done.CliVerification.IsSuccess
             && string.Equals(done.CliVerification.Value.Email?.Trim(), done.Now.Value, StringComparison.OrdinalIgnoreCase);
         if (!reportsIncoming)

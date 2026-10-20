@@ -318,18 +318,24 @@ So when you click Switch for the Windows side and the scheduled task named by `r
 (default `claude-remote-control`) is running, the dashboard first asks:
 "Switch to X? Remote Control restarts under X; live Remote Control sessions on this machine drop
 and reopen in X's Claude app." After the switch, and once `claude auth status` reports the new
-account, the tool ends the task, waits up to 15 seconds for it to stop, and runs it again.
+account, the tool restarts the task:
+
+1. It records the task's process tree: the process whose command line carries the task action's
+   arguments, and everything under it (`conhost.exe`, `pwsh.exe`, then the `claude.exe` server).
+   A `claude remote-control` you started in a terminal is not under that process and is never
+   touched.
+2. It ends the task. That ends only the root process, so it then ends the recorded processes
+   still running, `claude.exe` first.
+3. It waits up to 15 seconds for the task to stop, then runs it again.
 
 - A task that was not running is left alone, and the switch asks nothing.
 - A switch of the WSL side, and any switch on Linux, restarts nothing.
-- A restart that fails never fails the switch. The result says why and gives the commands to run
-  by hand: `Stop-ScheduledTask claude-remote-control`, then `Start-ScheduledTask claude-remote-control`.
+- A restart that fails never fails the switch. A process that cannot be ended stops the restart
+  before the task runs again, so two servers never run. The result says why and what to run by
+  hand: `Stop-ScheduledTask claude-remote-control`, end the `claude.exe` running `remote-control`
+  that it leaves behind, then `Start-ScheduledTask claude-remote-control`.
 - Set `remoteControlTask` to `null` or `""` in `config.json` to turn this off. A file without the
   key uses the default.
-
-The tool runs as you, at your normal (Limited) level, and that level can only read the task
-until provisioning grants your account run and stop rights on it. Until then every restart ends
-in the warning above.
 
 ## Reading the dashboard from scripts
 

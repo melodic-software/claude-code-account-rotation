@@ -263,7 +263,9 @@ internal static class AppComposition
         services.AddSingleton<IRemoteControlTask>(OperatingSystem.IsWindows() && configuration.RemoteControlTask is string remoteControlTask
             ? new ScheduledTaskRemoteControl(
                 remoteControlTask,
-                ScheduledTaskRemoteControl.WindowsRunner(Environment.SystemDirectory),
+                ScheduledTaskRemoteControl.WindowsRunner(Path.Combine(Environment.SystemDirectory, "schtasks.exe")),
+                ScheduledTaskRemoteControl.WindowsProcessLister(Environment.SystemDirectory),
+                ScheduledTaskRemoteControl.KillRecordedAsync,
                 TimeProvider.System,
                 ScheduledTaskRemoteControl.StopBound,
                 TimeSpan.FromMilliseconds(500))

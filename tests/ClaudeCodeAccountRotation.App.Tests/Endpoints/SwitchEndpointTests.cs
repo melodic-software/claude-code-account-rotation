@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
+using ClaudeCodeAccountRotation.App.Adapters.Process;
 using ClaudeCodeAccountRotation.App.Dashboard;
 using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.App.Switching;
@@ -114,6 +115,37 @@ public sealed class SwitchEndpointTests
         body["identityMismatchWarning"]!.GetValue<bool>().ShouldBeTrue();
         body["remoteControlWarning"]!.GetValue<string>().ShouldContain("Start-ScheduledTask claude-remote-control");
         factory.RemoteControl.Restarts.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task AnOrphanedServerThatCannotBeEndedIsAWarningAndTheSwitchStands()
+    {
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        ScheduledTaskRemoteControlTests.Script script = new ScheduledTaskRemoteControlTests.Script()
+            .Answer("/Query", 0, "\"\\claude-remote-control\",\"N/A\",\"Running\"")
+            .Answer("/XML", 0, ScheduledTaskRemoteControlTests.TaskXml)
+            .Answer("/End", 0)
+            .Answer("/Run", 0);
+        ScheduledTaskRemoteControlTests.Killer killer = new() { Refuse = 30 };
+        factory.Overrides = services => services.Replace(ServiceDescriptor.Singleton<IRemoteControlTask>(new ScheduledTaskRemoteControl(
+            "claude-remote-control",
+            script.Run,
+            _ => Task.FromResult(Result<IReadOnlyList<ProcessEntry>, string>.Success(ScheduledTaskRemoteControlTests.Machine)),
+            killer.Kill,
+            TimeProvider.System,
+            TimeSpan.FromSeconds(5),
+            TimeSpan.FromMilliseconds(1))));
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+        body["now"]!.GetValue<string>().ShouldBe("b@example.com");
+        body["remoteControlRestarted"]!.GetValue<bool>().ShouldBeFalse();
+        body["remoteControlWarning"]!.GetValue<string>().ShouldContain("claude.exe (process 30)");
+        killer.Killed.ShouldNotContain(120);
+        script.Calls.ShouldNotContain(static call => call.StartsWith("/Run", StringComparison.Ordinal));
     }
 
     [Fact]
