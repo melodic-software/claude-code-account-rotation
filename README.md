@@ -23,7 +23,8 @@ Status: a tagged release exists.
 - It reads the undocumented usage endpoint with its own User-Agent, which the research rates GRAY
   (no Anthropic statement either way), not ALLOWED. It reads only when the dashboard is opened,
   Refresh is pressed, or the rate-limit stop hook fires, at most once a minute per account, never
-  on a timer.
+  on a timer. It reads GitHub only through `gh api`, with gh's own User-Agent and sign-in, and
+  only when you click Check roles; the first rate-limit answer stops that check.
 - The parked-pair refresh presents Claude Code's public OAuth `client_id`.
 - Running the loop lanes (`work-loop`, `babysit-loop`, `attend-queue`) while rotating accounts is
   outside V1 because reader-side invalidation of a latched window is still an open problem.
@@ -417,6 +418,15 @@ token, matched by its `sk-ant-oat01-` prefix. Exactly one token must appear, sta
 its row. CI runs the real CLI under that host on both Windows and Linux, so a release that
 changes either one fails a check.
 
+Check roles, in the header, lists the Actions secrets of every organization a role on the roster
+names, and of one you type, with `gh api` (the `admin:org` scope reads them). It lists each role
+the secret names imply, with the account that backs it, and judges each half the roster records:
+`ok`; `changed outside the tool` when GitHub's `updated_at` is more than 2 minutes after the
+tool's write, or, for a half recorded with a date only, on a later UTC day; `unknown` for such a
+half updated that same day; and `missing` when the secret is gone. A role whose secrets exist
+but that no account backs is `unclaimed`. It reads only on that click, and the first rate-limit
+answer ends the check with no retry.
+
 To mark an account by hand instead (for a token made outside the tool, or when the tool set the
 secret but could not update the roster), open Edit and set "CI token generated on". Optionally
 also set "CI secret name" and "CI secret in" (`owner/repository`, or an organization), then
@@ -470,7 +480,8 @@ Releases from v1.0.0 on read the files the previous release wrote. There is no m
 schema bump. Do not edit `config.json`, `roster.json`, or `state/live-owner.json`, and do not
 copy a template over an existing config.
 
-The app does not call the GitHub API, and the dashboard has no "update available" line. Compare
+The app calls the GitHub API only through `gh`, for Check roles and CI secret writes, and never
+to look for releases; the dashboard has no "update available" line. Compare
 `claude-code-account-rotation --version` with
 <https://github.com/melodic-software/claude-code-account-rotation/releases/latest>.
 

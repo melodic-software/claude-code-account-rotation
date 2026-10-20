@@ -430,3 +430,30 @@ test("the switch toast says Remote Control restarted, and a restart that failed 
   assert.match(warned.text, /Start-ScheduledTask claude-remote-control/);
   assert.deepStrictEqual(switchedToast({ now: "b@example.com" }), { text: "Switched to b@example.com", kind: "ok" });
 });
+
+const { roleCheckLines } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+
+test("roleCheckLines names each role, its holder and its verdicts, and marks a change outside the tool", () => {
+  const lines = roleCheckLines({
+    checkedAt: "2026-10-20T12:00:00Z",
+    roles: [
+      { name: "AUTOMATIONS", prefix: "AUTOMATIONS", organization: "octo", tokenSecret: "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", keySecret: "AUTOMATIONS_CLAUDE_API_KEY", hasToken: true, hasKey: true, holder: "a@example.com", token: "changed", key: "ok" },
+      { name: "ISSUE_LANE", prefix: "ISSUE_LANE", organization: "octo", tokenSecret: "ISSUE_LANE_CLAUDE_CODE_OAUTH_TOKEN", keySecret: "ISSUE_LANE_CLAUDE_API_KEY", hasToken: true, hasKey: false, holder: null, token: "unclaimed", key: null },
+      { name: "legacy (review lanes)", prefix: "", organization: "octo", tokenSecret: "CLAUDE_CODE_OAUTH_TOKEN", keySecret: null, hasToken: true, hasKey: false, holder: "b@example.com", token: "ok", key: null }
+    ],
+    failures: [{ organization: "gone", error: "GitHub answered HTTP 404" }]
+  });
+  assert.deepStrictEqual(lines.map((line) => [line.kind, line.text]), [
+    ["crit", "automations in org octo · token+key · a@example.com · token: changed outside the tool · key: ok"],
+    ["warn", "issue_lane in org octo · token · no holder · token: unclaimed"],
+    ["ok", "legacy (review lanes) in org octo · token · b@example.com · token: ok"],
+    ["crit", "org gone could not be read: GitHub answered HTTP 404"]
+  ]);
+  assert.strictEqual(lines[0].title, "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN and AUTOMATIONS_CLAUDE_API_KEY");
+});
+
+test("roleCheckLines marks a missing secret critical", () => {
+  const [line] = roleCheckLines({ roles: [{ name: "REVIEWS", prefix: "REVIEWS", organization: "octo", tokenSecret: "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", keySecret: "REVIEWS_CLAUDE_API_KEY", hasToken: false, hasKey: false, holder: "a@example.com", token: "missing", key: null }], failures: [] });
+  assert.strictEqual(line.kind, "crit");
+  assert.strictEqual(line.text, "reviews in org octo · no secrets · a@example.com · token: missing");
+});

@@ -33,6 +33,7 @@
       remoteControlQuestion: remoteControlQuestion,
       switchedToast: switchedToast
     };
+    module.exports.roleCheckLines = roleCheckLines;
     return;
   }
 
@@ -1390,6 +1391,35 @@
       : { name: trimmedName, organization: trimmedWhere };
   }
 
+  // What Check roles found, one line per role and one per organization that
+  // could not be read. A line is crit when a half the roster records changed
+  // outside the tool or is gone, warn when a role has no holder or a half's
+  // change cannot be told apart, and ok otherwise.
+  function roleCheckLines(view) {
+    var words = {
+      ok: "ok",
+      changed: "changed outside the tool",
+      unknown: "unknown (no time recorded for the tool's write)",
+      missing: "missing",
+      unclaimed: "unclaimed"
+    };
+    var lines = (view.roles || []).map(function (role) {
+      var halves = [role.hasToken ? "token" : null, role.hasKey ? "key" : null].filter(Boolean).join("+") || "no secrets";
+      var verdicts = [["token", role.token], ["key", role.key]].filter(function (pair) { return pair[1]; });
+      var text = (role.prefix ? role.name.toLowerCase() : role.name) + " in org " + role.organization + " · " + halves
+        + " · " + (role.holder || "no holder")
+        + verdicts.map(function (pair) { return " · " + pair[0] + ": " + (words[pair[1]] || pair[1]); }).join("");
+      var values = verdicts.map(function (pair) { return pair[1]; });
+      var kind = values.some(function (value) { return value === "changed" || value === "missing"; }) ? "crit"
+        : values.some(function (value) { return value === "unclaimed" || value === "unknown"; }) ? "warn" : "ok";
+      return { kind: kind, text: text, title: role.tokenSecret + (role.keySecret ? " and " + role.keySecret : "") };
+    });
+    (view.failures || []).forEach(function (failure) {
+      lines.push({ kind: "crit", text: "org " + failure.organization + " could not be read: " + failure.error, title: "" });
+    });
+    return lines;
+  }
+
   function sentence(account, at) {
     if (account.cliLoggedOut) {
       return { kind: "crit", text: "Logged out" + (account.loggedOutOn ? " on " + sideLabel(account.loggedOutOn) : "") };
@@ -1978,6 +2008,51 @@
       .catch(function (error) { showToast("Request failed: " + error, "error"); })
       .then(function () { busy = false; setButtonsDisabled(false); });
   });
+
+  // Check roles: lists the GitHub secrets of every organization a role on the
+  // roster names, and of the one typed here, through `gh api`. Only this
+  // button reads GitHub; no load, poll or refresh does.
+  (function () {
+    var panel = element("details", "roster-add");
+    var summary = element("summary", "btn quiet sm", "Check roles");
+    panel.appendChild(summary);
+    var form = element("form", "roster-form popover");
+    var organization = element("input");
+    organization.type = "text";
+    organization.autocomplete = "off";
+    organization.placeholder = "octo-org";
+    labeled(form, "Organization (optional when a role names one)", organization);
+    var check = element("button", "btn primary", "Check");
+    check.type = "submit";
+    form.appendChild(check);
+    var status = element("p", "muted");
+    var found = element("ul");
+    form.appendChild(status);
+    form.appendChild(found);
+    panel.appendChild(form);
+    var stop = document.getElementById("stop");
+    stop.parentNode.insertBefore(panel, stop);
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      busy = true;
+      setButtonsDisabled(true);
+      status.textContent = "Reading GitHub secrets...";
+      found.replaceChildren();
+      send("/api/roles/check", "POST", { organization: organization.value.trim() })
+        .then(function (result) {
+          if (!result.ok) { status.textContent = refused(result.body); return; }
+          var lines = roleCheckLines(result.body);
+          status.textContent = lines.length ? "Checked " + new Date(result.body.checkedAt).toLocaleString() : "No role secrets found.";
+          lines.forEach(function (line) {
+            var item = element("li", line.kind === "ok" ? "muted" : null, line.text);
+            if (line.title) { item.title = line.title; }
+            found.appendChild(item);
+          });
+        })
+        .catch(function (error) { status.textContent = "Request failed: " + error; })
+        .then(function () { busy = false; setButtonsDisabled(false); });
+    });
+  })();
 
   function showStopped(sides) {
     var page = element("main", "stopped");
