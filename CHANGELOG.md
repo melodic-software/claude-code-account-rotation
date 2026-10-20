@@ -24,8 +24,8 @@ All notable changes to this project are documented in this file. The format foll
   Windows Credential Manager (this computer only) or, on Linux, the Secret Service through
   libsecret. `PUT /api/accounts/{email}/api-key` takes the key in the body and
   `DELETE /api/accounts/{email}/api-key` removes it; both answer with the roster entry, whose
-  `consoleApiKeySetOn` is the only trace on the page. No route returns the key, and it is never
-  logged or written to a file. With no usable store (no libsecret, no Secret Service provider, a
+  `consoleApiKeySetOn` is the only trace on the page. No route returns the key, and the tool never
+  logs it or writes it to a file of its own. With no usable store (no libsecret, no Secret Service provider, a
   locked collection, or libsecret's file backend) the PUT is refused with the cause. Removing an
   account also deletes its stored keys (#259).
 

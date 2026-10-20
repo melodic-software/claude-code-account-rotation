@@ -984,7 +984,7 @@
     panel.open = true;
     panel.appendChild(element("summary", null, "Console API key for " + account.email));
     panel.appendChild(element("p", "muted",
-      "Paste this account's Console API key. It is kept in this machine's OS store, never in a file, and is not shown here again."));
+      "Paste this account's Console API key. It is kept only in this machine's OS store, never in a file of this tool's, and is not shown here again."));
     var form = element("form", "roster-form");
     var field = element("input");
     field.type = "password";

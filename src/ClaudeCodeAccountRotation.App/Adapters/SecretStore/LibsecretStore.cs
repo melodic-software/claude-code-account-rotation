@@ -118,20 +118,25 @@ internal sealed class LibsecretStore(string libraryName, Func<string, string?> e
             CancellationToken.None,
             TaskCreationOptions.LongRunning,
             TaskScheduler.Default);
-        // Released only once the call has returned, whenever that is.
-        _ = work.ContinueWith(_ => api.Unref(cancellable), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+        Result<T, Refusal> result;
         try
         {
-            return await work.WaitAsync(callBound, cancellationToken);
+            result = await work.WaitAsync(callBound, cancellationToken);
         }
         catch (Exception exception) when (exception is TimeoutException or OperationCanceledException)
         {
+            // Cancelled before the release is queued, so the cancellable is
+            // never touched after the call that holds it has freed it.
             api.Cancel(cancellable);
+            _ = work.ContinueWith(_ => api.Unref(cancellable), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
             return Result<T, Refusal>.Failure(new Refusal(
                 "the Secret Service did not answer within " + callBound.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)
                 + " s; its collection may be locked and waiting for an unlock prompt",
                 Unreachable: false));
         }
+
+        api.Unref(cancellable);
+        return result;
     }
 
     // libsecret's own backend choice: a flatpak or snap with the secret portal,
