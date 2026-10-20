@@ -44,17 +44,19 @@ internal sealed class LibsecretStore(string libraryName, Func<string, string?> e
     public async Task<Result<Unit, string>> ProbeAsync(CancellationToken cancellationToken)
     {
         string token = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
+        // Each probe its own item, so two probes at once never read or clear each other's.
+        string probe = ProbeKind + "-" + Guid.NewGuid().ToString("N");
         return await RunAsync(
             (api, cancellable) =>
             {
-                Result<Unit, string> stored = api.Store(ProbeKind, ProbeKind, SecretNames.Product + ":probe", token, cancellable);
+                Result<Unit, string> stored = api.Store(ProbeKind, probe, SecretNames.Product + ":" + probe, token, cancellable);
                 if (stored.IsFailure)
                 {
                     return stored;
                 }
 
-                Result<string?, string> read = api.Lookup(ProbeKind, ProbeKind, cancellable);
-                Result<Unit, string> cleared = ClearConfirmed(api, ProbeKind, ProbeKind, cancellable);
+                Result<string?, string> read = api.Lookup(ProbeKind, probe, cancellable);
+                Result<Unit, string> cleared = ClearConfirmed(api, ProbeKind, probe, cancellable);
                 return read.IsFailure ? Result<Unit, string>.Failure(read.Error)
                     : read.Value != token ? Result<Unit, string>.Failure("the Secret Service did not return the item it was given")
                     : cleared;

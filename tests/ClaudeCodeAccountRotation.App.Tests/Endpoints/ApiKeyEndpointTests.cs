@@ -419,6 +419,119 @@ public sealed class ApiKeyEndpointTests
         factory.Logs.Lines.ShouldNotContain(line => line.Contains(PlantedKey, StringComparison.Ordinal));
     }
 
+    /// <summary>Blocks the first call it runs in until released, and says when that call has entered.</summary>
+    private sealed class Hold
+    {
+        private int _used;
+
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Run()
+        {
+            if (Interlocked.Exchange(ref _used, 1) != 0)
+            {
+                return Task.CompletedTask;
+            }
+
+            Entered.SetResult();
+            return Release.Task;
+        }
+    }
+
+    private static void MakeRosterUnwritable(AppFactory factory)
+    {
+        string roster = Path.Combine(factory.AppData, "roster.json");
+        File.Delete(roster);
+        Directory.CreateDirectory(roster);
+    }
+
+    [Fact]
+    public async Task ARemovalWhileAPutHoldsTheGateIsRefusedAndTheKeyIsRecorded()
+    {
+        (AppFactory factory, FakeSecretStore store) = await RosteredAsync(TestContext.Current.CancellationToken);
+        await using AppFactory owned = factory;
+        Hold hold = new();
+        store.DuringWrite = hold.Run;
+        using HttpClient client = factory.CreateMutatingClient();
+
+        Task<HttpResponseMessage> put = client.PutAsJsonAsync(ApiKey(Parked), new { key = PlantedKey }, TestContext.Current.CancellationToken);
+        await hold.Entered.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        using HttpResponseMessage removal = await client.DeleteAsync(Account(Parked), TestContext.Current.CancellationToken);
+        hold.Release.SetResult();
+        using HttpResponseMessage stored = await put;
+
+        removal.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        (await BodyAsync(removal))["refusal"]!.GetValue<string>().ShouldBe("MutationInProgress");
+        stored.StatusCode.ShouldBe(HttpStatusCode.OK);
+        store.Items.ShouldContainKey((SecretKind.ConsoleApiKey, Parked));
+        (await RosterOfAsync(client, Parked))!["consoleApiKeySetOn"].ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task APutWhileARemovalHoldsTheGateIsRefusedAndNoKeyIsLeft()
+    {
+        (AppFactory factory, FakeSecretStore store) = await RosteredAsync(TestContext.Current.CancellationToken);
+        await using AppFactory owned = factory;
+        Hold hold = new();
+        store.DuringDelete = hold.Run;
+        using HttpClient client = factory.CreateMutatingClient();
+
+        Task<HttpResponseMessage> removal = client.DeleteAsync(Account(Parked), TestContext.Current.CancellationToken);
+        await hold.Entered.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        using HttpResponseMessage put = await client.PutAsJsonAsync(ApiKey(Parked), new { key = PlantedKey }, TestContext.Current.CancellationToken);
+        hold.Release.SetResult();
+        using HttpResponseMessage removed = await removal;
+
+        put.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        (await BodyAsync(put))["refusal"]!.GetValue<string>().ShouldBe("MutationInProgress");
+        removed.StatusCode.ShouldBe(HttpStatusCode.OK);
+        store.Items.ShouldBeEmpty();
+        store.Writes.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task AStoredKeyTheRosterCannotRecordIsDeletedAgainAndThePutAnswers500()
+    {
+        (AppFactory factory, FakeSecretStore store) = await RosteredAsync(TestContext.Current.CancellationToken);
+        await using AppFactory owned = factory;
+        store.DuringWrite = () =>
+        {
+            MakeRosterUnwritable(factory);
+            return Task.CompletedTask;
+        };
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PutAsJsonAsync(ApiKey(Parked), new { key = PlantedKey }, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.InternalServerError);
+        (await BodyAsync(response))["error"]!.GetValue<string>().ShouldContain("deleted from the store again");
+        store.Writes.ShouldBe(1);
+        store.Items.ShouldBeEmpty();
+        factory.Logs.Lines.ShouldContain(line => line.Contains("console API key for " + Parked + " stored but not recorded", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ADeletedKeyTheRosterCannotRecordAnswers500AndLogsTheStaleBadge()
+    {
+        (AppFactory factory, FakeSecretStore store) = await RosteredAsync(TestContext.Current.CancellationToken);
+        await using AppFactory owned = factory;
+        using HttpClient client = factory.CreateMutatingClient();
+        await StoreKeyAsync(client);
+        store.DuringDelete = () =>
+        {
+            MakeRosterUnwritable(factory);
+            return Task.CompletedTask;
+        };
+
+        using HttpResponseMessage response = await client.DeleteAsync(ApiKey(Parked), TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.InternalServerError);
+        store.Items.ShouldBeEmpty();
+        factory.Logs.Lines.ShouldContain(line => line.Contains("the card's badge is stale", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task AFollowerMapsNeitherRoute()
     {
@@ -446,26 +559,42 @@ public sealed class ApiKeyEndpointTests
         public Task<Result<Unit, string>> ProbeAsync(CancellationToken cancellationToken) =>
             Task.FromResult(ProbeError is string error ? Result<Unit, string>.Failure(error) : Result<Unit, string>.Success(Unit.Value));
 
-        public Task<Result<Unit, string>> WriteAsync(SecretKind kind, AccountEmail email, string value, CancellationToken cancellationToken)
+        /// <summary>Runs inside each write, after the item is stored and before it answers.</summary>
+        public Func<Task>? DuringWrite { get; set; }
+
+        /// <summary>Runs inside each delete, after the item is removed and before it answers.</summary>
+        public Func<Task>? DuringDelete { get; set; }
+
+        public async Task<Result<Unit, string>> WriteAsync(SecretKind kind, AccountEmail email, string value, CancellationToken cancellationToken)
         {
             Writes++;
             Items[(kind, email.Value)] = value;
-            return Task.FromResult(Result<Unit, string>.Success(Unit.Value));
+            if (DuringWrite is not null)
+            {
+                await DuringWrite();
+            }
+
+            return Result<Unit, string>.Success(Unit.Value);
         }
 
         public Task<Result<string?, string>> ReadAsync(SecretKind kind, AccountEmail email, CancellationToken cancellationToken) =>
             Task.FromResult(Result<string?, string>.Success(Items.GetValueOrDefault((kind, email.Value))));
 
-        public Task<Result<Unit, string>> DeleteAsync(SecretKind kind, AccountEmail email, CancellationToken cancellationToken)
+        public async Task<Result<Unit, string>> DeleteAsync(SecretKind kind, AccountEmail email, CancellationToken cancellationToken)
         {
             // A store that cannot be reached cannot tell whether the key is there.
             if (DeleteError is string error)
             {
-                return Task.FromResult(Result<Unit, string>.Failure(error));
+                return Result<Unit, string>.Failure(error);
             }
 
             Items.Remove((kind, email.Value));
-            return Task.FromResult(Result<Unit, string>.Success(Unit.Value));
+            if (DuringDelete is not null)
+            {
+                await DuringDelete();
+            }
+
+            return Result<Unit, string>.Success(Unit.Value);
         }
     }
 }

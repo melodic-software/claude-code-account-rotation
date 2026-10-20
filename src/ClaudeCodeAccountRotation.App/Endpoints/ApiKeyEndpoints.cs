@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Dashboard;
 using ClaudeCodeAccountRotation.App.Security;
+using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Identity;
@@ -32,6 +33,8 @@ internal static partial class ApiKeyEndpoints
             JsonObject body,
             RosterFile rosterFile,
             ISecretStore store,
+            CredentialMutationGate gate,
+            SwitchOptions options,
             TimeProvider clock,
             ILoggerFactory loggers,
             CancellationToken cancellationToken) =>
@@ -53,15 +56,26 @@ internal static partial class ApiKeyEndpoints
             }
 
             AccountEmail target = parsed.Value;
+            ILogger logger = loggers.CreateLogger(typeof(ApiKeyEndpoints).FullName!);
+            // The one credential gate, as account removal takes it, so a removal
+            // cannot land between this check of the roster and its record: that
+            // would leave a key in the store for an account the roster no longer names.
+            using IDisposable? permit = await TryAcquireAsync(gate, options, cancellationToken);
+            if (permit is null)
+            {
+                return Busy();
+            }
+
             if ((await rosterFile.ReadAsync(cancellationToken)).Find(target) is null)
             {
                 return NotOnRoster(target);
             }
 
-            ILogger logger = loggers.CreateLogger(typeof(ApiKeyEndpoints).FullName!);
             Result<Unit, string> usable = await store.ProbeAsync(cancellationToken);
+            // Not the request's token from here: a write the store may still
+            // complete must be followed by its record, whatever the browser does.
             Result<Unit, string> written = usable.IsSuccess
-                ? await store.WriteAsync(SecretKind.ConsoleApiKey, target, key, cancellationToken)
+                ? await store.WriteAsync(SecretKind.ConsoleApiKey, target, key, CancellationToken.None)
                 : usable;
             if (written.IsFailure)
             {
@@ -71,8 +85,21 @@ internal static partial class ApiKeyEndpoints
 
             LogKeyStored(logger, target.Value);
             var today = DateOnly.FromDateTime(clock.GetLocalNow().DateTime);
-            RosterEntry? updated = await RecordAsync(rosterFile, target, today, cancellationToken);
-            return updated is null ? NotOnRoster(target) : Results.Ok(DashboardAssembler.View(updated));
+            Result<RosterEntry, string> recorded = await TryRecordAsync(rosterFile, target, today);
+            if (recorded.IsSuccess)
+            {
+                return Results.Ok(DashboardAssembler.View(recorded.Value));
+            }
+
+            // A key the roster does not record is one the page cannot show or
+            // delete, so it goes back out of the store.
+            Result<Unit, string> undone = await store.DeleteAsync(SecretKind.ConsoleApiKey, target, CancellationToken.None);
+            LogRecordFailedAfterWrite(logger, target.Value, undone.IsSuccess);
+            return Failed("The key was stored but the roster could not record it ("
+                + recorded.Error + "), so "
+                + (undone.IsSuccess
+                    ? "it was deleted from the store again. Try again."
+                    : "it is still in the store and could not be deleted (" + undone.Error + "); remove it by hand: " + ManualRemoval(SecretKind.ConsoleApiKey, target)));
         });
 
         mutations.MapDelete("/accounts/{email}/api-key", static async (
@@ -80,6 +107,8 @@ internal static partial class ApiKeyEndpoints
             bool? keepStoredKey,
             RosterFile rosterFile,
             ISecretStore store,
+            CredentialMutationGate gate,
+            SwitchOptions options,
             ILoggerFactory loggers,
             CancellationToken cancellationToken) =>
         {
@@ -91,14 +120,22 @@ internal static partial class ApiKeyEndpoints
             }
 
             AccountEmail target = parsed.Value;
+            ILogger logger = loggers.CreateLogger(typeof(ApiKeyEndpoints).FullName!);
+            using IDisposable? permit = await TryAcquireAsync(gate, options, cancellationToken);
+            if (permit is null)
+            {
+                return Busy();
+            }
+
             RosterEntry? existing = (await rosterFile.ReadAsync(cancellationToken)).Find(target);
             if (existing is null)
             {
                 return NotOnRoster(target);
             }
 
-            ILogger logger = loggers.CreateLogger(typeof(ApiKeyEndpoints).FullName!);
-            StoredKeyRemoval removal = await DeleteStoredKeysAsync(store, existing, [SecretKind.ConsoleApiKey], keepStoredKey ?? false, logger, cancellationToken);
+            // Past the read, the request's token is not consulted: a delete the
+            // store has done must reach the roster.
+            StoredKeyRemoval removal = await DeleteStoredKeysAsync(store, existing, [SecretKind.ConsoleApiKey], keepStoredKey ?? false, logger, CancellationToken.None);
             if (removal.Refusal is string refusal)
             {
                 return Refused("StoredKeyKept", refusal);
@@ -116,11 +153,53 @@ internal static partial class ApiKeyEndpoints
                 LogNoKeyRecorded(logger, target.Value);
             }
 
-            RosterEntry? updated = await RecordAsync(rosterFile, target, null, cancellationToken);
-            return updated is null
-                ? NotOnRoster(target)
-                : Results.Ok(new ApiKeyDeletionView(DashboardAssembler.View(updated)!, removal.Warning));
+            Result<RosterEntry, string> recorded = await TryRecordAsync(rosterFile, target, null);
+            if (recorded.IsFailure)
+            {
+                LogBadgeStale(logger, target.Value);
+                return Failed("The key is out of the store but the roster could not record that (" + recorded.Error
+                    + "), so the card still shows a key. Delete it again to clear the badge.");
+            }
+
+            return Results.Ok(new ApiKeyDeletionView(DashboardAssembler.View(recorded.Value)!, removal.Warning));
         });
+    }
+
+    private static async Task<IDisposable?> TryAcquireAsync(CredentialMutationGate gate, SwitchOptions options, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await gate.AcquireAsync(options.MutationGateTimeout, cancellationToken);
+        }
+        catch (TimeoutException)
+        {
+            return null;
+        }
+    }
+
+    private static IResult Busy() =>
+        Refused("MutationInProgress", "Another credential change is in progress; try again in a moment.");
+
+    private static IResult Failed(string message) =>
+        Results.Json(new { error = message }, statusCode: StatusCodes.Status500InternalServerError);
+
+    /// <summary>
+    /// Records the date with no cancellation, since the store has already
+    /// changed. A failure is the reason; a vanished entry is one too.
+    /// </summary>
+    private static async Task<Result<RosterEntry, string>> TryRecordAsync(RosterFile rosterFile, AccountEmail target, DateOnly? setOn)
+    {
+        try
+        {
+            RosterEntry? updated = await RecordAsync(rosterFile, target, setOn, CancellationToken.None);
+            return updated is null
+                ? Result<RosterEntry, string>.Failure(target.Value + " is no longer on the roster")
+                : Result<RosterEntry, string>.Success(updated);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return Result<RosterEntry, string>.Failure(exception.GetType().Name);
+        }
     }
 
     /// <summary>
@@ -218,6 +297,12 @@ internal static partial class ApiKeyEndpoints
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "stored key {Target} was left in the OS store at the operator's request; to remove it by hand: {Command}")]
     private static partial void LogStoredKeyLeft(ILogger logger, string target, string command);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "console API key for {Account} stored but not recorded on the roster; deleted from the store again: {Undone}")]
+    private static partial void LogRecordFailedAfterWrite(ILogger logger, string account, bool undone);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "console API key for {Account} deleted from the store but the roster still records it; the card's badge is stale")]
+    private static partial void LogBadgeStale(ILogger logger, string account);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "no stored console API key recorded for {Account}")]
     private static partial void LogNoKeyRecorded(ILogger logger, string account);
