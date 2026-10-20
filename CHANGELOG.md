@@ -13,7 +13,8 @@ All notable changes to this project are documented in this file. The format foll
   `<PREFIX>_CLAUDE_API_KEY`, and the date each half was set. The bare `CLAUDE_CODE_OAUTH_TOKEN` is
   the `legacy (review lanes)` role, with a token half only. One account backs each role, and an
   account can back several. Claiming a role takes it off its previous holder whatever either's
-  dates, and an account loses `ciTokenGeneratedOn` only when its last token half goes (#259).
+  dates. On an account that backs a token half, `ciTokenGeneratedOn` is always its newest token
+  half's date, so it drops when that role is taken off and clears with the last token half (#259).
 - `roster.json` entries carry `ciRoles` and `consoleApiKeySetOn`; `GET /api/dashboard` returns
   them as `accounts[].roster.ciRoles` and `accounts[].roster.consoleApiKeySetOn`, and still returns
   `ciTokenSecret` (the token secret set last) and `ciTokenGeneratedOn`. `consoleApiKeySetOn` is

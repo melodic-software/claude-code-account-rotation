@@ -429,8 +429,9 @@ account's whole list: each item names `prefix` (or `tokenSecret` for a token-onl
 `repository` or `organization`, and the halves set from this account, `tokenSetOn` and
 `keySetOn` (`yyyy-MM-dd`). A token half needs its date; a key half alone needs no token date.
 Naming a role takes it off the account that backed it before. A marker that names no role
-replaces the other markers that name none. Clearing the date clears every token half, and an
-account loses its date when its last token half goes.
+replaces the other markers that name none. Clearing the date clears every token half. On an
+account that backs a token half, the date is always that of its newest token half, whatever the
+request sends, so taking off the newest role lowers it and taking off the last one clears it.
 
 ## Build
 

@@ -19,7 +19,8 @@ public enum BrowserFamily
 /// <para>
 /// <see cref="CiRoles"/> are the CI funding roles this account backs, and
 /// <see cref="CiTokenGeneratedOn"/> the date of its newest
-/// <c>claude setup-token</c> token. A date with no roles is a marker the
+/// <c>claude setup-token</c> token still in a role: the newest token half's
+/// date, kept so by <see cref="WithCiRoles"/>. A date with no token half is a marker the
 /// operator set by hand, for the secret the README names. None of it is read
 /// back from GitHub. At most one entry on a <see cref="Roster"/> backs each
 /// role; see <see cref="Roster.With"/>.
@@ -50,32 +51,34 @@ public sealed record RosterEntry(
 
     /// <summary>
     /// Records a new token for <paramref name="role"/>, keeping that role's key
-    /// half and every other role as they are. The account's token date becomes
-    /// <paramref name="setOn"/> unless it is already later.
+    /// half and every other role as they are; see <see cref="WithCiRoles"/> for the date.
     /// </summary>
     public RosterEntry ClaimingToken(CiRole role, DateOnly setOn, DateTimeOffset? setAt)
     {
         ArgumentNullException.ThrowIfNull(role);
-        CiRoleAssignment claimed = (CiRoles.FirstOrDefault(assignment => assignment.Role.Equals(role)) ?? new CiRoleAssignment(role))
-            with { Role = role, TokenSetOn = setOn, TokenSetAt = setAt };
-        return this with
-        {
-            CiRoles = CiRoles.Any(assignment => assignment.Role.Equals(role))
-                ? [.. CiRoles.Select(assignment => assignment.Role.Equals(role) ? claimed : assignment)]
-                : CiRoles.Add(claimed),
-            CiTokenGeneratedOn = CiTokenGeneratedOn > setOn ? CiTokenGeneratedOn : setOn,
-        };
+        CiRoleAssignment held = CiRoles.FirstOrDefault(assignment => assignment.Role.Equals(role)) ?? new CiRoleAssignment(role);
+        CiRoleAssignment claimed = held with { Role = role, TokenSetOn = setOn, TokenSetAt = setAt };
+        return WithCiRoles(CiRoles.Any(assignment => assignment.Role.Equals(role))
+            ? CiRoles.Select(assignment => assignment.Role.Equals(role) ? claimed : assignment)
+            : CiRoles.Add(claimed));
     }
 
     /// <summary>
-    /// Replaces the roles, and clears <see cref="CiTokenGeneratedOn"/> when the
-    /// last token half goes: with no role left on that token, nothing in CI runs on it.
+    /// Replaces the roles and settles <see cref="CiTokenGeneratedOn"/>: on an
+    /// account left with a token half it is the newest token half's date, and
+    /// on one that just lost its last token half it is cleared, since nothing
+    /// in CI runs on that token. An account that held no token half keeps its
+    /// date, a marker set by hand.
     /// </summary>
     public RosterEntry WithCiRoles(IEnumerable<CiRoleAssignment> roles)
     {
         ArgumentNullException.ThrowIfNull(roles);
         RosterEntry updated = this with { CiRoles = [.. roles] };
-        return HasTokenHalf && !updated.HasTokenHalf ? updated with { CiTokenGeneratedOn = null } : updated;
+        return updated with
+        {
+            CiTokenGeneratedOn = updated.CiRoles.Max(static assignment => assignment.TokenSetOn)
+                ?? (HasTokenHalf ? null : CiTokenGeneratedOn),
+        };
     }
 
     public bool Equals(RosterEntry? other) =>

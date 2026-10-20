@@ -74,7 +74,7 @@ public sealed class RosterCiRoleEndpointTests
     }
 
     [Fact]
-    public async Task TheTokenDateGoesOnlyWithTheLastTokenHalf()
+    public async Task UntickingTheNewestRoleLowersTheTokenDateAndTheLastTokenHalfClearsIt()
     {
         await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
         using HttpClient client = factory.CreateMutatingClient();
@@ -94,7 +94,7 @@ public sealed class RosterCiRoleEndpointTests
             { "ciTokenGeneratedOn": "2026-10-06", "ciRoles": [
               { "prefix": "REVIEWS", "organization": "octo", "tokenSetOn": "2026-09-01", "keySetOn": "2026-09-01" } ] }
             """)).StatusCode.ShouldBe(HttpStatusCode.OK);
-        (await StoredAsync(factory, TestContext.Current.CancellationToken)).CiTokenGeneratedOn.ShouldBe(new DateOnly(2026, 10, 6));
+        (await StoredAsync(factory, TestContext.Current.CancellationToken)).CiTokenGeneratedOn.ShouldBe(new DateOnly(2026, 9, 1));
 
         (await PatchAsync(
             client,
@@ -105,6 +105,26 @@ public sealed class RosterCiRoleEndpointTests
         RosterEntry stored = await StoredAsync(factory, TestContext.Current.CancellationToken);
         stored.CiTokenGeneratedOn.ShouldBeNull();
         stored.CiRoles.Single().KeySetOn.ShouldBe(new DateOnly(2026, 9, 1));
+    }
+
+    [Fact]
+    public async Task OneEditCanUntickTheLastTokenRoleAndNameItsReplacement()
+    {
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        await client.PostAsJsonAsync(_accounts, new { email = NewEmail }, TestContext.Current.CancellationToken);
+        (await PatchAsync(
+            client,
+            """{ "ciRoles": [ { "prefix": "AUTOMATIONS", "organization": "octo", "tokenSetOn": "2026-01-15" } ] }""")).StatusCode.ShouldBe(HttpStatusCode.OK);
+
+        using HttpResponseMessage response = await PatchAsync(
+            client,
+            """{ "ciTokenGeneratedOn": "2026-10-06", "ciRoles": [], "ciTokenSecret": { "name": "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", "organization": "octo" } }""");
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        RosterEntry stored = await StoredAsync(factory, TestContext.Current.CancellationToken);
+        stored.CiRoles.ShouldBe([new CiRoleAssignment(new CiRole("REVIEWS", CiSecretScope.Organization, "octo"), new DateOnly(2026, 10, 6))]);
+        stored.CiTokenGeneratedOn.ShouldBe(new DateOnly(2026, 10, 6));
     }
 
     [Fact]

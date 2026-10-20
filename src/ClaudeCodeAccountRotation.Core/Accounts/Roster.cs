@@ -29,8 +29,9 @@ public sealed class Roster
     /// One account backs each CI role at a time: every role <paramref name="entry"/>
     /// backs is taken off every other entry, whatever either's dates, the way
     /// adopting a new live account elsewhere already leaves only one seat live.
-    /// The other entry keeps its other roles, and loses its token date only with
-    /// its last token half. Markers set by hand, with no role, count as one
+    /// The other entry keeps its other roles; its token date becomes that of its
+    /// newest remaining token half, or none once its last token half goes (see
+    /// <see cref="RosterEntry.WithCiRoles"/>). Markers set by hand, with no role, count as one
     /// role among themselves, so they keep their old behavior.
     /// </summary>
     public Roster With(RosterEntry entry)

@@ -94,6 +94,20 @@ public sealed class CiRoleTests
     }
 
     [Fact]
+    public void ClaimingTheRoleTheDateCameFromLowersTheHoldersDateToItsNewestRemainingToken()
+    {
+        RosterEntry holder = new RosterEntry(Email("a@example.com"))
+            .ClaimingToken(Org("REVIEWS"), _january, null)
+            .ClaimingToken(Org("AUTOMATIONS"), _june, null);
+
+        Roster roster = Roster.Empty
+            .With(holder)
+            .With(new RosterEntry(Email("b@example.com")).ClaimingToken(Org("AUTOMATIONS"), new DateOnly(2026, 10, 6), null));
+
+        roster.Find(Email("a@example.com"))!.CiTokenGeneratedOn.ShouldBe(_january);
+    }
+
+    [Fact]
     public void ARoleClaimLeavesAHandMarkerAlone()
     {
         Roster roster = Roster.Empty

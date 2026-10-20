@@ -168,54 +168,42 @@ internal static partial class RosterEndpoints
             // "clear the alias" from "leave the alias alone", and an edit that
             // silently reset the fields it did not mention would be worse than
             // one that refused.
-            RosterEntry updated = existing with
+            DateOnly? date = body.ContainsKey("ciTokenGeneratedOn") ? ciTokenGeneratedOn.Value : existing.CiTokenGeneratedOn;
+            RosterEntry edited = existing with
             {
                 Alias = body.ContainsKey("alias") ? Text(body, "alias") : existing.Alias,
                 Browser = body.ContainsKey("browser") ? browser.Value : existing.Browser,
                 BrowserProfileDirectory = body.ContainsKey("browserProfileDirectory") ? directory.Value : existing.BrowserProfileDirectory,
                 Paused = Flag(body, "paused") ?? existing.Paused,
                 Notes = body.ContainsKey("notes") ? Text(body, "notes") : existing.Notes,
-                CiTokenGeneratedOn = body.ContainsKey("ciTokenGeneratedOn") ? ciTokenGeneratedOn.Value : existing.CiTokenGeneratedOn,
+                CiTokenGeneratedOn = date,
             };
-            if (ciRoles.Value is not null)
+
+            // A cleared date leaves no token behind any role, so every token half
+            // goes with it, and a role left with no half goes too.
+            IEnumerable<CiRoleAssignment> roles = ciRoles.Value ?? existing.CiRoles;
+            if (body.ContainsKey("ciTokenGeneratedOn") && date is null)
             {
-                updated = updated.WithCiRoles(ciRoles.Value);
+                roles = roles
+                    .Select(static assignment => assignment with { TokenSetOn = null, TokenSetAt = null })
+                    .Where(static assignment => assignment.HasKey);
             }
+
+            // The date settles once, on the final list: the newest token half's,
+            // or none once the last one goes (see RosterEntry.WithCiRoles).
+            RosterEntry updated = edited.WithCiRoles(roles);
 
             // A single secret named by hand is the repair for a CI token whose
             // secret was set but whose roster write failed: that role's token
-            // half, set on the token date. Only a token half needs that date.
+            // half, set on the date the request names. Only a token half needs it.
             if (ciTokenSecret.Value is CiTokenSecret secret)
             {
-                if (updated.CiTokenGeneratedOn is not DateOnly setOn)
+                if (date is not DateOnly setOn)
                 {
                     return Results.BadRequest(new { error = "a CI secret needs the date its token was generated (ciTokenGeneratedOn)" });
                 }
 
                 updated = updated.ClaimingToken(CiRole.FromTokenSecret(secret), setOn, setAt: null);
-            }
-
-            // A cleared date leaves no token behind any role, so every token half
-            // goes with it, and a role left with no half goes too.
-            if (body.ContainsKey("ciTokenGeneratedOn") && ciTokenGeneratedOn.Value is null)
-            {
-                updated = updated.WithCiRoles(updated.CiRoles
-                    .Select(static assignment => assignment with { TokenSetOn = null, TokenSetAt = null })
-                    .Where(static assignment => assignment.HasKey));
-            }
-
-            // The account's token date goes with its last token half, whatever the
-            // date field said, so a role taken off does not leave a marker behind.
-            if (existing.HasTokenHalf && !updated.HasTokenHalf)
-            {
-                updated = updated with { CiTokenGeneratedOn = null };
-            }
-            else if (updated.HasTokenHalf
-                && updated.CiRoles.Max(static assignment => assignment.TokenSetOn) is DateOnly newest
-                && !(updated.CiTokenGeneratedOn >= newest))
-            {
-                // The date is the account's newest token, so no token half is newer.
-                updated = updated with { CiTokenGeneratedOn = newest };
             }
 
             await rosterFile.UpdateAsync(roster => roster.With(updated), cancellationToken);
