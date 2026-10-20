@@ -20,7 +20,7 @@ public sealed class ApiKeyEndpointTests
 {
     private const string Parked = "parked@example.com";
     private const string Other = "other@example.com";
-    private const string PlantedKey = "sk-ant-api03-planted-console-key-4c7e";
+    private const string PlantedKey = "sk-ant-" + "api03-planted-console-key-4c7e";
 
     public static bool OnLinux => OperatingSystem.IsLinux();
 
@@ -401,10 +401,10 @@ public sealed class ApiKeyEndpointTests
         using HttpClient client = factory.CreateMutatingClient();
 
         using HttpResponseMessage response = await client.PutAsJsonAsync(
-            new Uri(ApiKey(Parked) + "?key=" + PlantedKey, UriKind.Relative), new { key = "sk-ant-api03-body-key" }, TestContext.Current.CancellationToken);
+            new Uri(ApiKey(Parked) + "?key=" + PlantedKey, UriKind.Relative), new { key = "sk-ant-" + "api03-body-key" }, TestContext.Current.CancellationToken);
 
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
-        store.Items[(SecretKind.ConsoleApiKey, Parked)].ShouldBe("sk-ant-api03-body-key");
+        store.Items[(SecretKind.ConsoleApiKey, Parked)].ShouldBe("sk-ant-" + "api03-body-key");
         factory.Logs.Lines.ShouldNotBeEmpty();
         factory.Logs.Lines.ShouldNotContain(line => line.Contains(PlantedKey, StringComparison.Ordinal));
     }

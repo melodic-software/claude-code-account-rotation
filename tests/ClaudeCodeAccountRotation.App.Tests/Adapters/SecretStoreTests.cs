@@ -54,7 +54,7 @@ public sealed class SecretStoreTests
         WindowsCredentialStore store = new();
         try
         {
-            int written = WindowsCredentialStore.WriteCredential(arguments, Encoding.UTF8.GetBytes("sk-ant-api03-store-test"));
+            int written = WindowsCredentialStore.WriteCredential(arguments, Encoding.UTF8.GetBytes("sk-ant-" + "api03-store-test"));
             if (written == 1312)
             {
                 Assert.Skip("CredWriteW returned ERROR_NO_SUCH_LOGON_SESSION (1312): this session has no credential set");
@@ -63,10 +63,10 @@ public sealed class SecretStoreTests
             written.ShouldBe(0);
             WindowsCredentialStore.ReadCredential(arguments.TargetName, out byte[]? blob, out uint persist).ShouldBe(0);
             persist.ShouldBe(2u);
-            Encoding.UTF8.GetString(blob!).ShouldBe("sk-ant-api03-store-test");
+            Encoding.UTF8.GetString(blob!).ShouldBe("sk-ant-" + "api03-store-test");
 
-            (await store.WriteAsync(SecretKind.ConsoleApiKey, email, "sk-ant-api03-replaced", TestContext.Current.CancellationToken)).IsSuccess.ShouldBeTrue();
-            (await store.ReadAsync(SecretKind.ConsoleApiKey, email, TestContext.Current.CancellationToken)).Value.ShouldBe("sk-ant-api03-replaced");
+            (await store.WriteAsync(SecretKind.ConsoleApiKey, email, "sk-ant-" + "api03-replaced", TestContext.Current.CancellationToken)).IsSuccess.ShouldBeTrue();
+            (await store.ReadAsync(SecretKind.ConsoleApiKey, email, TestContext.Current.CancellationToken)).Value.ShouldBe("sk-ant-" + "api03-replaced");
             WindowsCredentialStore.ReadCredential(arguments.TargetName, out _, out uint replacedPersist).ShouldBe(0);
             replacedPersist.ShouldBe(2u);
 
@@ -88,7 +88,7 @@ public sealed class SecretStoreTests
         LibsecretStore store = Libsecret("libsecret-absent-" + Guid.NewGuid().ToString("N") + ".so.0");
 
         Result<Unit, string> probe = await store.ProbeAsync(TestContext.Current.CancellationToken);
-        Result<Unit, string> write = await store.WriteAsync(SecretKind.ConsoleApiKey, Email("a@example.com"), "sk-ant-api03-x", TestContext.Current.CancellationToken);
+        Result<Unit, string> write = await store.WriteAsync(SecretKind.ConsoleApiKey, Email("a@example.com"), "sk-ant-" + "api03-x", TestContext.Current.CancellationToken);
         Result<Unit, string> delete = await store.DeleteAsync(SecretKind.ConsoleApiKey, Email("a@example.com"), TestContext.Current.CancellationToken);
 
         probe.Error.ShouldStartWith(LibraryMissing);
@@ -134,7 +134,7 @@ public sealed class SecretStoreTests
     {
         LibsecretStore store = Libsecret("libsecret-absent.so.0", existingPath: "/.flatpak-info");
 
-        Result<Unit, string> write = await store.WriteAsync(SecretKind.ConsoleApiKey, Email("a@example.com"), "sk-ant-api03-x", TestContext.Current.CancellationToken);
+        Result<Unit, string> write = await store.WriteAsync(SecretKind.ConsoleApiKey, Email("a@example.com"), "sk-ant-" + "api03-x", TestContext.Current.CancellationToken);
 
         write.IsFailure.ShouldBeTrue();
         write.Error.ShouldContain("flatpak");

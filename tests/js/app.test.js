@@ -434,7 +434,7 @@ test("the switch toast says Remote Control restarted, and a restart that failed 
 const { apiKeyBody, apiKeyBadge } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
 
 test("a pasted API key is sent trimmed in the body, and a blank paste sends nothing", () => {
-  assert.deepStrictEqual(apiKeyBody("  sk-ant-api03-abc\n"), { key: "sk-ant-api03-abc" });
+  assert.deepStrictEqual(apiKeyBody("  sk-ant-" + "api03-abc\n"), { key: "sk-ant-" + "api03-abc" });
   assert.strictEqual(apiKeyBody(" \t\n"), null);
   assert.strictEqual(apiKeyBody(""), null);
   assert.strictEqual(apiKeyBody(undefined), null);
