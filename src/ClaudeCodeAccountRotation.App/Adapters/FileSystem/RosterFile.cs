@@ -4,6 +4,8 @@ using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Identity;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 
@@ -14,7 +16,7 @@ namespace ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 /// roster, and an entry whose e-mail no longer parses is dropped rather than
 /// failing every read.
 /// </summary>
-internal sealed class RosterFile : IDisposable
+internal sealed partial class RosterFile : IDisposable
 {
     public const string FileName = "roster.json";
 
@@ -25,12 +27,20 @@ internal sealed class RosterFile : IDisposable
     // the only process editing the file.
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly string _path;
+    private readonly TimeProvider _clock;
+    private readonly ILogger _logger;
 
-    public RosterFile(string appDataDirectory)
+    public RosterFile(string appDataDirectory, TimeProvider? clock = null, ILogger<RosterFile>? logger = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(appDataDirectory);
         _path = Path.Combine(Path.GetFullPath(appDataDirectory), FileName);
+        _clock = clock ?? TimeProvider.System;
+        _logger = logger ?? NullLogger<RosterFile>.Instance;
+        History = new LaneHistoryFile(appDataDirectory);
     }
+
+    /// <summary>The record of which account backed which role half, appended to by every update.</summary>
+    public LaneHistoryFile History { get; }
 
     public async Task<Roster> ReadAsync(CancellationToken cancellationToken)
     {
@@ -45,16 +55,34 @@ internal sealed class RosterFile : IDisposable
         }
     }
 
-    /// <summary>Applies <paramref name="change"/> to the stored roster and writes the result back.</summary>
-    public async Task<Roster> UpdateAsync(Func<Roster, Roster> change, CancellationToken cancellationToken)
+    /// <summary>
+    /// Applies <paramref name="change"/> to the stored roster and writes the result back,
+    /// then appends to the lane history one line per role half whose account changed,
+    /// tagged <paramref name="via"/>.
+    /// </summary>
+    public async Task<Roster> UpdateAsync(Func<Roster, Roster> change, CancellationToken cancellationToken, string via = LaneVia.Edit)
     {
         ArgumentNullException.ThrowIfNull(change);
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            Roster updated = change(await ReadUnguardedAsync(cancellationToken));
+            Roster before = await ReadUnguardedAsync(cancellationToken);
+            Roster updated = change(before);
             Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
             await AtomicJsonFile.WriteAsync(_path, ToJson(updated), cancellationToken);
+            try
+            {
+                // The roster write has committed, so the append must outlive a
+                // cancelled request.
+                await History.AppendAsync(LaneHistoryFile.Diff(before, updated, _clock.GetUtcNow(), via), CancellationToken.None);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // The edit is already stored; a history line that cannot be
+                // appended must not report it as failed, but it is not silent.
+                LogHistoryAppendFailed(LaneHistoryFile.FileName, exception.GetType().Name);
+            }
+
             return updated;
         }
         finally
@@ -64,6 +92,9 @@ internal sealed class RosterFile : IDisposable
     }
 
     public void Dispose() => _gate.Dispose();
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not append to {File}: {ExceptionType}")]
+    private partial void LogHistoryAppendFailed(string file, string exceptionType);
 
     private static JsonObject ToJson(Roster roster)
     {
