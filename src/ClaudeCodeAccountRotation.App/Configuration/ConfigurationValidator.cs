@@ -1,5 +1,6 @@
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.Core;
+using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Configuration;
 
 namespace ClaudeCodeAccountRotation.App.Configuration;
@@ -43,6 +44,17 @@ internal static class ConfigurationValidator
         if (configuration.RemoteControlTask is string task && task.IndexOfAny(['\\', '/', '*', '?', '[', ']']) >= 0)
         {
             return Failure("remoteControlTask must be the name of a task in the Task Scheduler root folder, without a path or wildcard (\\ / * ? [ ]): " + task);
+        }
+
+        // Each becomes part of a GitHub API path, so it is held to GitHub's
+        // repository rule, and a name of . or .. is refused as a traversal.
+        foreach (string repository in configuration.LaneRepositories ?? [])
+        {
+            if (CiTokenSecret.Parse(CiTokenSecret.DefaultName, repository, null).IsFailure
+                || repository.Split('/')[1] is "." or "..")
+            {
+                return Failure("laneRepositories entries are written owner/name, as GitHub names a repository: " + repository);
+            }
         }
 
         if (configuration.Role == RotationRole.Follower)

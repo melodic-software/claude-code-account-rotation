@@ -538,3 +538,55 @@ test("roleCheckLines gives each unknown half the cause the server sent", () => {
   assert.strictEqual(unknownLine("noListedTime").kind, "warn");
   assert.strictEqual(unknownLine(null).text, "automations in org octo · token · a@example.com · token: unknown");
 });
+
+const { killSwitchRows, toggleKillSwitch } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+
+// Kill switches in the shape POST /api/roles/check returns them.
+const LANES = { name: "CLAUDE_LANES_DISABLED", scope: "organization", owner: "octo", exists: true, value: "false", state: "running", writable: true, error: null };
+function repoSwitch(owner, value, state) {
+  return { name: "CLAUDE_LANES_REPO_DISABLED", scope: "repository", owner: owner, exists: value !== null, value: value, state: state, writable: false, error: null };
+}
+
+test("each lane repository shows its switch, read-only and with no toggle", () => {
+  const rows = killSwitchRows({ killSwitches: [LANES, repoSwitch("octo/lanes", "false", "running"), repoSwitch("octo/other", null, "stopped")] });
+  assert.strictEqual(rows.length, 3);
+  assert.strictEqual(rows[1].text, "CLAUDE_LANES_REPO_DISABLED in octo/lanes · running (false) · read-only");
+  assert.strictEqual(rows[2].text, "CLAUDE_LANES_REPO_DISABLED in octo/other · stopped (not set) · read-only");
+  assert.strictEqual(rows[1].toggle, null);
+  assert.strictEqual(rows[2].toggle, null);
+});
+
+test("a running organization switch offers Stop, which sends true; a stopped one offers Start, which sends false", () => {
+  const [running] = killSwitchRows({ killSwitches: [LANES] });
+  assert.strictEqual(running.text, "CLAUDE_LANES_DISABLED in org octo · running (false)");
+  assert.strictEqual(running.toggle.label, "Stop");
+  assert.deepStrictEqual(running.toggle.body, { org: "octo", name: "CLAUDE_LANES_DISABLED", value: "true" });
+  const [stopped] = killSwitchRows({ killSwitches: [Object.assign({}, LANES, { name: "CLAUDE_REVIEW_DISABLED", value: "true", state: "stopped" })] });
+  assert.strictEqual(stopped.toggle.label, "Start");
+  assert.deepStrictEqual(stopped.toggle.body, { org: "octo", name: "CLAUDE_REVIEW_DISABLED", value: "false" });
+});
+
+test("a switch that is missing or could not be read has no toggle", () => {
+  const rows = killSwitchRows({ killSwitches: [
+    Object.assign({}, LANES, { exists: false, value: null, state: "stopped" }),
+    Object.assign({}, LANES, { exists: false, value: null, state: null, error: "GitHub answered HTTP 403" })
+  ] });
+  assert.strictEqual(rows[0].toggle, null);
+  assert.strictEqual(rows[1].toggle, null);
+  assert.strictEqual(rows[1].kind, "crit");
+});
+
+test("a toggle sends nothing until the page's confirmation is accepted", async () => {
+  const [row] = killSwitchRows({ killSwitches: [LANES] });
+  const sent = [];
+  const asked = [];
+  function post(path, method, body) { sent.push([path, method, body]); return Promise.resolve({ ok: true, body: {} }); }
+
+  const declined = await toggleKillSwitch(row.toggle, (question) => { asked.push(question); return false; }, post);
+  assert.strictEqual(declined, null);
+  assert.strictEqual(asked.length, 1);
+  assert.deepStrictEqual(sent, []);
+
+  await toggleKillSwitch(row.toggle, () => true, post);
+  assert.deepStrictEqual(sent, [["/api/kill-switches", "POST", { org: "octo", name: "CLAUDE_LANES_DISABLED", value: "true" }]]);
+});

@@ -32,6 +32,15 @@ All notable changes to this project are documented in this file. The format foll
   `lane-history.jsonl` under app data (time, role, token or key, account, previous account, route),
   names and dates only. `GET /api/lane-history?since=` returns it, and a History disclosure on the
   page reads the last 30 days when opened (#259).
+- **Kill switches.** Check roles also reads the organization variables `CLAUDE_LANES_DISABLED`,
+  `CLAUDE_REVIEW_DISABLED` and `CLAUDE_SECURITY_REVIEW_DISABLED`, and `CLAUDE_LANES_REPO_DISABLED`
+  of each repository in the new optional `config.json` key `laneRepositories` (absent means none),
+  and shows each as running or stopped. Each organization switch has a Stop or Start button that
+  asks first and changes only the variable's value (`POST /api/kill-switches` runs
+  `gh api --method PATCH orgs/<org>/actions/variables/<name> -f value=<true|false>` with the
+  visibility, and any selected repository ids, read just before, and nothing when that read
+  fails); it never
+  creates a variable, and the repository switch is read-only (#259).
 
 ### Changed
 

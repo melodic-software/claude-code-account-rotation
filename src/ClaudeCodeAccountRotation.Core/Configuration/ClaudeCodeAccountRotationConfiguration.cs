@@ -29,6 +29,12 @@ namespace ClaudeCodeAccountRotation.Core.Configuration;
 /// Windows scheduled task a switch clicked on this side restarts once the
 /// switch verifies, or null for none.
 /// </para>
+/// <para>
+/// <paramref name="LaneRepositories"/> is <c>laneRepositories</c>: the
+/// repositories (<c>owner/name</c>) where CI lanes run, whose
+/// <c>CLAUDE_LANES_REPO_DISABLED</c> variable Check roles reads. Null, as in
+/// a file written before the key, means none.
+/// </para>
 /// </summary>
 public sealed record ClaudeCodeAccountRotationConfiguration(
     string LiveConfigDirectory,
@@ -45,4 +51,5 @@ public sealed record ClaudeCodeAccountRotationConfiguration(
     RotationRole Role = RotationRole.Leader,
     string? Mailbox = null,
     IReadOnlyList<PeerConfiguration>? Peers = null,
-    string? RemoteControlTask = null);
+    string? RemoteControlTask = null,
+    IReadOnlyList<string>? LaneRepositories = null);
