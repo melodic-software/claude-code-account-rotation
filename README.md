@@ -329,7 +329,10 @@ account, the tool restarts the task:
 3. It waits up to 15 seconds for the task to stop, then runs it again.
 
 - A task that was not running is left alone, and the switch asks nothing. When the page cannot
-  read the task's state, it still asks, as a condition.
+  read the task's state, it still asks, as a condition. The state comes from
+  `Get-ScheduledTask`, whose state is a number, so it reads the same in every display language.
+- A task whose state could not be read before the switch is restarted only if its processes are
+  found; one found stopped is not started, and the result says so.
 - A second switch sent while the first one's restart is running is refused (`MutationInProgress`).
 - A switch of the WSL side, and any switch on Linux, restarts nothing.
 - A restart that fails never fails the switch. A process that cannot be ended stops the restart

@@ -27,7 +27,7 @@ internal sealed class NoRemoteControlTask : IRemoteControlTask
 
     public Task<Result<bool, string>> IsRunningAsync(CancellationToken cancellationToken) => Task.FromResult(Result<bool, string>.Success(false));
 
-    public Task<Result<Unit, string>> RestartAsync(CancellationToken cancellationToken) =>
+    public Task<Result<Unit, string>> RestartAsync(bool startIfStopped, CancellationToken cancellationToken) =>
         Task.FromResult(Result<Unit, string>.Failure("no Remote Control task is configured"));
 }
 
@@ -54,14 +54,16 @@ internal sealed class NoRemoteControlTask : IRemoteControlTask
 /// it runs it again.
 /// </para>
 /// <para>
-/// <c>/Query</c>'s status column is the English word on an English Windows;
-/// another display language reads as not running, which only skips the
-/// confirmation and the restart.
+/// The task's state is read through Windows PowerShell's ScheduledTasks
+/// module, whose <c>State</c> is an enum, never from schtasks' text, which
+/// follows the display language. <c>/End</c> and <c>/Run</c> are judged by
+/// exit code alone.
 /// </para>
 /// </summary>
 internal sealed partial class ScheduledTaskRemoteControl(
     string name,
     CommandRunner schtasks,
+    CommandRunner powershell,
     ProcessLister listProcesses,
     ProcessKiller kill,
     TimeProvider timeProvider,
@@ -81,38 +83,47 @@ internal sealed partial class ScheduledTaskRemoteControl(
     public Task<Result<bool, string>> IsRunningAsync(CancellationToken cancellationToken) => StatusAsync(cancellationToken);
 
     /// <summary>
-    /// Whether the task is Running, or why that could not be read. A task that
-    /// does not exist is not running; any other failure is a failure, and a
-    /// restart never takes it for stopped.
+    /// Whether the task is Running, or why that could not be read, from the
+    /// ScheduledTasks module's <c>State</c>: an enum, printed as its number, so
+    /// no display language changes the answer. No output is a task that is not
+    /// registered, which is not running; a run that fails or exits non-zero is
+    /// a failure, and a restart never takes it for stopped.
     /// </summary>
     private async Task<Result<bool, string>> StatusAsync(CancellationToken cancellationToken)
     {
-        Result<(int ExitCode, string Output), string> query = await schtasks(["/Query", "/TN", name, "/FO", "CSV", "/NH"], cancellationToken);
+        Result<(int ExitCode, string Output), string> query = await powershell(
+            ["-NoProfile", "-NonInteractive", "-Command", StateScript(name)],
+            cancellationToken);
         if (query.IsFailure)
         {
             return Result<bool, string>.Failure(query.Error);
         }
 
-        // "ERROR: The system cannot find the file specified." is schtasks naming
-        // a task that is not registered, which is the ordinary state on a
-        // machine without Remote Control.
-        if (query.Value.ExitCode != 0 && query.Value.Output.Contains("cannot find", StringComparison.OrdinalIgnoreCase))
+        if (query.Value.ExitCode != 0)
+        {
+            return Result<bool, string>.Failure("Get-ScheduledTask exited with code " + query.Value.ExitCode + ": " + query.Value.Output.Trim());
+        }
+
+        string state = query.Value.Output.Trim();
+        if (state.Length == 0)
         {
             return Result<bool, string>.Success(false);
         }
 
-        if (query.Value.ExitCode != 0)
-        {
-            return Result<bool, string>.Failure("schtasks /Query exited with code " + query.Value.ExitCode + ": " + query.Value.Output.Trim());
-        }
-
-        // One row per trigger: "\name","next run","status". The status is the last field.
-        return Result<bool, string>.Success(query.Value.Output
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Any(static line => line.EndsWith("\"Running\"", StringComparison.Ordinal)));
+        return int.TryParse(state, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int number)
+            ? Result<bool, string>.Success(number == RunningState)
+            : Result<bool, string>.Failure("Get-ScheduledTask printed an unexpected state: " + state);
     }
 
-    public async Task<Result<Unit, string>> RestartAsync(CancellationToken cancellationToken)
+    /// <summary><c>Microsoft.Management.Infrastructure.CimInstance</c>'s <c>StateEnum</c>: Running is 4.</summary>
+    internal const int RunningState = 4;
+
+    /// <summary>The state query, with the task name as a single-quoted PowerShell literal.</summary>
+    internal static string StateScript(string taskName) =>
+        "$task = Get-ScheduledTask -TaskName '" + taskName.Replace("'", "''", StringComparison.Ordinal)
+        + "' -ErrorAction SilentlyContinue; if ($task) { [int]$task.State }";
+
+    public async Task<Result<Unit, string>> RestartAsync(bool startIfStopped, CancellationToken cancellationToken)
     {
         Result<(int ExitCode, string Output), string> definition = await schtasks(["/Query", "/TN", name, "/XML"], cancellationToken);
         if (definition.IsFailure)
@@ -137,16 +148,23 @@ internal sealed partial class ScheduledTaskRemoteControl(
         {
             // A running task whose processes cannot be told apart is left as it
             // is: /End alone would leave its server running, and /Run would then
-            // start a second one. A task that has stopped by itself is just run.
+            // start a second one. A task that has stopped by itself is run only
+            // when it was known to be running before the switch: a task whose
+            // earlier state was unknown may be one the operator stopped.
             Result<bool, string> status = await StatusAsync(cancellationToken);
             if (status.IsFailure)
             {
                 return Result<Unit, string>.Failure("the task's state could not be read: " + status.Error);
             }
 
-            return status.Value
-                ? Result<Unit, string>.Failure("the task is running but its processes could not be identified")
-                : await StepAsync("/Run", cancellationToken);
+            if (status.Value)
+            {
+                return Result<Unit, string>.Failure("the task is running but its processes could not be identified");
+            }
+
+            return startIfStopped
+                ? await StepAsync("/Run", cancellationToken)
+                : Result<Unit, string>.Failure("the task is not running and its state before the switch could not be read, so it was not started");
         }
 
         Result<Unit, string> ended = await StepAsync("/End", cancellationToken);
@@ -315,10 +333,8 @@ internal sealed partial class ScheduledTaskRemoteControl(
     /// .NET's own process API has neither the parent id nor the command line.
     /// One run per restart, never per poll.
     /// </summary>
-    public static ProcessLister WindowsProcessLister(string systemDirectory)
-    {
-        CommandRunner powershell = WindowsRunner(Path.Combine(systemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"));
-        return async cancellationToken =>
+    public static ProcessLister WindowsProcessLister(CommandRunner powershell) =>
+        async cancellationToken =>
         {
             Result<(int ExitCode, string Output), string> listed = await powershell(
                 [
@@ -339,7 +355,10 @@ internal sealed partial class ScheduledTaskRemoteControl(
 
             return ParseProcessTable(listed.Value.Output);
         };
-    }
+
+    /// <summary>Windows PowerShell from the system directory, never from PATH: present on every Windows, with the ScheduledTasks and CIM cmdlets.</summary>
+    public static CommandRunner WindowsPowerShell(string systemDirectory) =>
+        WindowsRunner(Path.Combine(systemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"));
 
     internal static Result<IReadOnlyList<ProcessEntry>, string> ParseProcessTable(string json)
     {

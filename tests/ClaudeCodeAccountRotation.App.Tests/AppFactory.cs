@@ -316,9 +316,13 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
         public Task<Result<bool, string>> IsRunningAsync(CancellationToken cancellationToken) =>
             Task.FromResult(RunningError is string error ? Result<bool, string>.Failure(error) : Result<bool, string>.Success(Running));
 
-        public async Task<Result<Unit, string>> RestartAsync(CancellationToken cancellationToken)
+        /// <summary>What the last restart was told about starting a stopped task.</summary>
+        public bool? LastStartIfStopped { get; private set; }
+
+        public async Task<Result<Unit, string>> RestartAsync(bool startIfStopped, CancellationToken cancellationToken)
         {
             Restarts++;
+            LastStartIfStopped = startIfStopped;
             RestartEntered.TrySetResult();
             if (HoldRestart is TaskCompletionSource hold)
             {

@@ -264,7 +264,8 @@ internal static class AppComposition
             ? new ScheduledTaskRemoteControl(
                 remoteControlTask,
                 ScheduledTaskRemoteControl.WindowsRunner(Path.Combine(Environment.SystemDirectory, "schtasks.exe")),
-                ScheduledTaskRemoteControl.WindowsProcessLister(Environment.SystemDirectory),
+                ScheduledTaskRemoteControl.WindowsPowerShell(Environment.SystemDirectory),
+                ScheduledTaskRemoteControl.WindowsProcessLister(ScheduledTaskRemoteControl.WindowsPowerShell(Environment.SystemDirectory)),
                 ScheduledTaskRemoteControl.KillRecordedAsync,
                 TimeProvider.System,
                 ScheduledTaskRemoteControl.StopBound,

@@ -5,8 +5,8 @@ namespace ClaudeCodeAccountRotation.App.Tests.Adapters;
 
 public sealed class ScheduledTaskRemoteControlTests
 {
-    private const string Running = "\"\\claude-remote-control\",\"N/A\",\"Running\"\r\n";
-    private const string Ready = "\"\\claude-remote-control\",\"N/A\",\"Ready\"\r\n";
+    private const string Running = "4\r\n";
+    private const string Ready = "3\r\n";
 
     /// <summary>The action the provisioning task registers, as <c>/Query /XML</c> prints it.</summary>
     internal const string TaskXml = """
@@ -54,6 +54,7 @@ public sealed class ScheduledTaskRemoteControlTests
         new(
             "claude-remote-control",
             script.Run,
+            script.Run,
             _ => Task.FromResult(Result<IReadOnlyList<ProcessEntry>, string>.Success(Machine)),
             (killer ?? new Killer()).Kill,
             TimeProvider.System,
@@ -75,9 +76,55 @@ public sealed class ScheduledTaskRemoteControlTests
     }
 
     [Fact]
+    public async Task StateIsReadAsANumberWhateverLanguageSchtasksSpeaks()
+    {
+        // A German Windows: schtasks' own text would say "Wird ausgeführt"; the
+        // state read never looks at it, only at the enum's number.
+        Script running = new Script()
+            .Answer("/Query", 0, "4\r\n")
+            .Answer("/XML", 1, "FEHLER: Zugriff verweigert");
+        Script ready = new Script().Answer("/Query", 0, "3\r\n");
+
+        (await RemoteControl(running).IsRunningAsync(Token)).Value.ShouldBeTrue();
+        (await RemoteControl(ready).IsRunningAsync(Token)).Value.ShouldBeFalse();
+        running.Calls.ShouldBe(["State"]);
+        running.LastStateScript.ShouldBe("$task = Get-ScheduledTask -TaskName 'claude-remote-control' -ErrorAction SilentlyContinue; if ($task) { [int]$task.State }");
+    }
+
+    [Fact]
+    public void TheTaskNameIsAQuotedLiteralInTheStateScript()
+    {
+        ScheduledTaskRemoteControl.StateScript("it's").ShouldContain("-TaskName 'it''s'");
+    }
+
+    [Fact]
+    public async Task AStateThatIsNotANumberIsAFailure()
+    {
+        Result<bool, string> state = await RemoteControl(new Script().Answer("/Query", 0, "Wird ausgeführt")).IsRunningAsync(Token);
+
+        state.IsFailure.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task AnUnknownEarlierStateNeverStartsATaskFoundStopped()
+    {
+        Script script = new Script()
+            .Answer("/XML", 0, TaskXml.Replace("--permission-mode auto", "--permission-mode plan", StringComparison.Ordinal))
+            .Answer("/Query", 0, Ready)
+            .Answer("/End", 0)
+            .Answer("/Run", 0);
+
+        Result<Unit, string> restart = await RemoteControl(script).RestartAsync(startIfStopped: false, Token);
+
+        restart.IsFailure.ShouldBeTrue();
+        restart.Error.ShouldContain("was not started");
+        script.Calls.ShouldNotContain(static call => call.StartsWith("/Run", StringComparison.Ordinal) || call.StartsWith("/End", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task AMissingTaskIsNotRunning()
     {
-        Result<bool, string> state = await RemoteControl(new Script().Answer("/Query", 1, "ERROR: The system cannot find the file specified.")).IsRunningAsync(Token);
+        Result<bool, string> state = await RemoteControl(new Script().Answer("/Query", 0, "")).IsRunningAsync(Token);
 
         state.IsSuccess.ShouldBeTrue();
         state.Value.ShouldBeFalse();
@@ -129,14 +176,14 @@ public sealed class ScheduledTaskRemoteControlTests
         Script script = Restartable();
         Killer killer = new();
 
-        Result<Unit, string> restart = await RemoteControl(script, killer).RestartAsync(Token);
+        Result<Unit, string> restart = await RemoteControl(script, killer).RestartAsync(startIfStopped: true, Token);
 
         restart.IsSuccess.ShouldBeTrue(restart.IsFailure ? restart.Error : "");
         script.Calls.ShouldBe([
             "/Query /TN claude-remote-control /XML",
             "/End /TN claude-remote-control",
-            "/Query /TN claude-remote-control /FO CSV /NH",
-            "/Query /TN claude-remote-control /FO CSV /NH",
+            "State",
+            "State",
             "/Run /TN claude-remote-control"]);
         killer.Killed.ShouldBe([30, 20, 10]);
     }
@@ -146,7 +193,7 @@ public sealed class ScheduledTaskRemoteControlTests
     {
         Killer killer = new();
 
-        await RemoteControl(Restartable(), killer).RestartAsync(Token);
+        await RemoteControl(Restartable(), killer).RestartAsync(startIfStopped: true, Token);
 
         killer.Killed.ShouldNotContain(120);
         killer.Killed.ShouldNotContain(110);
@@ -158,7 +205,7 @@ public sealed class ScheduledTaskRemoteControlTests
         Script script = Restartable();
         Killer killer = new() { Refuse = 30 };
 
-        Result<Unit, string> restart = await RemoteControl(script, killer).RestartAsync(Token);
+        Result<Unit, string> restart = await RemoteControl(script, killer).RestartAsync(startIfStopped: true, Token);
 
         restart.IsFailure.ShouldBeTrue();
         restart.Error.ShouldContain("claude.exe (process 30): Access is denied.");
@@ -181,7 +228,7 @@ public sealed class ScheduledTaskRemoteControlTests
             .Answer("/Query", Result<(int, string), string>.Failure("schtasks.exe did not finish within 20 s"))
             .Answer("/Run", 0);
 
-        Result<Unit, string> restart = await RemoteControl(script, stopBound: TimeSpan.FromMilliseconds(50)).RestartAsync(Token);
+        Result<Unit, string> restart = await RemoteControl(script, stopBound: TimeSpan.FromMilliseconds(50)).RestartAsync(startIfStopped: true, Token);
 
         restart.IsFailure.ShouldBeTrue();
         restart.Error.ShouldContain("could not be read");
@@ -197,7 +244,7 @@ public sealed class ScheduledTaskRemoteControlTests
             .Answer("/Query", 1, "ERROR: busy").Answer("/Query", 0, Ready)
             .Answer("/Run", 0);
 
-        Result<Unit, string> restart = await RemoteControl(script).RestartAsync(Token);
+        Result<Unit, string> restart = await RemoteControl(script).RestartAsync(startIfStopped: true, Token);
 
         restart.IsSuccess.ShouldBeTrue(restart.IsFailure ? restart.Error : "");
         script.Calls[^1].ShouldBe("/Run /TN claude-remote-control");
@@ -213,7 +260,7 @@ public sealed class ScheduledTaskRemoteControlTests
             .Answer("/Run", 0);
         Killer killer = new();
 
-        Result<Unit, string> restart = await RemoteControl(script, killer).RestartAsync(Token);
+        Result<Unit, string> restart = await RemoteControl(script, killer).RestartAsync(startIfStopped: true, Token);
 
         restart.IsFailure.ShouldBeTrue();
         restart.Error.ShouldContain("could not be identified");
@@ -230,7 +277,7 @@ public sealed class ScheduledTaskRemoteControlTests
             .Answer("/End", 0)
             .Answer("/Run", 0);
 
-        Result<Unit, string> restart = await RemoteControl(script).RestartAsync(Token);
+        Result<Unit, string> restart = await RemoteControl(script).RestartAsync(startIfStopped: true, Token);
 
         restart.IsSuccess.ShouldBeTrue(restart.IsFailure ? restart.Error : "");
         script.Calls[^1].ShouldBe("/Run /TN claude-remote-control");
@@ -244,13 +291,14 @@ public sealed class ScheduledTaskRemoteControlTests
         ScheduledTaskRemoteControl remoteControl = new(
             "claude-remote-control",
             script.Run,
+            script.Run,
             _ => Task.FromResult(Result<IReadOnlyList<ProcessEntry>, string>.Failure("powershell.exe exited with code 1")),
             new Killer().Kill,
             TimeProvider.System,
             TimeSpan.FromSeconds(5),
             TimeSpan.FromMilliseconds(1));
 
-        Result<Unit, string> restart = await remoteControl.RestartAsync(Token);
+        Result<Unit, string> restart = await remoteControl.RestartAsync(startIfStopped: true, Token);
 
         restart.IsFailure.ShouldBeTrue();
         script.Calls.ShouldBe(["/Query /TN claude-remote-control /XML"]);
@@ -261,7 +309,7 @@ public sealed class ScheduledTaskRemoteControlTests
     {
         Script script = new Script().Answer("/XML", 0, TaskXml).Answer("/End", 0).Answer("/Query", 0, Running).Answer("/Run", 0);
 
-        Result<Unit, string> restart = await RemoteControl(script, stopBound: TimeSpan.FromMilliseconds(50)).RestartAsync(Token);
+        Result<Unit, string> restart = await RemoteControl(script, stopBound: TimeSpan.FromMilliseconds(50)).RestartAsync(startIfStopped: true, Token);
 
         restart.IsFailure.ShouldBeTrue();
         restart.Error.ShouldContain("still running");
@@ -274,7 +322,7 @@ public sealed class ScheduledTaskRemoteControlTests
         Script script = new Script().Answer("/XML", 0, TaskXml).Answer("/End", 1, "ERROR: Access is denied.").Answer("/Run", 0);
         Killer killer = new();
 
-        Result<Unit, string> restart = await RemoteControl(script, killer).RestartAsync(Token);
+        Result<Unit, string> restart = await RemoteControl(script, killer).RestartAsync(startIfStopped: true, Token);
 
         restart.IsFailure.ShouldBeTrue();
         restart.Error.ShouldContain("Access is denied");
@@ -287,7 +335,7 @@ public sealed class ScheduledTaskRemoteControlTests
     {
         Script script = new Script().Answer("/XML", 0, TaskXml).Answer("/End", 0).Answer("/Query", 0, Ready).Answer("/Run", 1, "ERROR: Access is denied.");
 
-        Result<Unit, string> restart = await RemoteControl(script).RestartAsync(Token);
+        Result<Unit, string> restart = await RemoteControl(script).RestartAsync(startIfStopped: true, Token);
 
         restart.IsFailure.ShouldBeTrue();
         restart.Error.ShouldContain("/Run");
@@ -324,14 +372,17 @@ public sealed class ScheduledTaskRemoteControlTests
     }
 
     /// <summary>
-    /// A scripted schtasks.exe: each call takes the next answer for its verb
-    /// (<c>/XML</c> for the definition query), the last one repeating, and is recorded.
+    /// A scripted schtasks.exe and powershell.exe: each call takes the next
+    /// answer for its verb (<c>/XML</c> for the definition query, <c>/Query</c>
+    /// for the state read), the last one repeating, and is recorded.
     /// </summary>
     internal sealed class Script
     {
         private readonly Dictionary<string, Queue<Result<(int, string), string>>> _answers = [];
 
         public List<string> Calls { get; } = [];
+
+        public string? LastStateScript { get; private set; }
 
         public Script Answer(string verb, int exitCode, string output = "") =>
             Answer(verb, Result<(int, string), string>.Success((exitCode, output)));
@@ -350,8 +401,15 @@ public sealed class ScheduledTaskRemoteControlTests
 
         public Task<Result<(int ExitCode, string Output), string>> Run(IReadOnlyList<string> arguments, CancellationToken cancellationToken)
         {
-            Calls.Add(string.Join(' ', arguments));
-            Queue<Result<(int, string), string>> queue = _answers[arguments.Contains("/XML") ? "/XML" : arguments[0]];
+            // The PowerShell state read answers to "/Query" and is recorded as "State".
+            bool state = arguments.Contains("-Command");
+            if (state)
+            {
+                LastStateScript = arguments[^1];
+            }
+
+            Calls.Add(state ? "State" : string.Join(' ', arguments));
+            Queue<Result<(int, string), string>> queue = _answers[state ? "/Query" : arguments.Contains("/XML") ? "/XML" : arguments[0]];
             return Task.FromResult(queue.Count > 1 ? queue.Dequeue() : queue.Peek());
         }
     }

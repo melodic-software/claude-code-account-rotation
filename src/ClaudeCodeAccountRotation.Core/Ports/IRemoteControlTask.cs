@@ -21,6 +21,8 @@ public interface IRemoteControlTask
     /// <summary>
     /// Ends the task, waits until it is no longer running, and runs it again.
     /// A failure carries the reason; the caller decides what to tell the operator.
+    /// <paramref name="startIfStopped"/> is whether a task found stopped may be
+    /// started: true only when it was known to be running before the switch.
     /// </summary>
-    Task<Result<Unit, string>> RestartAsync(CancellationToken cancellationToken);
+    Task<Result<Unit, string>> RestartAsync(bool startIfStopped, CancellationToken cancellationToken);
 }

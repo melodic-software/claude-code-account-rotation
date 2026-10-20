@@ -62,6 +62,7 @@ public sealed class SwitchEndpointTests
         body["remoteControlRestarted"]!.GetValue<bool>().ShouldBeTrue();
         body["remoteControlWarning"].ShouldBeNull();
         factory.RemoteControl.Restarts.ShouldBe(1);
+        factory.RemoteControl.LastStartIfStopped.ShouldBe(true);
     }
 
     [Fact]
@@ -106,7 +107,40 @@ public sealed class SwitchEndpointTests
 
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
         factory.RemoteControl.Restarts.ShouldBe(1);
+        factory.RemoteControl.LastStartIfStopped.ShouldBe(false);
         (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["remoteControlRestarted"]!.GetValue<bool>().ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task AStoppedTaskWhoseEarlierStateWasUnknownIsNotStartedByTheSwitch()
+    {
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        // The read before the switch fails; the one in the restart finds the task stopped (3, Ready).
+        ScheduledTaskRemoteControlTests.Script script = new ScheduledTaskRemoteControlTests.Script()
+            .Answer("/Query", Result<(int, string), string>.Failure("powershell.exe did not finish within 20 s"))
+            .Answer("/Query", 0, "3")
+            .Answer("/XML", 0, ScheduledTaskRemoteControlTests.TaskXml)
+            .Answer("/End", 0)
+            .Answer("/Run", 0);
+        factory.Overrides = services => services.Replace(ServiceDescriptor.Singleton<IRemoteControlTask>(new ScheduledTaskRemoteControl(
+            "claude-remote-control",
+            script.Run,
+            script.Run,
+            _ => Task.FromResult(Result<IReadOnlyList<ProcessEntry>, string>.Success([new ProcessEntry(4, 0, "svchost.exe", null)])),
+            new ScheduledTaskRemoteControlTests.Killer().Kill,
+            TimeProvider.System,
+            TimeSpan.FromSeconds(5),
+            TimeSpan.FromMilliseconds(1),
+            ScheduledTaskRemoteControlTests.Expand)));
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+        body["remoteControlRestarted"]!.GetValue<bool>().ShouldBeFalse();
+        body["remoteControlWarning"]!.GetValue<string>().ShouldContain("was not started");
+        script.Calls.ShouldNotContain(static call => call.StartsWith("/Run", StringComparison.Ordinal) || call.StartsWith("/End", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -120,6 +154,7 @@ public sealed class SwitchEndpointTests
             .Answer("/Run", 0);
         factory.Overrides = services => services.Replace(ServiceDescriptor.Singleton<IRemoteControlTask>(new ScheduledTaskRemoteControl(
             "claude-remote-control",
+            script.Run,
             script.Run,
             _ => Task.FromResult(Result<IReadOnlyList<ProcessEntry>, string>.Success([new ProcessEntry(4, 0, "svchost.exe", null)])),
             new ScheduledTaskRemoteControlTests.Killer().Kill,
@@ -209,13 +244,14 @@ public sealed class SwitchEndpointTests
     {
         using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
         ScheduledTaskRemoteControlTests.Script script = new ScheduledTaskRemoteControlTests.Script()
-            .Answer("/Query", 0, "\"\\claude-remote-control\",\"N/A\",\"Running\"")
+            .Answer("/Query", 0, "4")
             .Answer("/XML", 0, ScheduledTaskRemoteControlTests.TaskXml)
             .Answer("/End", 0)
             .Answer("/Run", 0);
         ScheduledTaskRemoteControlTests.Killer killer = new() { Refuse = 30 };
         factory.Overrides = services => services.Replace(ServiceDescriptor.Singleton<IRemoteControlTask>(new ScheduledTaskRemoteControl(
             "claude-remote-control",
+            script.Run,
             script.Run,
             _ => Task.FromResult(Result<IReadOnlyList<ProcessEntry>, string>.Success(ScheduledTaskRemoteControlTests.Machine)),
             killer.Kill,
@@ -241,12 +277,13 @@ public sealed class SwitchEndpointTests
     {
         using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
         ScheduledTaskRemoteControlTests.Script script = new ScheduledTaskRemoteControlTests.Script()
-            .Answer("/Query", 0, "\"\\claude-remote-control\",\"N/A\",\"Running\"")
+            .Answer("/Query", 0, "4")
             .Answer("/XML", 0, ScheduledTaskRemoteControlTests.TaskXml)
             .Answer("/End", 0)
             .Answer("/Run", 0);
         factory.Overrides = services => services.Replace(ServiceDescriptor.Singleton<IRemoteControlTask>(new ScheduledTaskRemoteControl(
             "claude-remote-control",
+            script.Run,
             script.Run,
             _ => Task.FromResult(Result<IReadOnlyList<ProcessEntry>, string>.Success([new ProcessEntry(4, 0, "svchost.exe", null)])),
             new ScheduledTaskRemoteControlTests.Killer().Kill,

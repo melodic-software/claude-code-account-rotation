@@ -98,7 +98,8 @@ internal static class SwitchEndpoints
         // started on their behalf. A state that cannot be read is not taken for
         // stopped: the restart runs and its own checks decide, so a running
         // server is never skipped in silence. Those checks refuse to end or run
-        // a task whose processes they cannot identify, and say so.
+        // a task whose processes they cannot identify, and never start a task
+        // found stopped unless it was known to be running here.
         Result<bool, string> remoteControlState = await remoteControl.IsRunningAsync(cancellationToken);
         bool remoteControlWasRunning = remoteControlState.IsFailure || remoteControlState.Value;
 
@@ -126,7 +127,7 @@ internal static class SwitchEndpoints
 
         SwitchOutcome done = outcome.Value;
         (bool restarted, string? warning) = remoteControlWasRunning
-            ? await RestartRemoteControlAsync(remoteControl, done)
+            ? await RestartRemoteControlAsync(remoteControl, done, startIfStopped: remoteControlState.IsSuccess)
             : (false, null);
         return Results.Ok(new SwitchOutcomeView(
             done.Now.Value,
@@ -148,7 +149,7 @@ internal static class SwitchEndpoints
     /// request's token is not consulted, for the switch's own reason: an aborted
     /// request must not leave the task ended and not started again.
     /// </summary>
-    private static async Task<(bool Restarted, string? Warning)> RestartRemoteControlAsync(IRemoteControlTask remoteControl, SwitchOutcome done)
+    private static async Task<(bool Restarted, string? Warning)> RestartRemoteControlAsync(IRemoteControlTask remoteControl, SwitchOutcome done, bool startIfStopped)
     {
         // Stop-ScheduledTask ends only the task's root process, so the claude.exe
         // under it has to be ended by hand before the start, or two servers run.
@@ -161,7 +162,7 @@ internal static class SwitchEndpoints
             return (false, "Remote Control was not restarted, because the CLI did not report " + done.Now.Value + manual);
         }
 
-        Result<Unit, string> restart = await remoteControl.RestartAsync(CancellationToken.None);
+        Result<Unit, string> restart = await remoteControl.RestartAsync(startIfStopped, CancellationToken.None);
         return restart.IsSuccess
             ? (true, null)
             : (false, "Remote Control was not restarted: " + restart.Error + manual);
