@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-10-20
+
 ### Added
 
 - **Remote Control follows a switch.** A Switch clicked for the Windows side restarts the
