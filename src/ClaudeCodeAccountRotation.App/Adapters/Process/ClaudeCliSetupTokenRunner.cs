@@ -459,7 +459,8 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
                 roster => roster.Find(request.Email) is RosterEntry entry
                     ? roster.With(entry.ClaimingToken(CiRole.FromTokenSecret(request.Secret), today, setAt))
                     : roster,
-                CancellationToken.None);
+                CancellationToken.None,
+                via: "assign");
         }
 #pragma warning disable CA1031 // Do not catch general exception types
         catch (Exception)

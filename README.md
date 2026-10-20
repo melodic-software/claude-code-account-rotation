@@ -387,7 +387,7 @@ as a CI role: a prefix plus its organization or repository, whose token secret i
 `CLAUDE_CODE_OAUTH_TOKEN` is the `legacy (review lanes)` role, and any other name is a role with
 a token secret only. One account backs each role. A card shows one badge per role it backs, such
 as `automations · token+key` (hover it for the secret names and dates). A token badge warns in the
-last 30 days of the token's one year and says when it has expired. CI draws on that account's
+last 30 days of the token's one year and says when it has expired, and the card lists, per expiry date, which roles fall back to their API key only and which stop. CI draws on that account's
 5-hour and 7-day limits alongside your interactive sessions on it.
 
 Prerequisite: the GitHub CLI (`gh`) on PATH, signed in (`gh auth login`) as someone who may write

@@ -207,7 +207,10 @@ internal static class AppComposition
             provider.GetRequiredService<ILogger<ProfileFolderStore>>()));
         services.AddSingleton(new RateLimitGuardTeeFileReader(configuration.StatuslineTeePath));
         // Through the factory so the container owns the gate this file disposes.
-        services.AddSingleton(_ => new RosterFile(configuration.AppDataDirectory));
+        services.AddSingleton(provider => new RosterFile(
+            configuration.AppDataDirectory,
+            provider.GetRequiredService<TimeProvider>(),
+            provider.GetRequiredService<ILogger<RosterFile>>()));
         services.AddSingleton<IBrowserLauncher>(new ChromiumFamilyBrowserLauncher(configuration.BrowserExecutables));
         services.AddSingleton<IBrowserProfileReader>(new ChromiumLocalStateProfileReader());
 

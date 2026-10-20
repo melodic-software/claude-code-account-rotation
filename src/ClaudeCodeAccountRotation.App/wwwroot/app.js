@@ -27,6 +27,8 @@
       usageAge: usageAge,
       sentence: sentence,
       ciRoleBadges: ciRoleBadges,
+      ciTokenExpiries: ciTokenExpiries,
+      ciExpirySentence: ciExpirySentence,
       keptCiRoles: keptCiRoles,
       ciTag: ciTag,
       ciSecretBody: ciSecretBody,
@@ -1348,12 +1350,43 @@
       // repository, for a repository's role) and the hover says the rest.
       var where = role.repository || "org " + role.organization;
       var halves = [role.tokenSetOn ? "token" : null, role.keySetOn ? "key" : null].filter(Boolean).join("+");
-      var text = (role.prefix ? role.name.toLowerCase() : role.name)
-        + (role.repository ? " (" + role.repository.split("/")[1] + ")" : "") + " · " + halves;
+      var text = ciRoleLabel(role) + " · " + halves;
       var title = role.tokenSecret + (role.keySecret ? " and " + role.keySecret : "") + " in " + where + ". "
         + (role.keySetOn ? "Key set " + role.keySetOn + ". " : "");
       return (role.tokenSetOn && tokenExpiry(text, role.tokenSetOn, title, at)) || { kind: "ok", text: text, title: title.trim() };
     });
+  }
+
+  // The roles whose token half was set on one date lose it together, a year
+  // on. Lanes spend the API key first, so a role with a key half keeps running
+  // on its key and one without stops. One entry per expiry date within the
+  // warning window or past it, soonest first; the tone is tokenExpiry's.
+  function ciTokenExpiries(roster, at) {
+    var groups = {};
+    ((roster && roster.ciRoles) || []).forEach(function (role) {
+      if (!role.tokenSetOn) { return; }
+      var life = tokenLife(role.tokenSetOn, at);
+      if (!life || !life.tone) { return; }
+      var key = life.expires.toISOString().slice(0, 10);
+      var group = groups[key] || (groups[key] = { expiresOn: key, tone: life.tone, fallback: [], stop: [] });
+      (role.keySetOn ? group.fallback : group.stop).push(ciRoleLabel(role));
+    });
+    return Object.keys(groups).sort().map(function (key) { return groups[key]; });
+  }
+
+  function ciExpirySentence(expiry) {
+    var past = expiry.tone === "crit";
+    var parts = [];
+    if (expiry.fallback.length) { parts.push((past ? "these roles now run on their API key only: " : "these roles fall back to their API key only: ") + expiry.fallback.join(", ")); }
+    if (expiry.stop.length) { parts.push((past ? "these roles stopped: " : "these roles stop: ") + expiry.stop.join(", ")); }
+    return (past ? "The token expired on " + expiry.expiresOn + "; " : "When the token expires on " + expiry.expiresOn + ", ") + parts.join("; ");
+  }
+
+  // A role's name as a badge and the expiry line say it: lowercase for a
+  // prefix, and the repository's name after a repository's role.
+  function ciRoleLabel(role) {
+    return (role.prefix ? role.name.toLowerCase() : role.name)
+      + (role.repository ? " (" + role.repository.split("/")[1] + ")" : "");
   }
 
   // The side strip's tag: "CI" on an account that backs a role or carries a
@@ -1362,14 +1395,25 @@
     return roster && (roster.ciTokenGeneratedOn || (roster.ciRoles || []).length) ? "CI" : null;
   }
 
-  function tokenExpiry(text, setOn, title, at) {
+  // A token's one year: the day it expires, the whole days left from `at`
+  // (negative once expired) and the tone: "crit" once expired, "warn" in the
+  // last 30 days, else null. Null itself for a date that does not parse.
+  function tokenLife(setOn, at) {
     var made = Date.parse(setOn + "T00:00:00Z");
     if (isNaN(made)) { return null; }
     var expires = new Date(made + 365 * 86400000);
     var days = Math.floor((expires.getTime() - at) / 86400000);
+    return { expires: expires, days: days, tone: days < 0 ? "crit" : days <= 30 ? "warn" : null };
+  }
+
+  function tokenExpiry(text, setOn, title, at) {
+    var life = tokenLife(setOn, at);
+    if (!life) { return null; }
+    var expires = life.expires;
+    var days = life.days;
     title += "Token generated " + setOn + "; expires about " + expires.toISOString().slice(0, 10) + ".";
-    if (days < 0) { return { kind: "crit", text: text + " · expired", title: title }; }
-    if (days <= 30) { return { kind: "warn", text: text + " · " + days + " d left", title: title }; }
+    if (life.tone === "crit") { return { kind: "crit", text: text + " · expired", title: title }; }
+    if (life.tone === "warn") { return { kind: "warn", text: text + " · " + days + " d left", title: title }; }
     return { kind: "ok", text: text, title: title };
   }
 
@@ -1768,6 +1812,9 @@
     var status = element("div", "st");
     status.appendChild(element("p", "say " + say.kind, say.text));
     status.appendChild(statusLines(account, dashboard, at));
+    ciTokenExpiries(roster, at).forEach(function (expiry) {
+      status.appendChild(element("p", "say " + expiry.tone, ciExpirySentence(expiry)));
+    });
     line.appendChild(status);
 
     function limitOf(kind) { return account.usage.limits.filter(function (limit) { return limit.kind === kind; })[0]; }

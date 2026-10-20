@@ -122,14 +122,49 @@ public sealed class LaneHistoryFileTests : IDisposable
     }
 
     [Fact]
-    public async Task APlantedSecretInTheRosterNeverReachesTheFile()
+    public async Task EveryWrittenLineCarriesOnlyTheAllowedNamesAndDates()
     {
-        const string Planted = "sk-ant-oat01-planted-9f2e";
         using RosterFile file = new(_appData, _clock);
+        await file.UpdateAsync(roster => roster.With(Holding("a@example.com", _pair, notes: "sk-ant-oat01-planted")), TestContext.Current.CancellationToken, via: "assign");
+        await file.UpdateAsync(roster => roster.With(Holding("b@example.com", _repoRole, key: false)), TestContext.Current.CancellationToken, via: "push");
+        await file.UpdateAsync(roster => roster.With(Holding("c@example.com", _pair)), TestContext.Current.CancellationToken, via: "edit");
+        await file.UpdateAsync(roster => roster.Without(AccountEmail.Parse("c@example.com").Value), TestContext.Current.CancellationToken, via: "delete");
 
-        await file.UpdateAsync(roster => roster.With(Holding("a@example.com", _pair, notes: Planted)), TestContext.Current.CancellationToken);
+        string[] lines = await LinesAsync();
 
-        (await File.ReadAllTextAsync(HistoryPath, TestContext.Current.CancellationToken)).ShouldNotContain(Planted);
+        lines.Length.ShouldBeGreaterThan(4);
+        foreach (string line in lines)
+        {
+            JsonObject entry = JsonNode.Parse(line)!.AsObject();
+            entry.Select(static pair => pair.Key).Order().ShouldBe(["account", "at", "half", "previous", "role", "via"]);
+            entry["role"]!.AsObject().Select(static pair => pair.Key).ShouldBeSubsetOf(["prefix", "organization", "repository", "tokenSecret"]);
+            entry["half"]!.GetValue<string>().ShouldBeOneOf("token", "key");
+            entry["via"]!.GetValue<string>().ShouldBeOneOf("assign", "push", "edit", "delete");
+            foreach (string name in new[] { "account", "previous" })
+            {
+                if (entry[name] is JsonNode value)
+                {
+                    AccountEmail.Parse(value.GetValue<string>()).IsSuccess.ShouldBeTrue();
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task AHistoryAppendThatFailsLeavesTheRosterWrittenAndLogsAWarning()
+    {
+        RecordingLogger<RosterFile> logger = new();
+        using RosterFile file = new(_appData, _clock, logger);
+        Directory.CreateDirectory(HistoryPath);
+
+        Roster updated = await file.UpdateAsync(roster => roster.With(Holding("a@example.com", _tokenOnly)), TestContext.Current.CancellationToken);
+
+        updated.Find(AccountEmail.Parse("a@example.com").Value).ShouldNotBeNull();
+        (await file.ReadAsync(TestContext.Current.CancellationToken)).Find(AccountEmail.Parse("a@example.com").Value).ShouldNotBeNull();
+        string line = logger.Lines.Single();
+        line.ShouldContain(LaneHistoryFile.FileName);
+        line.ShouldContain(nameof(UnauthorizedAccessException));
+        line.ShouldNotContain("a@example.com");
     }
 
     [Fact]
