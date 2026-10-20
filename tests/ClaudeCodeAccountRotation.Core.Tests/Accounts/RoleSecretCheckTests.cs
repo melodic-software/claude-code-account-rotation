@@ -26,8 +26,17 @@ public sealed class RoleSecretCheckTests
     private static RoleCatalog Listing(params (string Name, DateTimeOffset? UpdatedAt)[] secrets) =>
         RoleCatalog.From([new OrganizationSecrets("octo", [.. secrets.Select(static secret => new ListedSecret(secret.Name, secret.UpdatedAt))])]);
 
+    private static ClaimedHalf TokenHalf(CiRoleAssignment assignment, RoleCatalog listing, TimeZoneInfo? zone = null) =>
+        RoleSecretCheck.Evaluate(Holding(assignment), listing, _now, zone ?? TimeZoneInfo.Utc).Claimed.Single(static half => half.Half == RoleHalf.Token);
+
     private static RoleSecretVerdict TokenVerdict(CiRoleAssignment assignment, RoleCatalog listing, TimeZoneInfo? zone = null) =>
-        RoleSecretCheck.Evaluate(Holding(assignment), listing, _now, zone ?? TimeZoneInfo.Utc).Claimed.Single(static half => half.Half == RoleHalf.Token).Verdict;
+        TokenHalf(assignment, listing, zone).Verdict;
+
+    private static (RoleSecretVerdict, UnknownReason?) TokenOutcome(CiRoleAssignment assignment, RoleCatalog listing, TimeZoneInfo? zone = null)
+    {
+        ClaimedHalf half = TokenHalf(assignment, listing, zone);
+        return (half.Verdict, half.Reason);
+    }
 
     [Fact]
     public void TenMinutesAfterTheToolsWriteIsAChangeOutsideTheTool() =>
@@ -37,9 +46,9 @@ public sealed class RoleSecretCheckTests
 
     [Fact]
     public void ThirtySecondsAfterTheToolsWriteIsTheToolsOwn() =>
-        TokenVerdict(
+        TokenOutcome(
             new CiRoleAssignment(_automations, _setOn, _setAt),
-            Listing(("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", _setAt.AddSeconds(30)))).ShouldBe(RoleSecretVerdict.Ok);
+            Listing(("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", _setAt.AddSeconds(30)))).ShouldBe((RoleSecretVerdict.Ok, null));
 
     [Fact]
     public void ExactlyTwoMinutesAfterTheToolsWriteIsStillTheToolsOwn() =>
@@ -48,22 +57,22 @@ public sealed class RoleSecretCheckTests
             Listing(("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", _setAt.AddMinutes(2)))).ShouldBe(RoleSecretVerdict.Ok);
 
     [Fact]
-    public void ASecretOlderThanTheToolsWriteIsUnknown() =>
-        TokenVerdict(
+    public void ASecretOlderThanTheToolsWriteIsUnknownAsNeverRecorded() =>
+        TokenOutcome(
             new CiRoleAssignment(_automations, _setOn, _setAt),
-            Listing(("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", _setAt.AddMinutes(-3)))).ShouldBe(RoleSecretVerdict.Unknown);
+            Listing(("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", _setAt.AddMinutes(-3)))).ShouldBe((RoleSecretVerdict.Unknown, UnknownReason.OlderThanWrite));
 
     [Fact]
-    public void ASecretListedWithNoReadableTimeIsUnknown() =>
-        TokenVerdict(
+    public void ASecretListedWithNoReadableTimeIsUnknownForWantOfATime() =>
+        TokenOutcome(
             new CiRoleAssignment(_automations, _setOn, _setAt),
-            Listing(("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", null))).ShouldBe(RoleSecretVerdict.Unknown);
+            Listing(("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", null))).ShouldBe((RoleSecretVerdict.Unknown, UnknownReason.NoListedTime));
 
     [Fact]
-    public void AHalfWithNoInstantUpdatedTheSameDayIsUnknown() =>
-        TokenVerdict(
+    public void AHalfWithNoInstantUpdatedTheSameDayIsUnknownForWantOfAnInstant() =>
+        TokenOutcome(
             new CiRoleAssignment(_automations, _setOn),
-            Listing(("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", new DateTimeOffset(2026, 10, 1, 23, 0, 0, TimeSpan.Zero)))).ShouldBe(RoleSecretVerdict.Unknown);
+            Listing(("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", new DateTimeOffset(2026, 10, 1, 23, 0, 0, TimeSpan.Zero)))).ShouldBe((RoleSecretVerdict.Unknown, UnknownReason.NoInstant));
 
     [Fact]
     public void AHalfWithNoInstantUpdatedOnALaterLocalDayChangedOutsideTheTool() =>

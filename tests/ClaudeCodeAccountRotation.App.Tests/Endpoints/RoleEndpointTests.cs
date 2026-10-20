@@ -140,6 +140,38 @@ public sealed class RoleEndpointTests
         reader.Paths.ShouldBe(["orgs/octo/actions/secrets?per_page=100&page=1"]);
     }
 
+    [Fact]
+    public async Task AnUnknownHalfCarriesItsReason()
+    {
+        (AppFactory factory, SpyReader reader) = await StartAsync(TestContext.Current.CancellationToken);
+        await using AppFactory _ = factory;
+        using HttpClient client = factory.CreateMutatingClient();
+        DateTimeOffset setAt = new(2026, 10, 1, 9, 0, 0, TimeSpan.Zero);
+        await HoldAsync(
+            factory,
+            new CiRoleAssignment(new CiRole("AUTOMATIONS", CiSecretScope.Organization, "octo"), new DateOnly(2026, 10, 1), null, new DateOnly(2026, 10, 1), setAt),
+            new CiRoleAssignment(new CiRole("ISSUE_LANE", CiSecretScope.Organization, "octo"), new DateOnly(2026, 10, 1), setAt));
+        // The clock's zone is the machine's, so the date-only half is listed at noon UTC on its day: the same local day anywhere from UTC-11 to UTC+11.
+        reader.Answers.Enqueue(Result<JsonNode, GhApiFailure>.Success(Page(
+            3,
+            ("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", "2026-10-01T12:00:00Z"),
+            ("AUTOMATIONS_CLAUDE_API_KEY", "2026-10-01T08:00:00Z"),
+            ("ISSUE_LANE_CLAUDE_CODE_OAUTH_TOKEN", "not a time"))));
+
+        using HttpResponseMessage response = await client.PostAsJsonAsync(_check, new { }, TestContext.Current.CancellationToken);
+
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+        body["roles"]!.AsArray().Select(static role => (
+            role!["name"]!.GetValue<string>(),
+            role["token"]?.GetValue<string>(),
+            role["tokenReason"]?.GetValue<string>(),
+            role["key"]?.GetValue<string>(),
+            role["keyReason"]?.GetValue<string>())).ShouldBe([
+                ("AUTOMATIONS", "unknown", "noInstant", "unknown", "olderThanWrite"),
+                ("ISSUE_LANE", "unknown", "noListedTime", null, null),
+            ]);
+    }
+
     /// <summary>A full page of 100 secrets named with <paramref name="stem"/>, under a stated total.</summary>
     private static JsonObject FullPage(int total, string stem) =>
         Page(total, [.. Enumerable.Range(0, 100).Select(index => (stem + index + "_CLAUDE_CODE_OAUTH_TOKEN", "2026-10-01T00:00:00Z"))]);

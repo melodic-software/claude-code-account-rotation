@@ -104,7 +104,9 @@ internal static class RoleEndpoints
         foreach (ClaimedHalf half in report.Claimed)
         {
             RoleCheckRowView row = rows.GetValueOrDefault(half.Role) ?? Row(half.Role, half.Holder.Value, catalog, null, null);
-            rows[half.Role] = half.Half == RoleHalf.Token ? row with { Token = Verdict(half.Verdict) } : row with { Key = Verdict(half.Verdict) };
+            rows[half.Role] = half.Half == RoleHalf.Token
+                ? row with { Token = Verdict(half.Verdict), TokenReason = Reason(half.Reason) }
+                : row with { Key = Verdict(half.Verdict), KeyReason = Reason(half.Reason) };
         }
 
         // A role a roster entry claims with no half recorded still shows its holder.
@@ -132,6 +134,14 @@ internal static class RoleEndpoints
         token,
         key);
 
+    private static string? Reason(UnknownReason? reason) => reason switch
+    {
+        UnknownReason.NoInstant => "noInstant",
+        UnknownReason.OlderThanWrite => "olderThanWrite",
+        UnknownReason.NoListedTime => "noListedTime",
+        _ => null,
+    };
+
     private static string Verdict(RoleSecretVerdict verdict) => verdict switch
     {
         RoleSecretVerdict.Ok => "ok",
@@ -147,7 +157,8 @@ internal sealed record RoleCheckView(DateTimeOffset CheckedAt, IReadOnlyList<Rol
 /// <summary>
 /// One role: whether each of its secrets exists, who backs it, and the verdict
 /// on each half: ok, changed, unknown, missing, unclaimed, or null for a half
-/// nobody's record speaks for.
+/// nobody's record speaks for. An unknown half's reason is noInstant,
+/// olderThanWrite or noListedTime.
 /// </summary>
 internal sealed record RoleCheckRowView(
     string Name,
@@ -159,7 +170,9 @@ internal sealed record RoleCheckRowView(
     bool HasKey,
     string? Holder,
     string? Token,
-    string? Key);
+    string? Key,
+    string? TokenReason = null,
+    string? KeyReason = null);
 
 /// <summary>An organization whose secrets could not be read, and why.</summary>
 internal sealed record RoleCheckFailureView(string Organization, string Error);

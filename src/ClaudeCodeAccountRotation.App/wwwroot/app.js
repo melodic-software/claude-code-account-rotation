@@ -1466,16 +1466,22 @@
     var words = {
       ok: "ok",
       changed: "changed outside the tool",
-      unknown: "unknown (no time recorded for the tool's write)",
+      unknown: "unknown",
       missing: "missing",
       unclaimed: "unclaimed"
     };
+    // Why a half is unknown, one cause each, as the README gives them.
+    var reasons = {
+      noInstant: "unknown (only the day it was set is recorded, and GitHub shows that same day)",
+      olderThanWrite: "unknown (GitHub lists it as older than the tool's write)",
+      noListedTime: "unknown (GitHub listed no readable update time)"
+    };
     var lines = (view.roles || []).map(function (role) {
       var halves = [role.hasToken ? "token" : null, role.hasKey ? "key" : null].filter(Boolean).join("+") || "no secrets";
-      var verdicts = [["token", role.token], ["key", role.key]].filter(function (pair) { return pair[1]; });
+      var verdicts = [["token", role.token, role.tokenReason], ["key", role.key, role.keyReason]].filter(function (pair) { return pair[1]; });
       var text = (role.prefix ? role.name.toLowerCase() : role.name) + " in org " + role.organization + " · " + halves
         + " · " + (role.holder || "no holder")
-        + verdicts.map(function (pair) { return " · " + pair[0] + ": " + (words[pair[1]] || pair[1]); }).join("");
+        + verdicts.map(function (pair) { return " · " + pair[0] + ": " + ((pair[1] === "unknown" && reasons[pair[2]]) || words[pair[1]] || pair[1]); }).join("");
       var values = verdicts.map(function (pair) { return pair[1]; });
       var kind = values.some(function (value) { return value === "changed" || value === "missing"; }) ? "crit"
         : values.some(function (value) { return value === "unclaimed" || value === "unknown"; }) ? "warn" : "ok";

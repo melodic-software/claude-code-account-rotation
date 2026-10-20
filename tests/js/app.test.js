@@ -527,3 +527,14 @@ test("expiry lines name a repository's role with its repository, as the badge do
   const [got] = ciTokenExpiries({ ciRoles: [one, two] }, Date.parse("2026-12-20T00:00:00Z"));
   assert.deepStrictEqual(got.fallback, ["tools (one)", "tools (two)"]);
 });
+
+test("roleCheckLines gives each unknown half the cause the server sent", () => {
+  function unknownLine(reason) {
+    return roleCheckLines({ roles: [{ name: "AUTOMATIONS", prefix: "AUTOMATIONS", organization: "octo", tokenSecret: "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", keySecret: null, hasToken: true, hasKey: false, holder: "a@example.com", token: "unknown", tokenReason: reason, key: null }], failures: [] })[0];
+  }
+  assert.strictEqual(unknownLine("noInstant").text, "automations in org octo · token · a@example.com · token: unknown (only the day it was set is recorded, and GitHub shows that same day)");
+  assert.strictEqual(unknownLine("olderThanWrite").text, "automations in org octo · token · a@example.com · token: unknown (GitHub lists it as older than the tool's write)");
+  assert.strictEqual(unknownLine("noListedTime").text, "automations in org octo · token · a@example.com · token: unknown (GitHub listed no readable update time)");
+  assert.strictEqual(unknownLine("noListedTime").kind, "warn");
+  assert.strictEqual(unknownLine(null).text, "automations in org octo · token · a@example.com · token: unknown");
+});

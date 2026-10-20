@@ -19,19 +19,34 @@ public enum RoleSecretVerdict
     /// <summary>The secret changed after the tool set it, so someone else wrote it.</summary>
     ChangedOutsideTool,
 
-    /// <summary>
-    /// Cannot be told: set on the day the roster records with no instant to
-    /// compare, listed as older than the tool's own write, or listed with no
-    /// readable time.
-    /// </summary>
+    /// <summary>Cannot be told; <see cref="UnknownReason"/> says why.</summary>
     Unknown,
 
     /// <summary>The secret is gone.</summary>
     Missing,
 }
 
-/// <summary>One half a roster entry claims, and its verdict.</summary>
-public sealed record ClaimedHalf(AccountEmail Holder, CiRole Role, RoleHalf Half, string SecretName, RoleSecretVerdict Verdict);
+/// <summary>Why a half's verdict is <see cref="RoleSecretVerdict.Unknown"/>.</summary>
+public enum UnknownReason
+{
+    /// <summary>The roster records only the day it was set, and GitHub stamps that same day.</summary>
+    NoInstant,
+
+    /// <summary>GitHub lists it as older than the tool's own write, so it never recorded that write.</summary>
+    OlderThanWrite,
+
+    /// <summary>GitHub listed it with no <c>updated_at</c> that could be read.</summary>
+    NoListedTime,
+}
+
+/// <summary>One half a roster entry claims, its verdict, and, for an unknown one, why.</summary>
+public sealed record ClaimedHalf(
+    AccountEmail Holder,
+    CiRole Role,
+    RoleHalf Half,
+    string SecretName,
+    RoleSecretVerdict Verdict,
+    UnknownReason? Reason = null);
 
 /// <summary>
 /// A check of the roster against the listed secrets: a verdict per claimed half
@@ -106,20 +121,19 @@ public static class RoleSecretCheck
         TimeZoneInfo zone)
     {
         ListedSecret? listed = secrets.Find(role.Owner, secretName);
-        RoleSecretVerdict verdict = listed switch
+        (RoleSecretVerdict verdict, UnknownReason? reason) = listed switch
         {
-            null => RoleSecretVerdict.Missing,
-            { UpdatedAt: not DateTimeOffset } => RoleSecretVerdict.Unknown,
+            null => (RoleSecretVerdict.Missing, null),
+            { UpdatedAt: not DateTimeOffset } => (RoleSecretVerdict.Unknown, UnknownReason.NoListedTime),
             { UpdatedAt: DateTimeOffset updated } when setAt is DateTimeOffset at =>
-                updated > at + ClockSkew ? RoleSecretVerdict.ChangedOutsideTool
-                    // Older than the tool's own write: GitHub never recorded it.
-                    : updated < at - ClockSkew ? RoleSecretVerdict.Unknown
-                    : RoleSecretVerdict.Ok,
+                updated > at + ClockSkew ? (RoleSecretVerdict.ChangedOutsideTool, null)
+                    : updated < at - ClockSkew ? (RoleSecretVerdict.Unknown, UnknownReason.OlderThanWrite)
+                    : (RoleSecretVerdict.Ok, (UnknownReason?)null),
             { UpdatedAt: DateTimeOffset updated } =>
                 DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(updated, zone).DateTime) > setOn
-                    ? RoleSecretVerdict.ChangedOutsideTool
-                    : RoleSecretVerdict.Unknown,
+                    ? (RoleSecretVerdict.ChangedOutsideTool, null)
+                    : (RoleSecretVerdict.Unknown, UnknownReason.NoInstant),
         };
-        return new ClaimedHalf(holder, role, half, secretName, verdict);
+        return new ClaimedHalf(holder, role, half, secretName, verdict, reason);
     }
 }
