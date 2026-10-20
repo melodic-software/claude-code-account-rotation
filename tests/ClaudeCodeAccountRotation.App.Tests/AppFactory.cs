@@ -310,7 +310,11 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
         /// <summary>When set, a restart waits for it before it answers.</summary>
         public TaskCompletionSource? HoldRestart { get; set; }
 
-        public Task<bool> IsRunningAsync(CancellationToken cancellationToken) => Task.FromResult(Running);
+        /// <summary>When set, the state cannot be read and this is why.</summary>
+        public string? RunningError { get; set; }
+
+        public Task<Result<bool, string>> IsRunningAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(RunningError is string error ? Result<bool, string>.Failure(error) : Result<bool, string>.Success(Running));
 
         public async Task<Result<Unit, string>> RestartAsync(CancellationToken cancellationToken)
         {

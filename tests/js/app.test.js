@@ -379,6 +379,9 @@ test("a Remote Control state that could not be read still asks, as a condition",
   assert.strictEqual(
     remoteControlQuestion(null, "Work"),
     "Switch to Work? Remote Control's state could not be read. If it is running, it restarts under Work; live Remote Control sessions on this machine drop and reopen in Work's Claude app.");
+  assert.strictEqual(
+    remoteControlQuestion({ task: "claude-remote-control", running: null, error: "schtasks.exe did not finish within 20 s" }, "Work"),
+    remoteControlQuestion(null, "Work"));
 });
 
 test("the switch toast says Remote Control restarted, and a restart that failed warns with its commands", () => {

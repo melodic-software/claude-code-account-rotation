@@ -277,8 +277,12 @@ internal sealed record SwitchOutcomeView(
     bool RemoteControlRestarted = false,
     string? RemoteControlWarning = null);
 
-/// <summary>The Remote Control task the page asks about before a switch: its name, or null when none is configured, and whether it is running.</summary>
-internal sealed record RemoteControlView(string? Task, bool Running);
+/// <summary>
+/// The Remote Control task the page asks about before a switch: its name, or
+/// null when none is configured; whether it is running, or null with
+/// <c>Error</c> when that could not be read.
+/// </summary>
+internal sealed record RemoteControlView(string? Task, bool? Running, string? Error = null);
 
 /// <summary>
 /// A refused switch as the page reads it: the enum name, which is the stable

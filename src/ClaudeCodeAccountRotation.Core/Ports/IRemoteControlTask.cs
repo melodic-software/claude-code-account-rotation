@@ -11,8 +11,12 @@ public interface IRemoteControlTask
     /// <summary>The task's name, or null when no task is configured.</summary>
     string? Name { get; }
 
-    /// <summary>Whether the task is running now. False when it cannot be read.</summary>
-    Task<bool> IsRunningAsync(CancellationToken cancellationToken);
+    /// <summary>
+    /// Whether the task is running now, or why that could not be read. A task
+    /// that is not registered is not running; an unreadable state is a failure,
+    /// never "not running", so a caller cannot skip a running server by accident.
+    /// </summary>
+    Task<Result<bool, string>> IsRunningAsync(CancellationToken cancellationToken);
 
     /// <summary>
     /// Ends the task, waits until it is no longer running, and runs it again.

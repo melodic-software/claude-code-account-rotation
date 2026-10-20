@@ -25,7 +25,7 @@ internal sealed class NoRemoteControlTask : IRemoteControlTask
 {
     public string? Name => null;
 
-    public Task<bool> IsRunningAsync(CancellationToken cancellationToken) => Task.FromResult(false);
+    public Task<Result<bool, string>> IsRunningAsync(CancellationToken cancellationToken) => Task.FromResult(Result<bool, string>.Success(false));
 
     public Task<Result<Unit, string>> RestartAsync(CancellationToken cancellationToken) =>
         Task.FromResult(Result<Unit, string>.Failure("no Remote Control task is configured"));
@@ -66,8 +66,11 @@ internal sealed partial class ScheduledTaskRemoteControl(
     ProcessKiller kill,
     TimeProvider timeProvider,
     TimeSpan stopBound,
-    TimeSpan pollInterval) : IRemoteControlTask
+    TimeSpan pollInterval,
+    Func<string, string>? expandEnvironment = null) : IRemoteControlTask
 {
+    private readonly Func<string, string> _expand = expandEnvironment ?? Environment.ExpandEnvironmentVariables;
+
     public static readonly TimeSpan StopBound = TimeSpan.FromSeconds(15);
 
     private static readonly TimeSpan _processTimeout = TimeSpan.FromSeconds(20);
@@ -75,19 +78,27 @@ internal sealed partial class ScheduledTaskRemoteControl(
 
     public string? Name => name;
 
-    public async Task<bool> IsRunningAsync(CancellationToken cancellationToken)
-    {
-        Result<bool, string> status = await StatusAsync(cancellationToken);
-        return status.IsSuccess && status.Value;
-    }
+    public Task<Result<bool, string>> IsRunningAsync(CancellationToken cancellationToken) => StatusAsync(cancellationToken);
 
-    /// <summary>Whether the task is Running, or why that could not be read. A restart never takes an unread status for stopped.</summary>
+    /// <summary>
+    /// Whether the task is Running, or why that could not be read. A task that
+    /// does not exist is not running; any other failure is a failure, and a
+    /// restart never takes it for stopped.
+    /// </summary>
     private async Task<Result<bool, string>> StatusAsync(CancellationToken cancellationToken)
     {
         Result<(int ExitCode, string Output), string> query = await schtasks(["/Query", "/TN", name, "/FO", "CSV", "/NH"], cancellationToken);
         if (query.IsFailure)
         {
             return Result<bool, string>.Failure(query.Error);
+        }
+
+        // "ERROR: The system cannot find the file specified." is schtasks naming
+        // a task that is not registered, which is the ordinary state on a
+        // machine without Remote Control.
+        if (query.Value.ExitCode != 0 && query.Value.Output.Contains("cannot find", StringComparison.OrdinalIgnoreCase))
+        {
+            return Result<bool, string>.Success(false);
         }
 
         if (query.Value.ExitCode != 0)
@@ -121,7 +132,7 @@ internal sealed partial class ScheduledTaskRemoteControl(
             return Result<Unit, string>.Failure("the task's processes could not be listed: " + table.Error);
         }
 
-        IReadOnlyList<ProcessEntry> tree = TaskTree(table.Value, action.Value.Command, action.Value.Arguments);
+        IReadOnlyList<ProcessEntry> tree = TaskTree(table.Value, action.Value.Command, action.Value.Arguments, _expand);
         if (tree.Count == 0)
         {
             // A running task whose processes cannot be told apart is left as it
@@ -208,15 +219,15 @@ internal sealed partial class ScheduledTaskRemoteControl(
     /// as Task Scheduler starts them.
     /// </para>
     /// </summary>
-    internal static IReadOnlyList<ProcessEntry> TaskTree(IReadOnlyList<ProcessEntry> table, string command, string arguments)
+    internal static IReadOnlyList<ProcessEntry> TaskTree(IReadOnlyList<ProcessEntry> table, string command, string arguments, Func<string, string> expand)
     {
         if (string.IsNullOrWhiteSpace(arguments))
         {
             return [];
         }
 
-        string image = ImageName(Environment.ExpandEnvironmentVariables(command));
-        string expanded = Environment.ExpandEnvironmentVariables(arguments);
+        string image = ImageName(expand(command));
+        string expanded = expand(arguments);
         List<ProcessEntry> tree = [.. table.Where(process =>
             string.Equals(ImageName(process.Name), image, StringComparison.OrdinalIgnoreCase)
             && process.CommandLine is string line

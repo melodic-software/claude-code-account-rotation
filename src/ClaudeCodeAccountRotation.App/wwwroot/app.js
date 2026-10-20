@@ -488,10 +488,10 @@
       });
   }
 
-  // Null when the read failed: the state is unknown, so the question is asked
-  // as a condition rather than skipped.
+  // Null, or a null running, when the read failed: the state is unknown, so the
+  // question is asked as a condition rather than skipped.
   function remoteControlQuestion(remoteControl, name) {
-    if (!remoteControl) {
+    if (!remoteControl || remoteControl.running === null || remoteControl.running === undefined) {
       return "Switch to " + name + "? Remote Control's state could not be read. If it is running, it restarts under " + name
         + "; live Remote Control sessions on this machine drop and reopen in " + name + "'s Claude app.";
     }

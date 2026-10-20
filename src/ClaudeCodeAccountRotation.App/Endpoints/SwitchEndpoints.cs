@@ -40,7 +40,10 @@ internal static class SwitchEndpoints
         // schtasks.exe per click rather than one every ten seconds. A running
         // task is what makes the page ask before switching.
         routes.MapGet("/api/remote-control", static async (IRemoteControlTask remoteControl, CancellationToken cancellationToken) =>
-            Results.Ok(new RemoteControlView(remoteControl.Name, await remoteControl.IsRunningAsync(cancellationToken))));
+        {
+            Result<bool, string> running = await remoteControl.IsRunningAsync(cancellationToken);
+            return Results.Ok(new RemoteControlView(remoteControl.Name, running.IsSuccess ? running.Value : null, running.IsFailure ? running.Error : null));
+        });
 
         mutations.MapPost("/accounts/{email}/switch", static async (
             string email,
@@ -92,8 +95,12 @@ internal static class SwitchEndpoints
     {
         // Read before the switch: Claude Code may end the session itself once
         // the account changes, and a task the operator had stopped is not
-        // started on their behalf.
-        bool remoteControlWasRunning = await remoteControl.IsRunningAsync(cancellationToken);
+        // started on their behalf. A state that cannot be read is not taken for
+        // stopped: the restart runs and its own checks decide, so a running
+        // server is never skipped in silence. Those checks refuse to end or run
+        // a task whose processes they cannot identify, and say so.
+        Result<bool, string> remoteControlState = await remoteControl.IsRunningAsync(cancellationToken);
+        bool remoteControlWasRunning = remoteControlState.IsFailure || remoteControlState.Value;
 
         // Remember the outgoing account's windows before the swap. A session
         // mid-turn at switch time writes them back under the incoming

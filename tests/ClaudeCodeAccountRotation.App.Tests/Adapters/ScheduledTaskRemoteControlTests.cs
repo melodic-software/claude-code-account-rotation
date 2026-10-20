@@ -25,19 +25,29 @@ public sealed class ScheduledTaskRemoteControlTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     /// <summary>
+    /// This test machine's environment: the variables the task XML names, with
+    /// roots that are not drive letters so the machine-path gate stays clean.
+    /// </summary>
+    internal static string Expand(string text) => text
+        .Replace("%SystemRoot%", "\\Windows", StringComparison.OrdinalIgnoreCase)
+        .Replace("%ProgramFiles%", "\\Program Files", StringComparison.OrdinalIgnoreCase)
+        .Replace("%USERPROFILE%", "\\Profiles\\someone", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// The machine as observed: the task engine's conhost, the pwsh it runs, and
     /// the claude.exe server under that; beside them a terminal running its own
-    /// <c>claude remote-control</c>, which no restart may touch.
+    /// <c>claude remote-control</c>, which no restart may touch. Command lines
+    /// are expanded, as Win32_Process reports them, while the task XML is not.
     /// </summary>
     internal static IReadOnlyList<ProcessEntry> Machine { get; } =
     [
-        new(4, 0, "svchost.exe", "%SystemRoot%\\system32\\svchost.exe -k netsvcs"),
-        new(10, 4, "conhost.exe", "%SystemRoot%\\system32\\conhost.exe --headless \"%ProgramFiles%\\PowerShell\\7\\pwsh.exe\" -NoProfile -Command \"claude remote-control --permission-mode auto\""),
-        new(20, 10, "pwsh.exe", "\"%ProgramFiles%\\PowerShell\\7\\pwsh.exe\" -NoProfile -Command \"claude remote-control --permission-mode auto\""),
-        new(30, 20, "claude.exe", "%USERPROFILE%\\.local\\bin\\claude.exe remote-control --permission-mode auto"),
+        new(4, 0, "svchost.exe", "\\Windows\\system32\\svchost.exe -k netsvcs"),
+        new(10, 4, "conhost.exe", "\\Windows\\system32\\conhost.exe --headless \"\\Program Files\\PowerShell\\7\\pwsh.exe\" -NoProfile -Command \"claude remote-control --permission-mode auto\""),
+        new(20, 10, "pwsh.exe", "\"\\Program Files\\PowerShell\\7\\pwsh.exe\" -NoProfile -Command \"claude remote-control --permission-mode auto\""),
+        new(30, 20, "claude.exe", "\\Profiles\\someone\\.local\\bin\\claude.exe remote-control --permission-mode auto"),
         new(100, 4, "WindowsTerminal.exe", "wt.exe"),
-        new(110, 100, "pwsh.exe", "\"%ProgramFiles%\\PowerShell\\7\\pwsh.exe\""),
-        new(120, 110, "claude.exe", "%USERPROFILE%\\.local\\bin\\claude.exe remote-control"),
+        new(110, 100, "pwsh.exe", "\"\\Program Files\\PowerShell\\7\\pwsh.exe\""),
+        new(120, 110, "claude.exe", "\\Profiles\\someone\\.local\\bin\\claude.exe remote-control"),
     ];
 
     private static ScheduledTaskRemoteControl RemoteControl(Script script, Killer? killer = null, TimeSpan? stopBound = null) =>
@@ -48,7 +58,8 @@ public sealed class ScheduledTaskRemoteControlTests
             (killer ?? new Killer()).Kill,
             TimeProvider.System,
             stopBound ?? TimeSpan.FromSeconds(5),
-            TimeSpan.FromMilliseconds(1));
+            TimeSpan.FromMilliseconds(1),
+            Expand);
 
     private static Script Restartable() => new Script()
         .Answer("/XML", 0, TaskXml)
@@ -59,15 +70,29 @@ public sealed class ScheduledTaskRemoteControlTests
     [Fact]
     public async Task RunningIsReadFromTheStatusColumn()
     {
-        (await RemoteControl(new Script().Answer("/Query", 0, Running)).IsRunningAsync(Token)).ShouldBeTrue();
-        (await RemoteControl(new Script().Answer("/Query", 0, Ready)).IsRunningAsync(Token)).ShouldBeFalse();
+        (await RemoteControl(new Script().Answer("/Query", 0, Running)).IsRunningAsync(Token)).Value.ShouldBeTrue();
+        (await RemoteControl(new Script().Answer("/Query", 0, Ready)).IsRunningAsync(Token)).Value.ShouldBeFalse();
     }
 
     [Fact]
-    public async Task AMissingTaskOrAQueryThatCannotRunIsNotRunning()
+    public async Task AMissingTaskIsNotRunning()
     {
-        (await RemoteControl(new Script().Answer("/Query", 1, "ERROR: The system cannot find the file specified.")).IsRunningAsync(Token)).ShouldBeFalse();
-        (await RemoteControl(new Script().Answer("/Query", Result<(int, string), string>.Failure("schtasks.exe could not be started"))).IsRunningAsync(Token)).ShouldBeFalse();
+        Result<bool, string> state = await RemoteControl(new Script().Answer("/Query", 1, "ERROR: The system cannot find the file specified.")).IsRunningAsync(Token);
+
+        state.IsSuccess.ShouldBeTrue();
+        state.Value.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task AStatusThatCannotBeReadIsAFailureNotStopped()
+    {
+        Result<bool, string> unstarted = await RemoteControl(new Script().Answer("/Query", Result<(int, string), string>.Failure("schtasks.exe could not be started"))).IsRunningAsync(Token);
+        Result<bool, string> refused = await RemoteControl(new Script().Answer("/Query", 1, "ERROR: Access is denied.")).IsRunningAsync(Token);
+
+        unstarted.IsFailure.ShouldBeTrue();
+        unstarted.Error.ShouldContain("could not be started");
+        refused.IsFailure.ShouldBeTrue();
+        refused.Error.ShouldContain("Access is denied");
     }
 
     [Fact]
@@ -84,7 +109,18 @@ public sealed class ScheduledTaskRemoteControlTests
     {
         (string command, string arguments) = ScheduledTaskRemoteControl.Action(TaskXml)!.Value;
 
-        ScheduledTaskRemoteControl.TaskTree(Machine, command, arguments).Select(static process => process.Id).ShouldBe([10, 20, 30]);
+        ScheduledTaskRemoteControl.TaskTree(Machine, command, arguments, Expand).Select(static process => process.Id).ShouldBe([10, 20, 30]);
+    }
+
+    [Fact]
+    public void TheUnexpandedActionFindsTheExpandedProcessOnlyThroughTheExpansion()
+    {
+        (string command, string arguments) = ScheduledTaskRemoteControl.Action(TaskXml)!.Value;
+
+        // The XML says %ProgramFiles%; the process table says \Program Files.
+        arguments.ShouldContain("%ProgramFiles%");
+        ScheduledTaskRemoteControl.TaskTree(Machine, command, arguments, static text => text).ShouldBeEmpty();
+        ScheduledTaskRemoteControl.TaskTree(Machine, command, arguments, Expand).Select(static process => process.Id).ShouldBe([10, 20, 30]);
     }
 
     [Fact]
@@ -132,7 +168,7 @@ public sealed class ScheduledTaskRemoteControlTests
     [Fact]
     public void ACommandNamedWithoutExeStillFindsItsProcess()
     {
-        ScheduledTaskRemoteControl.TaskTree(Machine, "pwsh", "-NoProfile -Command \"claude remote-control --permission-mode auto\"")
+        ScheduledTaskRemoteControl.TaskTree(Machine, "pwsh", "-NoProfile -Command \"claude remote-control --permission-mode auto\"", Expand)
             .Select(static process => process.Id).ShouldBe([20, 30]);
     }
 
