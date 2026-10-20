@@ -19,7 +19,11 @@ public enum RoleSecretVerdict
     /// <summary>The secret changed after the tool set it, so someone else wrote it.</summary>
     ChangedOutsideTool,
 
-    /// <summary>Set on the day the roster records, with no instant to tell the tool's write from another.</summary>
+    /// <summary>
+    /// Cannot be told: set on the day the roster records with no instant to
+    /// compare, listed as older than the tool's own write, or listed with no
+    /// readable time.
+    /// </summary>
     Unknown,
 
     /// <summary>The secret is gone.</summary>
@@ -50,10 +54,16 @@ public static class RoleSecretCheck
     public static readonly TimeSpan ClockSkew = TimeSpan.FromMinutes(2);
 
     /// <param name="now">When the listing was read, carried on the report.</param>
-    public static RoleSecretReport Evaluate(Roster roster, RoleCatalog secrets, DateTimeOffset now)
+    /// <param name="zone">
+    /// The zone the roster's set-on dates were written in: the tool records
+    /// them as this machine's local date, so <c>updated_at</c> is compared as a
+    /// date in that zone.
+    /// </param>
+    public static RoleSecretReport Evaluate(Roster roster, RoleCatalog secrets, DateTimeOffset now, TimeZoneInfo zone)
     {
         ArgumentNullException.ThrowIfNull(roster);
         ArgumentNullException.ThrowIfNull(secrets);
+        ArgumentNullException.ThrowIfNull(zone);
         ImmutableArray<ClaimedHalf>.Builder claimed = ImmutableArray.CreateBuilder<ClaimedHalf>();
         HashSet<CiRole> held = [];
         foreach (RosterEntry entry in roster.Entries)
@@ -68,12 +78,12 @@ public static class RoleSecretCheck
 
                 if (assignment.TokenSetOn is DateOnly tokenSetOn)
                 {
-                    claimed.Add(Judge(entry.Email, assignment.Role, RoleHalf.Token, assignment.Role.TokenSecretName, tokenSetOn, assignment.TokenSetAt, secrets));
+                    claimed.Add(Judge(entry.Email, assignment.Role, RoleHalf.Token, assignment.Role.TokenSecretName, tokenSetOn, assignment.TokenSetAt, secrets, zone));
                 }
 
                 if (assignment.KeySetOn is DateOnly keySetOn && assignment.Role.KeySecretName is string keySecret)
                 {
-                    claimed.Add(Judge(entry.Email, assignment.Role, RoleHalf.Key, keySecret, keySetOn, assignment.KeySetAt, secrets));
+                    claimed.Add(Judge(entry.Email, assignment.Role, RoleHalf.Key, keySecret, keySetOn, assignment.KeySetAt, secrets, zone));
                 }
             }
         }
@@ -92,14 +102,23 @@ public static class RoleSecretCheck
         string secretName,
         DateOnly setOn,
         DateTimeOffset? setAt,
-        RoleCatalog secrets)
+        RoleCatalog secrets,
+        TimeZoneInfo zone)
     {
         ListedSecret? listed = secrets.Find(role.Owner, secretName);
         RoleSecretVerdict verdict = listed switch
         {
             null => RoleSecretVerdict.Missing,
-            _ when setAt is DateTimeOffset at => listed.UpdatedAt > at + ClockSkew ? RoleSecretVerdict.ChangedOutsideTool : RoleSecretVerdict.Ok,
-            _ => DateOnly.FromDateTime(listed.UpdatedAt.UtcDateTime) > setOn ? RoleSecretVerdict.ChangedOutsideTool : RoleSecretVerdict.Unknown,
+            { UpdatedAt: not DateTimeOffset } => RoleSecretVerdict.Unknown,
+            { UpdatedAt: DateTimeOffset updated } when setAt is DateTimeOffset at =>
+                updated > at + ClockSkew ? RoleSecretVerdict.ChangedOutsideTool
+                    // Older than the tool's own write: GitHub never recorded it.
+                    : updated < at - ClockSkew ? RoleSecretVerdict.Unknown
+                    : RoleSecretVerdict.Ok,
+            { UpdatedAt: DateTimeOffset updated } =>
+                DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(updated, zone).DateTime) > setOn
+                    ? RoleSecretVerdict.ChangedOutsideTool
+                    : RoleSecretVerdict.Unknown,
         };
         return new ClaimedHalf(holder, role, half, secretName, verdict);
     }

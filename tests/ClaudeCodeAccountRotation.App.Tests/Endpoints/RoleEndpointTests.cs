@@ -140,20 +140,52 @@ public sealed class RoleEndpointTests
         reader.Paths.ShouldBe(["orgs/octo/actions/secrets?per_page=100&page=1"]);
     }
 
+    /// <summary>A full page of 100 secrets named with <paramref name="stem"/>, under a stated total.</summary>
+    private static JsonObject FullPage(int total, string stem) =>
+        Page(total, [.. Enumerable.Range(0, 100).Select(index => (stem + index + "_CLAUDE_CODE_OAUTH_TOKEN", "2026-10-01T00:00:00Z"))]);
+
     [Fact]
-    public async Task AListingLongerThanAPageIsReadToItsEnd()
+    public async Task ATooLowTotalStopsTheListingOnlyAtAShortPage()
     {
         SpyReader reader = new();
-        reader.Answers.Enqueue(Result<JsonNode, GhApiFailure>.Success(Page(2, ("A_CLAUDE_CODE_OAUTH_TOKEN", "2026-10-01T00:00:00Z"))));
-        reader.Answers.Enqueue(Result<JsonNode, GhApiFailure>.Success(Page(2, ("B_CLAUDE_CODE_OAUTH_TOKEN", "2026-10-01T00:00:00Z"))));
+        reader.Answers.Enqueue(Result<JsonNode, GhApiFailure>.Success(FullPage(1, "A")));
+        reader.Answers.Enqueue(Result<JsonNode, GhApiFailure>.Success(Page(1, ("B_CLAUDE_CODE_OAUTH_TOKEN", "2026-10-01T00:00:00Z"))));
 
         Result<OrganizationSecrets, GhApiFailure> listed = await reader.ListOrganizationSecretsAsync("octo", TestContext.Current.CancellationToken);
 
-        listed.Value.Secrets.Select(static secret => secret.Name).ShouldBe(["A_CLAUDE_CODE_OAUTH_TOKEN", "B_CLAUDE_CODE_OAUTH_TOKEN"]);
+        listed.Value.Secrets.Count.ShouldBe(101);
+        listed.Value.Secrets[^1].Name.ShouldBe("B_CLAUDE_CODE_OAUTH_TOKEN");
         reader.Paths.ShouldBe([
             "orgs/octo/actions/secrets?per_page=100&page=1",
             "orgs/octo/actions/secrets?per_page=100&page=2",
         ]);
+    }
+
+    [Fact]
+    public async Task AListingPastFiftyPagesIsReportedAndNotUsed()
+    {
+        SpyReader reader = new();
+        for (int page = 0; page < 51; page++)
+        {
+            reader.Answers.Enqueue(Result<JsonNode, GhApiFailure>.Success(FullPage(6000, "P" + page + "_")));
+        }
+
+        Result<OrganizationSecrets, GhApiFailure> listed = await reader.ListOrganizationSecretsAsync("octo", TestContext.Current.CancellationToken);
+
+        listed.Error.Message.ShouldContain("50 pages");
+        listed.Error.RateLimited.ShouldBeFalse();
+        reader.Paths.Count.ShouldBe(50);
+    }
+
+    [Fact]
+    public async Task ASecretWithAnUnreadableTimeIsKeptWithNone()
+    {
+        SpyReader reader = new();
+        reader.Answers.Enqueue(Result<JsonNode, GhApiFailure>.Success(Page(1, ("A_CLAUDE_CODE_OAUTH_TOKEN", "not a time"))));
+
+        Result<OrganizationSecrets, GhApiFailure> listed = await reader.ListOrganizationSecretsAsync("octo", TestContext.Current.CancellationToken);
+
+        listed.Value.Secrets.ShouldBe([new ListedSecret("A_CLAUDE_CODE_OAUTH_TOKEN", null)]);
     }
 
     /// <summary>Records every path it is asked for and answers from a queue; an empty queue fails the read.</summary>

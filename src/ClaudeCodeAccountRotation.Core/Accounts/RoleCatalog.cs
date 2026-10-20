@@ -2,8 +2,11 @@ using System.Collections.Immutable;
 
 namespace ClaudeCodeAccountRotation.Core.Accounts;
 
-/// <summary>One secret as GitHub lists it: its name and when its value last changed. Never its value.</summary>
-public sealed record ListedSecret(string Name, DateTimeOffset UpdatedAt);
+/// <summary>
+/// One secret as GitHub lists it: its name and when its value last changed,
+/// or null when that could not be read. Never its value.
+/// </summary>
+public sealed record ListedSecret(string Name, DateTimeOffset? UpdatedAt);
 
 /// <summary>Every secret one organization listed, read to the last page.</summary>
 public sealed record OrganizationSecrets(string Organization, IReadOnlyList<ListedSecret> Secrets);

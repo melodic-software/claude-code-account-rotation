@@ -120,7 +120,7 @@ its terms at any time.
 | Background timer for reads, refreshes or switches | No | [Posture](#posture), switch and read bullets; [`QuotaRefresh.cs`](src/ClaudeCodeAccountRotation.App/Quota/QuotaRefresh.cs) |
 | Refreshes a parked token | Only during a requested read: when its recorded expiry has passed, or once when the usage endpoint answers 401, followed by one retried read. Done under the tool's own write gate; a switch holds Claude Code's own refresh lock | [`QuotaRefresh.cs`](src/ClaudeCodeAccountRotation.App/Quota/QuotaRefresh.cs), [`OAuthRefreshLock.cs`](src/ClaudeCodeAccountRotation.App/Adapters/FileSystem/OAuthRefreshLock.cs) |
 | Usage reads | Bounded: at most once a minute per account, only on request | [Posture](#posture), read bullet; [`RefreshBudget.cs`](src/ClaudeCodeAccountRotation.Core/Quota/RefreshBudget.cs) |
-| User-Agent | Its own, on every request | [`AnthropicEndpoints.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Http/AnthropicEndpoints.cs) |
+| User-Agent | Its own on every Anthropic request; GitHub reads and writes go through `gh`, with gh's own | [`AnthropicEndpoints.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Http/AnthropicEndpoints.cs), [`GhProcess.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Process/GhProcess.cs) |
 | OAuth `client_id` for parked refreshes | Claude Code's public one | [Posture](#posture); [`AnthropicEndpoints.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Http/AnthropicEndpoints.cs) |
 | CI tokens | Only on a click: the unmodified `claude setup-token` makes the token, you sign in on Anthropic's page and paste the code, and the token goes from the CLI's output to `gh secret set` in memory, never to disk, a log, or the page | [Rotating the CI token](#rotating-the-ci-token); [`ClaudeCliSetupTokenRunner.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Process/ClaudeCliSetupTokenRunner.cs) |
 
@@ -422,10 +422,11 @@ Check roles, in the header, lists the Actions secrets of every organization a ro
 names, and of one you type, with `gh api` (the `admin:org` scope reads them). It lists each role
 the secret names imply, with the account that backs it, and judges each half the roster records:
 `ok`; `changed outside the tool` when GitHub's `updated_at` is more than 2 minutes after the
-tool's write, or, for a half recorded with a date only, on a later UTC day; `unknown` for such a
-half updated that same day; and `missing` when the secret is gone. A role whose secrets exist
-but that no account backs is `unclaimed`. It reads only on that click, and the first rate-limit
-answer ends the check with no retry.
+tool's write, or, for a half recorded with a date only, on a later day in this machine's time
+zone, where the tool records those dates; `unknown` for such a half updated that same day, or
+one GitHub lists as older than the tool's write or with no readable time; and `missing` when the
+secret is gone. A role whose secrets exist but that no account backs is `unclaimed`. It reads
+only on that click, and the first rate-limit answer ends the check with no retry.
 
 To mark an account by hand instead (for a token made outside the tool, or when the tool set the
 secret but could not update the roster), open Edit and set "CI token generated on". Optionally

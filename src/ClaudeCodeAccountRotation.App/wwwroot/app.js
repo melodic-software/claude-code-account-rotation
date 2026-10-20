@@ -2044,7 +2044,7 @@
           var lines = roleCheckLines(result.body);
           status.textContent = lines.length ? "Checked " + new Date(result.body.checkedAt).toLocaleString() : "No role secrets found.";
           lines.forEach(function (line) {
-            var item = element("li", line.kind === "ok" ? "muted" : null, line.text);
+            var item = element("li", line.kind === "ok" ? "muted" : "say " + line.kind, line.text);
             if (line.title) { item.title = line.title; }
             found.appendChild(item);
           });

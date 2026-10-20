@@ -133,11 +133,18 @@ internal static class GhApiReads
     /// <summary>The most a page of the listing holds. Basis: https://docs.github.com/en/rest/actions/secrets#list-organization-secrets.</summary>
     public const int PageSize = 100;
 
+    /// <summary>The most pages one listing reads: 5,000 secrets. Basis: judgment, far above what an organization holds.</summary>
+    public const int MaxPages = 50;
+
     /// <summary>
     /// Every Actions secret of <paramref name="organization"/>, a page per call
-    /// until <c>total_count</c> is reached. The first failure ends the listing.
-    /// The organization must already be held to GitHub's login rules: it is
-    /// part of the path.
+    /// until a page comes back short of <see cref="PageSize"/>. That, not
+    /// <c>total_count</c>, ends the listing, so a count that is too low cannot
+    /// cut it off. The first failure ends it, and so does reaching
+    /// <see cref="MaxPages"/>, as a failure: a cut-off listing would make a
+    /// secret past the cut read as missing. The organization must already be
+    /// held to GitHub's login rules: it is part of the path. A secret whose
+    /// <c>updated_at</c> cannot be read is kept with no time.
     /// </summary>
     public static async Task<Result<OrganizationSecrets, GhApiFailure>> ListOrganizationSecretsAsync(
         this IGhApiReader reader,
@@ -146,8 +153,7 @@ internal static class GhApiReads
     {
         ArgumentNullException.ThrowIfNull(reader);
         List<ListedSecret> secrets = [];
-        int seen = 0;
-        for (int page = 1; ; page++)
+        for (int page = 1; page <= MaxPages; page++)
         {
             string path = "orgs/" + organization + "/actions/secrets?per_page=" + PageSize.ToString(CultureInfo.InvariantCulture)
                 + "&page=" + page.ToString(CultureInfo.InvariantCulture);
@@ -157,29 +163,33 @@ internal static class GhApiReads
                 return Result<OrganizationSecrets, GhApiFailure>.Failure(read.Error);
             }
 
-            if (read.Value["secrets"] is not JsonArray listed
-                || read.Value["total_count"] is not JsonValue countValue
-                || !countValue.TryGetValue(out int total))
+            if (read.Value["secrets"] is not JsonArray listed)
             {
                 return Result<OrganizationSecrets, GhApiFailure>.Failure(
                     new GhApiFailure("GitHub's secret list for " + organization + " was not in the shape its documentation gives", RateLimited: false));
             }
 
-            seen += listed.Count;
             foreach (JsonNode? item in listed)
             {
-                if (item?["name"] is JsonValue name && name.TryGetValue(out string? secretName)
-                    && item["updated_at"] is JsonValue updated && updated.TryGetValue(out string? stamp)
-                    && DateTimeOffset.TryParse(stamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTimeOffset updatedAt))
+                if (item?["name"] is JsonValue name && name.TryGetValue(out string? secretName))
                 {
+                    DateTimeOffset? updatedAt = item["updated_at"] is JsonValue updated && updated.TryGetValue(out string? stamp)
+                        && DateTimeOffset.TryParse(stamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTimeOffset parsed)
+                            ? parsed
+                            : null;
                     secrets.Add(new ListedSecret(secretName, updatedAt));
                 }
             }
 
-            if (listed.Count == 0 || seen >= total)
+            if (listed.Count < PageSize)
             {
                 return Result<OrganizationSecrets, GhApiFailure>.Success(new OrganizationSecrets(organization, secrets));
             }
         }
+
+        return Result<OrganizationSecrets, GhApiFailure>.Failure(new GhApiFailure(
+            "the secret list for " + organization + " ran past " + MaxPages.ToString(CultureInfo.InvariantCulture)
+            + " pages, so the check read none of it rather than part",
+            RateLimited: false));
     }
 }

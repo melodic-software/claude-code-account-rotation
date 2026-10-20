@@ -84,7 +84,7 @@ internal static class RoleEndpoints
             }
 
             var catalog = RoleCatalog.From(read);
-            return Results.Ok(View(roster, catalog, RoleSecretCheck.Evaluate(roster, catalog, clock.GetUtcNow()), failures));
+            return Results.Ok(View(roster, catalog, RoleSecretCheck.Evaluate(roster, catalog, clock.GetUtcNow(), clock.LocalTimeZone), failures));
         });
     }
 

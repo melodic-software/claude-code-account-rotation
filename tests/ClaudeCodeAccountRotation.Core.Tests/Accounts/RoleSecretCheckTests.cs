@@ -20,11 +20,14 @@ public sealed class RoleSecretCheckTests
     private static Roster Holding(CiRoleAssignment assignment) =>
         new([new RosterEntry(Email("a@example.com")).WithCiRoles([assignment])]);
 
-    private static RoleCatalog Listing(params (string Name, DateTimeOffset UpdatedAt)[] secrets) =>
+    /// <summary>A fixed zone seven hours west of UTC, as the Pacific coast in summer, with no daylight rules.</summary>
+    private static readonly TimeZoneInfo _west = TimeZoneInfo.CreateCustomTimeZone("west", TimeSpan.FromHours(-7), "west", "west");
+
+    private static RoleCatalog Listing(params (string Name, DateTimeOffset? UpdatedAt)[] secrets) =>
         RoleCatalog.From([new OrganizationSecrets("octo", [.. secrets.Select(static secret => new ListedSecret(secret.Name, secret.UpdatedAt))])]);
 
-    private static RoleSecretVerdict TokenVerdict(CiRoleAssignment assignment, RoleCatalog listing) =>
-        RoleSecretCheck.Evaluate(Holding(assignment), listing, _now).Claimed.Single(static half => half.Half == RoleHalf.Token).Verdict;
+    private static RoleSecretVerdict TokenVerdict(CiRoleAssignment assignment, RoleCatalog listing, TimeZoneInfo? zone = null) =>
+        RoleSecretCheck.Evaluate(Holding(assignment), listing, _now, zone ?? TimeZoneInfo.Utc).Claimed.Single(static half => half.Half == RoleHalf.Token).Verdict;
 
     [Fact]
     public void TenMinutesAfterTheToolsWriteIsAChangeOutsideTheTool() =>
@@ -39,16 +42,44 @@ public sealed class RoleSecretCheckTests
             Listing(("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", _setAt.AddSeconds(30)))).ShouldBe(RoleSecretVerdict.Ok);
 
     [Fact]
+    public void ExactlyTwoMinutesAfterTheToolsWriteIsStillTheToolsOwn() =>
+        TokenVerdict(
+            new CiRoleAssignment(_automations, _setOn, _setAt),
+            Listing(("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", _setAt.AddMinutes(2)))).ShouldBe(RoleSecretVerdict.Ok);
+
+    [Fact]
+    public void ASecretOlderThanTheToolsWriteIsUnknown() =>
+        TokenVerdict(
+            new CiRoleAssignment(_automations, _setOn, _setAt),
+            Listing(("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", _setAt.AddMinutes(-3)))).ShouldBe(RoleSecretVerdict.Unknown);
+
+    [Fact]
+    public void ASecretListedWithNoReadableTimeIsUnknown() =>
+        TokenVerdict(
+            new CiRoleAssignment(_automations, _setOn, _setAt),
+            Listing(("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", null))).ShouldBe(RoleSecretVerdict.Unknown);
+
+    [Fact]
     public void AHalfWithNoInstantUpdatedTheSameDayIsUnknown() =>
         TokenVerdict(
             new CiRoleAssignment(_automations, _setOn),
             Listing(("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", new DateTimeOffset(2026, 10, 1, 23, 0, 0, TimeSpan.Zero)))).ShouldBe(RoleSecretVerdict.Unknown);
 
     [Fact]
-    public void AHalfWithNoInstantUpdatedOnALaterUtcDayChangedOutsideTheTool() =>
+    public void AHalfWithNoInstantUpdatedOnALaterLocalDayChangedOutsideTheTool() =>
         TokenVerdict(
             new CiRoleAssignment(_automations, _setOn),
-            Listing(("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", new DateTimeOffset(2026, 10, 1, 23, 0, 0, TimeSpan.FromHours(-2))))).ShouldBe(RoleSecretVerdict.ChangedOutsideTool);
+            Listing(("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", new DateTimeOffset(2026, 10, 2, 8, 0, 0, TimeSpan.Zero))),
+            _west).ShouldBe(RoleSecretVerdict.ChangedOutsideTool);
+
+    // 2026-10-01 20:00 seven hours west of UTC is 2026-10-02 03:00 UTC: the
+    // same local day the roster recorded, though a later UTC day.
+    [Fact]
+    public void AnEveningWriteWestOfUtcIsTheSameLocalDay() =>
+        TokenVerdict(
+            new CiRoleAssignment(_automations, _setOn),
+            Listing(("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", new DateTimeOffset(2026, 10, 2, 3, 0, 0, TimeSpan.Zero))),
+            _west).ShouldBe(RoleSecretVerdict.Unknown);
 
     [Fact]
     public void AnAbsentSecretIsMissing() =>
@@ -60,7 +91,8 @@ public sealed class RoleSecretCheckTests
         RoleSecretReport report = RoleSecretCheck.Evaluate(
             Holding(new CiRoleAssignment(_automations, _setOn, _setAt, _setOn, _setAt)),
             Listing(("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", _setAt), ("AUTOMATIONS_CLAUDE_API_KEY", _setAt.AddHours(1))),
-            _now);
+            _now,
+            TimeZoneInfo.Utc);
 
         report.Claimed.Select(static half => (half.Half, half.SecretName, half.Verdict)).ShouldBe([
             (RoleHalf.Token, "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", RoleSecretVerdict.Ok),
@@ -77,7 +109,8 @@ public sealed class RoleSecretCheckTests
                 ("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", _setAt),
                 ("ISSUE_LANE_CLAUDE_CODE_OAUTH_TOKEN", _setAt),
                 ("ISSUE_LANE_CLAUDE_API_KEY", _setAt)),
-            _now);
+            _now,
+            TimeZoneInfo.Utc);
 
         report.Unclaimed.Select(static role => role.Role.Name).ShouldBe(["ISSUE_LANE"]);
         report.CheckedAt.ShouldBe(_now);
@@ -88,7 +121,7 @@ public sealed class RoleSecretCheckTests
     {
         CiRole elsewhere = new("AUTOMATIONS", CiSecretScope.Organization, "elsewhere");
 
-        RoleSecretCheck.Evaluate(Holding(new CiRoleAssignment(elsewhere, _setOn, _setAt)), Listing(), _now).Claimed.ShouldBeEmpty();
+        RoleSecretCheck.Evaluate(Holding(new CiRoleAssignment(elsewhere, _setOn, _setAt)), Listing(), _now, TimeZoneInfo.Utc).Claimed.ShouldBeEmpty();
     }
 
     [Fact]
