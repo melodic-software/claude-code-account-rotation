@@ -26,8 +26,9 @@ All notable changes to this project are documented in this file. The format foll
 - `roster.json` no longer writes `ciTokenSecret`. A file written by 2.1.0 or 2.2.0 reads its
   `ciTokenSecret` as one role: a name ending `_CLAUDE_CODE_OAUTH_TOKEN` gives the prefix before
   it, the bare name the legacy role, and any other name a token-only role under that name, set on
-  `ciTokenGeneratedOn`. Downgrading to 2.2.0 drops `ciRoles` on its next roster write; the card
-  then shows the account's `ciTokenGeneratedOn` as a marker set by hand (#259).
+  `ciTokenGeneratedOn`. Downgrading to 2.2.0 drops `ciRoles` on its next roster write. 2.2.0 then
+  reads every dated account as a marker set by hand, and its next edit to one dated account clears
+  `ciTokenGeneratedOn` on the others (#259).
 
 ## [2.2.0] - 2026-10-20
 
