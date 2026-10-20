@@ -26,7 +26,9 @@
       asOf: asOf,
       usageAge: usageAge,
       sentence: sentence,
-      ciTokenBadge: ciTokenBadge,
+      ciRoleBadges: ciRoleBadges,
+      keptCiRoles: keptCiRoles,
+      ciTag: ciTag,
       ciSecretBody: ciSecretBody,
       remoteControlQuestion: remoteControlQuestion,
       switchedToast: switchedToast
@@ -654,7 +656,8 @@
       who.appendChild(element("h2", null, displayName(account)));
       var address = element("div", "em");
       address.appendChild(wrappableEmail(account.email));
-      if (account.roster && account.roster.ciTokenGeneratedOn) { address.appendChild(element("span", "tag", "CI token")); }
+      var tag = ciTag(account.roster);
+      if (tag) { address.appendChild(element("span", "tag", tag)); }
       who.appendChild(address);
     } else {
       // An offline read leaves the address null too, and that side may still
@@ -1065,23 +1068,29 @@
     notes.placeholder = "warnings belong here, not in the name";
     labeled(form, "Notes", notes);
     // Generate CI token sets this itself. By hand it is the operator's own
-    // record of when they ran `claude setup-token`; clearing it also clears the
-    // secret it named. Nothing here reads GitHub or the token itself.
+    // record of when they ran `claude setup-token`; clearing it also clears
+    // every token half the account backs. Nothing here reads GitHub or the token itself.
     var ciToken = element("input");
     ciToken.type = "date";
     ciToken.value = (account.roster && account.roster.ciTokenGeneratedOn) || "";
     labeled(form, "CI token generated on", ciToken);
-    // The secret that token went to. Generate CI token fills these in; by hand
-    // they repair a card whose secret was set but whose roster write failed.
-    var secret = (account.roster && account.roster.ciTokenSecret) || null;
+    // The roles this account backs; unticking one takes it off on save.
+    var ciRoles = (account.roster && account.roster.ciRoles) || [];
+    var ciKeep = ciRoles.map(function (role) {
+      var box = element("input");
+      box.type = "checkbox";
+      box.checked = true;
+      labeled(form, "Backs " + role.name + " in " + (role.repository || "org " + role.organization), box);
+      return box;
+    });
+    // A role to add by its token secret's name, set on the date above. By hand
+    // it repairs a card whose secret was set but whose roster write failed.
     var ciSecretName = element("input");
     ciSecretName.type = "text";
-    ciSecretName.value = secret ? secret.name : "";
     ciSecretName.placeholder = "CLAUDE_CODE_OAUTH_TOKEN";
     labeled(form, "CI secret name", ciSecretName);
     var ciSecretWhere = element("input");
     ciSecretWhere.type = "text";
-    ciSecretWhere.value = secret ? (secret.repository || secret.organization) : "";
     ciSecretWhere.placeholder = "owner/repository, or an organization";
     labeled(form, "CI secret in", ciSecretWhere);
     var save = element("button", null, "Save");
@@ -1100,6 +1109,7 @@
       // a blank one, is what lets the operator take a warning back off the card.
       body.notes = notes.value.trim() || null;
       body.ciTokenGeneratedOn = ciToken.value || null;
+      body.ciRoles = keptCiRoles(ciRoles, ciKeep.map(function (box) { return box.checked; }));
       body.ciTokenSecret = ciSecretBody(ciSecretName.value, ciSecretWhere.value);
       mutate(accountPath(account.email), "PATCH", body, function (result) {
         showToast(result.ok ? account.email + " updated" : refused(result.body), result.ok ? "ok" : "error");
@@ -1307,27 +1317,65 @@
   // The account's state in one sentence, worst first, and the tone it is said
   // in. The credential facts come before the quota: a card whose login has
   // expired is not "usable now" whatever its figures say.
-  // The CI token badge: which secret the account backs, and when its one-year
-  // token runs out. setup-token asks for 365 days, so the expiry is reckoned
-  // from the generation date; within 30 days the badge warns, and past it the
-  // badge says so. Null when the account backs no secret.
-  function ciTokenBadge(roster, at) {
-    if (!roster || !roster.ciTokenGeneratedOn) { return null; }
-    var made = Date.parse(roster.ciTokenGeneratedOn + "T00:00:00Z");
+  // The CI badges: one per role the account backs, naming the role and the
+  // halves set from this account. A token half counts down to its one-year
+  // expiry: setup-token asks for 365 days, so the expiry is reckoned from the
+  // day it was set; within 30 days the badge warns, and past it the badge says
+  // so. A date with no role is a marker set by hand and keeps its one badge.
+  // Empty when the account backs nothing.
+  function ciRoleBadges(roster, at) {
+    if (!roster) { return []; }
+    var roles = roster.ciRoles || [];
+    if (!roles.length) {
+      var marker = roster.ciTokenGeneratedOn ? tokenExpiry("CI token", roster.ciTokenGeneratedOn, "", at) : null;
+      if (marker && marker.kind === "ok") { marker.text += " · " + roster.ciTokenGeneratedOn; }
+      return marker ? [marker] : [];
+    }
+    return roles.map(function (role) {
+      // The badge sits in a narrow column, so it names the role (and the
+      // repository, for a repository's role) and the hover says the rest.
+      var where = role.repository || "org " + role.organization;
+      var halves = [role.tokenSetOn ? "token" : null, role.keySetOn ? "key" : null].filter(Boolean).join("+");
+      var text = (role.prefix ? role.name.toLowerCase() : role.name)
+        + (role.repository ? " (" + role.repository.split("/")[1] + ")" : "") + " · " + halves;
+      var title = role.tokenSecret + (role.keySecret ? " and " + role.keySecret : "") + " in " + where + ". "
+        + (role.keySetOn ? "Key set " + role.keySetOn + ". " : "");
+      return (role.tokenSetOn && tokenExpiry(text, role.tokenSetOn, title, at)) || { kind: "ok", text: text, title: title.trim() };
+    });
+  }
+
+  // The side strip's tag: "CI" on an account that backs a role or carries a
+  // hand-set marker, else null.
+  function ciTag(roster) {
+    return roster && (roster.ciTokenGeneratedOn || (roster.ciRoles || []).length) ? "CI" : null;
+  }
+
+  function tokenExpiry(text, setOn, title, at) {
+    var made = Date.parse(setOn + "T00:00:00Z");
     if (isNaN(made)) { return null; }
     var expires = new Date(made + 365 * 86400000);
-    var expiresOn = expires.toISOString().slice(0, 10);
     var days = Math.floor((expires.getTime() - at) / 86400000);
-    // The badge sits in a narrow column, so it names the lane (the repository,
-    // or the organization) and the hover says the rest.
-    var secret = roster.ciTokenSecret;
-    var name = !secret ? "CI token"
-      : "CI · " + (secret.repository ? secret.repository.split("/")[1] : "org " + secret.organization);
-    var title = (secret ? secret.name + " in " + (secret.repository || "org " + secret.organization) + ". " : "")
-      + "Generated " + roster.ciTokenGeneratedOn + "; expires about " + expiresOn + ".";
-    if (days < 0) { return { kind: "crit", text: name + " · expired", title: title }; }
-    if (days <= 30) { return { kind: "warn", text: name + " · " + days + " d left", title: title }; }
-    return { kind: "ok", text: secret ? name : name + " · " + roster.ciTokenGeneratedOn, title: title };
+    title += "Token generated " + setOn + "; expires about " + expires.toISOString().slice(0, 10) + ".";
+    if (days < 0) { return { kind: "crit", text: text + " · expired", title: title }; }
+    if (days <= 30) { return { kind: "warn", text: text + " · " + days + " d left", title: title }; }
+    return { kind: "ok", text: text, title: title };
+  }
+
+  // The roles an Edit keeps, as the PATCH names them: each by its token
+  // secret's name, which the server reads back into the same role, with the
+  // dates its halves were set.
+  function keptCiRoles(roles, keep) {
+    return roles.filter(function (_, index) { return keep[index]; }).map(function (role) {
+      return {
+        tokenSecret: role.tokenSecret,
+        repository: role.repository,
+        organization: role.organization,
+        tokenSetOn: role.tokenSetOn,
+        tokenSetAt: role.tokenSetAt,
+        keySetOn: role.keySetOn,
+        keySetAt: role.keySetAt
+      };
+    });
   }
 
   // The CI secret an Edit names: null when either field is blank, else its name
@@ -1691,12 +1739,11 @@
       badges.appendChild(element("span", "badge " + chip.replace(/ /g, "-"), chip));
     }
     if (!roster) { badges.appendChild(element("span", "badge off-roster", "not on roster")); }
-    var ci = ciTokenBadge(roster, at);
-    if (ci) {
+    ciRoleBadges(roster, at).forEach(function (ci) {
       var ciBadge = element("span", "badge ci-token " + ci.kind, ci.text);
       ciBadge.title = ci.title;
       badges.appendChild(ciBadge);
-    }
+    });
     title.appendChild(badges);
     who.appendChild(title);
     // The heading is the display name, or the local part when the account has

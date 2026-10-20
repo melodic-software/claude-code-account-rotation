@@ -26,28 +26,32 @@ public sealed class Roster
 
     /// <summary>
     /// Adds <paramref name="entry"/>, replacing any entry for the same account.
-    /// One account backs each CI secret at a time: marking <paramref name="entry"/>
-    /// as the holder of a secret clears the marker from every other entry that
-    /// held the same one, the way adopting a new live account elsewhere already
-    /// leaves only one seat live. Markers set by hand, with no secret named,
-    /// count as one secret among themselves, so they keep their old behavior.
+    /// One account backs each CI role at a time: every role <paramref name="entry"/>
+    /// backs is taken off every other entry, whatever either's dates, the way
+    /// adopting a new live account elsewhere already leaves only one seat live.
+    /// The other entry keeps its other roles; its token date becomes that of its
+    /// newest remaining token half, or none once its last token half goes (see
+    /// <see cref="RosterEntry.WithCiRoles"/>). Markers set by hand, with no role, count as one
+    /// role among themselves, so they keep their old behavior.
     /// </summary>
     public Roster With(RosterEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
         IEnumerable<RosterEntry> others = _entries.Where(existing => existing.Email != entry.Email);
-        if (entry.CiTokenGeneratedOn is not null)
+        if (!entry.CiRoles.IsEmpty)
         {
-            others = others.Select(existing => existing.CiTokenGeneratedOn is not null && SameSecret(existing.CiTokenSecret, entry.CiTokenSecret)
-                ? existing with { CiTokenGeneratedOn = null, CiTokenSecret = null }
+            others = others.Select(existing => existing.WithCiRoles(
+                existing.CiRoles.Where(held => !entry.CiRoles.Any(claimed => claimed.Role.Equals(held.Role)))));
+        }
+        else if (entry.CiTokenGeneratedOn is not null)
+        {
+            others = others.Select(static existing => existing.CiRoles.IsEmpty && existing.CiTokenGeneratedOn is not null
+                ? existing with { CiTokenGeneratedOn = null }
                 : existing);
         }
 
         return new Roster(others.Append(entry));
     }
-
-    private static bool SameSecret(CiTokenSecret? left, CiTokenSecret? right) =>
-        left is null ? right is null : left.SameSecretAs(right);
 
     public Roster Without(AccountEmail email) => new(_entries.Where(entry => entry.Email != email));
 }

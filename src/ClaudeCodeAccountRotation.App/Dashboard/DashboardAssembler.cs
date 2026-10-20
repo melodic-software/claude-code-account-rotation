@@ -93,7 +93,19 @@ internal sealed partial class DashboardAssembler(
                     secret.Name,
                     secret.Scope == CiSecretScope.Repository ? secret.Owner : null,
                     secret.Scope == CiSecretScope.Organization ? secret.Owner : null)
-                : null);
+                : null,
+            [.. entry.CiRoles.Select(static assignment => new CiRoleView(
+                assignment.Role.Name,
+                assignment.Role.Prefix,
+                assignment.Role.Scope == CiSecretScope.Repository ? assignment.Role.Owner : null,
+                assignment.Role.Scope == CiSecretScope.Organization ? assignment.Role.Owner : null,
+                assignment.Role.TokenSecretName,
+                assignment.Role.KeySecretName,
+                assignment.TokenSetOn,
+                assignment.TokenSetAt,
+                assignment.KeySetOn,
+                assignment.KeySetAt))],
+            entry.ConsoleApiKeySetOn);
 
     public async Task<DashboardView> AssembleAsync(CancellationToken cancellationToken)
     {
