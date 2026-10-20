@@ -37,6 +37,9 @@
       historyLines: historyLines,
       historyReadLines: historyReadLines
     };
+    module.exports.apiKeyBody = apiKeyBody;
+    module.exports.apiKeyBadge = apiKeyBadge;
+    module.exports.keptKeyToast = keptKeyToast;
     module.exports.roleCheckLines = roleCheckLines;
     return;
   }
@@ -808,6 +811,12 @@
           showToast(forced.ok ? email + " removed. " + forced.body.warning : refused(forced.body), forced.ok ? "warn" : "error");
         });
       }
+      if (result.body.refusal === "StoredKeyKept" && window.confirm(result.body.message + "\n\nRemove the account anyway and leave the key in the OS store?")) {
+        return send(accountPath(email) + "?keepStoredKey=true", "DELETE", null).then(function (forced) {
+          var toastFor = keptKeyToast(email + " removed", forced);
+          showToast(toastFor.text, toastFor.kind);
+        });
+      }
       showToast(refused(result.body), "error");
       return null;
     });
@@ -992,6 +1001,73 @@
     panel.appendChild(status);
     card.appendChild(panel);
     owner.focus();
+  }
+
+  // Set API key: the account's Console API key, pasted once on this machine
+  // and kept in its OS store (Credential Manager, or the Secret Service). The
+  // field is cleared as soon as it is read, and the key never comes back to
+  // this page. A details.login, so an open one holds the poll's re-render.
+  function openApiKeyPanel(account) {
+    var card = cardNodes[account.email];
+    if (!card) { return; }
+    var existing = card.querySelector("details.api-key");
+    if (existing) { existing.parentNode.removeChild(existing); }
+
+    var panel = element("details", "login api-key");
+    panel.open = true;
+    panel.appendChild(element("summary", null, "Console API key for " + account.email));
+    panel.appendChild(element("p", "muted",
+      "Paste this account's Console API key. It is kept only in this machine's OS store, never in a file of this tool's, and is not shown here again."));
+    var form = element("form", "roster-form");
+    var field = element("input");
+    field.type = "password";
+    field.autocomplete = "off";
+    field.spellcheck = false;
+    labeled(form, "API key", field);
+    var save = element("button", null, "Save");
+    save.type = "submit";
+    form.appendChild(save);
+    form.appendChild(actionButton("Cancel", "secondary", function () { panel.parentNode.removeChild(panel); }));
+    var status = element("p", "muted");
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      var body = apiKeyBody(field.value);
+      field.value = "";
+      if (!body) { status.textContent = "Paste the key first."; return; }
+      busy = true;
+      setButtonsDisabled(true);
+      send(accountPath(account.email, "/api-key"), "PUT", body)
+        .then(function (result) {
+          if (!result.ok) { status.textContent = refused(result.body); return null; }
+          panel.parentNode.removeChild(panel);
+          showToast("API key stored for " + account.email, "ok");
+          return refresh(true);
+        })
+        .catch(function (error) { status.textContent = "Request failed: " + error; })
+        .then(function () { busy = false; setButtonsDisabled(false); });
+    });
+    panel.appendChild(form);
+    panel.appendChild(status);
+    card.appendChild(panel);
+    field.focus();
+  }
+
+  function clearApiKey(email) {
+    if (!window.confirm("Delete " + email + "'s Console API key from this machine's OS store?")) {
+      return Promise.resolve();
+    }
+    return mutate(accountPath(email, "/api-key"), "DELETE", null, function (result) {
+      // The store could not delete it. Leaving it there is the operator's
+      // call, and the response then names the key and how to remove it by hand.
+      if (!result.ok && result.body.refusal === "StoredKeyKept" && window.confirm(result.body.message + "\n\nForget it here and leave it in the OS store?")) {
+        return send(accountPath(email, "/api-key") + "?keepStoredKey=true", "DELETE", null).then(function (forced) {
+          var toastFor = keptKeyToast("API key forgotten here for " + email, forced);
+          showToast(toastFor.text, toastFor.kind);
+        });
+      }
+      showToast(result.ok ? "API key deleted for " + email : refused(result.body), result.ok ? "ok" : "error");
+      return null;
+    });
   }
 
   function startCiToken(email, body, form, status, panel) {
@@ -1458,6 +1534,28 @@
       : { name: trimmedName, organization: trimmedWhere };
   }
 
+  // The PUT body for a pasted Console API key, trimmed, or null when nothing
+  // but whitespace was pasted.
+  function apiKeyBody(pasted) {
+    var key = (pasted || "").trim();
+    return key ? { key: key } : null;
+  }
+
+  // The toast after a keepStoredKey delete: what was done, then the warning
+  // naming the key left behind when there is one, never a bare "null".
+  function keptKeyToast(done, result) {
+    if (!result.ok) { return { text: refused(result.body), kind: "error" }; }
+    var warning = result.body && result.body.warning;
+    return warning ? { text: done + ". " + warning, kind: "warn" } : { text: done, kind: "ok" };
+  }
+
+  // The card's key badge: the day the key was stored, from the roster, so
+  // the page never reads the store to draw it. Null when none is stored.
+  function apiKeyBadge(roster) {
+    var setOn = roster && roster.consoleApiKeySetOn;
+    return setOn ? { text: "API key", title: "Console API key stored in this machine's OS store on " + setOn + "." } : null;
+  }
+
   // What Check roles found, one line per role and one per organization that
   // could not be read. A line is crit when a half the roster records changed
   // outside the tool or is gone, warn when a role has no holder or a half's
@@ -1847,6 +1945,12 @@
       ciBadge.title = ci.title;
       badges.appendChild(ciBadge);
     });
+    var keyBadge = apiKeyBadge(roster);
+    if (keyBadge) {
+      var keyChip = element("span", "badge api-key", keyBadge.text);
+      keyChip.title = keyBadge.title;
+      badges.appendChild(keyChip);
+    }
     title.appendChild(badges);
     who.appendChild(title);
     // The heading is the display name, or the local part when the account has
@@ -1904,6 +2008,12 @@
     menu.appendChild(blockable(menuItem(more, "Refresh usage", "quiet sm", function () { refreshAccount(account.email); }), false));
     if (roster) {
       menu.appendChild(menuItem(more, "Generate CI token", "quiet sm", function () { openCiTokenPanel(account); }));
+    }
+    if (roster) {
+      menu.appendChild(menuItem(more, roster.consoleApiKeySetOn ? "Replace API key" : "Set API key", "quiet sm", function () { openApiKeyPanel(account); }));
+      if (roster.consoleApiKeySetOn) {
+        menu.appendChild(menuItem(more, "Delete API key", "quiet sm", function () { clearApiKey(account.email); }));
+      }
     }
     if (roster) {
       menu.appendChild(menuItem(more, paused ? "Resume rotation" : "Pause rotation", "quiet sm", function () { setPaused(account.email, !paused); }));

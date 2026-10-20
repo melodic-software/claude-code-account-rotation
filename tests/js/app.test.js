@@ -431,6 +431,30 @@ test("the switch toast says Remote Control restarted, and a restart that failed 
   assert.deepStrictEqual(switchedToast({ now: "b@example.com" }), { text: "Switched to b@example.com", kind: "ok" });
 });
 
+const { apiKeyBody, apiKeyBadge } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+
+test("a pasted API key is sent trimmed in the body, and a blank paste sends nothing", () => {
+  assert.deepStrictEqual(apiKeyBody("  sk-ant-" + "api03-abc\n"), { key: "sk-ant-" + "api03-abc" });
+  assert.strictEqual(apiKeyBody(" \t\n"), null);
+  assert.strictEqual(apiKeyBody(""), null);
+  assert.strictEqual(apiKeyBody(undefined), null);
+});
+
+test("a keepStoredKey toast names the key left when there is one and never says null", () => {
+  const { keptKeyToast } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+  assert.deepStrictEqual(keptKeyToast("a@x removed", { ok: true, body: { warning: null } }), { text: "a@x removed", kind: "ok" });
+  assert.deepStrictEqual(keptKeyToast("a@x removed", { ok: true, body: { warning: "The stored key k was left." } }), { text: "a@x removed. The stored key k was left.", kind: "warn" });
+  assert.deepStrictEqual(keptKeyToast("a@x removed", { ok: false, body: { message: "locked" } }), { text: "Refused: locked", kind: "error" });
+});
+
+test("the API key badge shows only once the roster records a stored key, and names the day", () => {
+  assert.strictEqual(apiKeyBadge(null), null);
+  assert.strictEqual(apiKeyBadge({ consoleApiKeySetOn: null }), null);
+  const badge = apiKeyBadge({ consoleApiKeySetOn: "2026-10-20" });
+  assert.strictEqual(badge.text, "API key");
+  assert.match(badge.title, /2026-10-20/);
+});
+
 const { roleCheckLines } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
 
 test("roleCheckLines names each role, its holder and its verdicts, and marks a change outside the tool", () => {

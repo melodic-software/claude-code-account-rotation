@@ -4,6 +4,7 @@ using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Adapters.Http;
 using ClaudeCodeAccountRotation.App.Adapters.Peers;
 using ClaudeCodeAccountRotation.App.Adapters.Process;
+using ClaudeCodeAccountRotation.App.Adapters.SecretStore;
 using ClaudeCodeAccountRotation.App.Configuration;
 using ClaudeCodeAccountRotation.App.Dashboard;
 using ClaudeCodeAccountRotation.App.Endpoints;
@@ -81,6 +82,9 @@ internal static class AppComposition
         ArgumentNullException.ThrowIfNull(arguments);
         ArgumentNullException.ThrowIfNull(commandLine);
         ConfigureConsoleTimestamp(builder.Logging);
+        // The hosting diagnostics log every request's full URL, query string
+        // included, at Information, so a key pasted into a URL would land in a log.
+        builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
 
         ClaudeCodeAccountRotationConfiguration defaults = ConfigurationDefaults.ForCurrentUser();
         string configPath = arguments.ConfigPath
@@ -263,6 +267,11 @@ internal static class AppComposition
             provider.GetRequiredService<RosterFile>(),
             provider.GetRequiredService<TimeProvider>(),
             provider.GetRequiredService<ILogger<ClaudeCliSetupTokenRunner>>()));
+        // Console and Admin keys live in the OS store or nowhere: no file fallback.
+        services.AddSingleton<ISecretStore>(
+            OperatingSystem.IsWindows() ? new WindowsCredentialStore()
+            : OperatingSystem.IsLinux() ? LibsecretStore.ForCurrentProcess()
+            : new UnavailableSecretStore("this platform has no OS secret store this tool supports"));
         services.AddSingleton<LiveDirectorySwitch>();
         services.AddSingleton<IStaleIdentityRepair>(static provider => provider.GetRequiredService<LiveDirectorySwitch>());
         // Windows only: the task is a Windows scheduled task, and a Linux leader
@@ -406,6 +415,7 @@ internal static class AppComposition
         RefreshEndpoints.Map(app);
         LoginEndpoints.Map(app);
         CiTokenEndpoints.Map(app);
+        ApiKeyEndpoints.Map(app);
         RoleEndpoints.Map(app);
         ShutdownEndpoints.Map(app);
         ShutdownEndpoints.MapStop(app);

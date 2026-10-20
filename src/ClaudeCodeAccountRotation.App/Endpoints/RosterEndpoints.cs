@@ -233,6 +233,7 @@ internal static partial class RosterEndpoints
         mutations.MapDelete("/accounts/{email}", static async (
             string email,
             bool? logout,
+            bool? keepStoredKey,
             RosterFile rosterFile,
             ProfileFolderStore profiles,
             ClaudeStateFile stateFile,
@@ -242,6 +243,7 @@ internal static partial class RosterEndpoints
             RecoveryFiles recovery,
             SharedStoreSlots slots,
             SwitchOptions options,
+            ISecretStore secrets,
             ILoggerFactory loggers,
             CancellationToken cancellationToken) =>
         {
@@ -383,13 +385,26 @@ internal static partial class RosterEndpoints
                     await profiles.DeleteFolderAsync(folder, committed);
                 }
 
+                // Both stored keys go with the account. A recorded key the store
+                // cannot delete keeps the entry and its record, so a retry (which
+                // finds no folder left to revoke or delete) comes back here, unless
+                // the operator says to leave the key: then the response names it.
+                RosterEntry entry = (await rosterFile.ReadAsync(committed)).Find(target) ?? new RosterEntry(target);
+                StoredKeyRemoval keys = await ApiKeyEndpoints.DeleteStoredKeysAsync(
+                    secrets, entry, Enum.GetValues<SecretKind>(), keepStoredKey ?? false, logger, committed);
+                if (keys.Refusal is string keyRefusal)
+                {
+                    return Refused("StoredKeyKept", "The account's login and folder were handled, but it stays on the roster. " + keyRefusal);
+                }
+
                 await rosterFile.UpdateAsync(roster => roster.Without(target), committed, via: LaneVia.Delete);
+                string? folderWarning = hasPair && !revoked
+                    ? "The folder was deleted without a logout; that refresh token stays valid until its login expires."
+                    : null;
                 return Results.Ok(new RemovalView(
                     target.Value,
                     revoked,
-                    hasPair && !revoked
-                        ? "The folder was deleted without a logout; that refresh token stays valid until its login expires."
-                        : null));
+                    folderWarning is null || keys.Warning is null ? folderWarning ?? keys.Warning : folderWarning + " " + keys.Warning));
             }
             finally
             {
