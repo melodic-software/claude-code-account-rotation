@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const { takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, promptWording, uniqueName, renameLabel, nearestLimit, tier, asOf, usageAge, sentence, ciRoleBadges, keptCiRoles, ciSecretBody, remoteControlQuestion, switchedToast } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+const { takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, promptWording, uniqueName, renameLabel, nearestLimit, tier, asOf, usageAge, sentence, ciRoleBadges, keptCiRoles, ciTag, ciSecretBody, remoteControlQuestion, switchedToast } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
 
 function limit(kind, percent, fields) {
   return Object.assign({ kind, percent, known: true, windowReset: false }, fields);
@@ -392,6 +392,16 @@ test("ciRoleBadges keeps a hand-set marker readable and is empty with no marker"
   assert.deepStrictEqual(ciRoleBadges({ ciTokenGeneratedOn: "2026-09-01", ciRoles: [] }, Date.parse("2026-10-01T00:00:00Z")).map((badge) => badge.text), ["CI token · 2026-09-01"]);
   assert.deepStrictEqual(ciRoleBadges({ ciTokenGeneratedOn: null, ciRoles: [] }, Date.parse("2026-10-01T00:00:00Z")), []);
   assert.deepStrictEqual(ciRoleBadges(null, Date.parse("2026-10-01T00:00:00Z")), []);
+  // A roster with no ciRoles key at all reads as one with none.
+  assert.deepStrictEqual(ciRoleBadges({ ciTokenGeneratedOn: "2026-09-01" }, Date.parse("2026-10-01T00:00:00Z")).map((badge) => badge.text), ["CI token · 2026-09-01"]);
+});
+
+test("ciTag tags the side strip CI for a role or a hand-set marker, and nothing otherwise", () => {
+  assert.strictEqual(ciTag({ ciTokenGeneratedOn: null, ciRoles: [Object.assign({}, AUTOMATIONS, { tokenSetOn: null })] }), "CI");
+  assert.strictEqual(ciTag({ ciTokenGeneratedOn: "2026-09-01" }), "CI");
+  assert.strictEqual(ciTag({ ciTokenGeneratedOn: null, ciRoles: [] }), null);
+  assert.strictEqual(ciTag({ ciTokenGeneratedOn: null }), null);
+  assert.strictEqual(ciTag(null), null);
 });
 
 test("Switch asks first only while the Remote Control task is running", () => {

@@ -28,6 +28,7 @@
       sentence: sentence,
       ciRoleBadges: ciRoleBadges,
       keptCiRoles: keptCiRoles,
+      ciTag: ciTag,
       ciSecretBody: ciSecretBody,
       remoteControlQuestion: remoteControlQuestion,
       switchedToast: switchedToast
@@ -655,7 +656,8 @@
       who.appendChild(element("h2", null, displayName(account)));
       var address = element("div", "em");
       address.appendChild(wrappableEmail(account.email));
-      if (account.roster && (account.roster.ciTokenGeneratedOn || (account.roster.ciRoles || []).length)) { address.appendChild(element("span", "tag", "CI")); }
+      var tag = ciTag(account.roster);
+      if (tag) { address.appendChild(element("span", "tag", tag)); }
       who.appendChild(address);
     } else {
       // An offline read leaves the address null too, and that side may still
@@ -1342,6 +1344,12 @@
     });
   }
 
+  // The side strip's tag: "CI" on an account that backs a role or carries a
+  // hand-set marker, else null.
+  function ciTag(roster) {
+    return roster && (roster.ciTokenGeneratedOn || (roster.ciRoles || []).length) ? "CI" : null;
+  }
+
   function tokenExpiry(text, setOn, title, at) {
     var made = Date.parse(setOn + "T00:00:00Z");
     if (isNaN(made)) { return null; }
@@ -1357,7 +1365,7 @@
   // secret's name, which the server reads back into the same role, with the
   // dates its halves were set.
   function keptCiRoles(roles, keep) {
-    return roles.filter(function (role, index) { return keep[index]; }).map(function (role) {
+    return roles.filter(function (_, index) { return keep[index]; }).map(function (role) {
       return {
         tokenSecret: role.tokenSecret,
         repository: role.repository,

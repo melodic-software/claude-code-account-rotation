@@ -36,7 +36,7 @@ public sealed class ClaudeCliSetupTokenRunnerRoleTests : IDisposable
         await _roster.UpdateAsync(
             roster => roster.With(new RosterEntry(email) { CiRoles = [new CiRoleAssignment(automations, KeySetOn: keySetOn)] }),
             TestContext.Current.CancellationToken);
-        TestClock clock = new(_now);
+        UtcClock clock = new(_now);
         using ClaudeCliSetupTokenRunner runner = new(_script.Start, _secrets, _roster, clock, new RecordingLogger<ClaudeCliSetupTokenRunner>(), TimeSpan.FromSeconds(10));
         CiTokenSecret secret = CiTokenSecret.Parse("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", null, "octo").Value;
 
@@ -49,8 +49,16 @@ public sealed class ClaudeCliSetupTokenRunnerRoleTests : IDisposable
         role.Role.ShouldBe(automations);
         role.TokenSetAt.ShouldNotBeNull();
         (role.TokenSetAt.Value - _now).Duration().ShouldBeLessThanOrEqualTo(TimeSpan.FromSeconds(5));
-        role.TokenSetOn.ShouldBe(DateOnly.FromDateTime(clock.GetLocalNow().DateTime));
+        role.TokenSetOn.ShouldBe(new DateOnly(2026, 10, 20));
         role.KeySetOn.ShouldBe(keySetOn);
-        entry.CiTokenGeneratedOn.ShouldBe(role.TokenSetOn);
+        entry.CiTokenGeneratedOn.ShouldBe(new DateOnly(2026, 10, 20));
+    }
+
+    /// <summary>A fixed clock whose local zone is UTC, so the day it reads is the same on every machine.</summary>
+    private sealed class UtcClock(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+
+        public override TimeZoneInfo LocalTimeZone => TimeZoneInfo.Utc;
     }
 }

@@ -108,6 +108,25 @@ public sealed class RosterCiRoleEndpointTests
     }
 
     [Fact]
+    public async Task TheTokenDateIsTheNewestTokenHalfWhenTheBodySendsAnOlderOne()
+    {
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        await client.PostAsJsonAsync(_accounts, new { email = NewEmail }, TestContext.Current.CancellationToken);
+
+        using HttpResponseMessage response = await PatchAsync(
+            client,
+            """
+            { "ciTokenGeneratedOn": "2026-01-15", "ciRoles": [
+              { "prefix": "AUTOMATIONS", "organization": "octo", "tokenSetOn": "2026-10-06" },
+              { "prefix": "REVIEWS", "organization": "octo", "tokenSetOn": "2026-03-01" } ] }
+            """);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        (await StoredAsync(factory, TestContext.Current.CancellationToken)).CiTokenGeneratedOn.ShouldBe(new DateOnly(2026, 10, 6));
+    }
+
+    [Fact]
     public async Task TheDashboardKeepsTheSingleSecretFieldsAndAddsTheRoles()
     {
         await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);

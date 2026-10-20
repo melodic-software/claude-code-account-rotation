@@ -16,13 +16,16 @@ All notable changes to this project are documented in this file. The format foll
   dates, and an account loses `ciTokenGeneratedOn` only when its last token half goes (#259).
 - `roster.json` entries carry `ciRoles` and `consoleApiKeySetOn`; `GET /api/dashboard` returns
   them as `accounts[].roster.ciRoles` and `accounts[].roster.consoleApiKeySetOn`, and still returns
-  `ciTokenSecret` (the token secret set last) and `ciTokenGeneratedOn`.
+  `ciTokenSecret` (the token secret set last) and `ciTokenGeneratedOn`. `consoleApiKeySetOn` is
+  recorded for the upcoming Console key store; nothing sets it yet.
   `PATCH /api/accounts/{email}` accepts `ciRoles`, and requires a date only for a token half (#259).
 
 ### Changed
 
 - A card shows one CI badge per role, such as `automations · token+key`, and Edit lists the roles
-  with a tick box each. Generate CI token records the instant the token was set (#259).
+  with a tick box each. The side strip's tag reads `CI` (was `CI token`) and also shows for an
+  account that backs only a key half. Generate CI token records the instant the token was set
+  (#259).
 - `roster.json` no longer writes `ciTokenSecret`. A file written by 2.1.0 or 2.2.0 reads its
   `ciTokenSecret` as one role: a name ending `_CLAUDE_CODE_OAUTH_TOKEN` gives the prefix before
   it, the bare name the legacy role, and any other name a token-only role under that name, set on

@@ -210,9 +210,12 @@ internal static partial class RosterEndpoints
             {
                 updated = updated with { CiTokenGeneratedOn = null };
             }
-            else if (updated.CiTokenGeneratedOn is null && updated.HasTokenHalf)
+            else if (updated.HasTokenHalf
+                && updated.CiRoles.Max(static assignment => assignment.TokenSetOn) is DateOnly newest
+                && !(updated.CiTokenGeneratedOn >= newest))
             {
-                updated = updated with { CiTokenGeneratedOn = updated.CiRoles.Max(static assignment => assignment.TokenSetOn) };
+                // The date is the account's newest token, so no token half is newer.
+                updated = updated with { CiTokenGeneratedOn = newest };
             }
 
             await rosterFile.UpdateAsync(roster => roster.With(updated), cancellationToken);

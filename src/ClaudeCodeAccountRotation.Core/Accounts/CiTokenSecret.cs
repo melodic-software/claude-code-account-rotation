@@ -57,13 +57,6 @@ public sealed partial record CiTokenSecret(string Name, CiSecretScope Scope, str
             : Result<CiTokenSecret, string>.Failure("an organization is its GitHub login: letters, digits and single hyphens");
     }
 
-    /// <summary>Whether both name the same secret, which is the one an account can back at a time.</summary>
-    public bool SameSecretAs(CiTokenSecret? other) =>
-        other is not null
-        && Scope == other.Scope
-        && string.Equals(Name, other.Name, StringComparison.OrdinalIgnoreCase)
-        && string.Equals(Owner, other.Owner, StringComparison.OrdinalIgnoreCase);
-
     public override string ToString() => Name + (Scope == CiSecretScope.Repository ? " in " : " in org ") + Owner;
 
     [GeneratedRegex("^[A-Za-z_][A-Za-z0-9_]{0,99}$", RegexOptions.None, matchTimeoutMilliseconds: 1000)]
