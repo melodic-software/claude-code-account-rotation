@@ -431,6 +431,33 @@ test("the switch toast says Remote Control restarted, and a restart that failed 
   assert.deepStrictEqual(switchedToast({ now: "b@example.com" }), { text: "Switched to b@example.com", kind: "ok" });
 });
 
+const { roleCheckLines } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+
+test("roleCheckLines names each role, its holder and its verdicts, and marks a change outside the tool", () => {
+  const lines = roleCheckLines({
+    checkedAt: "2026-10-20T12:00:00Z",
+    roles: [
+      { name: "AUTOMATIONS", prefix: "AUTOMATIONS", organization: "octo", tokenSecret: "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", keySecret: "AUTOMATIONS_CLAUDE_API_KEY", hasToken: true, hasKey: true, holder: "a@example.com", token: "changed", key: "ok" },
+      { name: "ISSUE_LANE", prefix: "ISSUE_LANE", organization: "octo", tokenSecret: "ISSUE_LANE_CLAUDE_CODE_OAUTH_TOKEN", keySecret: "ISSUE_LANE_CLAUDE_API_KEY", hasToken: true, hasKey: false, holder: null, token: "unclaimed", key: null },
+      { name: "legacy (review lanes)", prefix: "", organization: "octo", tokenSecret: "CLAUDE_CODE_OAUTH_TOKEN", keySecret: null, hasToken: true, hasKey: false, holder: "b@example.com", token: "ok", key: null }
+    ],
+    failures: [{ organization: "gone", error: "GitHub answered HTTP 404" }]
+  });
+  assert.deepStrictEqual(lines.map((line) => [line.kind, line.text]), [
+    ["crit", "automations in org octo · token+key · a@example.com · token: changed outside the tool · key: ok"],
+    ["warn", "issue_lane in org octo · token · no holder · token: unclaimed"],
+    ["ok", "legacy (review lanes) in org octo · token · b@example.com · token: ok"],
+    ["crit", "org gone could not be read: GitHub answered HTTP 404"]
+  ]);
+  assert.strictEqual(lines[0].title, "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN and AUTOMATIONS_CLAUDE_API_KEY");
+});
+
+test("roleCheckLines marks a missing secret critical", () => {
+  const [line] = roleCheckLines({ roles: [{ name: "REVIEWS", prefix: "REVIEWS", organization: "octo", tokenSecret: "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", keySecret: "REVIEWS_CLAUDE_API_KEY", hasToken: false, hasKey: false, holder: "a@example.com", token: "missing", key: null }], failures: [] });
+  assert.strictEqual(line.kind, "crit");
+  assert.strictEqual(line.text, "reviews in org octo · no secrets · a@example.com · token: missing");
+});
+
 test("history lines run newest first and name the role half, both accounts and the route", () => {
   const entries = [
     { at: "2026-10-01T11:00:00.0000000Z", role: { prefix: "AUTOMATIONS", organization: "octo" }, half: "token", account: "b@example.com", previous: "a@example.com", via: "push" },
@@ -499,4 +526,15 @@ test("expiry lines name a repository's role with its repository, as the badge do
   const two = Object.assign(expiryRole("tools", "2026-01-01", "2026-01-01", true), { repository: "octo/two" });
   const [got] = ciTokenExpiries({ ciRoles: [one, two] }, Date.parse("2026-12-20T00:00:00Z"));
   assert.deepStrictEqual(got.fallback, ["tools (one)", "tools (two)"]);
+});
+
+test("roleCheckLines gives each unknown half the cause the server sent", () => {
+  function unknownLine(reason) {
+    return roleCheckLines({ roles: [{ name: "AUTOMATIONS", prefix: "AUTOMATIONS", organization: "octo", tokenSecret: "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", keySecret: null, hasToken: true, hasKey: false, holder: "a@example.com", token: "unknown", tokenReason: reason, key: null }], failures: [] })[0];
+  }
+  assert.strictEqual(unknownLine("noInstant").text, "automations in org octo · token · a@example.com · token: unknown (only the day it was set is recorded, and GitHub shows that same day)");
+  assert.strictEqual(unknownLine("olderThanWrite").text, "automations in org octo · token · a@example.com · token: unknown (GitHub lists it as older than the tool's write)");
+  assert.strictEqual(unknownLine("noListedTime").text, "automations in org octo · token · a@example.com · token: unknown (GitHub listed no readable update time)");
+  assert.strictEqual(unknownLine("noListedTime").kind, "warn");
+  assert.strictEqual(unknownLine(null).text, "automations in org octo · token · a@example.com · token: unknown");
 });
