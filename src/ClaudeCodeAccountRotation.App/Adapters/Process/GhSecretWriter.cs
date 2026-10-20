@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Accounts;
 
@@ -134,65 +133,12 @@ internal sealed class GhSecretWriter(string executable, TimeSpan timeout) : ICiS
                 + "; check `gh auth status` and that you may write secrets for " + secret.Owner);
     }
 
-    /// <summary>Runs gh with <paramref name="input"/>, if any, on its standard input, and returns its exit code.</summary>
+    /// <summary>Runs gh with <paramref name="input"/>, if any, on its standard input, and returns its exit code alone.</summary>
     private async Task<Result<int, string>> RunAsync(IReadOnlyList<string> arguments, string? input, CancellationToken cancellationToken)
     {
-        ProcessStartInfo startInfo = new(executable)
-        {
-            UseShellExecute = false,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
-        };
-        foreach (string argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
-        // No prompt may wait on a terminal that is not there, and no update
-        // notice is wanted on output nobody reads.
-        startInfo.Environment["GH_PROMPT_DISABLED"] = "1";
-        startInfo.Environment["GH_NO_UPDATE_NOTIFIER"] = "1";
-
-        using System.Diagnostics.Process process = new() { StartInfo = startInfo };
-        try
-        {
-            process.Start();
-        }
-        catch (System.ComponentModel.Win32Exception)
-        {
-            return Result<int, string>.Failure("the GitHub CLI (gh) could not be started");
-        }
-
-        using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        budget.CancelAfter(timeout);
-        try
-        {
-            // Drained, not read: a full pipe would block gh, and what it says is not relayed.
-            Task drainOut = process.StandardOutput.ReadToEndAsync(budget.Token);
-            Task drainError = process.StandardError.ReadToEndAsync(budget.Token);
-            if (input is not null)
-            {
-                await process.StandardInput.WriteAsync(input.AsMemory(), budget.Token);
-                await process.StandardInput.FlushAsync(budget.Token);
-            }
-
-            process.StandardInput.Close();
-            await Task.WhenAll(drainOut, drainError);
-            await process.WaitForExitAsync(budget.Token);
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            ChildProcess.TryKill(process);
-            return Result<int, string>.Failure("gh did not finish in time");
-        }
-        catch (IOException)
-        {
-            ChildProcess.TryKill(process);
-            return Result<int, string>.Failure("gh closed its input early");
-        }
-
-        return Result<int, string>.Success(process.ExitCode);
+        Result<GhExit, string> run = await GhProcess.RunAsync(executable, arguments, input, timeout, cancellationToken);
+        return run.IsSuccess
+            ? Result<int, string>.Success(run.Value.ExitCode)
+            : Result<int, string>.Failure(run.Error);
     }
 }

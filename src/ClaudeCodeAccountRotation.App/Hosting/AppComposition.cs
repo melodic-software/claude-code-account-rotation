@@ -250,6 +250,10 @@ internal static class AppComposition
         services.AddSingleton<ICiSecretWriter>(gh.IsSuccess
             ? new GhSecretWriter(gh.Value, TimeSpan.FromSeconds(60))
             : new UnavailableCiSecretWriter(gh.Error));
+        // "Check roles": GitHub reads through the same gh, only on that click.
+        services.AddSingleton<IGhApiReader>(gh.IsSuccess
+            ? new GhApiReader(gh.Value, TimeSpan.FromSeconds(60))
+            : new UnavailableGhApiReader(gh.Error));
         services.AddSingleton<ICiTokenSessionRunner>(provider => new ClaudeCliSetupTokenRunner(
             setupTokenChild,
             provider.GetRequiredService<ICiSecretWriter>(),
@@ -399,6 +403,7 @@ internal static class AppComposition
         RefreshEndpoints.Map(app);
         LoginEndpoints.Map(app);
         CiTokenEndpoints.Map(app);
+        RoleEndpoints.Map(app);
         ShutdownEndpoints.Map(app);
         ShutdownEndpoints.MapStop(app);
     }
