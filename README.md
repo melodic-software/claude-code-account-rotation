@@ -331,7 +331,8 @@ account, the tool restarts the task:
 - A task that was not running is left alone, and the switch asks nothing.
 - A switch of the WSL side, and any switch on Linux, restarts nothing.
 - A restart that fails never fails the switch. A process that cannot be ended stops the restart
-  before the task runs again, so two servers never run. The result says why and what to run by
+  before the task runs again, so two servers never run. A running task whose processes cannot be
+  identified is neither ended nor run. The result says why and what to run by
   hand: `Stop-ScheduledTask claude-remote-control`, end the `claude.exe` running `remote-control`
   that it leaves behind, then `Start-ScheduledTask claude-remote-control`.
 - Set `remoteControlTask` to `null` or `""` in `config.json` to turn this off. A file without the

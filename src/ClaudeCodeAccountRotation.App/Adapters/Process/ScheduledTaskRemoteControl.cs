@@ -43,7 +43,9 @@ internal sealed class NoRemoteControlTask : IRemoteControlTask
 /// line carries the task action's own arguments, read from <c>/Query /XML</c>,
 /// and its descendants. A <c>claude remote-control</c> started in a terminal
 /// has no such ancestor and is never touched. After <c>/End</c> the recorded
-/// descendants still running are ended, deepest first; only those ids.
+/// descendants still running are ended, deepest first; only those ids. A
+/// running task with no such tree is neither ended nor run, and the restart
+/// fails so the operator is told.
 /// </para>
 /// <para>
 /// The task is registered with MultipleInstances IgnoreNew, so a run sent
@@ -108,6 +110,19 @@ internal sealed partial class ScheduledTaskRemoteControl(
         }
 
         IReadOnlyList<ProcessEntry> tree = TaskTree(table.Value, action.Value.Command, action.Value.Arguments);
+        if (tree.Count == 0)
+        {
+            // A running task whose processes cannot be told apart is left as it
+            // is: /End alone would leave its server running, and /Run would then
+            // start a second one. A task that has stopped by itself is just run.
+            if (await IsRunningAsync(cancellationToken))
+            {
+                return Result<Unit, string>.Failure("the task is running but its processes could not be identified");
+            }
+
+            return await StepAsync("/Run", cancellationToken);
+        }
+
         Result<Unit, string> ended = await StepAsync("/End", cancellationToken);
         if (ended.IsFailure)
         {

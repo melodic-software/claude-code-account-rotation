@@ -130,6 +130,40 @@ public sealed class ScheduledTaskRemoteControlTests
     }
 
     [Fact]
+    public async Task ARunningTaskWhoseProcessesCannotBeIdentifiedIsNeitherEndedNorRun()
+    {
+        Script script = new Script()
+            .Answer("/XML", 0, TaskXml.Replace("--permission-mode auto", "--permission-mode plan", StringComparison.Ordinal))
+            .Answer("/Query", 0, Running)
+            .Answer("/End", 0)
+            .Answer("/Run", 0);
+        Killer killer = new();
+
+        Result<Unit, string> restart = await RemoteControl(script, killer).RestartAsync(Token);
+
+        restart.IsFailure.ShouldBeTrue();
+        restart.Error.ShouldContain("could not be identified");
+        killer.Killed.ShouldBeEmpty();
+        script.Calls.ShouldNotContain(static call => call.StartsWith("/End", StringComparison.Ordinal) || call.StartsWith("/Run", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ATaskThatStoppedByItselfIsRunWithNothingToEnd()
+    {
+        Script script = new Script()
+            .Answer("/XML", 0, TaskXml.Replace("--permission-mode auto", "--permission-mode plan", StringComparison.Ordinal))
+            .Answer("/Query", 0, Ready)
+            .Answer("/End", 0)
+            .Answer("/Run", 0);
+
+        Result<Unit, string> restart = await RemoteControl(script).RestartAsync(Token);
+
+        restart.IsSuccess.ShouldBeTrue(restart.IsFailure ? restart.Error : "");
+        script.Calls[^1].ShouldBe("/Run /TN claude-remote-control");
+        script.Calls.ShouldNotContain(static call => call.StartsWith("/End", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task AProcessTableThatCannotBeReadEndsNothing()
     {
         Script script = Restartable();

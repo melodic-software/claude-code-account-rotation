@@ -149,6 +149,36 @@ public sealed class SwitchEndpointTests
     }
 
     [Fact]
+    public async Task ARunningTaskWhoseProcessesCannotBeIdentifiedIsAWarningAndTheSwitchStands()
+    {
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        ScheduledTaskRemoteControlTests.Script script = new ScheduledTaskRemoteControlTests.Script()
+            .Answer("/Query", 0, "\"\\claude-remote-control\",\"N/A\",\"Running\"")
+            .Answer("/XML", 0, ScheduledTaskRemoteControlTests.TaskXml)
+            .Answer("/End", 0)
+            .Answer("/Run", 0);
+        factory.Overrides = services => services.Replace(ServiceDescriptor.Singleton<IRemoteControlTask>(new ScheduledTaskRemoteControl(
+            "claude-remote-control",
+            script.Run,
+            _ => Task.FromResult(Result<IReadOnlyList<ProcessEntry>, string>.Success([new ProcessEntry(4, 0, "svchost.exe", null)])),
+            new ScheduledTaskRemoteControlTests.Killer().Kill,
+            TimeProvider.System,
+            TimeSpan.FromSeconds(5),
+            TimeSpan.FromMilliseconds(1))));
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+        body["now"]!.GetValue<string>().ShouldBe("b@example.com");
+        string warning = body["remoteControlWarning"]!.GetValue<string>();
+        warning.ShouldContain("running but its processes could not be identified");
+        warning.ShouldContain("Start-ScheduledTask claude-remote-control");
+        script.Calls.ShouldNotContain(static call => call.StartsWith("/End", StringComparison.Ordinal) || call.StartsWith("/Run", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task RemoteControlIsNotRestartedWhenTheCliReportsNoAccount()
     {
         using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
