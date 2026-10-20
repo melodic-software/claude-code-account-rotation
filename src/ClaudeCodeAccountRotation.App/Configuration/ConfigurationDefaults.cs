@@ -12,6 +12,7 @@ internal static class ConfigurationDefaults
 {
     public const int DefaultListenPort = 48211;
     public const string ProductToken = "claude-code-account-rotation";
+    public const string RemoteControlTask = "claude-remote-control";
 
     private const string TeeDirectoryName = "rate-limit-guard";
     private const string TeeFileName = "rate-limits.json";
@@ -54,6 +55,7 @@ internal static class ConfigurationDefaults
             ProductToken,
             // No override until the operator writes one: the launcher looks in the
             // platform's known install locations first.
-            System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty);
+            System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty,
+            RemoteControlTask: RemoteControlTask);
     }
 }

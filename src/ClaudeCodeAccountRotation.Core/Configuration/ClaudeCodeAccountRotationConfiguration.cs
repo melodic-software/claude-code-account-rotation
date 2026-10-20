@@ -24,6 +24,11 @@ namespace ClaudeCodeAccountRotation.Core.Configuration;
 /// no side appears on the page and the Windows side behaves exactly as it did
 /// before the coordinator existed.
 /// </para>
+/// <para>
+/// <paramref name="RemoteControlTask"/> is <c>remoteControlTask</c>: the
+/// Windows scheduled task a switch clicked on this side restarts once the
+/// switch verifies, or null for none.
+/// </para>
 /// </summary>
 public sealed record ClaudeCodeAccountRotationConfiguration(
     string LiveConfigDirectory,
@@ -39,4 +44,5 @@ public sealed record ClaudeCodeAccountRotationConfiguration(
     bool SharedStore = false,
     RotationRole Role = RotationRole.Leader,
     string? Mailbox = null,
-    IReadOnlyList<PeerConfiguration>? Peers = null);
+    IReadOnlyList<PeerConfiguration>? Peers = null,
+    string? RemoteControlTask = null);

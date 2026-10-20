@@ -107,6 +107,9 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
 
     public BrowserRecorder Browser { get; } = new();
 
+    /// <summary>The Remote Control task, doubled so no test reads or restarts this machine's own.</summary>
+    public FakeRemoteControlTask RemoteControl { get; } = new();
+
     /// <summary>The scripted <c>claude setup-token</c> every CI token test drives.</summary>
     public SetupTokenScript SetupToken { get; } = new();
 
@@ -234,6 +237,7 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
             // Both ports, or a removal would resolve the real CLI on this machine.
             services.Replace(ServiceDescriptor.Singleton<IClaudeCliLogout>(Cli));
             services.Replace(ServiceDescriptor.Singleton<IBrowserLauncher>(Browser));
+            services.Replace(ServiceDescriptor.Singleton<IRemoteControlTask>(RemoteControl));
             services.Replace(ServiceDescriptor.Singleton<IBrowserProfileReader>(BrowserProfiles));
             // The real runner over a scripted child: the URL parsing, the retry, the
             // expiry, and the profile rewrite are the code under test, not doubles.
@@ -285,6 +289,29 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
             _requested.Enqueue(delay);
             DuringWait?.Invoke();
             return cancellationToken.IsCancellationRequested ? Task.FromCanceled(cancellationToken) : Task.CompletedTask;
+        }
+    }
+
+    /// <summary>A Remote Control task a test says is running or not, and whose restarts it counts.</summary>
+    internal sealed class FakeRemoteControlTask : IRemoteControlTask
+    {
+        public string? Name => "claude-remote-control";
+
+        public bool Running { get; set; }
+
+        /// <summary>When set, every restart fails with this reason.</summary>
+        public string? RestartError { get; set; }
+
+        public int Restarts { get; private set; }
+
+        public Task<bool> IsRunningAsync(CancellationToken cancellationToken) => Task.FromResult(Running);
+
+        public Task<Result<Unit, string>> RestartAsync(CancellationToken cancellationToken)
+        {
+            Restarts++;
+            return Task.FromResult(RestartError is string error
+                ? Result<Unit, string>.Failure(error)
+                : Result<Unit, string>.Success(Unit.Value));
         }
     }
 

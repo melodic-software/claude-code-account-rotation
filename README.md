@@ -309,6 +309,28 @@ takes. It answers 202 when a read started, or 409 with one of these `refusal` va
 the last minute, or the usage endpoint's lockout is still running), or `RefreshInProgress` (a
 refresh is already running).
 
+## Remote Control after a switch
+
+A Remote Control session belongs to the account signed in when it started, and Claude Code stops
+it once that account changes; nothing restarts it
+([docs](https://code.claude.com/docs/en/errors#remote-control-stopped-because-the-signed-in-account-changed)).
+So when you click Switch for the Windows side and the scheduled task named by `remoteControlTask`
+(default `claude-remote-control`) is running, the dashboard first asks:
+"Switch to X? Remote Control restarts under X; live Remote Control sessions on this machine drop
+and reopen in X's Claude app." After the switch, and once `claude auth status` reports the new
+account, the tool ends the task, waits up to 15 seconds for it to stop, and runs it again.
+
+- A task that was not running is left alone, and the switch asks nothing.
+- A switch of the WSL side, and any switch on Linux, restarts nothing.
+- A restart that fails never fails the switch. The result says why and gives the commands to run
+  by hand: `Stop-ScheduledTask claude-remote-control`, then `Start-ScheduledTask claude-remote-control`.
+- Set `remoteControlTask` to `null` or `""` in `config.json` to turn this off. A file without the
+  key uses the default.
+
+The tool runs as you, at your normal (Limited) level, and that level can only read the task
+until provisioning grants your account run and stop rights on it. Until then every restart ends
+in the warning above.
+
 ## Reading the dashboard from scripts
 
 `GET /api/dashboard`, sent with `Authorization: Bearer` and the token on the second line of

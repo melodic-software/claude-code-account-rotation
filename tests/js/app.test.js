@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const { takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, promptWording, uniqueName, renameLabel, nearestLimit, tier, asOf, usageAge, sentence, ciTokenBadge, ciSecretBody } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+const { takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, promptWording, uniqueName, renameLabel, nearestLimit, tier, asOf, usageAge, sentence, ciTokenBadge, ciSecretBody, remoteControlQuestion, switchedToast } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
 
 function limit(kind, percent, fields) {
   return Object.assign({ kind, percent, known: true, windowReset: false }, fields);
@@ -365,4 +365,23 @@ test("ciTokenBadge keeps a hand-set marker readable and is null with no marker",
   assert.strictEqual(ciTokenBadge({ ciTokenGeneratedOn: "2026-09-01" }, Date.parse("2026-10-01T00:00:00Z")).text, "CI token · 2026-09-01");
   assert.strictEqual(ciTokenBadge({ ciTokenGeneratedOn: null }, Date.parse("2026-10-01T00:00:00Z")), null);
   assert.strictEqual(ciTokenBadge(null, Date.parse("2026-10-01T00:00:00Z")), null);
+});
+
+test("Switch asks first only while the Remote Control task is running", () => {
+  assert.strictEqual(
+    remoteControlQuestion({ task: "claude-remote-control", running: true }, "Work"),
+    "Switch to Work? Remote Control restarts under Work; live Remote Control sessions on this machine drop and reopen in Work's Claude app.");
+  assert.strictEqual(remoteControlQuestion({ task: "claude-remote-control", running: false }, "Work"), null);
+  assert.strictEqual(remoteControlQuestion({ task: null, running: false }, "Work"), null);
+  assert.strictEqual(remoteControlQuestion(null, "Work"), null);
+});
+
+test("the switch toast says Remote Control restarted, and a restart that failed warns with its commands", () => {
+  assert.deepStrictEqual(
+    switchedToast({ now: "b@example.com", parkedAs: "a@example.com", remoteControlRestarted: true }),
+    { text: "Switched to b@example.com; parked a@example.com. Remote Control restarted.", kind: "ok" });
+  const warned = switchedToast({ now: "b@example.com", remoteControlWarning: "Remote Control was not restarted: denied; restart it by hand: Stop-ScheduledTask claude-remote-control; Start-ScheduledTask claude-remote-control" });
+  assert.strictEqual(warned.kind, "warn");
+  assert.match(warned.text, /Start-ScheduledTask claude-remote-control/);
+  assert.deepStrictEqual(switchedToast({ now: "b@example.com" }), { text: "Switched to b@example.com", kind: "ok" });
 });

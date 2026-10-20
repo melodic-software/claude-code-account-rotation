@@ -261,13 +261,24 @@ internal static class UsageBuckets
         new(rawKind, kind, Group: null, Percent: 0, Severity: null, ResetsAt: null, ScopeDisplayName: null, IsActive: false);
 }
 
+/// <summary>
+/// A completed switch. <c>RemoteControlRestarted</c> is true when the switch
+/// restarted the Remote Control task under the incoming account;
+/// <c>RemoteControlWarning</c> says why a task that was running was not
+/// restarted, with the commands that restart it by hand.
+/// </summary>
 internal sealed record SwitchOutcomeView(
     string Now,
     string? ParkedAs,
     string? CliEmail,
     string? CliError,
     bool IdentityMismatchWarning,
-    DateTimeOffset At);
+    DateTimeOffset At,
+    bool RemoteControlRestarted = false,
+    string? RemoteControlWarning = null);
+
+/// <summary>The Remote Control task the page asks about before a switch: its name, or null when none is configured, and whether it is running.</summary>
+internal sealed record RemoteControlView(string? Task, bool Running);
 
 /// <summary>
 /// A refused switch as the page reads it: the enum name, which is the stable

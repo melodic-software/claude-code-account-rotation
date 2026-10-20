@@ -100,6 +100,9 @@ public sealed class SideEndpointTests
         await CredentialFiles.WriteAsync(leader.LiveDirectory, "refresh-w", Token);
         await leader.WriteStateFileAsync("w@example.com", Token);
         await leader.ParkedProfileAsync(Incoming, "refresh-b", Token);
+        // Running, so the assertion below is that a WSL hand-off leaves it alone:
+        // the Windows account, which Remote Control runs under, did not change.
+        leader.RemoteControl.Running = true;
         using HttpClient client = leader.CreateMutatingClient();
 
         using HttpResponseMessage response = await client.PostAsync(SwitchUri(Incoming), content: null, Token);
@@ -108,6 +111,7 @@ public sealed class SideEndpointTests
         JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(Token))!;
         body["now"]!.GetValue<string>().ShouldBe(Incoming);
         body["parkedAs"]!.GetValue<string>().ShouldBe(Outgoing);
+        leader.RemoteControl.Restarts.ShouldBe(0);
 
         // The WSL side: the claimed pair is its live pair, its state file names
         // the account that came with it, and the staging copy the swap went

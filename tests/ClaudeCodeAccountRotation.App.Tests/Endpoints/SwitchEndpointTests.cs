@@ -48,6 +48,88 @@ public sealed class SwitchEndpointTests
     }
 
     [Fact]
+    public async Task ASwitchRestartsARunningRemoteControlTask()
+    {
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        factory.RemoteControl.Running = true;
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+        body["remoteControlRestarted"]!.GetValue<bool>().ShouldBeTrue();
+        body["remoteControlWarning"].ShouldBeNull();
+        factory.RemoteControl.Restarts.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task ASwitchLeavesARemoteControlTaskThatWasNotRunningAlone()
+    {
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+        body["remoteControlRestarted"]!.GetValue<bool>().ShouldBeFalse();
+        body["remoteControlWarning"].ShouldBeNull();
+        factory.RemoteControl.Restarts.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task ARestartThatFailsIsAWarningWithTheManualCommandsAndTheSwitchStands()
+    {
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        factory.RemoteControl.Running = true;
+        factory.RemoteControl.RestartError = "schtasks /End exited with code 1: ERROR: Access is denied.";
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+        body["now"]!.GetValue<string>().ShouldBe("b@example.com");
+        body["remoteControlRestarted"]!.GetValue<bool>().ShouldBeFalse();
+        string warning = body["remoteControlWarning"]!.GetValue<string>();
+        warning.ShouldContain("Access is denied");
+        warning.ShouldContain("Stop-ScheduledTask claude-remote-control");
+        warning.ShouldContain("Start-ScheduledTask claude-remote-control");
+        (await CredentialFiles.FingerprintAsync(factory.LiveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
+    }
+
+    [Fact]
+    public async Task RemoteControlIsNotRestartedWhenTheCliReportsAnotherAccount()
+    {
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        factory.RemoteControl.Running = true;
+        factory.Cli.Email = "a@example.com";
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+        body["identityMismatchWarning"]!.GetValue<bool>().ShouldBeTrue();
+        body["remoteControlWarning"]!.GetValue<string>().ShouldContain("Start-ScheduledTask claude-remote-control");
+        factory.RemoteControl.Restarts.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task TheRemoteControlRouteReportsWhetherTheTaskIsRunning()
+    {
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        factory.RemoteControl.Running = true;
+        using HttpClient client = factory.CreateClient();
+
+        JsonObject view = (await client.GetFromJsonAsync<JsonObject>(new Uri("/api/remote-control", UriKind.Relative), TestContext.Current.CancellationToken))!;
+
+        view["task"]!.GetValue<string>().ShouldBe("claude-remote-control");
+        view["running"]!.GetValue<bool>().ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task TheDashboardShowsTheLiveAccountAndEveryParkedProfile()
     {
         using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
