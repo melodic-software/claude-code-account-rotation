@@ -468,3 +468,16 @@ test("outside the 30-day window no expiry entry is shown", () => {
   assert.strictEqual(ciTokenExpiries(roster, Date.parse("2026-12-02T00:00:00Z")).length, 1);
   assert.deepStrictEqual(ciTokenExpiries(roster, Date.parse("2026-12-01T00:00:00Z")), []);
 });
+
+test("after the date the sentence reads in the past", () => {
+  const roster = { ciRoles: [expiryRole("A", "2026-01-01", "2026-01-01"), expiryRole("LEGACY", "2026-01-01", null)] };
+  const [late] = ciTokenExpiries(roster, Date.parse("2027-01-02T00:00:00Z"));
+  assert.strictEqual(ciExpirySentence(late), "The token expired on 2027-01-01; these roles now run on their API key only: A; these roles stopped: LEGACY");
+});
+
+test("expiry lines name a repository's role with its repository, as the badge does", () => {
+  const one = Object.assign(expiryRole("tools", "2026-01-01", "2026-01-01", true), { repository: "octo/one" });
+  const two = Object.assign(expiryRole("tools", "2026-01-01", "2026-01-01", true), { repository: "octo/two" });
+  const [got] = ciTokenExpiries({ ciRoles: [one, two] }, Date.parse("2026-12-20T00:00:00Z"));
+  assert.deepStrictEqual(got.fallback, ["tools (one)", "tools (two)"]);
+});
