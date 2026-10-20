@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-20
+
 ### Added
 
 - **Generate CI token.** A card's ··· menu has "Generate CI token". It runs `claude setup-token`
