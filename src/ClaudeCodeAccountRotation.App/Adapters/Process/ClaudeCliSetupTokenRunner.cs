@@ -460,7 +460,7 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
                     ? roster.With(entry.ClaimingToken(CiRole.FromTokenSecret(request.Secret), today, setAt))
                     : roster,
                 CancellationToken.None,
-                via: "assign");
+                via: LaneVia.Assign);
         }
 #pragma warning disable CA1031 // Do not catch general exception types
         catch (Exception)

@@ -48,6 +48,24 @@ internal sealed record LaneHistoryEntry(
     }
 }
 
+/// <summary>The routes a role half can change by; a line naming any other is skipped on read.</summary>
+internal static class LaneVia
+{
+    /// <summary>Generate CI token recorded a token half.</summary>
+    public const string Assign = "assign";
+
+    /// <summary>For the push action; nothing writes it yet.</summary>
+    public const string Push = "push";
+
+    /// <summary>An edit of the roster entry.</summary>
+    public const string Edit = "edit";
+
+    /// <summary>The account left the roster.</summary>
+    public const string Delete = "delete";
+
+    public static bool IsKnown(string? via) => via is Assign or Push or Edit or Delete;
+}
+
 /// <summary>
 /// <c>lane-history.jsonl</c> under app data: an append-only record of which
 /// account backed which half of which role, and when. One JSON object per line.
@@ -75,7 +93,7 @@ internal sealed class LaneHistoryFile
     {
         ArgumentNullException.ThrowIfNull(before);
         ArgumentNullException.ThrowIfNull(after);
-        ArgumentException.ThrowIfNullOrWhiteSpace(via);
+        ArgumentOutOfRangeException.ThrowIfEqual(LaneVia.IsKnown(via), false);
         List<LaneHistoryEntry> changes = [];
         foreach (CiRole role in Roles(after).Concat(Roles(before)).Distinct())
         {
@@ -189,7 +207,7 @@ internal sealed class LaneHistoryFile
             string? half = Text(entry, "half");
             string? via = Text(entry, "via");
             if (half is not (LaneHistoryEntry.TokenHalf or LaneHistoryEntry.KeyHalf)
-                || via is null
+                || !LaneVia.IsKnown(via)
                 || !DateTimeOffset.TryParse(Text(entry, "at"), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTimeOffset at))
             {
                 return null;
@@ -198,7 +216,7 @@ internal sealed class LaneHistoryFile
             Result<CiRole, string> parsed = CiRole.Parse(Text(role, "prefix") ?? string.Empty, Text(role, "tokenSecret"), Text(role, "repository"), Text(role, "organization"));
             return parsed.IsFailure
                 ? null
-                : new LaneHistoryEntry(at, parsed.Value, half, Text(entry, "account"), Text(entry, "previous"), via);
+                : new LaneHistoryEntry(at, parsed.Value, half, Text(entry, "account"), Text(entry, "previous"), via!);
         }
         catch (JsonException)
         {

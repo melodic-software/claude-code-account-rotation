@@ -194,6 +194,19 @@ public sealed class LaneHistoryFileTests : IDisposable
     }
 
     [Fact]
+    public async Task ALineWithAnUnknownRouteIsSkipped()
+    {
+        using RosterFile file = new(_appData, _clock);
+        await file.UpdateAsync(roster => roster.With(Holding("a@example.com", _tokenOnly)), TestContext.Current.CancellationToken, via: LaneVia.Assign);
+        string good = (await LinesAsync())[0];
+        await File.AppendAllTextAsync(HistoryPath, good.Replace("\"assign\"", "\"teleport\"", StringComparison.Ordinal) + "\n", TestContext.Current.CancellationToken);
+
+        IReadOnlyList<LaneHistoryEntry> entries = await file.History.ReadAsync(since: null, TestContext.Current.CancellationToken);
+
+        entries.Single().Via.ShouldBe("assign");
+    }
+
+    [Fact]
     public async Task AMissingFileReadsAsEmpty()
     {
         using RosterFile file = new(_appData, _clock);

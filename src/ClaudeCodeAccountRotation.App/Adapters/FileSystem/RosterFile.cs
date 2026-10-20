@@ -60,7 +60,7 @@ internal sealed partial class RosterFile : IDisposable
     /// then appends to the lane history one line per role half whose account changed,
     /// tagged <paramref name="via"/>.
     /// </summary>
-    public async Task<Roster> UpdateAsync(Func<Roster, Roster> change, CancellationToken cancellationToken, string via = "edit")
+    public async Task<Roster> UpdateAsync(Func<Roster, Roster> change, CancellationToken cancellationToken, string via = LaneVia.Edit)
     {
         ArgumentNullException.ThrowIfNull(change);
         await _gate.WaitAsync(cancellationToken);

@@ -226,7 +226,7 @@ internal static partial class RosterEndpoints
                 updated = updated.ClaimingToken(CiRole.FromTokenSecret(secret), setOn, setAt: null);
             }
 
-            await rosterFile.UpdateAsync(roster => roster.With(updated), cancellationToken, via: "edit");
+            await rosterFile.UpdateAsync(roster => roster.With(updated), cancellationToken, via: LaneVia.Edit);
             return Results.Ok(DashboardAssembler.View(updated));
         });
 
@@ -383,7 +383,7 @@ internal static partial class RosterEndpoints
                     await profiles.DeleteFolderAsync(folder, committed);
                 }
 
-                await rosterFile.UpdateAsync(roster => roster.Without(target), committed, via: "delete");
+                await rosterFile.UpdateAsync(roster => roster.Without(target), committed, via: LaneVia.Delete);
                 return Results.Ok(new RemovalView(
                     target.Value,
                     revoked,
