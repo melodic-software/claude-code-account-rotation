@@ -213,6 +213,7 @@ internal static partial class RosterEndpoints
         mutations.MapDelete("/accounts/{email}", static async (
             string email,
             bool? logout,
+            bool? keepStoredKey,
             RosterFile rosterFile,
             ProfileFolderStore profiles,
             ClaudeStateFile stateFile,
@@ -364,29 +365,26 @@ internal static partial class RosterEndpoints
                     await profiles.DeleteFolderAsync(folder, committed);
                 }
 
-                // Both stored keys go with the account. One the store refuses to
-                // remove keeps the entry, so a retry (which finds no folder left
-                // to revoke or delete) comes back here rather than orphaning it.
-                foreach (SecretKind kind in Enum.GetValues<SecretKind>())
+                // Both stored keys go with the account. A recorded key the store
+                // cannot delete keeps the entry and its record, so a retry (which
+                // finds no folder left to revoke or delete) comes back here, unless
+                // the operator says to leave the key: then the response names it.
+                RosterEntry entry = (await rosterFile.ReadAsync(committed)).Find(target) ?? new RosterEntry(target);
+                StoredKeyRemoval keys = await ApiKeyEndpoints.DeleteStoredKeysAsync(
+                    secrets, entry, Enum.GetValues<SecretKind>(), keepStoredKey ?? false, logger, committed);
+                if (keys.Refusal is string keyRefusal)
                 {
-                    Result<Unit, string> keyDeleted = await secrets.DeleteAsync(kind, target, committed);
-                    if (keyDeleted.IsFailure)
-                    {
-                        LogStoredKeyKept(logger, target.Value);
-                        return Refused(
-                            "StoredKeyKept",
-                            "The OS store would not delete a key stored for that account, so it stays on the roster: " + keyDeleted.Error
-                            + " Fix that and remove the account again.");
-                    }
+                    return Refused("StoredKeyKept", "The account's login and folder were handled, but it stays on the roster. " + keyRefusal);
                 }
 
                 await rosterFile.UpdateAsync(roster => roster.Without(target), committed);
+                string? folderWarning = hasPair && !revoked
+                    ? "The folder was deleted without a logout; that refresh token stays valid until its login expires."
+                    : null;
                 return Results.Ok(new RemovalView(
                     target.Value,
                     revoked,
-                    hasPair && !revoked
-                        ? "The folder was deleted without a logout; that refresh token stays valid until its login expires."
-                        : null));
+                    folderWarning is null || keys.Warning is null ? folderWarning ?? keys.Warning : folderWarning + " " + keys.Warning));
             }
             finally
             {
@@ -705,11 +703,7 @@ internal static partial class RosterEndpoints
     private static partial void LogLogoutRevoked(ILogger logger, string account);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "logout for {Account} failed")]
-    private static partial void LogLogoutFailed(ILogger logger, string account);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "stored key for {Account} not deleted")]
-    private static partial void LogStoredKeyKept(ILogger logger, string account);
-}
+    private static partial void LogLogoutFailed(ILogger logger, string account);}
 
 /// <summary>What a removal did, including whether the refresh token was revoked.</summary>
 internal sealed record RemovalView(string Removed, bool LoggedOut, string? Warning);

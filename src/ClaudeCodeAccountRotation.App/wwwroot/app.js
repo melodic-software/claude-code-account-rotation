@@ -784,6 +784,11 @@
           showToast(forced.ok ? email + " removed. " + forced.body.warning : refused(forced.body), forced.ok ? "warn" : "error");
         });
       }
+      if (result.body.refusal === "StoredKeyKept" && window.confirm(result.body.message + "\n\nRemove the account anyway and leave the key in the OS store?")) {
+        return send(accountPath(email) + "?keepStoredKey=true", "DELETE", null).then(function (forced) {
+          showToast(forced.ok ? email + " removed. " + forced.body.warning : refused(forced.body), forced.ok ? "warn" : "error");
+        });
+      }
       showToast(refused(result.body), "error");
       return null;
     });
@@ -1024,7 +1029,15 @@
       return Promise.resolve();
     }
     return mutate(accountPath(email, "/api-key"), "DELETE", null, function (result) {
+      // The store could not delete it. Leaving it there is the operator's
+      // call, and the response then names the key and how to remove it by hand.
+      if (!result.ok && result.body.refusal === "StoredKeyKept" && window.confirm(result.body.message + "\n\nForget it here and leave it in the OS store?")) {
+        return send(accountPath(email, "/api-key") + "?keepStoredKey=true", "DELETE", null).then(function (forced) {
+          showToast(forced.ok ? forced.body.warning : refused(forced.body), forced.ok ? "warn" : "error");
+        });
+      }
       showToast(result.ok ? "API key deleted for " + email : refused(result.body), result.ok ? "ok" : "error");
+      return null;
     });
   }
 

@@ -27,7 +27,9 @@ All notable changes to this project are documented in this file. The format foll
   `consoleApiKeySetOn` is the only trace on the page. No route returns the key, and the tool never
   logs it or writes it to a file of its own. With no usable store (no libsecret, no Secret Service provider, a
   locked collection, or libsecret's file backend) the PUT is refused with the cause. Removing an
-  account also deletes its stored keys (#259).
+  account also deletes its stored keys. When the roster records a key the store cannot delete,
+  both deletes answer 409 with the cause and keep the roster entry and its key record; `?keepStoredKey=true` goes ahead and
+  names the key left in the store and the command that removes it (#259).
 
 ### Changed
 

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -30,11 +31,12 @@ internal sealed class LibsecretStore(string libraryName, Func<string, string?> e
     public const string DefaultLibrary = "libsecret-1.so.0";
     public const string NotInstalled = "libsecret is not installed";
     public const string NoProvider = "no Secret Service provider";
+    public const string Locked = "the Secret Service collection is locked; unlock it and try again";
 
     private const string SchemaName = "com.melodic-software.ClaudeCodeAccountRotation";
     private const string ProbeKind = "probe";
 
-    private readonly Lazy<Result<Api, Refusal>> _api = new(() => Api.Load(libraryName), LazyThreadSafetyMode.ExecutionAndPublication);
+    private readonly Lazy<Result<Api, string>> _api = new(() => Api.Load(libraryName), LazyThreadSafetyMode.ExecutionAndPublication);
 
     public static LibsecretStore ForCurrentProcess() =>
         new(DefaultLibrary, Environment.GetEnvironmentVariable, Path.Exists, TimeSpan.FromSeconds(15));
@@ -42,83 +44,77 @@ internal sealed class LibsecretStore(string libraryName, Func<string, string?> e
     public async Task<Result<Unit, string>> ProbeAsync(CancellationToken cancellationToken)
     {
         string token = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
-        Result<Unit, Refusal> probed = await RunAsync(
+        return await RunAsync(
             (api, cancellable) =>
             {
-                Result<Unit, Refusal> stored = api.Store(ProbeKind, ProbeKind, SecretNames.Product + ":probe", token, cancellable);
+                Result<Unit, string> stored = api.Store(ProbeKind, ProbeKind, SecretNames.Product + ":probe", token, cancellable);
                 if (stored.IsFailure)
                 {
                     return stored;
                 }
 
-                Result<string?, Refusal> read = api.Lookup(ProbeKind, ProbeKind, cancellable);
-                Result<Unit, Refusal> cleared = api.Clear(ProbeKind, ProbeKind, cancellable);
-                return read.IsFailure ? Result<Unit, Refusal>.Failure(read.Error)
-                    : read.Value != token ? Result<Unit, Refusal>.Failure(new Refusal("the Secret Service did not return the item it was given", Unreachable: false))
-                    : cleared;
+                Result<string?, string> read = api.Lookup(ProbeKind, ProbeKind, cancellable);
+                Result<bool, string> cleared = api.Clear(ProbeKind, ProbeKind, cancellable);
+                return read.IsFailure ? Result<Unit, string>.Failure(read.Error)
+                    : read.Value != token ? Result<Unit, string>.Failure("the Secret Service did not return the item it was given")
+                    : cleared.IsFailure ? Result<Unit, string>.Failure(cleared.Error)
+                    : !cleared.Value ? Result<Unit, string>.Failure("the Secret Service did not remove the item it was given")
+                    : Result<Unit, string>.Success(Unit.Value);
             },
             cancellationToken);
-        return probed.IsSuccess ? Result<Unit, string>.Success(Unit.Value) : Result<Unit, string>.Failure(probed.Error.Cause);
     }
 
-    public async Task<Result<Unit, string>> WriteAsync(SecretKind kind, AccountEmail email, string value, CancellationToken cancellationToken)
+    public Task<Result<Unit, string>> WriteAsync(SecretKind kind, AccountEmail email, string value, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(value);
-        Result<Unit, Refusal> stored = await RunAsync(
+        return RunAsync(
             (api, cancellable) => api.Store(SecretNames.Kind(kind), email.Value, SecretNames.Target(kind, email), value, cancellable),
             cancellationToken);
-        return stored.IsSuccess ? Result<Unit, string>.Success(Unit.Value) : Result<Unit, string>.Failure(stored.Error.Cause);
     }
 
-    public async Task<Result<string?, string>> ReadAsync(SecretKind kind, AccountEmail email, CancellationToken cancellationToken)
-    {
-        Result<string?, Refusal> read = await RunAsync(
-            (api, cancellable) => api.Lookup(SecretNames.Kind(kind), email.Value, cancellable),
-            cancellationToken);
-        return read.IsSuccess ? Result<string?, string>.Success(read.Value) : Result<string?, string>.Failure(read.Error.Cause);
-    }
+    public Task<Result<string?, string>> ReadAsync(SecretKind kind, AccountEmail email, CancellationToken cancellationToken) =>
+        RunAsync((api, cancellable) => api.Lookup(SecretNames.Kind(kind), email.Value, cancellable), cancellationToken);
 
     public async Task<Result<Unit, string>> DeleteAsync(SecretKind kind, AccountEmail email, CancellationToken cancellationToken)
     {
-        Result<Unit, Refusal> cleared = await RunAsync(
+        // Removed or nothing matched are both success; any failure, including a
+        // store this process cannot reach, is reported: the key may still be there.
+        Result<bool, string> cleared = await RunAsync(
             (api, cancellable) => api.Clear(SecretNames.Kind(kind), email.Value, cancellable),
             cancellationToken);
-        // A store this process cannot reach holds nothing it wrote.
-        return cleared.IsSuccess || cleared.Error.Unreachable
-            ? Result<Unit, string>.Success(Unit.Value)
-            : Result<Unit, string>.Failure(cleared.Error.Cause);
+        return cleared.IsSuccess ? Result<Unit, string>.Success(Unit.Value) : Result<Unit, string>.Failure(cleared.Error);
     }
 
     /// <summary>
     /// Refuses what must not reach libsecret, then runs <paramref name="call"/>
     /// on its own thread with a cancellable the bound and the request both cancel.
     /// </summary>
-    private async Task<Result<T, Refusal>> RunAsync<T>(Func<Api, nint, Result<T, Refusal>> call, CancellationToken cancellationToken)
+    private async Task<Result<T, string>> RunAsync<T>(Func<Api, nint, Result<T, string>> call, CancellationToken cancellationToken)
     {
         if (FileBackend() is string fileBackend)
         {
-            return Result<T, Refusal>.Failure(new Refusal(fileBackend, Unreachable: true));
+            return Result<T, string>.Failure(fileBackend);
         }
 
-        Result<Api, Refusal> loaded = _api.Value;
+        Result<Api, string> loaded = _api.Value;
         if (loaded.IsFailure)
         {
-            return Result<T, Refusal>.Failure(loaded.Error);
+            return Result<T, string>.Failure(loaded.Error);
         }
 
         if (!HasSessionBus())
         {
-            return Result<T, Refusal>.Failure(new Refusal(NoProvider + " (this session has no D-Bus session bus)", Unreachable: true));
+            return Result<T, string>.Failure(NoProvider + " (this session has no D-Bus session bus)");
         }
 
         Api api = loaded.Value;
         nint cancellable = api.NewCancellable();
-        Task<Result<T, Refusal>> work = Task.Factory.StartNew(
+        Task<Result<T, string>> work = Task.Factory.StartNew(
             () => call(api, cancellable),
             CancellationToken.None,
             TaskCreationOptions.LongRunning,
             TaskScheduler.Default);
-        Result<T, Refusal> result;
+        Result<T, string> result;
         try
         {
             result = await work.WaitAsync(callBound, cancellationToken);
@@ -129,10 +125,9 @@ internal sealed class LibsecretStore(string libraryName, Func<string, string?> e
             // never touched after the call that holds it has freed it.
             api.Cancel(cancellable);
             _ = work.ContinueWith(_ => api.Unref(cancellable), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
-            return Result<T, Refusal>.Failure(new Refusal(
-                "the Secret Service did not answer within " + callBound.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                + " s; its collection may be locked and waiting for an unlock prompt",
-                Unreachable: false));
+            return Result<T, string>.Failure(
+                "the Secret Service did not answer within " + callBound.TotalSeconds.ToString(CultureInfo.InvariantCulture)
+                + " s, so the change may still complete; its collection may be locked and waiting for an unlock prompt");
         }
 
         api.Unref(cancellable);
@@ -160,8 +155,22 @@ internal sealed class LibsecretStore(string libraryName, Func<string, string?> e
         !string.IsNullOrEmpty(environment("DBUS_SESSION_BUS_ADDRESS"))
         || (environment("XDG_RUNTIME_DIR") is string runtime && runtime.Length > 0 && pathExists(Path.Combine(runtime, "bus")));
 
-    /// <summary>Why a call did not happen, and whether that is because there is no store to reach.</summary>
-    private sealed record Refusal(string Cause, bool Unreachable);
+    /// <summary>
+    /// Names a GError for the page. Only a failure to reach a provider on the
+    /// bus reads as "no Secret Service provider"; every other error, including
+    /// G_IO_ERROR_DBUS_ERROR, is the provider refusing.
+    /// </summary>
+    internal static string Describe(string domain, int code, string message) => domain switch
+    {
+        // gio/gioenums.h GDBusError: SERVICE_UNKNOWN = 2, NAME_HAS_NO_OWNER = 3, NO_SERVER = 11.
+        "g-dbus-error-quark" when code is 2 or 3 or 11 => NoProvider + " (" + message + ")",
+        // gio/gioenums.h GIOErrorEnum: NOT_FOUND = 1 (no bus socket), CONNECTION_REFUSED = 39.
+        "g-io-error-quark" when code is 1 or 39 => NoProvider + " (" + message + ")",
+        // libsecret/secret-util.c registers its domain as "secret-error";
+        // secret-types.h SECRET_ERROR_IS_LOCKED = 2.
+        "secret-error" when code == 2 => Locked,
+        _ => "the Secret Service refused (" + message + ")",
+    };
 
     private unsafe delegate T NativeCall<T>(nint schema, nint attributes, nint* error);
 
@@ -171,11 +180,6 @@ internal sealed class LibsecretStore(string libraryName, Func<string, string?> e
         private const string GLib = "libglib-2.0.so.0";
         private const string Gio = "libgio-2.0.so.0";
         private const string GObject = "libgobject-2.0.so.0";
-
-        // GDBusError: SERVICE_UNKNOWN, NAME_HAS_NO_OWNER, NO_SERVER.
-        private static readonly int[] _noProviderCodes = [2, 3, 11];
-        private const int SecretErrorIsLocked = 2;
-        private const int GioErrorCancelled = 19;
 
         private delegate* unmanaged<byte*, int, nint, nint> _schemaNew;
         private delegate* unmanaged<nint, void> _schemaUnref;
@@ -194,7 +198,7 @@ internal sealed class LibsecretStore(string libraryName, Func<string, string?> e
         private delegate* unmanaged<nint, void> _cancellableCancel;
         private delegate* unmanaged<nint, void> _objectUnref;
 
-        public static Result<Api, Refusal> Load(string libraryName)
+        public static Result<Api, string> Load(string libraryName)
         {
             try
             {
@@ -202,7 +206,7 @@ internal sealed class LibsecretStore(string libraryName, Func<string, string?> e
                 nint glib = NativeLibrary.Load(GLib);
                 nint gio = NativeLibrary.Load(Gio);
                 nint gobject = NativeLibrary.Load(GObject);
-                return Result<Api, Refusal>.Success(new Api
+                return Result<Api, string>.Success(new Api
                 {
                     _schemaNew = (delegate* unmanaged<byte*, int, nint, nint>)NativeLibrary.GetExport(secret, "secret_schema_newv"),
                     _schemaUnref = (delegate* unmanaged<nint, void>)NativeLibrary.GetExport(secret, "secret_schema_unref"),
@@ -224,11 +228,11 @@ internal sealed class LibsecretStore(string libraryName, Func<string, string?> e
             }
             catch (Exception exception) when (exception is DllNotFoundException or BadImageFormatException)
             {
-                return Result<Api, Refusal>.Failure(new Refusal(NotInstalled + " (" + libraryName + " could not be loaded)", Unreachable: true));
+                return Result<Api, string>.Failure(NotInstalled + " (" + libraryName + " could not be loaded)");
             }
             catch (EntryPointNotFoundException exception)
             {
-                return Result<Api, Refusal>.Failure(new Refusal(NotInstalled + " in a version this tool can use (" + exception.Message + ")", Unreachable: true));
+                return Result<Api, string>.Failure(NotInstalled + " in a version this tool can use (" + exception.Message + ")");
             }
         }
 
@@ -238,7 +242,7 @@ internal sealed class LibsecretStore(string libraryName, Func<string, string?> e
 
         public void Unref(nint cancellable) => _objectUnref(cancellable);
 
-        public Result<Unit, Refusal> Store(string kind, string email, string label, string password, nint cancellable)
+        public Result<Unit, string> Store(string kind, string email, string label, string password, nint cancellable)
         {
             int size = Encoding.UTF8.GetByteCount(password);
             byte* secret = (byte*)NativeMemory.AllocZeroed((nuint)size + 1);
@@ -246,12 +250,15 @@ internal sealed class LibsecretStore(string libraryName, Func<string, string?> e
             {
                 Encoding.UTF8.GetBytes(password, new Span<byte>(secret, size));
                 nint secretAddress = (nint)secret;
-                return With(kind, email, (schema, attributes, error) =>
+                Result<bool, string> stored = With(kind, email, (schema, attributes, error) =>
                 {
                     using Utf8 labelText = new(label);
-                    _store(schema, attributes, null, labelText.Pointer, (byte*)secretAddress, cancellable, error);
-                    return Unit.Value;
+                    return _store(schema, attributes, null, labelText.Pointer, (byte*)secretAddress, cancellable, error) != 0;
                 });
+                // FALSE with no GError is still a store that did not happen.
+                return stored.IsFailure ? Result<Unit, string>.Failure(stored.Error)
+                    : stored.Value ? Result<Unit, string>.Success(Unit.Value)
+                    : Result<Unit, string>.Failure("the Secret Service did not store the key and gave no reason");
             }
             finally
             {
@@ -260,7 +267,7 @@ internal sealed class LibsecretStore(string libraryName, Func<string, string?> e
             }
         }
 
-        public Result<string?, Refusal> Lookup(string kind, string email, nint cancellable) =>
+        public Result<string?, string> Lookup(string kind, string email, nint cancellable) =>
             With<string?>(kind, email, (schema, attributes, error) =>
             {
                 byte* found = _lookup(schema, attributes, cancellable, error);
@@ -279,19 +286,19 @@ internal sealed class LibsecretStore(string libraryName, Func<string, string?> e
                 }
             });
 
-        public Result<Unit, Refusal> Clear(string kind, string email, nint cancellable) =>
-            With(kind, email, (schema, attributes, error) =>
-            {
-                // False with no error is "nothing matched", which is what a delete wants.
-                _clear(schema, attributes, cancellable, error);
-                return Unit.Value;
-            });
+        /// <summary>
+        /// True when an item was removed. libsecret documents the return as
+        /// "whether any passwords were removed", so FALSE with no GError means
+        /// nothing matched.
+        /// </summary>
+        public Result<bool, string> Clear(string kind, string email, nint cancellable) =>
+            With(kind, email, (schema, attributes, error) => _clear(schema, attributes, cancellable, error) != 0);
 
         /// <summary>
         /// Builds the schema and the two attributes, runs <paramref name="call"/>,
         /// turns any GError it set into a refusal, and frees all of it.
         /// </summary>
-        private Result<T, Refusal> With<T>(string kind, string email, NativeCall<T> call)
+        private Result<T, string> With<T>(string kind, string email, NativeCall<T> call)
         {
             using Utf8 schemaName = new(SchemaName);
             using Utf8 kindName = new("kind");
@@ -313,12 +320,16 @@ internal sealed class LibsecretStore(string libraryName, Func<string, string?> e
                 T value = call(schema, attributes, &error);
                 if (error == 0)
                 {
-                    return Result<T, Refusal>.Success(value);
+                    return Result<T, string>.Success(value);
                 }
 
-                Refusal refusal = Classify(error);
+                // GError: GQuark domain, gint code, gchar *message.
+                string described = Describe(
+                    Marshal.PtrToStringUTF8((nint)_quarkToString(*(uint*)error)) ?? string.Empty,
+                    *(int*)(error + 4),
+                    Marshal.PtrToStringUTF8(*(nint*)(error + 8)) ?? string.Empty);
                 _errorFree(error);
-                return Result<T, Refusal>.Failure(refusal);
+                return Result<T, string>.Failure(described);
             }
             finally
             {
@@ -330,22 +341,6 @@ internal sealed class LibsecretStore(string libraryName, Func<string, string?> e
                 _hashTableUnref(attributes);
                 _hashTableUnref(types);
             }
-        }
-
-        // GError: GQuark domain, gint code, gchar *message.
-        private Refusal Classify(nint error)
-        {
-            uint domain = *(uint*)error;
-            int code = *(int*)(error + 4);
-            string message = Marshal.PtrToStringUTF8(*(nint*)(error + 8)) ?? string.Empty;
-            string domainName = Marshal.PtrToStringUTF8((nint)_quarkToString(domain)) ?? string.Empty;
-            return domainName switch
-            {
-                "g-dbus-error-quark" when _noProviderCodes.Contains(code) => new Refusal(NoProvider + " (" + message + ")", Unreachable: true),
-                "g-io-error-quark" when code != GioErrorCancelled => new Refusal(NoProvider + " (" + message + ")", Unreachable: true),
-                "secret-error-quark" when code == SecretErrorIsLocked => new Refusal("the Secret Service collection is locked; unlock it and try again", Unreachable: false),
-                _ => new Refusal("the Secret Service refused (" + message + ")", Unreachable: false),
-            };
         }
     }
 

@@ -82,6 +82,9 @@ internal static class AppComposition
         ArgumentNullException.ThrowIfNull(arguments);
         ArgumentNullException.ThrowIfNull(commandLine);
         ConfigureConsoleTimestamp(builder.Logging);
+        // The hosting diagnostics log every request's full URL, query string
+        // included, at Information, so a key pasted into a URL would land in a log.
+        builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
 
         ClaudeCodeAccountRotationConfiguration defaults = ConfigurationDefaults.ForCurrentUser();
         string configPath = arguments.ConfigPath

@@ -83,7 +83,7 @@ public sealed class SecretStoreTests
     }
 
     [Fact]
-    public async Task AMissingLibsecretIsNamedAsNotInstalledAndHasNothingToDelete()
+    public async Task AMissingLibsecretIsNamedAsNotInstalledEvenForADelete()
     {
         LibsecretStore store = Libsecret("libsecret-absent-" + Guid.NewGuid().ToString("N") + ".so.0");
 
@@ -93,8 +93,29 @@ public sealed class SecretStoreTests
 
         probe.Error.ShouldStartWith(LibraryMissing);
         write.Error.ShouldStartWith(LibraryMissing);
-        delete.IsSuccess.ShouldBeTrue();
+        delete.Error.ShouldStartWith(LibraryMissing);
     }
+
+    [Theory]
+    [InlineData("g-dbus-error-quark", 2)]
+    [InlineData("g-dbus-error-quark", 3)]
+    [InlineData("g-dbus-error-quark", 11)]
+    [InlineData("g-io-error-quark", 1)]
+    [InlineData("g-io-error-quark", 39)]
+    public void OnlyAFailureToReachAProviderReadsAsNoProvider(string domain, int code) =>
+        LibsecretStore.Describe(domain, code, "stand-in").ShouldBe(NoProvider + " (stand-in)");
+
+    [Theory]
+    [InlineData("g-io-error-quark", 36)]
+    [InlineData("g-io-error-quark", 19)]
+    [InlineData("g-dbus-error-quark", 9)]
+    [InlineData("secret-error", 3)]
+    public void AnyOtherErrorIsTheProviderRefusing(string domain, int code) =>
+        LibsecretStore.Describe(domain, code, "stand-in").ShouldBe("the Secret Service refused (stand-in)");
+
+    [Fact]
+    public void LibsecretsIsLockedErrorReadsAsALockedCollection() =>
+        LibsecretStore.Describe("secret-error", 2, "Cannot store: collection is locked").ShouldContain("locked");
 
     [Theory]
     [InlineData("file")]
@@ -133,12 +154,12 @@ public sealed class SecretStoreTests
     }
 
     [Fact]
-    public async Task AnUnsupportedPlatformRefusesAKeyWithItsReasonAndHasNothingToDelete()
+    public async Task AnUnsupportedPlatformRefusesEveryCallWithItsReason()
     {
         UnavailableSecretStore store = new("no store here");
 
         (await store.ProbeAsync(TestContext.Current.CancellationToken)).Error.ShouldBe("no store here");
         (await store.WriteAsync(SecretKind.ConsoleApiKey, Email("a@example.com"), "k", TestContext.Current.CancellationToken)).Error.ShouldBe("no store here");
-        (await store.DeleteAsync(SecretKind.AdminKey, Email("a@example.com"), TestContext.Current.CancellationToken)).IsSuccess.ShouldBeTrue();
+        (await store.DeleteAsync(SecretKind.AdminKey, Email("a@example.com"), TestContext.Current.CancellationToken)).Error.ShouldBe("no store here");
     }
 }

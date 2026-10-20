@@ -28,8 +28,9 @@ public interface ISecretStore
     Task<Result<string?, string>> ReadAsync(SecretKind kind, AccountEmail email, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Removes the key. Nothing stored is success, and so is a store that is
-    /// not there at all: nothing this tool wrote can be in it.
+    /// Removes the key. Nothing stored is success. A store that cannot be
+    /// reached is a failure, because the key may still be in it; the caller
+    /// decides, from what the roster records, whether that matters.
     /// </summary>
     Task<Result<Unit, string>> DeleteAsync(SecretKind kind, AccountEmail email, CancellationToken cancellationToken);
 }

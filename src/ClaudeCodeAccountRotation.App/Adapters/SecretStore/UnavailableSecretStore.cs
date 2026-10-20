@@ -5,8 +5,8 @@ using ClaudeCodeAccountRotation.Core.Ports;
 namespace ClaudeCodeAccountRotation.App.Adapters.SecretStore;
 
 /// <summary>
-/// The store on a platform with none this tool supports: every write is
-/// refused with the reason, and a delete has nothing to remove.
+/// The store on a platform with none this tool supports: every call is
+/// refused with the reason, a delete included, since it cannot show a key is gone.
 /// </summary>
 internal sealed class UnavailableSecretStore(string reason) : ISecretStore
 {
@@ -20,5 +20,5 @@ internal sealed class UnavailableSecretStore(string reason) : ISecretStore
         Task.FromResult(Result<string?, string>.Failure(reason));
 
     public Task<Result<Unit, string>> DeleteAsync(SecretKind kind, AccountEmail email, CancellationToken cancellationToken) =>
-        Task.FromResult(Result<Unit, string>.Success(Unit.Value));
+        Task.FromResult(Result<Unit, string>.Failure(reason));
 }

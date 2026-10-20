@@ -20,8 +20,16 @@ Status: a tagged release exists.
 - CI tokens never leave memory. An account's Console API key is the exception: you paste it once
   per machine, and it is kept only in the OS store (Windows Credential Manager, persisted for this
   computer only, or the Secret Service through libsecret on Linux). The tool never writes it to a
-  file of its own, a log or a page, and never copies it to another machine. With no usable store,
-  setting a key is refused with the cause. Removing the account deletes its stored keys.
+  file of its own, a log or a page, and never copies it to another machine. The key belongs to your
+  user on this machine, so setting or removing it needs your interactive sign-in: an SSH or service
+  session has no credential store (Windows error 1312). With no usable store, setting a key is
+  refused with the cause. A store that does not answer within 15 s is reported as a failure, but
+  the write or delete may still complete.
+- Removing an account, or its key, deletes the stored key. If the roster records a key and the
+  store cannot be reached or refuses, the removal is refused with the cause and the account stays
+  on the roster with its key record (a removed account's login and folder are already handled);
+  `?keepStoredKey=true` goes ahead and names the key left behind and the command that removes it
+  (`cmdkey /delete:<target>` on Windows, `secret-tool clear` on Linux).
 - The tool identifies itself honestly on every request it makes.
 - Every switch is a human click; nothing rotates on its own.
 - The tool never calls the model API.

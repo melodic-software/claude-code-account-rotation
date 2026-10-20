@@ -90,8 +90,9 @@ internal sealed partial class WindowsCredentialStore : ISecretStore
     public Task<Result<Unit, string>> DeleteAsync(SecretKind kind, AccountEmail email, CancellationToken cancellationToken)
     {
         int error = DeleteCredential(SecretNames.Target(kind, email));
-        // A session with no credential set holds nothing this tool could have written.
-        return Task.FromResult(error is 0 or ErrorNotFound or ErrorNoSuchLogonSession
+        // A session with no credential set (1312) cannot see the user's store,
+        // so the key may still be there: a failure, not "nothing stored".
+        return Task.FromResult(error is 0 or ErrorNotFound
             ? Result<Unit, string>.Success(Unit.Value)
             : Result<Unit, string>.Failure(Cause(error)));
     }

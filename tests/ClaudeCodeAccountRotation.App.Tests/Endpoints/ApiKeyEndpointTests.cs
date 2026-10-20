@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json.Nodes;
+using ClaudeCodeAccountRotation.App.Adapters.SecretStore;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Ports;
@@ -272,27 +273,140 @@ public sealed class ApiKeyEndpointTests
         store.Items.Count.ShouldBe(2);
     }
 
+    private const string Target = "claude-code-account-rotation:console-api-key:" + Parked;
+
+    private static async Task StoreKeyAsync(HttpClient client)
+    {
+        using HttpResponseMessage put = await client.PutAsJsonAsync(ApiKey(Parked), new { key = PlantedKey }, TestContext.Current.CancellationToken);
+        put.StatusCode.ShouldBe(HttpStatusCode.OK);
+    }
+
+    private static async Task<JsonObject> BodyAsync(HttpResponseMessage response) =>
+        (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+
     [Fact]
-    public async Task AKeyTheStoreWillNotDeleteKeepsTheAccountOnTheRosterUntilARetrySucceeds()
+    public async Task ARecordedKeyTheStoreCannotDeleteKeepsTheAccountAndItsRecordUntilARetrySucceeds()
     {
         (AppFactory factory, FakeSecretStore store) = await RosteredAsync(TestContext.Current.CancellationToken);
         await using AppFactory owned = factory;
-        store.Items[(SecretKind.ConsoleApiKey, Parked)] = "console";
-        store.DeleteError = "the Secret Service collection is locked; unlock it and try again";
         using HttpClient client = factory.CreateMutatingClient();
+        await StoreKeyAsync(client);
+        store.DeleteError = LibsecretStore.Locked;
 
         using HttpResponseMessage refused = await client.DeleteAsync(Account(Parked), TestContext.Current.CancellationToken);
-        JsonObject refusal = (await refused.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+        string message = (await BodyAsync(refused))["message"]!.GetValue<string>();
 
         refused.StatusCode.ShouldBe(HttpStatusCode.Conflict);
-        refusal["message"]!.GetValue<string>().ShouldContain("collection is locked");
-        (await RosterOfAsync(client, Parked)).ShouldNotBeNull();
+        message.ShouldContain(LibsecretStore.Locked);
+        message.ShouldContain(Target);
+        (await RosterOfAsync(client, Parked))!["consoleApiKeySetOn"].ShouldNotBeNull();
+        store.Items.ShouldContainKey((SecretKind.ConsoleApiKey, Parked));
 
         store.DeleteError = null;
         using HttpResponseMessage retried = await client.DeleteAsync(Account(Parked), TestContext.Current.CancellationToken);
 
         retried.StatusCode.ShouldBe(HttpStatusCode.OK);
         store.Items.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task KeepStoredKeyRemovesTheAccountAndNamesTheKeyLeftAndHowToRemoveIt()
+    {
+        (AppFactory factory, FakeSecretStore store) = await RosteredAsync(TestContext.Current.CancellationToken);
+        await using AppFactory owned = factory;
+        using HttpClient client = factory.CreateMutatingClient();
+        await StoreKeyAsync(client);
+        store.DeleteError = "no Secret Service provider (stand-in)";
+
+        using HttpResponseMessage response = await client.DeleteAsync(new Uri(Account(Parked) + "?keepStoredKey=true", UriKind.Relative), TestContext.Current.CancellationToken);
+        string warning = (await BodyAsync(response))["warning"]!.GetValue<string>();
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        warning.ShouldContain(Target);
+        warning.ShouldContain(OperatingSystem.IsWindows() ? "cmdkey /delete:" + Target : "secret-tool clear kind console-api-key email " + Parked);
+        factory.Logs.Lines.ShouldContain(line => line.Contains("stored key " + Target + " was left", StringComparison.Ordinal));
+        JsonObject dashboard = (await client.GetFromJsonAsync<JsonObject>(new Uri("/api/dashboard", UriKind.Relative), TestContext.Current.CancellationToken))!;
+        dashboard["accounts"]!.AsArray().ShouldNotContain(account => account!["email"]!.GetValue<string>() == Parked && account["roster"] != null);
+    }
+
+    [Fact]
+    public async Task WithNoKeyRecordedAStoreThatCannotBeReachedDoesNotHoldUpARemoval()
+    {
+        (AppFactory factory, FakeSecretStore store) = await RosteredAsync(TestContext.Current.CancellationToken);
+        await using AppFactory owned = factory;
+        store.DeleteError = "no Secret Service provider (stand-in)";
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.DeleteAsync(Account(Parked), TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        (await BodyAsync(response))["warning"].ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task DeletingARecordedKeyTheStoreCannotDeleteIsA409ThatKeepsTheRecord()
+    {
+        (AppFactory factory, FakeSecretStore store) = await RosteredAsync(TestContext.Current.CancellationToken);
+        await using AppFactory owned = factory;
+        using HttpClient client = factory.CreateMutatingClient();
+        await StoreKeyAsync(client);
+        store.DeleteError = "this Windows sign-in has no credential store (ERROR_NO_SUCH_LOGON_SESSION, 1312)";
+
+        using HttpResponseMessage response = await client.DeleteAsync(ApiKey(Parked), TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        (await BodyAsync(response))["message"]!.GetValue<string>().ShouldContain("1312");
+        (await RosterOfAsync(client, Parked))!["consoleApiKeySetOn"].ShouldNotBeNull();
+        store.Items.ShouldContainKey((SecretKind.ConsoleApiKey, Parked));
+    }
+
+    [Fact]
+    public async Task DeletingARecordedKeyWithKeepStoredKeyClearsTheRecordAndNamesTheKeyLeft()
+    {
+        (AppFactory factory, FakeSecretStore store) = await RosteredAsync(TestContext.Current.CancellationToken);
+        await using AppFactory owned = factory;
+        using HttpClient client = factory.CreateMutatingClient();
+        await StoreKeyAsync(client);
+        store.DeleteError = LibsecretStore.Locked;
+
+        using HttpResponseMessage response = await client.DeleteAsync(new Uri(ApiKey(Parked) + "?keepStoredKey=true", UriKind.Relative), TestContext.Current.CancellationToken);
+        JsonObject body = await BodyAsync(response);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        body["warning"]!.GetValue<string>().ShouldContain(Target);
+        body["roster"]!["consoleApiKeySetOn"].ShouldBeNull();
+        factory.Logs.Lines.ShouldContain(line => line.Contains("stored key " + Target + " was left", StringComparison.Ordinal));
+        factory.Logs.Lines.ShouldNotContain(line => line.Contains("console API key for " + Parked + " deleted", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task DeletingWhenNoKeyIsRecordedProceedsEvenIfTheStoreCannotBeReached()
+    {
+        (AppFactory factory, FakeSecretStore store) = await RosteredAsync(TestContext.Current.CancellationToken);
+        await using AppFactory owned = factory;
+        store.DeleteError = "no Secret Service provider (stand-in)";
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.DeleteAsync(ApiKey(Parked), TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        (await BodyAsync(response))["warning"].ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task AKeyInTheQueryStringNeverReachesALogLine()
+    {
+        (AppFactory factory, FakeSecretStore store) = await RosteredAsync(TestContext.Current.CancellationToken);
+        await using AppFactory owned = factory;
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PutAsJsonAsync(
+            new Uri(ApiKey(Parked) + "?key=" + PlantedKey, UriKind.Relative), new { key = "sk-ant-api03-body-key" }, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        store.Items[(SecretKind.ConsoleApiKey, Parked)].ShouldBe("sk-ant-api03-body-key");
+        factory.Logs.Lines.ShouldNotBeEmpty();
+        factory.Logs.Lines.ShouldNotContain(line => line.Contains(PlantedKey, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -334,7 +448,8 @@ public sealed class ApiKeyEndpointTests
 
         public Task<Result<Unit, string>> DeleteAsync(SecretKind kind, AccountEmail email, CancellationToken cancellationToken)
         {
-            if (DeleteError is string error && Items.ContainsKey((kind, email.Value)))
+            // A store that cannot be reached cannot tell whether the key is there.
+            if (DeleteError is string error)
             {
                 return Task.FromResult(Result<Unit, string>.Failure(error));
             }
