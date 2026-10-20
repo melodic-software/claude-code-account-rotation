@@ -17,6 +17,11 @@ Status: a tagged release exists.
   machine (a WSL distribution) crosses a volume, where a rename does not exist: there the pair is
   staged, verified by fingerprint, promoted and deleted under a journal, so at most one *reachable*
   copy exists at every instant. Nothing is ever copied to another machine.
+- CI tokens never leave memory. An account's Console API key is the exception: you paste it once
+  per machine, and it goes into the OS store (Windows Credential Manager, persisted for this computer only, or the
+  Secret Service through libsecret on Linux). It is never written to a file, a log, or a page, and
+  never copied to another machine. With no usable store, setting a key is refused with the cause.
+  Removing the account deletes its stored keys.
 - The tool identifies itself honestly on every request it makes.
 - Every switch is a human click; nothing rotates on its own.
 - The tool never calls the model API.
