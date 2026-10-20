@@ -1354,13 +1354,10 @@
     var groups = {};
     ((roster && roster.ciRoles) || []).forEach(function (role) {
       if (!role.tokenSetOn) { return; }
-      var made = Date.parse(role.tokenSetOn + "T00:00:00Z");
-      if (isNaN(made)) { return; }
-      var expires = new Date(made + 365 * 86400000);
-      var days = Math.floor((expires.getTime() - at) / 86400000);
-      if (days > 30) { return; }
-      var key = expires.toISOString().slice(0, 10);
-      var group = groups[key] || (groups[key] = { expiresOn: key, tone: days < 0 ? "crit" : "warn", fallback: [], stop: [] });
+      var life = tokenLife(role.tokenSetOn, at);
+      if (!life || life.days > 30) { return; }
+      var key = life.expires.toISOString().slice(0, 10);
+      var group = groups[key] || (groups[key] = { expiresOn: key, tone: life.days < 0 ? "crit" : "warn", fallback: [], stop: [] });
       var name = role.prefix ? role.name.toLowerCase() : role.name;
       (role.keySetOn ? group.fallback : group.stop).push(name);
     });
@@ -1380,11 +1377,20 @@
     return roster && (roster.ciTokenGeneratedOn || (roster.ciRoles || []).length) ? "CI" : null;
   }
 
-  function tokenExpiry(text, setOn, title, at) {
+  // A token's one year: the day it expires and the whole days left from `at`
+  // (negative once expired), or null for a date that does not parse.
+  function tokenLife(setOn, at) {
     var made = Date.parse(setOn + "T00:00:00Z");
     if (isNaN(made)) { return null; }
     var expires = new Date(made + 365 * 86400000);
-    var days = Math.floor((expires.getTime() - at) / 86400000);
+    return { expires: expires, days: Math.floor((expires.getTime() - at) / 86400000) };
+  }
+
+  function tokenExpiry(text, setOn, title, at) {
+    var life = tokenLife(setOn, at);
+    if (!life) { return null; }
+    var expires = life.expires;
+    var days = life.days;
     title += "Token generated " + setOn + "; expires about " + expires.toISOString().slice(0, 10) + ".";
     if (days < 0) { return { kind: "crit", text: text + " · expired", title: title }; }
     if (days <= 30) { return { kind: "warn", text: text + " · " + days + " d left", title: title }; }
