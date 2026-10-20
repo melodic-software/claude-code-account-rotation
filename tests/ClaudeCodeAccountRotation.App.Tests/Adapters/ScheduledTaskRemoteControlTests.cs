@@ -88,7 +88,22 @@ public sealed class ScheduledTaskRemoteControlTests
         (await RemoteControl(running).IsRunningAsync(Token)).Value.ShouldBeTrue();
         (await RemoteControl(ready).IsRunningAsync(Token)).Value.ShouldBeFalse();
         running.Calls.ShouldBe(["State"]);
-        running.LastStateScript.ShouldBe("$task = Get-ScheduledTask -TaskName 'claude-remote-control' -ErrorAction SilentlyContinue; if ($task) { [int]$task.State }");
+        running.LastStateScript.ShouldBe("$task = Get-ScheduledTask -TaskPath '\\' -TaskName 'claude-remote-control' -ErrorAction SilentlyContinue; foreach ($t in @($task)) { [int]$t.State }");
+    }
+
+    [Fact]
+    public void TheStateReadLooksOnlyInTheRootFolder()
+    {
+        ScheduledTaskRemoteControl.StateScript("claude-remote-control").ShouldContain("-TaskPath '\\' -TaskName 'claude-remote-control'");
+    }
+
+    [Fact]
+    public async Task MoreThanOneMatchingTaskIsAReadFailure()
+    {
+        Result<bool, string> state = await RemoteControl(new Script().Answer("/Query", 0, "4\r\n3\r\n")).IsRunningAsync(Token);
+
+        state.IsFailure.ShouldBeTrue();
+        state.Error.ShouldContain("more than one task");
     }
 
     [Fact]

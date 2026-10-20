@@ -440,6 +440,36 @@ public sealed class ConfigurationTests : IDisposable
         loaded.Error.ShouldContain(path);
     }
 
+    [Theory]
+    [InlineData("\\Folder\\claude-remote-control")]
+    [InlineData("Folder/claude-remote-control")]
+    [InlineData("claude-*")]
+    [InlineData("claude-remote-contro?")]
+    [InlineData("claude-[r]emote-control")]
+    [InlineData("claude-remote-control]")]
+    public void ARemoteControlTaskWithAPathOrWildcardIsRefused(string task)
+    {
+        ClaudeCodeAccountRotationConfiguration configuration = Defaults() with { RemoteControlTask = task };
+
+        Result<Unit, string> verdict = ConfigurationValidator.Validate(configuration, _home, static _ => "C:", static _ => null);
+
+        verdict.IsFailure.ShouldBeTrue();
+        verdict.Error.ShouldContain("remoteControlTask must be the name of a task in the Task Scheduler root folder");
+    }
+
+    [Theory]
+    [InlineData("claude-remote-control")]
+    [InlineData("my remote control")]
+    [InlineData(null)]
+    public void ARootFolderTaskNameOrNoTaskIsAccepted(string? task)
+    {
+        ClaudeCodeAccountRotationConfiguration configuration = Defaults() with { RemoteControlTask = task };
+
+        Result<Unit, string> verdict = ConfigurationValidator.Validate(configuration, _home, static _ => "C:", static _ => null);
+
+        (verdict.IsFailure ? verdict.Error : string.Empty).ShouldNotContain("remoteControlTask");
+    }
+
     [Fact]
     public void AProfilesRootOnAnotherVolumeIsRefusedNamingBothPaths()
     {

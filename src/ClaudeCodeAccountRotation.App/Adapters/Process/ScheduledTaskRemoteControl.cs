@@ -110,6 +110,13 @@ internal sealed partial class ScheduledTaskRemoteControl(
             return Result<bool, string>.Success(false);
         }
 
+        // One task in the root folder by its exact name prints one line; more
+        // than one is not the task /End and /Run will name.
+        if (state.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Length > 1)
+        {
+            return Result<bool, string>.Failure("Get-ScheduledTask matched more than one task: " + state.ReplaceLineEndings(", "));
+        }
+
         return int.TryParse(state, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int number)
             ? Result<bool, string>.Success(number == RunningState)
             : Result<bool, string>.Failure("Get-ScheduledTask printed an unexpected state: " + state);
@@ -120,8 +127,8 @@ internal sealed partial class ScheduledTaskRemoteControl(
 
     /// <summary>The state query, with the task name as a single-quoted PowerShell literal.</summary>
     internal static string StateScript(string taskName) =>
-        "$task = Get-ScheduledTask -TaskName '" + taskName.Replace("'", "''", StringComparison.Ordinal)
-        + "' -ErrorAction SilentlyContinue; if ($task) { [int]$task.State }";
+        "$task = Get-ScheduledTask -TaskPath '\\' -TaskName '" + taskName.Replace("'", "''", StringComparison.Ordinal)
+        + "' -ErrorAction SilentlyContinue; foreach ($t in @($task)) { [int]$t.State }";
 
     public async Task<Result<Unit, string>> RestartAsync(bool startIfStopped, CancellationToken cancellationToken)
     {

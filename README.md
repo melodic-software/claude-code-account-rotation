@@ -340,6 +340,8 @@ account, the tool restarts the task:
   identified is neither ended nor run. The result says why and what to run by
   hand: `Stop-ScheduledTask claude-remote-control`, end the `claude.exe` running `remote-control`
   that it leaves behind, then `Start-ScheduledTask claude-remote-control`.
+- `remoteControlTask` names a task in the Task Scheduler root folder; a path or a wildcard
+  (`\ / * ? [ ]`) is refused at startup.
 - Set `remoteControlTask` to `null` or `""` in `config.json` to turn this off. A file without the
   key uses the default.
 
