@@ -400,7 +400,7 @@ as a CI role: a prefix plus its organization or repository, whose token secret i
 `CLAUDE_CODE_OAUTH_TOKEN` is the `legacy (review lanes)` role, and any other name is a role with
 a token secret only. One account backs each role. A card shows one badge per role it backs, such
 as `automations · token+key` (hover it for the secret names and dates). A token badge warns in the
-last 30 days of the token's one year and says when it has expired. CI draws on that account's
+last 30 days of the token's one year and says when it has expired, and the card lists, per expiry date, which roles fall back to their API key only and which stop. CI draws on that account's
 5-hour and 7-day limits alongside your interactive sessions on it.
 
 Prerequisite: the GitHub CLI (`gh`) on PATH, signed in (`gh auth login`) as someone who may write
@@ -445,6 +445,14 @@ Naming a role takes it off the account that backed it before. A marker that name
 replaces the other markers that name none. Clearing the date clears every token half. On an
 account that backs a token half, the date is always that of its newest token half, whatever the
 request sends, so taking off the newest role lowers it and taking off the last one clears it.
+
+Every change of which account backs a role half is appended to `lane-history.jsonl` under the app
+data directory: one JSON line with the time, the role, `token` or `key`, the account and the
+previous account (or null), and the route (`assign`, `edit` or `delete`; `push` is reserved for the push action and nothing
+writes it yet). It holds names
+and dates only, never a secret value, and a line that does not parse is skipped.
+`GET /api/lane-history?since=<date or ISO time>` returns the entries, and the page's History
+disclosure reads the last 30 days when you open it.
 
 ## Build
 

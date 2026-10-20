@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const { takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, promptWording, uniqueName, renameLabel, nearestLimit, tier, asOf, usageAge, sentence, ciRoleBadges, keptCiRoles, ciTag, ciSecretBody, remoteControlQuestion, switchedToast } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+const { takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, promptWording, uniqueName, renameLabel, nearestLimit, tier, asOf, usageAge, sentence, ciRoleBadges, keptCiRoles, ciTag, ciSecretBody, remoteControlQuestion, switchedToast, historyLines, historyReadLines } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
 
 function limit(kind, percent, fields) {
   return Object.assign({ kind, percent, known: true, windowReset: false }, fields);
@@ -446,4 +446,74 @@ test("the API key badge shows only once the roster records a stored key, and nam
   const badge = apiKeyBadge({ consoleApiKeySetOn: "2026-10-20" });
   assert.strictEqual(badge.text, "API key");
   assert.match(badge.title, /2026-10-20/);
+});
+
+test("history lines run newest first and name the role half, both accounts and the route", () => {
+  const entries = [
+    { at: "2026-10-01T11:00:00.0000000Z", role: { prefix: "AUTOMATIONS", organization: "octo" }, half: "token", account: "b@example.com", previous: "a@example.com", via: "push" },
+    { at: "2026-10-02T09:30:00.0000000Z", role: { prefix: "", organization: "octo" }, half: "token", account: null, previous: "b@example.com", via: "delete" }
+  ];
+  assert.deepStrictEqual(historyLines(entries), [
+    "2026-10-02 09:30 \u00b7 legacy (review lanes) token: b@example.com \u2192 no account (delete)",
+    "2026-10-01 11:00 \u00b7 AUTOMATIONS token: a@example.com \u2192 b@example.com (push)"
+  ]);
+  assert.deepStrictEqual(historyLines(null), []);
+});
+
+test("a failed history read says so with the status, and only a successful empty read says there were no changes", () => {
+  assert.deepStrictEqual(historyReadLines({ ok: false, status: 500 }), ["Could not read the history (HTTP 500)"]);
+  assert.deepStrictEqual(historyReadLines({ ok: false }), ["Could not read the history"]);
+  assert.deepStrictEqual(historyReadLines({ ok: true, entries: [] }), ["No role changes in the last 30 days."]);
+  assert.strictEqual(historyReadLines({ ok: true, entries: [{ at: "2026-10-01T11:00:00Z", role: { prefix: "A" }, half: "key", account: "b@example.com", previous: null, via: "assign" }] }).length, 1);
+});
+
+const { ciTokenExpiries, ciExpirySentence } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+
+function expiryRole(name, tokenSetOn, keySetOn, prefix) {
+  return { name: name, prefix: prefix || false, tokenSetOn: tokenSetOn, keySetOn: keySetOn || null };
+}
+
+test("token halves set on two dates give two expiry entries, each with its roles", () => {
+  const roster = { ciRoles: [
+    expiryRole("A", "2026-01-01", "2026-01-01"),
+    expiryRole("B", "2026-01-01", "2026-01-01"),
+    expiryRole("C", "2026-01-10", "2026-01-10")
+  ] };
+  const got = ciTokenExpiries(roster, Date.parse("2026-12-20T00:00:00Z"));
+  assert.deepStrictEqual(got.map((g) => [g.expiresOn, g.fallback]), [["2027-01-01", ["A", "B"]], ["2027-01-10", ["C"]]]);
+});
+
+test("within 30 days the sentence warns, roles with no key stop, and after the date the tone is critical", () => {
+  const roster = { ciRoles: [expiryRole("A", "2026-01-01", "2026-01-01"), expiryRole("LEGACY", "2026-01-01", null)] };
+  const soon = ciTokenExpiries(roster, Date.parse("2026-12-20T00:00:00Z"));
+  assert.strictEqual(soon.length, 1);
+  assert.strictEqual(soon[0].tone, "warn");
+  assert.deepStrictEqual(soon[0].stop, ["LEGACY"]);
+  assert.strictEqual(ciExpirySentence(soon[0]), "When the token expires on 2027-01-01, these roles fall back to their API key only: A; these roles stop: LEGACY");
+  assert.strictEqual(ciTokenExpiries(roster, Date.parse("2027-01-02T00:00:00Z"))[0].tone, "crit");
+});
+
+test("key halves never produce an expiry entry", () => {
+  const roster = { ciRoles: [expiryRole("A", null, "2026-01-01")] };
+  assert.deepStrictEqual(ciTokenExpiries(roster, Date.parse("2027-06-01T00:00:00Z")), []);
+});
+
+test("outside the 30-day window no expiry entry is shown", () => {
+  const roster = { ciRoles: [expiryRole("A", "2026-01-01", "2026-01-01")] };
+  assert.deepStrictEqual(ciTokenExpiries(roster, Date.parse("2026-06-01T00:00:00Z")), []);
+  assert.strictEqual(ciTokenExpiries(roster, Date.parse("2026-12-02T00:00:00Z")).length, 1);
+  assert.deepStrictEqual(ciTokenExpiries(roster, Date.parse("2026-12-01T00:00:00Z")), []);
+});
+
+test("after the date the sentence reads in the past", () => {
+  const roster = { ciRoles: [expiryRole("A", "2026-01-01", "2026-01-01"), expiryRole("LEGACY", "2026-01-01", null)] };
+  const [late] = ciTokenExpiries(roster, Date.parse("2027-01-02T00:00:00Z"));
+  assert.strictEqual(ciExpirySentence(late), "The token expired on 2027-01-01; these roles now run on their API key only: A; these roles stopped: LEGACY");
+});
+
+test("expiry lines name a repository's role with its repository, as the badge does", () => {
+  const one = Object.assign(expiryRole("tools", "2026-01-01", "2026-01-01", true), { repository: "octo/one" });
+  const two = Object.assign(expiryRole("tools", "2026-01-01", "2026-01-01", true), { repository: "octo/two" });
+  const [got] = ciTokenExpiries({ ciRoles: [one, two] }, Date.parse("2026-12-20T00:00:00Z"));
+  assert.deepStrictEqual(got.fallback, ["tools (one)", "tools (two)"]);
 });
