@@ -117,6 +117,23 @@ public sealed class SwitchEndpointTests
     }
 
     [Fact]
+    public async Task RemoteControlIsNotRestartedWhenTheCliReportsNoAccount()
+    {
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        factory.RemoteControl.Running = true;
+        factory.Cli.Email = null;
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+        body["remoteControlRestarted"]!.GetValue<bool>().ShouldBeFalse();
+        body["remoteControlWarning"]!.GetValue<string>().ShouldContain("did not report b@example.com");
+        factory.RemoteControl.Restarts.ShouldBe(0);
+    }
+
+    [Fact]
     public async Task TheRemoteControlRouteReportsWhetherTheTaskIsRunning()
     {
         using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);

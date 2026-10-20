@@ -461,14 +461,22 @@
   // does the switch cost anything beyond the account: the task is restarted
   // under the incoming account. Read at the click, not on every poll. A read
   // that fails asks nothing, and the server, reading the same task, restarts
-  // nothing either.
+  // nothing either. Every button is off from the click, through the read and
+  // the question, so a second click cannot start a second switch, and with it a
+  // second restart, while the first is still being decided.
   function switchTo(email) {
     var account = lastAccounts.filter(function (candidate) { return candidate.email === email; })[0];
     var name = account ? uniqueName(account, lastAccounts) : email;
+    busy = true;
+    setButtonsDisabled(true);
     return send("/api/remote-control", "GET")
       .then(function (result) { return result.ok ? remoteControlQuestion(result.body, name) : null; }, function () { return null; })
       .then(function (question) {
-        if (question && !window.confirm(question)) { return null; }
+        if (question && !window.confirm(question)) {
+          busy = false;
+          setButtonsDisabled(false);
+          return null;
+        }
         return mutate(accountPath(email, "/switch"), "POST", null, function (result) {
           if (!result.ok) {
             showToast(refused(result.body), "error");

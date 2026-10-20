@@ -99,7 +99,9 @@ internal static class SwitchEndpoints
     private static async Task<(bool Restarted, string? Warning)> RestartRemoteControlAsync(IRemoteControlTask remoteControl, SwitchOutcome done)
     {
         string manual = "; restart it by hand: Stop-ScheduledTask " + remoteControl.Name + "; Start-ScheduledTask " + remoteControl.Name;
-        if (done.CliVerification.IsFailure || done.IdentityMismatchWarning)
+        bool reportsIncoming = done.CliVerification.IsSuccess
+            && string.Equals(done.CliVerification.Value.Email?.Trim(), done.Now.Value, StringComparison.OrdinalIgnoreCase);
+        if (!reportsIncoming)
         {
             return (false, "Remote Control was not restarted, because the CLI did not report " + done.Now.Value + manual);
         }
