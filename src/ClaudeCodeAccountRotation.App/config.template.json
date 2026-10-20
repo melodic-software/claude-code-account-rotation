@@ -13,5 +13,6 @@
   },
   "role": "leader",
   "mailbox": null,
-  "peers": null
+  "peers": null,
+  "remoteControlTask": "claude-remote-control"
 }

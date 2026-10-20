@@ -107,6 +107,9 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
 
     public BrowserRecorder Browser { get; } = new();
 
+    /// <summary>The Remote Control task, doubled so no test reads or restarts this machine's own.</summary>
+    public FakeRemoteControlTask RemoteControl { get; } = new();
+
     /// <summary>The scripted <c>claude setup-token</c> every CI token test drives.</summary>
     public SetupTokenScript SetupToken { get; } = new();
 
@@ -234,6 +237,7 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
             // Both ports, or a removal would resolve the real CLI on this machine.
             services.Replace(ServiceDescriptor.Singleton<IClaudeCliLogout>(Cli));
             services.Replace(ServiceDescriptor.Singleton<IBrowserLauncher>(Browser));
+            services.Replace(ServiceDescriptor.Singleton<IRemoteControlTask>(RemoteControl));
             services.Replace(ServiceDescriptor.Singleton<IBrowserProfileReader>(BrowserProfiles));
             // The real runner over a scripted child: the URL parsing, the retry, the
             // expiry, and the profile rewrite are the code under test, not doubles.
@@ -285,6 +289,49 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
             _requested.Enqueue(delay);
             DuringWait?.Invoke();
             return cancellationToken.IsCancellationRequested ? Task.FromCanceled(cancellationToken) : Task.CompletedTask;
+        }
+    }
+
+    /// <summary>A Remote Control task a test says is running or not, and whose restarts it counts.</summary>
+    internal sealed class FakeRemoteControlTask : IRemoteControlTask
+    {
+        public string? Name => "claude-remote-control";
+
+        public bool Running { get; set; }
+
+        /// <summary>When set, every restart fails with this reason.</summary>
+        public string? RestartError { get; set; }
+
+        public int Restarts { get; private set; }
+
+        /// <summary>Completed when a restart begins.</summary>
+        public TaskCompletionSource RestartEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>When set, a restart waits for it before it answers.</summary>
+        public TaskCompletionSource? HoldRestart { get; set; }
+
+        /// <summary>When set, the state cannot be read and this is why.</summary>
+        public string? RunningError { get; set; }
+
+        public Task<Result<bool, string>> IsRunningAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(RunningError is string error ? Result<bool, string>.Failure(error) : Result<bool, string>.Success(Running));
+
+        /// <summary>What the last restart was told about starting a stopped task.</summary>
+        public bool? LastStartIfStopped { get; private set; }
+
+        public async Task<Result<Unit, string>> RestartAsync(bool startIfStopped, CancellationToken cancellationToken)
+        {
+            Restarts++;
+            LastStartIfStopped = startIfStopped;
+            RestartEntered.TrySetResult();
+            if (HoldRestart is TaskCompletionSource hold)
+            {
+                await hold.Task;
+            }
+
+            return RestartError is string error
+                ? Result<Unit, string>.Failure(error)
+                : Result<Unit, string>.Success(Unit.Value);
         }
     }
 

@@ -6,6 +6,20 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Added
+
+- **Remote Control follows a switch.** A Switch clicked for the Windows side restarts the
+  `claude-remote-control` scheduled task once the CLI reports the new account, because Claude Code
+  stops a Remote Control session when the signed-in account changes. Ending a scheduled task ends
+  only its root process, so the restart also ends the `pwsh.exe` and `claude.exe` recorded under
+  that task's process tree, and nothing else, before running it again. While the task is running,
+  the dashboard asks before switching. A failed restart is a warning with the manual steps, never
+  a failed switch. WSL switches and
+  Linux restart nothing. The new `config.json` key `remoteControlTask` names the task; `null` or
+  `""` turns this off, and a file without the key uses the default (#234).
+- `GET /api/remote-control` returns the task's name and whether it is running, and the switch
+  result carries `remoteControlRestarted` and `remoteControlWarning` (#234).
+
 ## [2.1.0] - 2026-10-20
 
 ### Added

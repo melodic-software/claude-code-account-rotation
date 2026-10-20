@@ -51,6 +51,36 @@ public sealed class ConfigurationTests : IDisposable
         defaults.RefreshLockWaitBound.ShouldBe(TimeSpan.FromSeconds(10));
     }
 
+    [Theory]
+    [InlineData("{}", "claude-remote-control")]
+    [InlineData("""{"remoteControlTask": "my-remote-control"}""", "my-remote-control")]
+    [InlineData("""{"remoteControlTask": null}""", null)]
+    [InlineData("""{"remoteControlTask": ""}""", null)]
+    public async Task TheRemoteControlTaskDefaultsWhenAbsentAndIsOffWhenNullOrEmpty(string json, string? expected)
+    {
+        string path = Path.Combine(_root, "appdata", "config.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, json, TestContext.Current.CancellationToken);
+
+        Result<ClaudeCodeAccountRotationConfiguration, string> loaded = await ConfigurationFile.LoadOrCreateAsync(path, Defaults(), TestContext.Current.CancellationToken);
+
+        loaded.IsSuccess.ShouldBeTrue(loaded.IsFailure ? loaded.Error : "");
+        loaded.Value.RemoteControlTask.ShouldBe(expected);
+    }
+
+    [Fact]
+    public async Task AFirstRunWritesTheRemoteControlTaskAndReadsItBack()
+    {
+        string path = Path.Combine(_root, "appdata", "config.json");
+
+        Result<ClaudeCodeAccountRotationConfiguration, string> created = await ConfigurationFile.LoadOrCreateAsync(path, Defaults(), TestContext.Current.CancellationToken);
+        Result<ClaudeCodeAccountRotationConfiguration, string> reread = await ConfigurationFile.LoadOrCreateAsync(path, Defaults(), TestContext.Current.CancellationToken);
+
+        created.Value.RemoteControlTask.ShouldBe("claude-remote-control");
+        JsonNode.Parse(await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken))!["remoteControlTask"]!.GetValue<string>().ShouldBe("claude-remote-control");
+        reread.Value.RemoteControlTask.ShouldBe("claude-remote-control");
+    }
+
     [Fact]
     public void AClaudeConfigDirectoryMovesTheLiveDirectoryAndTheStateFile()
     {
@@ -408,6 +438,36 @@ public sealed class ConfigurationTests : IDisposable
 
         loaded.IsFailure.ShouldBeTrue();
         loaded.Error.ShouldContain(path);
+    }
+
+    [Theory]
+    [InlineData("\\Folder\\claude-remote-control")]
+    [InlineData("Folder/claude-remote-control")]
+    [InlineData("claude-*")]
+    [InlineData("claude-remote-contro?")]
+    [InlineData("claude-[r]emote-control")]
+    [InlineData("claude-remote-control]")]
+    public void ARemoteControlTaskWithAPathOrWildcardIsRefused(string task)
+    {
+        ClaudeCodeAccountRotationConfiguration configuration = Defaults() with { RemoteControlTask = task };
+
+        Result<Unit, string> verdict = ConfigurationValidator.Validate(configuration, _home, static _ => "C:", static _ => null);
+
+        verdict.IsFailure.ShouldBeTrue();
+        verdict.Error.ShouldContain("remoteControlTask must be the name of a task in the Task Scheduler root folder");
+    }
+
+    [Theory]
+    [InlineData("claude-remote-control")]
+    [InlineData("my remote control")]
+    [InlineData(null)]
+    public void ARootFolderTaskNameOrNoTaskIsAccepted(string? task)
+    {
+        ClaudeCodeAccountRotationConfiguration configuration = Defaults() with { RemoteControlTask = task };
+
+        Result<Unit, string> verdict = ConfigurationValidator.Validate(configuration, _home, static _ => "C:", static _ => null);
+
+        (verdict.IsFailure ? verdict.Error : string.Empty).ShouldNotContain("remoteControlTask");
     }
 
     [Fact]

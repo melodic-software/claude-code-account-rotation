@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
+using ClaudeCodeAccountRotation.App.Adapters.Process;
 using ClaudeCodeAccountRotation.App.Dashboard;
 using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.App.Switching;
@@ -45,6 +46,292 @@ public sealed class SwitchEndpointTests
         body["parkedAs"]!.GetValue<string>().ShouldBe("a@example.com");
         body["identityMismatchWarning"]!.GetValue<bool>().ShouldBeFalse();
         (await CredentialFiles.FingerprintAsync(factory.LiveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
+    }
+
+    [Fact]
+    public async Task ASwitchRestartsARunningRemoteControlTask()
+    {
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        factory.RemoteControl.Running = true;
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+        body["remoteControlRestarted"]!.GetValue<bool>().ShouldBeTrue();
+        body["remoteControlWarning"].ShouldBeNull();
+        factory.RemoteControl.Restarts.ShouldBe(1);
+        factory.RemoteControl.LastStartIfStopped.ShouldBe(true);
+    }
+
+    [Fact]
+    public async Task ASwitchDuringAnotherSwitchsRestartIsRefusedAndMovesNothing()
+    {
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        factory.RemoteControl.Running = true;
+        factory.RemoteControl.HoldRestart = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using HttpClient client = factory.CreateMutatingClient();
+
+        Task<HttpResponseMessage> first = client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+        try
+        {
+            await factory.RemoteControl.RestartEntered.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            factory.Cli.Email = "a@example.com";
+
+            // The first switch's gate is released, but its restart is still running.
+            using HttpResponseMessage second = await client.PostAsync(SwitchUri("a@example.com"), content: null, TestContext.Current.CancellationToken);
+
+            second.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+            (await second.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["refusal"]!.GetValue<string>().ShouldBe("MutationInProgress");
+            (await CredentialFiles.FingerprintAsync(factory.LiveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
+        }
+        finally
+        {
+            factory.RemoteControl.HoldRestart.TrySetResult();
+        }
+
+        using HttpResponseMessage firstResponse = await first;
+        firstResponse.StatusCode.ShouldBe(HttpStatusCode.OK);
+        factory.RemoteControl.Restarts.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task AStateThatCannotBeReadBeforeTheSwitchStillGoesThroughTheRestart()
+    {
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        factory.RemoteControl.RunningError = "schtasks.exe did not finish within 20 s";
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        factory.RemoteControl.Restarts.ShouldBe(1);
+        factory.RemoteControl.LastStartIfStopped.ShouldBe(false);
+        (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["remoteControlRestarted"]!.GetValue<bool>().ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task AStoppedTaskWhoseEarlierStateWasUnknownIsNotStartedByTheSwitch()
+    {
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        // The read before the switch fails; the one in the restart finds the task stopped (3, Ready).
+        ScheduledTaskRemoteControlTests.Script script = new ScheduledTaskRemoteControlTests.Script()
+            .Answer("/Query", Result<(int, string), string>.Failure("powershell.exe did not finish within 20 s"))
+            .Answer("/Query", 0, "3")
+            .Answer("/XML", 0, ScheduledTaskRemoteControlTests.TaskXml)
+            .Answer("/End", 0)
+            .Answer("/Run", 0);
+        factory.Overrides = services => services.Replace(ServiceDescriptor.Singleton<IRemoteControlTask>(new ScheduledTaskRemoteControl(
+            "claude-remote-control",
+            script.Run,
+            script.Run,
+            _ => Task.FromResult(Result<IReadOnlyList<ProcessEntry>, string>.Success([new ProcessEntry(4, 0, "svchost.exe", null)])),
+            new ScheduledTaskRemoteControlTests.Killer().Kill,
+            TimeProvider.System,
+            TimeSpan.FromSeconds(5),
+            TimeSpan.FromMilliseconds(1),
+            ScheduledTaskRemoteControlTests.Expand)));
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+        body["remoteControlRestarted"]!.GetValue<bool>().ShouldBeFalse();
+        body["remoteControlWarning"]!.GetValue<string>().ShouldContain("was not started");
+        script.Calls.ShouldNotContain(static call => call.StartsWith("/Run", StringComparison.Ordinal) || call.StartsWith("/End", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AnUnreadableStateWhoseProcessesCannotBeIdentifiedIsAWarningNotASilentSkip()
+    {
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        ScheduledTaskRemoteControlTests.Script script = new ScheduledTaskRemoteControlTests.Script()
+            .Answer("/Query", Result<(int, string), string>.Failure("schtasks.exe did not finish within 20 s"))
+            .Answer("/XML", 0, ScheduledTaskRemoteControlTests.TaskXml)
+            .Answer("/End", 0)
+            .Answer("/Run", 0);
+        factory.Overrides = services => services.Replace(ServiceDescriptor.Singleton<IRemoteControlTask>(new ScheduledTaskRemoteControl(
+            "claude-remote-control",
+            script.Run,
+            script.Run,
+            _ => Task.FromResult(Result<IReadOnlyList<ProcessEntry>, string>.Success([new ProcessEntry(4, 0, "svchost.exe", null)])),
+            new ScheduledTaskRemoteControlTests.Killer().Kill,
+            TimeProvider.System,
+            TimeSpan.FromSeconds(5),
+            TimeSpan.FromMilliseconds(1),
+            ScheduledTaskRemoteControlTests.Expand)));
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+        body["remoteControlRestarted"]!.GetValue<bool>().ShouldBeFalse();
+        body["remoteControlWarning"]!.GetValue<string>().ShouldContain("could not be read");
+        script.Calls.ShouldNotContain(static call => call.StartsWith("/End", StringComparison.Ordinal) || call.StartsWith("/Run", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task TheRemoteControlRouteSaysWhenTheStateCannotBeRead()
+    {
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        factory.RemoteControl.RunningError = "schtasks.exe did not finish within 20 s";
+        using HttpClient client = factory.CreateClient();
+
+        JsonObject view = (await client.GetFromJsonAsync<JsonObject>(new Uri("/api/remote-control", UriKind.Relative), TestContext.Current.CancellationToken))!;
+
+        view["running"].ShouldBeNull();
+        view["error"]!.GetValue<string>().ShouldContain("did not finish");
+    }
+
+    [Fact]
+    public async Task ASwitchLeavesARemoteControlTaskThatWasNotRunningAlone()
+    {
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+        body["remoteControlRestarted"]!.GetValue<bool>().ShouldBeFalse();
+        body["remoteControlWarning"].ShouldBeNull();
+        factory.RemoteControl.Restarts.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task ARestartThatFailsIsAWarningWithTheManualCommandsAndTheSwitchStands()
+    {
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        factory.RemoteControl.Running = true;
+        factory.RemoteControl.RestartError = "schtasks /End exited with code 1: ERROR: Access is denied.";
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+        body["now"]!.GetValue<string>().ShouldBe("b@example.com");
+        body["remoteControlRestarted"]!.GetValue<bool>().ShouldBeFalse();
+        string warning = body["remoteControlWarning"]!.GetValue<string>();
+        warning.ShouldContain("Access is denied");
+        warning.ShouldContain("Stop-ScheduledTask claude-remote-control");
+        warning.ShouldContain("Start-ScheduledTask claude-remote-control");
+        (await CredentialFiles.FingerprintAsync(factory.LiveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
+    }
+
+    [Fact]
+    public async Task RemoteControlIsNotRestartedWhenTheCliReportsAnotherAccount()
+    {
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        factory.RemoteControl.Running = true;
+        factory.Cli.Email = "a@example.com";
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+        body["identityMismatchWarning"]!.GetValue<bool>().ShouldBeTrue();
+        body["remoteControlWarning"]!.GetValue<string>().ShouldContain("Start-ScheduledTask claude-remote-control");
+        factory.RemoteControl.Restarts.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task AnOrphanedServerThatCannotBeEndedIsAWarningAndTheSwitchStands()
+    {
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        ScheduledTaskRemoteControlTests.Script script = new ScheduledTaskRemoteControlTests.Script()
+            .Answer("/Query", 0, "4")
+            .Answer("/XML", 0, ScheduledTaskRemoteControlTests.TaskXml)
+            .Answer("/End", 0)
+            .Answer("/Run", 0);
+        ScheduledTaskRemoteControlTests.Killer killer = new() { Refuse = 30 };
+        factory.Overrides = services => services.Replace(ServiceDescriptor.Singleton<IRemoteControlTask>(new ScheduledTaskRemoteControl(
+            "claude-remote-control",
+            script.Run,
+            script.Run,
+            _ => Task.FromResult(Result<IReadOnlyList<ProcessEntry>, string>.Success(ScheduledTaskRemoteControlTests.Machine)),
+            killer.Kill,
+            TimeProvider.System,
+            TimeSpan.FromSeconds(5),
+            TimeSpan.FromMilliseconds(1),
+            ScheduledTaskRemoteControlTests.Expand)));
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+        body["now"]!.GetValue<string>().ShouldBe("b@example.com");
+        body["remoteControlRestarted"]!.GetValue<bool>().ShouldBeFalse();
+        body["remoteControlWarning"]!.GetValue<string>().ShouldContain("claude.exe (process 30)");
+        killer.Killed.ShouldNotContain(120);
+        script.Calls.ShouldNotContain(static call => call.StartsWith("/Run", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ARunningTaskWhoseProcessesCannotBeIdentifiedIsAWarningAndTheSwitchStands()
+    {
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        ScheduledTaskRemoteControlTests.Script script = new ScheduledTaskRemoteControlTests.Script()
+            .Answer("/Query", 0, "4")
+            .Answer("/XML", 0, ScheduledTaskRemoteControlTests.TaskXml)
+            .Answer("/End", 0)
+            .Answer("/Run", 0);
+        factory.Overrides = services => services.Replace(ServiceDescriptor.Singleton<IRemoteControlTask>(new ScheduledTaskRemoteControl(
+            "claude-remote-control",
+            script.Run,
+            script.Run,
+            _ => Task.FromResult(Result<IReadOnlyList<ProcessEntry>, string>.Success([new ProcessEntry(4, 0, "svchost.exe", null)])),
+            new ScheduledTaskRemoteControlTests.Killer().Kill,
+            TimeProvider.System,
+            TimeSpan.FromSeconds(5),
+            TimeSpan.FromMilliseconds(1),
+            ScheduledTaskRemoteControlTests.Expand)));
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+        body["now"]!.GetValue<string>().ShouldBe("b@example.com");
+        string warning = body["remoteControlWarning"]!.GetValue<string>();
+        warning.ShouldContain("running but its processes could not be identified");
+        warning.ShouldContain("Start-ScheduledTask claude-remote-control");
+        script.Calls.ShouldNotContain(static call => call.StartsWith("/End", StringComparison.Ordinal) || call.StartsWith("/Run", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task RemoteControlIsNotRestartedWhenTheCliReportsNoAccount()
+    {
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        factory.RemoteControl.Running = true;
+        factory.Cli.Email = null;
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+        body["remoteControlRestarted"]!.GetValue<bool>().ShouldBeFalse();
+        body["remoteControlWarning"]!.GetValue<string>().ShouldContain("did not report b@example.com");
+        factory.RemoteControl.Restarts.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task TheRemoteControlRouteReportsWhetherTheTaskIsRunning()
+    {
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        factory.RemoteControl.Running = true;
+        using HttpClient client = factory.CreateClient();
+
+        JsonObject view = (await client.GetFromJsonAsync<JsonObject>(new Uri("/api/remote-control", UriKind.Relative), TestContext.Current.CancellationToken))!;
+
+        view["task"]!.GetValue<string>().ShouldBe("claude-remote-control");
+        view["running"]!.GetValue<bool>().ShouldBeTrue();
     }
 
     [Fact]

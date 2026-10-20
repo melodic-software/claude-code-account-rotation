@@ -91,6 +91,7 @@ internal static class ConfigurationFile
         ["role"] = RoleName(configuration.Role),
         ["mailbox"] = configuration.Mailbox,
         ["peers"] = PeersToJson(configuration.Peers),
+        ["remoteControlTask"] = configuration.RemoteControlTask,
     };
 
     private static JsonArray PeersToJson(IReadOnlyList<PeerConfiguration>? peers)
@@ -162,7 +163,10 @@ internal static class ConfigurationFile
             SharedStore(raw) ?? defaults.SharedStore,
             Role(raw) ?? defaults.Role,
             Text(raw, "mailbox") ?? defaults.Mailbox,
-            Peers(raw) ?? defaults.Peers);
+            Peers(raw) ?? defaults.Peers,
+            // Absent keeps the default, so a file written before this key restarts
+            // the default task; a null or empty value written there turns it off.
+            raw.ContainsKey("remoteControlTask") ? Text(raw, "remoteControlTask") : defaults.RemoteControlTask);
     }
 
     /// <summary>

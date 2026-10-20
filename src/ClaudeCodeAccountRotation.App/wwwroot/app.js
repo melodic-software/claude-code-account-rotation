@@ -27,7 +27,9 @@
       usageAge: usageAge,
       sentence: sentence,
       ciTokenBadge: ciTokenBadge,
-      ciSecretBody: ciSecretBody
+      ciSecretBody: ciSecretBody,
+      remoteControlQuestion: remoteControlQuestion,
+      switchedToast: switchedToast
     };
     return;
   }
@@ -455,17 +457,56 @@
     return "/api/accounts/" + encodeURIComponent(email) + (suffix || "");
   }
 
+  // Switch asks first only while Remote Control runs here, because only then
+  // does the switch cost anything beyond the account: the task is restarted
+  // under the incoming account. Read at the click, not on every poll. A read
+  // that fails still asks, in the conditional: the server reads the task again
+  // and may find it running. Every button is off from the click, through the read and
+  // the question, so a second click cannot start a second switch, and with it a
+  // second restart, while the first is still being decided.
   function switchTo(email) {
-    return mutate(accountPath(email, "/switch"), "POST", null, function (result) {
-      if (!result.ok) {
-        showToast(refused(result.body), "error");
-        return;
-      }
-      var text = "Switched to " + result.body.now;
-      if (result.body.parkedAs) { text += "; parked " + result.body.parkedAs; }
-      if (result.body.identityMismatchWarning) { text += ". The CLI reports " + result.body.cliEmail + "; check /status."; }
-      showToast(text, result.body.identityMismatchWarning ? "warn" : "ok");
-    });
+    var account = lastAccounts.filter(function (candidate) { return candidate.email === email; })[0];
+    var name = account ? uniqueName(account, lastAccounts) : email;
+    busy = true;
+    setButtonsDisabled(true);
+    return send("/api/remote-control", "GET")
+      .then(function (result) { return remoteControlQuestion(result.ok ? result.body : null, name); }, function () { return remoteControlQuestion(null, name); })
+      .then(function (question) {
+        if (question && !window.confirm(question)) {
+          busy = false;
+          setButtonsDisabled(false);
+          return null;
+        }
+        return mutate(accountPath(email, "/switch"), "POST", null, function (result) {
+          if (!result.ok) {
+            showToast(refused(result.body), "error");
+            return;
+          }
+          var toast = switchedToast(result.body);
+          showToast(toast.text, toast.kind);
+        });
+      });
+  }
+
+  // Null, or a null running, when the read failed: the state is unknown, so the
+  // question is asked as a condition rather than skipped.
+  function remoteControlQuestion(remoteControl, name) {
+    if (!remoteControl || remoteControl.running === null || remoteControl.running === undefined) {
+      return "Switch to " + name + "? Remote Control's state could not be read. If it is running, it restarts under " + name
+        + "; live Remote Control sessions on this machine drop and reopen in " + name + "'s Claude app.";
+    }
+    if (!remoteControl.running) { return null; }
+    return "Switch to " + name + "? Remote Control restarts under " + name
+      + "; live Remote Control sessions on this machine drop and reopen in " + name + "'s Claude app.";
+  }
+
+  function switchedToast(body) {
+    var text = "Switched to " + body.now;
+    if (body.parkedAs) { text += "; parked " + body.parkedAs; }
+    if (body.identityMismatchWarning) { text += ". The CLI reports " + body.cliEmail + "; check /status."; }
+    if (body.remoteControlRestarted) { text += ". Remote Control restarted."; }
+    if (body.remoteControlWarning) { text += ". " + body.remoteControlWarning; }
+    return { text: text, kind: body.identityMismatchWarning || body.remoteControlWarning ? "warn" : "ok" };
   }
 
   // The "switch now" prompt's wording, all of it here: it is to follow the
@@ -1764,7 +1805,7 @@
     // passes force, since that one has to show the result.
     if (!force && cards.querySelector("details.edit[open], details.login[open], input.rename, details.more[open]")) { return; }
     // The hazard is a row moving, not a row being redrawn. Switch fires without a
-    // confirm, so an order that changes while the pointer rests on the list, or
+    // confirm unless Remote Control is running, so an order that changes while the pointer rests on the list, or
     // while a button inside it holds focus, sends the operator to whichever account
     // slid under the aim; the pointer resting there is the mouse's ordinary state,
     // so deferring on it alone would freeze the rows for as long as an operator

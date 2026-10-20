@@ -258,6 +258,20 @@ internal static class AppComposition
             provider.GetRequiredService<ILogger<ClaudeCliSetupTokenRunner>>()));
         services.AddSingleton<LiveDirectorySwitch>();
         services.AddSingleton<IStaleIdentityRepair>(static provider => provider.GetRequiredService<LiveDirectorySwitch>());
+        // Windows only: the task is a Windows scheduled task, and a Linux leader
+        // has nothing to restart.
+        services.AddSingleton<IRemoteControlTask>(OperatingSystem.IsWindows() && configuration.RemoteControlTask is string remoteControlTask
+            ? new ScheduledTaskRemoteControl(
+                remoteControlTask,
+                ScheduledTaskRemoteControl.WindowsRunner(Path.Combine(Environment.SystemDirectory, "schtasks.exe")),
+                ScheduledTaskRemoteControl.WindowsPowerShell(Environment.SystemDirectory),
+                ScheduledTaskRemoteControl.WindowsProcessLister(ScheduledTaskRemoteControl.WindowsPowerShell(Environment.SystemDirectory)),
+                ScheduledTaskRemoteControl.KillRecordedAsync,
+                TimeProvider.System,
+                ScheduledTaskRemoteControl.StopBound,
+                TimeSpan.FromMilliseconds(500))
+            : new NoRemoteControlTask());
+        services.AddSingleton<RemoteControlRestartLock>();
         ComposePeers(services, configuration);
         services.AddSingleton(new WslSwitchJournal(configuration.AppDataDirectory));
         services.AddSingleton<WslSwitch>();

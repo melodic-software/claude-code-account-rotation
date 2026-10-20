@@ -38,6 +38,13 @@ internal static class ConfigurationValidator
             return Failure("listenPort must be between 1 and 65535");
         }
 
+        // A task in the Task Scheduler root folder, named exactly: a path or a
+        // wildcard would let the state read and /End, /Run name different tasks.
+        if (configuration.RemoteControlTask is string task && task.IndexOfAny(['\\', '/', '*', '?', '[', ']']) >= 0)
+        {
+            return Failure("remoteControlTask must be the name of a task in the Task Scheduler root folder, without a path or wildcard (\\ / * ? [ ]): " + task);
+        }
+
         if (configuration.Role == RotationRole.Follower)
         {
             return ValidateFollower(configuration, volumeOf);
