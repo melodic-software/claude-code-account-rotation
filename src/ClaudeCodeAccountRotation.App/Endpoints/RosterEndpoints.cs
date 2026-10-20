@@ -113,6 +113,26 @@ internal static partial class RosterEndpoints
                 DashboardAssembler.View(entry)));
         });
 
+        routes.MapGet("/api/lane-history", static async (
+            string? since,
+            RosterFile rosterFile,
+            CancellationToken cancellationToken) =>
+        {
+            DateTimeOffset? from = null;
+            if (since is not null)
+            {
+                if (!DateTimeOffset.TryParse(since, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out DateTimeOffset parsedSince))
+                {
+                    return Results.BadRequest(new { error = "since must be a date or an ISO 8601 time" });
+                }
+
+                from = parsedSince;
+            }
+
+            IReadOnlyList<LaneHistoryEntry> entries = await rosterFile.History.ReadAsync(from, cancellationToken);
+            return Results.Ok(new JsonArray([.. entries.Select(static entry => (JsonNode)entry.ToJson())]));
+        });
+
         mutations.MapPatch("/accounts/{email}", static async (
             string email,
             JsonObject body,
@@ -206,7 +226,7 @@ internal static partial class RosterEndpoints
                 updated = updated.ClaimingToken(CiRole.FromTokenSecret(secret), setOn, setAt: null);
             }
 
-            await rosterFile.UpdateAsync(roster => roster.With(updated), cancellationToken);
+            await rosterFile.UpdateAsync(roster => roster.With(updated), cancellationToken, via: "edit");
             return Results.Ok(DashboardAssembler.View(updated));
         });
 
@@ -363,7 +383,7 @@ internal static partial class RosterEndpoints
                     await profiles.DeleteFolderAsync(folder, committed);
                 }
 
-                await rosterFile.UpdateAsync(roster => roster.Without(target), committed);
+                await rosterFile.UpdateAsync(roster => roster.Without(target), committed, via: "delete");
                 return Results.Ok(new RemovalView(
                     target.Value,
                     revoked,

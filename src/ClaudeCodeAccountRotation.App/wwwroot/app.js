@@ -31,7 +31,8 @@
       ciTag: ciTag,
       ciSecretBody: ciSecretBody,
       remoteControlQuestion: remoteControlQuestion,
-      switchedToast: switchedToast
+      switchedToast: switchedToast,
+      historyLines: historyLines
     };
     return;
   }
@@ -244,6 +245,17 @@
     toast.hidden = false;
     clearTimeout(toastTimer);
     toastTimer = setTimeout(function () { toast.hidden = true; }, 6000);
+  }
+
+  // One line per lane-history entry, newest first: when, which role half, and
+  // which account took it from which. Names and dates only.
+  function historyLines(entries) {
+    return (entries || []).slice().reverse().map(function (entry) {
+      var role = entry.role || {};
+      var name = role.tokenSecret || role.prefix || "legacy (review lanes)";
+      var moved = (entry.previous || "no account") + " \u2192 " + (entry.account || "no account");
+      return String(entry.at).slice(0, 16).replace("T", " ") + " \u00b7 " + name + " " + entry.half + ": " + moved + " (" + entry.via + ")";
+    });
   }
 
   function element(tag, className, text) {
@@ -2026,12 +2038,40 @@
       });
   }
 
+  // The lane history: read only when the operator opens it, never on load or
+  // by timer, and only the last 30 days.
+  function mountHistory() {
+    var panel = element("details", "history");
+    panel.appendChild(element("summary", "quiet sm", "History"));
+    var list = element("ul", "warnings");
+    panel.appendChild(list);
+    panel.addEventListener("toggle", function () {
+      if (!panel.open) { return; }
+      var since = new Date(Date.now() - 30 * 86400000).toISOString();
+      fetch("/api/lane-history?since=" + encodeURIComponent(since), { headers: withBearer({ "Accept": "application/json" }) })
+        .then(function (response) {
+          if (response.status === 401) { loseToken(); return null; }
+          return response.ok ? response.json() : [];
+        })
+        .catch(function () { return []; })
+        .then(function (entries) {
+          if (entries === null) { return; }
+          list.innerHTML = "";
+          var lines = historyLines(entries);
+          if (!lines.length) { lines = ["No role changes in the last 30 days."]; }
+          lines.forEach(function (line) { list.appendChild(element("li", null, line)); });
+        });
+    });
+    cards.parentNode.appendChild(panel);
+  }
+
   // Always taken, so the fragment leaves the address bar even when the meta
   // already carries the token. The first /api call then sets the cookie.
   var tokenFromHash = takeTokenFromHash(window.location, window.history);
   if (!instanceToken) { instanceToken = tokenFromHash; }
 
   if (instanceToken) {
+    mountHistory();
     loadProfiles();
   } else {
     showTokenForm();

@@ -25,12 +25,18 @@ internal sealed class RosterFile : IDisposable
     // the only process editing the file.
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly string _path;
+    private readonly TimeProvider _clock;
 
-    public RosterFile(string appDataDirectory)
+    public RosterFile(string appDataDirectory, TimeProvider? clock = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(appDataDirectory);
         _path = Path.Combine(Path.GetFullPath(appDataDirectory), FileName);
+        _clock = clock ?? TimeProvider.System;
+        History = new LaneHistoryFile(appDataDirectory);
     }
+
+    /// <summary>The record of which account backed which role half, appended to by every update.</summary>
+    public LaneHistoryFile History { get; }
 
     public async Task<Roster> ReadAsync(CancellationToken cancellationToken)
     {
@@ -45,16 +51,34 @@ internal sealed class RosterFile : IDisposable
         }
     }
 
-    /// <summary>Applies <paramref name="change"/> to the stored roster and writes the result back.</summary>
-    public async Task<Roster> UpdateAsync(Func<Roster, Roster> change, CancellationToken cancellationToken)
+    /// <summary>
+    /// Applies <paramref name="change"/> to the stored roster and writes the result back,
+    /// then appends to the lane history one line per role half whose account changed,
+    /// tagged <paramref name="via"/>.
+    /// </summary>
+    public async Task<Roster> UpdateAsync(Func<Roster, Roster> change, CancellationToken cancellationToken, string via = "edit")
     {
         ArgumentNullException.ThrowIfNull(change);
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            Roster updated = change(await ReadUnguardedAsync(cancellationToken));
+            Roster before = await ReadUnguardedAsync(cancellationToken);
+            Roster updated = change(before);
             Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
             await AtomicJsonFile.WriteAsync(_path, ToJson(updated), cancellationToken);
+            try
+            {
+                await History.AppendAsync(LaneHistoryFile.Diff(before, updated, _clock.GetUtcNow(), via), cancellationToken);
+            }
+            catch (IOException)
+            {
+                // The roster is already written; a history line that cannot be
+                // appended must not report the edit as failed.
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+
             return updated;
         }
         finally
