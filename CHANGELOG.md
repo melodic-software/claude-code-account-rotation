@@ -8,6 +8,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- **Token expiry by role.** In the last 30 days of a token's year, and after it, a card says on which date
+  which roles fall back to their API key only and which (token-only) roles stop.
 - **CI roles.** The roster records the CI funding roles an account backs: a prefix plus its
   organization or repository, with token secret `<PREFIX>_CLAUDE_CODE_OAUTH_TOKEN` and key secret
   `<PREFIX>_CLAUDE_API_KEY`, and the date each half was set. The bare `CLAUDE_CODE_OAUTH_TOKEN` is

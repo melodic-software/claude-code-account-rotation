@@ -27,6 +27,8 @@
       usageAge: usageAge,
       sentence: sentence,
       ciRoleBadges: ciRoleBadges,
+      ciTokenExpiries: ciTokenExpiries,
+      ciExpirySentence: ciExpirySentence,
       keptCiRoles: keptCiRoles,
       ciTag: ciTag,
       ciSecretBody: ciSecretBody,
@@ -1344,6 +1346,34 @@
     });
   }
 
+  // The roles whose token half was set on one date lose it together, a year
+  // on. Lanes spend the API key first, so a role with a key half keeps running
+  // on its key and one without stops. One entry per expiry date within the
+  // warning window or past it, soonest first; the tone is tokenExpiry's.
+  function ciTokenExpiries(roster, at) {
+    var groups = {};
+    ((roster && roster.ciRoles) || []).forEach(function (role) {
+      if (!role.tokenSetOn) { return; }
+      var made = Date.parse(role.tokenSetOn + "T00:00:00Z");
+      if (isNaN(made)) { return; }
+      var expires = new Date(made + 365 * 86400000);
+      var days = Math.floor((expires.getTime() - at) / 86400000);
+      if (days > 30) { return; }
+      var key = expires.toISOString().slice(0, 10);
+      var group = groups[key] || (groups[key] = { expiresOn: key, tone: days < 0 ? "crit" : "warn", fallback: [], stop: [] });
+      var name = role.prefix ? role.name.toLowerCase() : role.name;
+      (role.keySetOn ? group.fallback : group.stop).push(name);
+    });
+    return Object.keys(groups).sort().map(function (key) { return groups[key]; });
+  }
+
+  function ciExpirySentence(expiry) {
+    var parts = [];
+    if (expiry.fallback.length) { parts.push("these roles fall back to their API key only: " + expiry.fallback.join(", ")); }
+    if (expiry.stop.length) { parts.push("these roles stop: " + expiry.stop.join(", ")); }
+    return "When the token expires on " + expiry.expiresOn + ", " + parts.join("; ");
+  }
+
   // The side strip's tag: "CI" on an account that backs a role or carries a
   // hand-set marker, else null.
   function ciTag(roster) {
@@ -1756,6 +1786,9 @@
     var status = element("div", "st");
     status.appendChild(element("p", "say " + say.kind, say.text));
     status.appendChild(statusLines(account, dashboard, at));
+    ciTokenExpiries(roster, at).forEach(function (expiry) {
+      status.appendChild(element("p", "say " + expiry.tone, ciExpirySentence(expiry)));
+    });
     line.appendChild(status);
 
     function limitOf(kind) { return account.usage.limits.filter(function (limit) { return limit.kind === kind; })[0]; }

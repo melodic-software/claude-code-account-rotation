@@ -430,3 +430,41 @@ test("the switch toast says Remote Control restarted, and a restart that failed 
   assert.match(warned.text, /Start-ScheduledTask claude-remote-control/);
   assert.deepStrictEqual(switchedToast({ now: "b@example.com" }), { text: "Switched to b@example.com", kind: "ok" });
 });
+
+const { ciTokenExpiries, ciExpirySentence } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+
+function expiryRole(name, tokenSetOn, keySetOn, prefix) {
+  return { name: name, prefix: prefix || false, tokenSetOn: tokenSetOn, keySetOn: keySetOn || null };
+}
+
+test("token halves set on two dates give two expiry entries, each with its roles", () => {
+  const roster = { ciRoles: [
+    expiryRole("A", "2026-01-01", "2026-01-01"),
+    expiryRole("B", "2026-01-01", "2026-01-01"),
+    expiryRole("C", "2026-01-10", "2026-01-10")
+  ] };
+  const got = ciTokenExpiries(roster, Date.parse("2026-12-20T00:00:00Z"));
+  assert.deepStrictEqual(got.map((g) => [g.expiresOn, g.fallback]), [["2027-01-01", ["A", "B"]], ["2027-01-10", ["C"]]]);
+});
+
+test("within 30 days the sentence warns, roles with no key stop, and after the date the tone is critical", () => {
+  const roster = { ciRoles: [expiryRole("A", "2026-01-01", "2026-01-01"), expiryRole("LEGACY", "2026-01-01", null)] };
+  const soon = ciTokenExpiries(roster, Date.parse("2026-12-20T00:00:00Z"));
+  assert.strictEqual(soon.length, 1);
+  assert.strictEqual(soon[0].tone, "warn");
+  assert.deepStrictEqual(soon[0].stop, ["LEGACY"]);
+  assert.strictEqual(ciExpirySentence(soon[0]), "When the token expires on 2027-01-01, these roles fall back to their API key only: A; these roles stop: LEGACY");
+  assert.strictEqual(ciTokenExpiries(roster, Date.parse("2027-01-02T00:00:00Z"))[0].tone, "crit");
+});
+
+test("key halves never produce an expiry entry", () => {
+  const roster = { ciRoles: [expiryRole("A", null, "2026-01-01")] };
+  assert.deepStrictEqual(ciTokenExpiries(roster, Date.parse("2027-06-01T00:00:00Z")), []);
+});
+
+test("outside the 30-day window no expiry entry is shown", () => {
+  const roster = { ciRoles: [expiryRole("A", "2026-01-01", "2026-01-01")] };
+  assert.deepStrictEqual(ciTokenExpiries(roster, Date.parse("2026-06-01T00:00:00Z")), []);
+  assert.strictEqual(ciTokenExpiries(roster, Date.parse("2026-12-02T00:00:00Z")).length, 1);
+  assert.deepStrictEqual(ciTokenExpiries(roster, Date.parse("2026-12-01T00:00:00Z")), []);
+});
