@@ -440,6 +440,13 @@ test("a pasted API key is sent trimmed in the body, and a blank paste sends noth
   assert.strictEqual(apiKeyBody(undefined), null);
 });
 
+test("a keepStoredKey toast names the key left when there is one and never says null", () => {
+  const { keptKeyToast } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+  assert.deepStrictEqual(keptKeyToast("a@x removed", { ok: true, body: { warning: null } }), { text: "a@x removed", kind: "ok" });
+  assert.deepStrictEqual(keptKeyToast("a@x removed", { ok: true, body: { warning: "The stored key k was left." } }), { text: "a@x removed. The stored key k was left.", kind: "warn" });
+  assert.deepStrictEqual(keptKeyToast("a@x removed", { ok: false, body: { message: "locked" } }), { text: "Refused: locked", kind: "error" });
+});
+
 test("the API key badge shows only once the roster records a stored key, and names the day", () => {
   assert.strictEqual(apiKeyBadge(null), null);
   assert.strictEqual(apiKeyBadge({ consoleApiKeySetOn: null }), null);

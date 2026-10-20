@@ -39,6 +39,7 @@
     };
     module.exports.apiKeyBody = apiKeyBody;
     module.exports.apiKeyBadge = apiKeyBadge;
+    module.exports.keptKeyToast = keptKeyToast;
     module.exports.roleCheckLines = roleCheckLines;
     return;
   }
@@ -812,7 +813,8 @@
       }
       if (result.body.refusal === "StoredKeyKept" && window.confirm(result.body.message + "\n\nRemove the account anyway and leave the key in the OS store?")) {
         return send(accountPath(email) + "?keepStoredKey=true", "DELETE", null).then(function (forced) {
-          showToast(forced.ok ? email + " removed. " + forced.body.warning : refused(forced.body), forced.ok ? "warn" : "error");
+          var toastFor = keptKeyToast(email + " removed", forced);
+          showToast(toastFor.text, toastFor.kind);
         });
       }
       showToast(refused(result.body), "error");
@@ -1059,7 +1061,8 @@
       // call, and the response then names the key and how to remove it by hand.
       if (!result.ok && result.body.refusal === "StoredKeyKept" && window.confirm(result.body.message + "\n\nForget it here and leave it in the OS store?")) {
         return send(accountPath(email, "/api-key") + "?keepStoredKey=true", "DELETE", null).then(function (forced) {
-          showToast(forced.ok ? forced.body.warning : refused(forced.body), forced.ok ? "warn" : "error");
+          var toastFor = keptKeyToast("API key forgotten here for " + email, forced);
+          showToast(toastFor.text, toastFor.kind);
         });
       }
       showToast(result.ok ? "API key deleted for " + email : refused(result.body), result.ok ? "ok" : "error");
@@ -1536,6 +1539,14 @@
   function apiKeyBody(pasted) {
     var key = (pasted || "").trim();
     return key ? { key: key } : null;
+  }
+
+  // The toast after a keepStoredKey delete: what was done, then the warning
+  // naming the key left behind when there is one, never a bare "null".
+  function keptKeyToast(done, result) {
+    if (!result.ok) { return { text: refused(result.body), kind: "error" }; }
+    var warning = result.body && result.body.warning;
+    return warning ? { text: done + ". " + warning, kind: "warn" } : { text: done, kind: "ok" };
   }
 
   // The card's key badge: the day the key was stored, from the roster, so

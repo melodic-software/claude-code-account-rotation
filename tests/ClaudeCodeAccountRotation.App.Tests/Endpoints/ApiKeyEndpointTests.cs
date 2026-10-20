@@ -275,6 +275,11 @@ public sealed class ApiKeyEndpointTests
 
     private const string Target = "claude-code-account-rotation:console-api-key:" + Parked;
 
+    // cmdkey on Windows; on Linux secret-tool, which clears only unlocked items, so the keyring is unlocked first.
+    private static readonly string _manualCommand = OperatingSystem.IsWindows()
+        ? "cmdkey /delete:" + Target
+        : "unlock the keyring, then run secret-tool clear kind console-api-key email " + Parked;
+
     private static async Task StoreKeyAsync(HttpClient client)
     {
         using HttpResponseMessage put = await client.PutAsJsonAsync(ApiKey(Parked), new { key = PlantedKey }, TestContext.Current.CancellationToken);
@@ -323,7 +328,7 @@ public sealed class ApiKeyEndpointTests
 
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
         warning.ShouldContain(Target);
-        warning.ShouldContain(OperatingSystem.IsWindows() ? "cmdkey /delete:" + Target : "secret-tool clear kind console-api-key email " + Parked);
+        warning.ShouldContain(_manualCommand);
         factory.Logs.Lines.ShouldContain(line => line.Contains("stored key " + Target + " was left", StringComparison.Ordinal));
         JsonObject dashboard = (await client.GetFromJsonAsync<JsonObject>(new Uri("/api/dashboard", UriKind.Relative), TestContext.Current.CancellationToken))!;
         dashboard["accounts"]!.AsArray().ShouldNotContain(account => account!["email"]!.GetValue<string>() == Parked && account["roster"] != null);
@@ -341,6 +346,7 @@ public sealed class ApiKeyEndpointTests
 
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
         (await BodyAsync(response))["warning"].ShouldBeNull();
+        factory.Logs.Lines.ShouldNotContain(line => line.Contains("key", StringComparison.OrdinalIgnoreCase) && line.Contains("deleted", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -374,8 +380,10 @@ public sealed class ApiKeyEndpointTests
 
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
         body["warning"]!.GetValue<string>().ShouldContain(Target);
+        body["warning"]!.GetValue<string>().ShouldContain(_manualCommand);
         body["roster"]!["consoleApiKeySetOn"].ShouldBeNull();
-        factory.Logs.Lines.ShouldContain(line => line.Contains("stored key " + Target + " was left", StringComparison.Ordinal));
+        factory.Logs.Lines.ShouldContain(line => line.Contains("stored key " + Target + " was left", StringComparison.Ordinal)
+            && line.Contains(_manualCommand, StringComparison.Ordinal));
         factory.Logs.Lines.ShouldNotContain(line => line.Contains("console API key for " + Parked + " deleted", StringComparison.Ordinal));
     }
 
@@ -391,6 +399,8 @@ public sealed class ApiKeyEndpointTests
 
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
         (await BodyAsync(response))["warning"].ShouldBeNull();
+        factory.Logs.Lines.ShouldNotContain(line => line.Contains("deleted", StringComparison.Ordinal) && line.Contains(Parked, StringComparison.Ordinal));
+        factory.Logs.Lines.ShouldContain(line => line.Contains("no stored console API key recorded for " + Parked, StringComparison.Ordinal));
     }
 
     [Fact]

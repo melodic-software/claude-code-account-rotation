@@ -115,7 +115,36 @@ public sealed class SecretStoreTests
 
     [Fact]
     public void LibsecretsIsLockedErrorReadsAsALockedCollection() =>
-        LibsecretStore.Describe("secret-error", 2, "Cannot store: collection is locked").ShouldContain("locked");
+        LibsecretStore.Describe("secret-error", 2, "Cannot store: collection is locked").ShouldBe(LibsecretStore.Locked);
+
+    [Fact]
+    public void AClearIsADeleteOnlyWhenALookupAfterwardsFindsNothing()
+    {
+        var nothing = Result<bool, string>.Success(false);
+        var found = Result<bool, string>.Success(true);
+
+        // clearv FALSE with no error, as libsecret answers when every match is locked.
+        LibsecretStore.AfterClear(Result<bool, string>.Success(false), () => found).Error.ShouldBe(LibsecretStore.StillStored);
+        LibsecretStore.AfterClear(Result<bool, string>.Success(true), () => found).Error.ShouldBe(LibsecretStore.StillStored);
+        LibsecretStore.AfterClear(Result<bool, string>.Success(false), () => nothing).IsSuccess.ShouldBeTrue();
+        LibsecretStore.AfterClear(Result<bool, string>.Success(true), () => nothing).IsSuccess.ShouldBeTrue();
+        LibsecretStore.AfterClear(Result<bool, string>.Success(false), () => Result<bool, string>.Failure(LibsecretStore.Locked)).Error.ShouldBe(LibsecretStore.Locked);
+    }
+
+    [Fact]
+    public void AClearThatFailsIsReportedWithoutALookup()
+    {
+        bool looked = false;
+
+        Result<Unit, string> outcome = LibsecretStore.AfterClear(Result<bool, string>.Failure("the Secret Service refused (x)"), () =>
+        {
+            looked = true;
+            return Result<bool, string>.Success(false);
+        });
+
+        outcome.Error.ShouldBe("the Secret Service refused (x)");
+        looked.ShouldBeFalse();
+    }
 
     [Theory]
     [InlineData("file")]

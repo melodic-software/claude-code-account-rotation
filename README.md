@@ -29,7 +29,8 @@ Status: a tagged release exists.
   store cannot be reached or refuses, the removal is refused with the cause and the account stays
   on the roster with its key record (a removed account's login and folder are already handled);
   `?keepStoredKey=true` goes ahead and names the key left behind and the command that removes it
-  (`cmdkey /delete:<target>` on Windows, `secret-tool clear` on Linux).
+  (`cmdkey /delete:<target>` on Windows; on Linux, unlock the keyring first, since `secret-tool
+  clear` removes only unlocked items).
 - The tool identifies itself honestly on every request it makes.
 - Every switch is a human click; nothing rotates on its own.
 - The tool never calls the model API.

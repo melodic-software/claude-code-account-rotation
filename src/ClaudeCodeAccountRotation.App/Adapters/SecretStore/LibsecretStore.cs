@@ -54,12 +54,10 @@ internal sealed class LibsecretStore(string libraryName, Func<string, string?> e
                 }
 
                 Result<string?, string> read = api.Lookup(ProbeKind, ProbeKind, cancellable);
-                Result<bool, string> cleared = api.Clear(ProbeKind, ProbeKind, cancellable);
+                Result<Unit, string> cleared = ClearConfirmed(api, ProbeKind, ProbeKind, cancellable);
                 return read.IsFailure ? Result<Unit, string>.Failure(read.Error)
                     : read.Value != token ? Result<Unit, string>.Failure("the Secret Service did not return the item it was given")
-                    : cleared.IsFailure ? Result<Unit, string>.Failure(cleared.Error)
-                    : !cleared.Value ? Result<Unit, string>.Failure("the Secret Service did not remove the item it was given")
-                    : Result<Unit, string>.Success(Unit.Value);
+                    : cleared;
             },
             cancellationToken);
     }
@@ -77,12 +75,40 @@ internal sealed class LibsecretStore(string libraryName, Func<string, string?> e
 
     public async Task<Result<Unit, string>> DeleteAsync(SecretKind kind, AccountEmail email, CancellationToken cancellationToken)
     {
-        // Removed or nothing matched are both success; any failure, including a
-        // store this process cannot reach, is reported: the key may still be there.
-        Result<bool, string> cleared = await RunAsync(
-            (api, cancellable) => api.Clear(SecretNames.Kind(kind), email.Value, cancellable),
+        // Any failure, including a store this process cannot reach, is
+        // reported: the key may still be there.
+        return await RunAsync(
+            (api, cancellable) => ClearConfirmed(api, SecretNames.Kind(kind), email.Value, cancellable),
             cancellationToken);
-        return cleared.IsSuccess ? Result<Unit, string>.Success(Unit.Value) : Result<Unit, string>.Failure(cleared.Error);
+    }
+
+    public const string StillStored =
+        "the key is still in the store: the Secret Service did not delete it, as it does not for an item in a locked collection; unlock the keyring and try again";
+
+    // clearv deletes only unlocked matches and answers FALSE with no error
+    // when every match is locked (libsecret secret-password.c, secret-methods.c),
+    // so the result alone cannot tell "deleted" from "still there": a lookup
+    // on the same attributes settles it.
+    private static Result<Unit, string> ClearConfirmed(Api api, string kind, string email, nint cancellable) =>
+        AfterClear(api.Clear(kind, email, cancellable), () => api.Exists(kind, email, cancellable));
+
+    /// <summary>
+    /// What a delete came to, from the clear's result and, when the clear
+    /// raised no error, a lookup afterwards: found is a refusal, an error is
+    /// that error, and nothing found is the only success.
+    /// </summary>
+    internal static Result<Unit, string> AfterClear(Result<bool, string> cleared, Func<Result<bool, string>> stillStored)
+    {
+        ArgumentNullException.ThrowIfNull(stillStored);
+        if (cleared.IsFailure)
+        {
+            return Result<Unit, string>.Failure(cleared.Error);
+        }
+
+        Result<bool, string> found = stillStored();
+        return found.IsFailure ? Result<Unit, string>.Failure(found.Error)
+            : found.Value ? Result<Unit, string>.Failure(StillStored)
+            : Result<Unit, string>.Success(Unit.Value);
     }
 
     /// <summary>
@@ -287,12 +313,25 @@ internal sealed class LibsecretStore(string libraryName, Func<string, string?> e
             });
 
         /// <summary>
-        /// True when an item was removed. libsecret documents the return as
-        /// "whether any passwords were removed", so FALSE with no GError means
-        /// nothing matched.
+        /// True when an item was removed. FALSE with no GError is either
+        /// nothing matched or every match locked, so the store confirms it with a lookup.
         /// </summary>
         public Result<bool, string> Clear(string kind, string email, nint cancellable) =>
             With(kind, email, (schema, attributes, error) => _clear(schema, attributes, cancellable, error) != 0);
+
+        /// <summary>Whether an item matches, with any value found freed (and cleared) at once, never decoded.</summary>
+        public Result<bool, string> Exists(string kind, string email, nint cancellable) =>
+            With(kind, email, (schema, attributes, error) =>
+            {
+                byte* found = _lookup(schema, attributes, cancellable, error);
+                if (found == null)
+                {
+                    return false;
+                }
+
+                _passwordFree(found);
+                return true;
+            });
 
         /// <summary>
         /// Builds the schema and the two attributes, runs <paramref name="call"/>,

@@ -104,9 +104,16 @@ internal static partial class ApiKeyEndpoints
                 return Refused("StoredKeyKept", refusal);
             }
 
-            if (removal.Warning is null)
+            // "deleted" only when the store said so; a key left behind is logged
+            // where it is left, and an unrecorded key the store could not reach
+            // is not called deleted.
+            if (removal.AllDeleted)
             {
                 LogKeyDeleted(logger, target.Value);
+            }
+            else if (removal.Warning is null)
+            {
+                LogNoKeyRecorded(logger, target.Value);
             }
 
             RosterEntry? updated = await RecordAsync(rosterFile, target, null, cancellationToken);
@@ -136,9 +143,11 @@ internal static partial class ApiKeyEndpoints
         ArgumentNullException.ThrowIfNull(entry);
         ArgumentNullException.ThrowIfNull(kinds);
         List<string> left = [];
+        bool allDeleted = true;
         foreach (SecretKind kind in kinds)
         {
             Result<Unit, string> deleted = await store.DeleteAsync(kind, entry.Email, cancellationToken);
+            allDeleted &= deleted.IsSuccess;
             if (deleted.IsSuccess || !Recorded(entry, kind))
             {
                 continue;
@@ -151,14 +160,16 @@ internal static partial class ApiKeyEndpoints
                 return new StoredKeyRemoval(
                     "The OS store could not delete the stored key " + target + ": " + deleted.Error
                     + " Nothing was removed from the roster. Fix that and try again, or retry with keepStoredKey=true to go ahead and leave the key in the store.",
-                    null);
+                    null,
+                    AllDeleted: false);
             }
 
-            LogStoredKeyLeft(logger, target);
-            left.Add("The stored key " + target + " was left in the OS store (" + deleted.Error + "); remove it by hand with: " + ManualRemoval(kind, entry.Email));
+            string manual = ManualRemoval(kind, entry.Email);
+            LogStoredKeyLeft(logger, target, manual);
+            left.Add("The stored key " + target + " was left in the OS store (" + deleted.Error + "); remove it by hand: " + manual);
         }
 
-        return new StoredKeyRemoval(null, left.Count == 0 ? null : string.Join(" ", left));
+        return new StoredKeyRemoval(null, left.Count == 0 ? null : string.Join(" ", left), allDeleted);
     }
 
     // Only the Console key has a roster record so far.
@@ -166,9 +177,10 @@ internal static partial class ApiKeyEndpoints
         kind == SecretKind.ConsoleApiKey && entry.ConsoleApiKeySetOn is not null;
 
     /// <summary>The command that removes a stored key by hand, on this platform.</summary>
+    // secret-tool clear removes only unlocked items, so the keyring is unlocked first.
     internal static string ManualRemoval(SecretKind kind, AccountEmail email) => OperatingSystem.IsWindows()
         ? "cmdkey /delete:" + SecretNames.Target(kind, email)
-        : "secret-tool clear kind " + SecretNames.Kind(kind) + " email " + email.Value;
+        : "unlock the keyring, then run secret-tool clear kind " + SecretNames.Kind(kind) + " email " + email.Value;
 
     /// <summary>
     /// Sets the date on the entry as the roster holds it at write time, so an
@@ -204,12 +216,19 @@ internal static partial class ApiKeyEndpoints
     [LoggerMessage(Level = LogLevel.Warning, Message = "the OS store refused a stored key for {Account}")]
     private static partial void LogStoreRefused(ILogger logger, string account);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "stored key {Target} was left in the OS store at the operator's request")]
-    private static partial void LogStoredKeyLeft(ILogger logger, string target);
+    [LoggerMessage(Level = LogLevel.Warning, Message = "stored key {Target} was left in the OS store at the operator's request; to remove it by hand: {Command}")]
+    private static partial void LogStoredKeyLeft(ILogger logger, string target, string command);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "no stored console API key recorded for {Account}")]
+    private static partial void LogNoKeyRecorded(ILogger logger, string account);
 }
 
-/// <summary>What deleting stored keys came to: a refusal, or done with an optional warning naming a key left behind.</summary>
-internal sealed record StoredKeyRemoval(string? Refusal, string? Warning);
+/// <summary>
+/// What deleting stored keys came to: a refusal, or done with an optional
+/// warning naming a key left behind. <c>AllDeleted</c> is true only when the
+/// store confirmed every delete.
+/// </summary>
+internal sealed record StoredKeyRemoval(string? Refusal, string? Warning, bool AllDeleted);
 
 /// <summary>The roster entry after a key delete, and the warning when the key was left in the store.</summary>
 internal sealed record ApiKeyDeletionView(RosterEntryView Roster, string? Warning);
