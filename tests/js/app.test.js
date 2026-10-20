@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const { takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, promptWording, uniqueName, renameLabel, nearestLimit, tier, asOf, usageAge, sentence, ciTokenBadge, ciSecretBody, remoteControlQuestion, switchedToast } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+const { takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, promptWording, uniqueName, renameLabel, nearestLimit, tier, asOf, usageAge, sentence, ciRoleBadges, keptCiRoles, ciSecretBody, remoteControlQuestion, switchedToast } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
 
 function limit(kind, percent, fields) {
   return Object.assign({ kind, percent, known: true, windowReset: false }, fields);
@@ -337,21 +337,48 @@ test("the oldest figure behind the standing dates the card, a row from another s
   assert.strictEqual(usageAge(account, NOW), 5 * 60);
 });
 
-test("ciTokenBadge names the secret and counts down to the one-year expiry", () => {
-  const roster = {
-    ciTokenGeneratedOn: "2026-01-01",
-    ciTokenSecret: { name: "CLAUDE_CODE_OAUTH_TOKEN", repository: "octo/lane-one", organization: null }
-  };
-  assert.deepStrictEqual(ciTokenBadge(roster, Date.parse("2026-06-01T00:00:00Z")), {
+// Roles shaped as GET /api/dashboard returns them.
+const AUTOMATIONS = {
+  name: "AUTOMATIONS", prefix: "AUTOMATIONS", repository: null, organization: "octo",
+  tokenSecret: "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", keySecret: "AUTOMATIONS_CLAUDE_API_KEY",
+  tokenSetOn: "2026-01-01", tokenSetAt: "2026-01-01T10:00:00+00:00", keySetOn: "2026-01-02", keySetAt: null
+};
+const LEGACY_LANE_ONE = {
+  name: "legacy (review lanes)", prefix: "", repository: "octo/lane-one", organization: null,
+  tokenSecret: "CLAUDE_CODE_OAUTH_TOKEN", keySecret: null,
+  tokenSetOn: "2026-01-01", tokenSetAt: null, keySetOn: null, keySetAt: null
+};
+
+test("ciRoleBadges names the role and its halves and counts the token down to the one-year expiry", () => {
+  const roster = { ciTokenGeneratedOn: "2026-01-01", ciRoles: [AUTOMATIONS] };
+  assert.deepStrictEqual(ciRoleBadges(roster, Date.parse("2026-06-01T00:00:00Z")), [{
     kind: "ok",
-    text: "CI · lane-one",
-    title: "CLAUDE_CODE_OAUTH_TOKEN in octo/lane-one. Generated 2026-01-01; expires about 2027-01-01."
-  });
-  assert.strictEqual(ciTokenBadge(roster, Date.parse("2026-12-12T00:00:00Z")).text, "CI · lane-one · 20 d left");
-  const org = { ciTokenGeneratedOn: "2026-01-01", ciTokenSecret: { name: "LANE_TOKEN", repository: null, organization: "octo" } };
-  assert.strictEqual(ciTokenBadge(org, Date.parse("2026-06-01T00:00:00Z")).text, "CI · org octo");
-  assert.strictEqual(ciTokenBadge(roster, Date.parse("2026-12-12T00:00:00Z")).kind, "warn");
-  assert.strictEqual(ciTokenBadge(roster, Date.parse("2027-01-02T00:00:00Z")).kind, "crit");
+    text: "automations · token+key",
+    title: "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN and AUTOMATIONS_CLAUDE_API_KEY in org octo. Key set 2026-01-02. Token generated 2026-01-01; expires about 2027-01-01."
+  }]);
+  assert.strictEqual(ciRoleBadges(roster, Date.parse("2026-12-12T00:00:00Z"))[0].text, "automations · token+key · 20 d left");
+  assert.strictEqual(ciRoleBadges(roster, Date.parse("2026-12-12T00:00:00Z"))[0].kind, "warn");
+  assert.strictEqual(ciRoleBadges(roster, Date.parse("2027-01-02T00:00:00Z"))[0].kind, "crit");
+  const keyOnly = { ciRoles: [Object.assign({}, AUTOMATIONS, { tokenSetOn: null, tokenSetAt: null })] };
+  assert.deepStrictEqual(ciRoleBadges(keyOnly, Date.parse("2027-06-01T00:00:00Z")), [{
+    kind: "ok",
+    text: "automations · key",
+    title: "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN and AUTOMATIONS_CLAUDE_API_KEY in org octo. Key set 2026-01-02."
+  }]);
+});
+
+test("a card with two roles shows two badges", () => {
+  const roster = { ciTokenGeneratedOn: "2026-01-01", ciRoles: [AUTOMATIONS, LEGACY_LANE_ONE] };
+  assert.deepStrictEqual(
+    ciRoleBadges(roster, Date.parse("2026-06-01T00:00:00Z")).map((badge) => badge.text),
+    ["automations · token+key", "legacy (review lanes) (lane-one) · token"]);
+});
+
+test("keptCiRoles sends back only the ticked roles, each by its token secret and dates", () => {
+  assert.deepStrictEqual(keptCiRoles([AUTOMATIONS, LEGACY_LANE_ONE], [false, true]), [{
+    tokenSecret: "CLAUDE_CODE_OAUTH_TOKEN", repository: "octo/lane-one", organization: null,
+    tokenSetOn: "2026-01-01", tokenSetAt: null, keySetOn: null, keySetAt: null
+  }]);
 });
 
 test("ciSecretBody reads a repository by its slash, an organization without one, and blank as none", () => {
@@ -361,10 +388,10 @@ test("ciSecretBody reads a repository by its slash, an organization without one,
   assert.strictEqual(ciSecretBody("", "octo"), null);
 });
 
-test("ciTokenBadge keeps a hand-set marker readable and is null with no marker", () => {
-  assert.strictEqual(ciTokenBadge({ ciTokenGeneratedOn: "2026-09-01" }, Date.parse("2026-10-01T00:00:00Z")).text, "CI token · 2026-09-01");
-  assert.strictEqual(ciTokenBadge({ ciTokenGeneratedOn: null }, Date.parse("2026-10-01T00:00:00Z")), null);
-  assert.strictEqual(ciTokenBadge(null, Date.parse("2026-10-01T00:00:00Z")), null);
+test("ciRoleBadges keeps a hand-set marker readable and is empty with no marker", () => {
+  assert.deepStrictEqual(ciRoleBadges({ ciTokenGeneratedOn: "2026-09-01", ciRoles: [] }, Date.parse("2026-10-01T00:00:00Z")).map((badge) => badge.text), ["CI token · 2026-09-01"]);
+  assert.deepStrictEqual(ciRoleBadges({ ciTokenGeneratedOn: null, ciRoles: [] }, Date.parse("2026-10-01T00:00:00Z")), []);
+  assert.deepStrictEqual(ciRoleBadges(null, Date.parse("2026-10-01T00:00:00Z")), []);
 });
 
 test("Switch asks first only while the Remote Control task is running", () => {

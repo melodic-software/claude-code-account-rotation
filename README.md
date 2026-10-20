@@ -381,9 +381,13 @@ returns one entry per configured side (an empty list when none is). Supported fi
 ## Rotating the CI token
 
 A `CLAUDE_CODE_OAUTH_TOKEN` secret authenticates Claude Code in GitHub Actions. Each lane can
-have its own: one account per repository or organization secret. A card that backs a secret
-shows a `CI · <repository>` badge (hover it for the secret name and dates). The badge warns in
-the last 30 days of the token's one year and says when it has expired. CI draws on that account's
+have its own: one account per repository or organization secret. The roster records each secret
+as a CI role: a prefix plus its organization or repository, whose token secret is
+`<PREFIX>_CLAUDE_CODE_OAUTH_TOKEN` and key secret `<PREFIX>_CLAUDE_API_KEY`. The bare
+`CLAUDE_CODE_OAUTH_TOKEN` is the `legacy (review lanes)` role, and any other name is a role with
+a token secret only. One account backs each role. A card shows one badge per role it backs, such
+as `automations · token+key` (hover it for the secret names and dates). A token badge warns in the
+last 30 days of the token's one year and says when it has expired. CI draws on that account's
 5-hour and 7-day limits alongside your interactive sessions on it.
 
 Prerequisite: the GitHub CLI (`gh`) on PATH, signed in (`gh auth login`) as someone who may write
@@ -416,11 +420,17 @@ changes either one fails a check.
 To mark an account by hand instead (for a token made outside the tool, or when the tool set the
 secret but could not update the roster), open Edit and set "CI token generated on". Optionally
 also set "CI secret name" and "CI secret in" (`owner/repository`, or an organization), then
-Save. The same write is `PATCH /api/accounts/{email}` with
+Save; that adds the secret's role with its token set on that date. Untick a role in Edit to take
+it off the account. The same writes are `PATCH /api/accounts/{email}`, sent with the headers
+`POST /api/shutdown` takes, with
 `{"ciTokenGeneratedOn":"yyyy-MM-dd","ciTokenSecret":{"name":"...","repository":"owner/name"}}`
-(or `"organization"` in place of `"repository"`), sent with the headers `POST /api/shutdown`
-takes. A marker that names no secret replaces the other markers that name none. Clearing the date
-clears the secret too.
+(or `"organization"` in place of `"repository"`) to add one role, or with `"ciRoles"`, the
+account's whole list: each item names `prefix` (or `tokenSecret` for a token-only role), then
+`repository` or `organization`, and the halves set from this account, `tokenSetOn` and
+`keySetOn` (`yyyy-MM-dd`). A token half needs its date; a key half alone needs no token date.
+Naming a role takes it off the account that backed it before. A marker that names no role
+replaces the other markers that name none. Clearing the date clears every token half, and an
+account loses its date when its last token half goes.
 
 ## Build
 
