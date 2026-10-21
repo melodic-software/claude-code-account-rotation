@@ -52,6 +52,9 @@ internal sealed class UnavailableGhVariableWriter(string reason) : IGhVariableWr
 /// </summary>
 internal sealed partial class GhVariableWriter(string executable, TimeSpan timeout, GhWriteGate gate) : IGhVariableWriter
 {
+    /// <summary>The gate this writer's PATCHes pass.</summary>
+    internal GhWriteGate Gate => gate;
+
     /// <summary>
     /// <c>-f</c> for the value and the visibility, which GitHub takes as
     /// strings; <c>-F</c> for each repository id, an integer. A selected

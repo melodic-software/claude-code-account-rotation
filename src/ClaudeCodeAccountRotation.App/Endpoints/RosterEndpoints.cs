@@ -228,7 +228,10 @@ internal static partial class RosterEndpoints
                 updated = updated.ClaimingToken(CiRole.FromTokenSecret(secret), setOn, setAt: null);
             }
 
-            await rosterFile.UpdateAsync(roster => roster.With(updated), cancellationToken, via: LaneVia.Edit);
+            // The repair names a token secret only, so another account keeps
+            // that role's key half.
+            IReadOnlyCollection<CiRole>? halvesOnly = ciTokenSecret.Value is CiTokenSecret repaired ? [CiRole.FromTokenSecret(repaired)] : null;
+            await rosterFile.UpdateAsync(roster => roster.With(updated, halvesOnly), cancellationToken, via: LaneVia.Edit);
             return Results.Ok(DashboardAssembler.View(updated));
         });
 

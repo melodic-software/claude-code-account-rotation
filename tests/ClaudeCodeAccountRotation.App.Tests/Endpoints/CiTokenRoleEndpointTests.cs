@@ -310,6 +310,60 @@ public sealed class CiTokenRoleEndpointTests
     }
 
     [Fact]
+    public async Task TheOldBodyNamingARolesTokenSecretLeavesTheOtherAccountItsKeyHalf()
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: false, TestContext.Current.CancellationToken);
+        await using AppFactory host = factory;
+        DateOnly before = new(2026, 6, 1);
+        await SeedAsync(factory, new RosterEntry(Parse(Previous)).ClaimingToken(_automations, before, null).ClaimingKey(_automations, before, null));
+        using HttpClient client = factory.CreateMutatingClient();
+
+        await AssignAsync(client, new { secretName = "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", organization = "octo", visibility = "all" }, TestContext.Current.CancellationToken);
+
+        Roster roster = await RosterAsync(factory);
+        roster.Find(Parse(Previous))!.CiRoles.ShouldBe([new CiRoleAssignment(_automations, KeySetOn: before)]);
+        roster.Find(Parse(Email))!.CiRoles.Select(static held => (held.Role, held.HasToken, held.HasKey)).ShouldBe([(_automations, true, false)]);
+    }
+
+    [Fact]
+    public async Task TheEditRepairNamingARolesTokenSecretLeavesTheOtherAccountItsKeyHalf()
+    {
+        (AppFactory factory, _) = await StartAsync(withKey: false, TestContext.Current.CancellationToken);
+        await using AppFactory host = factory;
+        DateOnly before = new(2026, 6, 1);
+        await SeedAsync(factory, new RosterEntry(Parse(Previous)).ClaimingToken(_automations, before, null).ClaimingKey(_automations, before, null));
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage patched = await client.PatchAsJsonAsync(
+            Account(Email, string.Empty),
+            new { ciTokenGeneratedOn = "2026-09-01", ciTokenSecret = new { name = "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", organization = "octo" } },
+            TestContext.Current.CancellationToken);
+
+        patched.StatusCode.ShouldBe(HttpStatusCode.OK);
+        Roster roster = await RosterAsync(factory);
+        roster.Find(Parse(Previous))!.CiRoles.ShouldBe([new CiRoleAssignment(_automations, KeySetOn: before)]);
+        roster.Find(Parse(Email))!.CiRoles.Single().HasToken.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task AnEditThatSendsNoRolesKeepsTheRolesTheRosterHolds()
+    {
+        (AppFactory factory, _) = await StartAsync(withKey: false, TestContext.Current.CancellationToken);
+        await using AppFactory host = factory;
+        DateOnly before = new(2026, 6, 1);
+        RosterEntry entry = (await RosterAsync(factory)).Find(Parse(Email))!;
+        await SeedAsync(factory, entry.ClaimingToken(_automations, before, null));
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage patched = await client.PatchAsJsonAsync(Account(Email, string.Empty), new { alias = "renamed" }, TestContext.Current.CancellationToken);
+
+        patched.StatusCode.ShouldBe(HttpStatusCode.OK);
+        RosterEntry after = (await RosterAsync(factory)).Find(Parse(Email))!;
+        after.Alias.ShouldBe("renamed");
+        after.CiRoles.ShouldBe([new CiRoleAssignment(_automations, before)]);
+    }
+
+    [Fact]
     public async Task ARateLimitStopsEveryWriteAfterIt()
     {
         (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken);

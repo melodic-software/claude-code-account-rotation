@@ -512,19 +512,12 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
                     }
 
                     // Who set each half that was not set this time: that secret
-                    // still holds their value, so the message names them, and
-                    // when the role's other half moved here they keep this half.
-                    List<(AccountEmail Holder, CiRoleAssignment Half)> kept = [];
+                    // still holds their value, so the message names them.
                     foreach ((RoleTarget role, bool isKey, _) in failed)
                     {
                         if (roster.Entries.FirstOrDefault(other => other.Email != request.Email && other.CiRoles.Any(held => held.Role.Equals(role.Role) && (isKey ? held.HasKey : held.HasToken))) is RosterEntry holder)
                         {
                             holders[(role, isKey)] = holder.Email.Value;
-                            CiRoleAssignment held = holder.CiRoles.First(assignment => assignment.Role.Equals(role.Role));
-                            if (set.Exists(half => half.Role == role && half.IsKey != isKey))
-                            {
-                                kept.Add((holder.Email, isKey ? new CiRoleAssignment(role.Role, KeySetOn: held.KeySetOn, KeySetAt: held.KeySetAt) : new CiRoleAssignment(role.Role, held.TokenSetOn, held.TokenSetAt)));
-                            }
                         }
                     }
 
@@ -533,12 +526,13 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
                         entry = isKey ? entry.ClaimingKey(role.Role, today, setAt) : entry.ClaimingToken(role.Role, today, setAt);
                     }
 
-                    // The claim takes each role whole off its holder; a half that
-                    // holder still backs goes back on it, leaving the role split.
-                    Roster moved = roster.With(entry);
-                    return new Roster(moved.Entries.Select(other => kept.Where(half => half.Holder == other.Email).Select(static half => half.Half).ToList() is { Count: > 0 } halves
-                        ? other.WithCiRoles(other.CiRoles.AddRange(halves))
-                        : other));
+                    // A role with a key half that was not set whole this time (its
+                    // key failed, or was never asked for) is claimed by halves: the
+                    // other secret still holds its holder's value, and stays theirs.
+                    List<CiRole> partial = [.. request.Roles
+                        .Where(role => role.Role.HasKeyHalf && set.Count(half => half.Role == role) < 2)
+                        .Select(static role => role.Role)];
+                    return roster.With(entry, partial);
                 },
                 CancellationToken.None,
                 via: LaneVia.Assign);

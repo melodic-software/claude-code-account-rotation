@@ -57,7 +57,9 @@ All notable changes to this project are documented in this file. The format foll
   record). When only some halves are set, the roster records those, the account that set a half
   that failed keeps that half, and both cards show the role as `split`, naming the account behind
   each half; the message names every half not set. Re-sending one half of a split role (Push API
-  key, or a new token) moves only that half. `POST /api/accounts/{email}/ci-token` takes
+  key, or a new token) moves only that half, and so does naming one token secret (the 2.1.0 body,
+  or the Edit repair): another account keeps that role's key half. Edit sends the role list only
+  when you untick a role, so a form opened before another account took a role cannot take it back. `POST /api/accounts/{email}/ci-token` takes
   `roles`; the 2.1.0 single-secret body still works and writes the token half only (#259).
 - **Push API key.** `POST /api/accounts/{email}/api-key/push`, on the card's ··· menu, re-sends
   the stored Console key to the key secret of every role the account backs, with no sign-in, and

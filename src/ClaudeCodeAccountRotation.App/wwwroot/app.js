@@ -1238,7 +1238,8 @@
       // a blank one, is what lets the operator take a warning back off the card.
       body.notes = notes.value.trim() || null;
       body.ciTokenGeneratedOn = ciToken.value || null;
-      body.ciRoles = keptCiRoles(ciRoles, ciKeep.map(function (box) { return box.checked; }));
+      var kept = keptCiRoles(ciRoles, ciKeep.map(function (box) { return box.checked; }));
+      if (kept) { body.ciRoles = kept; }
       body.ciTokenSecret = ciSecretBody(ciSecretName.value, ciSecretWhere.value);
       mutate(accountPath(account.email), "PATCH", body, function (result) {
         showToast(result.ok ? account.email + " updated" : refused(result.body), result.ok ? "ok" : "error");
@@ -1557,8 +1558,11 @@
 
   // The roles an Edit keeps, as the PATCH names them: each by its token
   // secret's name, which the server reads back into the same role, with the
-  // dates its halves were set.
+  // dates its halves were set. Null when every box is still ticked: the PATCH
+  // then sends no ciRoles and the server keeps the roles it holds, so a form
+  // opened before another account took a role cannot hand it back.
   function keptCiRoles(roles, keep) {
+    if (keep.every(Boolean)) { return null; }
     return roles.filter(function (_, index) { return keep[index]; }).map(function (role) {
       return {
         tokenSecret: role.tokenSecret,

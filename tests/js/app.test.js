@@ -381,6 +381,12 @@ test("keptCiRoles sends back only the ticked roles, each by its token secret and
   }]);
 });
 
+test("keptCiRoles sends nothing when no role was unticked, so a stale form cannot take a role back", () => {
+  assert.strictEqual(keptCiRoles([AUTOMATIONS, LEGACY_LANE_ONE], [true, true]), null);
+  assert.strictEqual(keptCiRoles([], []), null);
+  assert.deepStrictEqual(keptCiRoles([AUTOMATIONS], [false]), []);
+});
+
 test("ciSecretBody reads a repository by its slash, an organization without one, and blank as none", () => {
   assert.deepStrictEqual(ciSecretBody(" TOKEN ", " octo/lane-one "), { name: "TOKEN", repository: "octo/lane-one" });
   assert.deepStrictEqual(ciSecretBody("TOKEN", "octo"), { name: "TOKEN", organization: "octo" });

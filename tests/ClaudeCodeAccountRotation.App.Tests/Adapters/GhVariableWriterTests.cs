@@ -1,6 +1,7 @@
 using ClaudeCodeAccountRotation.App.Adapters.Process;
 using ClaudeCodeAccountRotation.App.Endpoints;
 using ClaudeCodeAccountRotation.Core;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Adapters;
 
@@ -153,6 +154,19 @@ public sealed class GhVariableWriterTests : IDisposable
         long[] at = [.. (await File.ReadAllLinesAsync(stamps, TestContext.Current.CancellationToken)).Select(static line => long.Parse(line, System.Globalization.CultureInfo.InvariantCulture))];
         at.Length.ShouldBe(4);
         TimeSpan.FromTicks((at[2] - at[1]) / 100).ShouldBeGreaterThanOrEqualTo(GhWriteGate.Spacing);
+    }
+
+    [Fact]
+    public void TheComposedWritersShareOneGate()
+    {
+        ServiceCollection services = new();
+        ClaudeCodeAccountRotation.App.Hosting.AppComposition.AddGhWriters(services, Result<string, string>.Success("gh"));
+        using ServiceProvider provider = services.BuildServiceProvider();
+
+        GhSecretWriter secrets = provider.GetRequiredService<ICiSecretWriter>().ShouldBeOfType<GhSecretWriter>();
+        GhVariableWriter variables = provider.GetRequiredService<IGhVariableWriter>().ShouldBeOfType<GhVariableWriter>();
+
+        secrets.Gate.ShouldBeSameAs(variables.Gate);
     }
 
     [Fact(SkipUnless = nameof(OnUnix), Skip = "The stand-in gh is a shell script")]

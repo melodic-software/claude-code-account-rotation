@@ -64,6 +64,9 @@ internal sealed class UnavailableCiSecretWriter(string reason) : ICiSecretWriter
 /// </summary>
 internal sealed class GhSecretWriter(string executable, TimeSpan timeout, GhWriteGate gate) : ICiSecretWriter
 {
+    /// <summary>The gate this writer's sets pass.</summary>
+    internal GhWriteGate Gate => gate;
+
     public const string RateLimitMessage =
         "GitHub's API rate limit was reached, so this write and every one after it was stopped and nothing retried them. Wait for the limit to reset, then try again.";
 
