@@ -271,6 +271,7 @@ public sealed class KillSwitchEndpointTests
         JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(Token))!;
         body["state"]!.GetValue<string>().ShouldBe("stopped");
         body["value"]!.GetValue<string>().ShouldBe("true");
+        factory.Logs.Lines.ShouldContain("Information kill switch CLAUDE_LANES_DISABLED in org octo set to True ");
     }
 
     [Fact]
@@ -311,6 +312,7 @@ public sealed class KillSwitchEndpointTests
         response.StatusCode.ShouldBe(HttpStatusCode.BadGateway);
         (await response.Content.ReadFromJsonAsync<JsonObject>(Token))!["error"]!.GetValue<string>().ShouldStartWith("nothing was written");
         writer.Calls.ShouldBeEmpty();
+        factory.Logs.Lines.ShouldContain("Warning kill switch CLAUDE_LANES_DISABLED in org octo not set to True: GitHub answered HTTP 403 ");
     }
 
     [Fact]
@@ -360,6 +362,7 @@ public sealed class KillSwitchEndpointTests
         response.StatusCode.ShouldBe(HttpStatusCode.NotFound);
         writer.Calls.Count.ShouldBe(1);
         reader.Paths.Count.ShouldBe(1);
+        factory.Logs.Lines.ShouldContain(line => line.StartsWith("Warning kill switch CLAUDE_REVIEW_DISABLED in org octo not set to False: ", StringComparison.Ordinal));
     }
 
     [Fact]

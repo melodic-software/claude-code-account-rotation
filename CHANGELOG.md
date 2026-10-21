@@ -50,7 +50,8 @@ All notable changes to this project are documented in this file. The format foll
   `gh api --method PATCH orgs/<org>/actions/variables/<name> -f value=<true|false>` with the
   visibility, and any selected repository ids, read just before, and nothing when that read
   fails); it never
-  creates a variable, and the repository switch is read-only (#259).
+  creates a variable, and the repository switch is read-only. Each toggle logs the switch, the
+  organization, the value asked for and the outcome (#259).
 
 ### Changed
 

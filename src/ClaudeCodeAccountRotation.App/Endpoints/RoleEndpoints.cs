@@ -9,6 +9,7 @@ using ClaudeCodeAccountRotation.Core.Configuration;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeCodeAccountRotation.App.Endpoints;
 
@@ -25,7 +26,7 @@ namespace ClaudeCodeAccountRotation.App.Endpoints;
 /// the first rate-limit answer ends the check.
 /// </para>
 /// </summary>
-internal static class RoleEndpoints
+internal static partial class RoleEndpoints
 {
     public static void Map(IEndpointRouteBuilder routes)
     {
@@ -115,6 +116,7 @@ internal static class RoleEndpoints
             JsonObject? body,
             IGhVariableWriter writer,
             IGhApiReader reader,
+            ILoggerFactory loggers,
             CancellationToken cancellationToken) =>
         {
             string? name = body?["name"] is JsonValue named && named.TryGetValue(out string? text) ? text : null;
@@ -136,6 +138,7 @@ internal static class RoleEndpoints
             }
 
             string organization = valid.Value.Owner;
+            ILogger log = loggers.CreateLogger(typeof(RoleEndpoints));
 
             // The current visibility first, sent back with the value: GitHub's
             // docs do not promise an omitted one is kept. A read that fails
@@ -143,6 +146,7 @@ internal static class RoleEndpoints
             Result<VariableVisibility, GhApiFailure> visibility = await reader.GetOrganizationVariableVisibilityAsync(organization, kill.Name, cancellationToken);
             if (visibility.IsFailure)
             {
+                LogKillSwitchNotSet(log, kill.Name, organization, value, visibility.Error.Message);
                 return visibility.Error.RateLimited ? RateLimited(visibility.Error)
                     : visibility.Error.Status == 404 ? Results.NotFound(new { error = kill.Name + " is not set in org " + organization + " or not visible to this sign-in. The tool never creates it." })
                     : Results.Json(new { error = "nothing was written: " + visibility.Error.Message }, statusCode: StatusCodes.Status502BadGateway);
@@ -151,16 +155,27 @@ internal static class RoleEndpoints
             Result<Unit, GhApiFailure> set = await writer.SetOrganizationVariableAsync(organization, kill.Name, value, visibility.Value, cancellationToken);
             if (set.IsFailure)
             {
+                LogKillSwitchNotSet(log, kill.Name, organization, value, set.Error.Message);
                 return set.Error.RateLimited ? RateLimited(set.Error)
                     : set.Error.Status == 404 ? Results.NotFound(new { error = set.Error.Message })
                     : Results.Json(new { error = set.Error.Message }, statusCode: StatusCodes.Status502BadGateway);
             }
+
+            LogKillSwitchSet(log, kill.Name, organization, value);
 
             // The write happened; a re-read that fails, a rate limit included,
             // is shown on the switch rather than as a refusal.
             return Results.Ok(KillSwitchView.Of(kill, organization, await reader.GetVariableAsync(kill.PathIn(organization), cancellationToken)));
         });
     }
+
+    // Audit lines: which switch, which organization, the value asked for, and
+    // the outcome. Nothing gh printed is in a failure's message.
+    [LoggerMessage(Level = LogLevel.Information, Message = "kill switch {Name} in org {Organization} set to {Value}")]
+    private static partial void LogKillSwitchSet(ILogger logger, string name, string organization, bool value);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "kill switch {Name} in org {Organization} not set to {Value}: {Reason}")]
+    private static partial void LogKillSwitchNotSet(ILogger logger, string name, string organization, bool value, string reason);
 
     private static IResult RateLimited(GhApiFailure failure) =>
         Results.Json(new SwitchRefusalView("RateLimited", failure.Message), statusCode: StatusCodes.Status409Conflict);
