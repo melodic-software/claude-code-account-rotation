@@ -111,6 +111,7 @@ internal sealed partial class RosterFile : IDisposable
                 ["notes"] = entry.Notes,
                 ["ciTokenGeneratedOn"] = DateText(entry.CiTokenGeneratedOn),
                 ["consoleApiKeySetOn"] = DateText(entry.ConsoleApiKeySetOn),
+                ["adminKeySetOn"] = DateText(entry.AdminKeySetOn),
                 ["ciRoles"] = new JsonArray([.. entry.CiRoles.Select(RoleToJson)]),
             });
         }
@@ -169,6 +170,7 @@ internal sealed partial class RosterFile : IDisposable
                 ? [.. roles.Select(RoleFromJson).OfType<CiRoleAssignment>().DistinctBy(static assignment => assignment.Role)]
                 : [.. LegacyRole(entry["ciTokenSecret"], ciTokenGeneratedOn)],
             ConsoleApiKeySetOn = ParseCiTokenDate(Text(entry, "consoleApiKeySetOn")),
+            AdminKeySetOn = ParseCiTokenDate(Text(entry, "adminKeySetOn")),
         };
     }
 

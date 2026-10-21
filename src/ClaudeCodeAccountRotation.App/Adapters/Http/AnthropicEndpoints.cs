@@ -5,9 +5,9 @@ using ClaudeCodeAccountRotation.Core.Quota;
 namespace ClaudeCodeAccountRotation.App.Adapters.Http;
 
 /// <summary>
-/// What the two outbound adapters share: the honest identity the tool presents,
-/// the timeout, and the mapping from an HTTP outcome to a
-/// <see cref="UsageReadFailure"/>. The tool never imitates the CLI's
+/// What the outbound adapters share: the honest identity the tool presents,
+/// the timeout, and, for the usage and token clients, the mapping from an HTTP
+/// outcome to a <see cref="UsageReadFailure"/>. The tool never imitates the CLI's
 /// User-Agent; it says what it is on every request it makes.
 /// </summary>
 internal static class AnthropicEndpoints
@@ -15,6 +15,10 @@ internal static class AnthropicEndpoints
     public const string UsageUrl = "https://api.anthropic.com/api/oauth/usage";
     public const string TokenUrl = "https://platform.claude.com/v1/oauth/token";
     public const string OAuthBeta = "oauth-2025-04-20";
+    public const string AdminApiKeysUrl = "https://api.anthropic.com/v1/organizations/api_keys";
+
+    /// <summary>The <c>anthropic-version</c> the Admin API listing is sent with, as its documented example sends it.</summary>
+    public const string ApiVersion = "2023-06-01";
 
     /// <summary>
     /// Claude Code's public OAuth client id, as spike 03 sent it. The refresh

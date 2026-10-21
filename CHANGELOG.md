@@ -32,6 +32,14 @@ All notable changes to this project are documented in this file. The format foll
   account also deletes its stored keys. When the roster records a key the store cannot delete,
   both deletes answer 409 with the cause and keep the roster entry and its key record; `?keepStoredKey=true` goes ahead and
   names the key left in the store and the command that removes it (#259).
+- **Check API key, with an optional Admin key.** Set Admin key on a card keeps an Admin key in the
+  OS store like the Console key (`PUT` and `DELETE /api/accounts/{email}/admin-key`; the roster
+  records `adminKeySetOn`, returned as `accounts[].roster.adminKeySetOn`). Check API key
+  (`POST /api/accounts/{email}/api-key/check`) lists the organization's keys through the Admin API,
+  only on that click, finds the stored Console key by its partial hint, and says whether it is
+  archived, inactive, expired or expires within 30 days, or that it cannot tell which key it is.
+  A 401 or 403 says the Admin API is unavailable for this account. It is not a model API call, and
+  neither key reaches a response, a log or a file (#259).
 - **Check roles.** A header button lists the GitHub Actions secrets of every organization a role
   names, and of one you type, through `gh api`, only when clicked. It lists each role found from
   the secret names with its holder, says whether each half the roster records is `ok`, `changed

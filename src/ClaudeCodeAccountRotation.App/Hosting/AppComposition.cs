@@ -574,7 +574,7 @@ internal static class AppComposition
     }
 
     /// <summary>
-    /// The two outbound calls the tool ever makes, both on demand and never on a
+    /// The outbound calls the tool ever makes, all on demand and never on a
     /// timer, each through the factory so no captive HttpClient outlives DNS.
     /// The factory's logging handler names every header at Trace and redacts
     /// every value unless told otherwise, which is what keeps a bearer token out
@@ -590,6 +590,10 @@ internal static class AppComposition
         services.AddHttpClient(nameof(ClaudeOAuthTokenRefreshClient))
             .ConfigurePrimaryHttpMessageHandler(static () => OutboundPrimaryHandler.Create())
             .AddTypedClient<ITokenRefreshClient>((http, provider) => new ClaudeOAuthTokenRefreshClient(http, userAgent, provider.GetRequiredService<TimeProvider>()));
+        // The leader's alone: the Admin API key listing, read only on a Check click.
+        services.AddHttpClient(nameof(AnthropicAdminKeysClient))
+            .ConfigurePrimaryHttpMessageHandler(static () => OutboundPrimaryHandler.Create())
+            .AddTypedClient<IAdminApiKeysClient>(http => new AnthropicAdminKeysClient(http, userAgent));
     }
 
     /// <summary>
