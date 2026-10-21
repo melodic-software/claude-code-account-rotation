@@ -15,6 +15,7 @@ namespace ClaudeCodeAccountRotation.App.Tests.Switching;
 /// two operating systems, which is the one place this leader's own conventions
 /// are the wrong ones to apply.
 /// </summary>
+[Collection(StandInScripts.Name)]
 public sealed class PeerTests
 {
     [Fact]

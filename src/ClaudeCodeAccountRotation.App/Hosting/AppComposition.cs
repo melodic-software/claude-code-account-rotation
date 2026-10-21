@@ -254,17 +254,11 @@ internal static class AppComposition
             ? PseudoTerminalChild.Factory(cli.Value)
             : (_, _) => Result<ILoginChild, string>.Failure(cli.Error);
         Result<string, string> gh = GhSecretWriter.Locate(Environment.GetEnvironmentVariable("PATH"), OperatingSystem.IsWindows());
-        services.AddSingleton<ICiSecretWriter>(provider => gh.IsSuccess
-            ? new GhSecretWriter(gh.Value, TimeSpan.FromSeconds(60), provider.GetRequiredService<TimeProvider>())
-            : new UnavailableCiSecretWriter(gh.Error));
+        AddGhWriters(services, gh);
         // "Check roles": GitHub reads through the same gh, only on that click.
         services.AddSingleton<IGhApiReader>(gh.IsSuccess
             ? new GhApiReader(gh.Value, TimeSpan.FromSeconds(60))
             : new UnavailableGhApiReader(gh.Error));
-        // The kill-switch toggle: a PATCH of an existing organization variable's value.
-        services.AddSingleton<IGhVariableWriter>(_ => gh.IsSuccess
-            ? new GhVariableWriter(gh.Value, TimeSpan.FromSeconds(60), TimeProvider.System)
-            : new UnavailableGhVariableWriter(gh.Error));
         services.AddSingleton<ICiTokenSessionRunner>(provider => new ClaudeCliSetupTokenRunner(
             setupTokenChild,
             provider.GetRequiredService<ICiSecretWriter>(),
@@ -677,5 +671,21 @@ internal static class AppComposition
 
         public Task<Result<Unit, string>> LogoutAsync(string configDirectory, CancellationToken cancellationToken) =>
             Task.FromResult(Result<Unit, string>.Failure(reason));
+    }
+
+    /// <summary>
+    /// The two gh writers: CI secret sets and the kill-switch toggle (a PATCH
+    /// of an existing organization variable's value). Both pass one gate, so
+    /// every gh write runs one at a time, at least a second apart, on the wall clock.
+    /// </summary>
+    internal static void AddGhWriters(IServiceCollection services, Result<string, string> gh)
+    {
+        services.AddSingleton(_ => new GhWriteGate(TimeProvider.System));
+        services.AddSingleton<ICiSecretWriter>(provider => gh.IsSuccess
+            ? new GhSecretWriter(gh.Value, TimeSpan.FromSeconds(60), provider.GetRequiredService<GhWriteGate>())
+            : new UnavailableCiSecretWriter(gh.Error));
+        services.AddSingleton<IGhVariableWriter>(provider => gh.IsSuccess
+            ? new GhVariableWriter(gh.Value, TimeSpan.FromSeconds(60), provider.GetRequiredService<GhWriteGate>())
+            : new UnavailableGhVariableWriter(gh.Error));
     }
 }

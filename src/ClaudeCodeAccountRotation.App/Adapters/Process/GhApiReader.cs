@@ -203,8 +203,9 @@ internal static class GhApiReads
     /// Who may read <paramref name="secret"/> now, so that setting it again
     /// passes that back: <c>gh secret set</c> makes an organization secret
     /// private when told nothing. A repository secret has no visibility. A
-    /// secret GitHub answers 404 for does not exist yet and is created visible
-    /// to all repositories, as the organization's role secrets are. Any other
+    /// secret GitHub answers 404 for does not exist yet and is created as
+    /// <paramref name="whenNew"/> says: visible to all repositories, as the
+    /// organization's role secrets are, unless the caller says otherwise. Any other
     /// failure is returned, never guessed past, and so is a selected secret
     /// with no repositories, which no <c>--repos</c> list can express.
     /// Basis: https://docs.github.com/en/rest/actions/secrets#get-an-organization-secret and
@@ -213,7 +214,8 @@ internal static class GhApiReads
     public static async Task<Result<SecretTarget, GhApiFailure>> ReadAccessAsync(
         this IGhApiReader reader,
         CiTokenSecret secret,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        OrgSecretVisibility whenNew = OrgSecretVisibility.All)
     {
         ArgumentNullException.ThrowIfNull(reader);
         ArgumentNullException.ThrowIfNull(secret);
@@ -227,7 +229,7 @@ internal static class GhApiReads
         if (read.IsFailure)
         {
             return read.Error.Status == 404 && !read.Error.RateLimited
-                ? Result<SecretTarget, GhApiFailure>.Success(new SecretTarget(secret, OrgSecretVisibility.All, []))
+                ? Result<SecretTarget, GhApiFailure>.Success(new SecretTarget(secret, whenNew, []))
                 : Result<SecretTarget, GhApiFailure>.Failure(read.Error);
         }
 

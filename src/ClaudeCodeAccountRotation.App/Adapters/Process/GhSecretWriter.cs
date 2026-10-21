@@ -53,10 +53,8 @@ internal sealed class UnavailableCiSecretWriter(string reason) : ICiSecretWriter
 /// process can list. <c>gh</c> reads the value from standard input when
 /// <c>--body</c> is absent and input is not a terminal.
 /// <para>
-/// Sets run one at a time, each starting at least <see cref="WriteSpacing"/>
-/// after the last one ended, whoever asked: GitHub asks for requests to be
-/// serial and for writes to wait at least a second between each. Basis:
-/// https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#pause-between-mutative-requests.
+/// Sets pass the shared <see cref="GhWriteGate"/>: one gh write at a time,
+/// at least a second apart, whichever writer runs it.
 /// </para>
 /// <para>
 /// Nothing <c>gh</c> prints is returned: a failure is reported by its exit code
@@ -64,16 +62,13 @@ internal sealed class UnavailableCiSecretWriter(string reason) : ICiSecretWriter
 /// <see cref="RateLimitMessage"/> when its error output names a rate limit.
 /// </para>
 /// </summary>
-internal sealed class GhSecretWriter(string executable, TimeSpan timeout, TimeProvider? clock = null) : ICiSecretWriter, IDisposable
+internal sealed class GhSecretWriter(string executable, TimeSpan timeout, GhWriteGate gate) : ICiSecretWriter
 {
-    public static readonly TimeSpan WriteSpacing = TimeSpan.FromSeconds(1);
+    /// <summary>The gate this writer's sets pass.</summary>
+    internal GhWriteGate Gate => gate;
 
     public const string RateLimitMessage =
         "GitHub's API rate limit was reached, so this write and every one after it was stopped and nothing retried them. Wait for the limit to reset, then try again.";
-
-    private readonly TimeProvider _clock = clock ?? TimeProvider.System;
-    private readonly SemaphoreSlim _writes = new(1, 1);
-    private long? _lastWriteEnded;
 
     /// <summary>The <c>gh</c> on PATH, or the reason there is none.</summary>
     public static Result<string, string> Locate(string? pathVariable, bool isWindows)
@@ -91,7 +86,10 @@ internal sealed class GhSecretWriter(string executable, TimeSpan timeout, TimePr
         return Result<string, string>.Failure("the GitHub CLI (gh) was not found on PATH; install it and run `gh auth login` first");
     }
 
-    /// <summary>The argument list, never a command line, and never the value.</summary>
+    /// <summary>
+    /// The argument list, never a command line, and never the value. An
+    /// organization secret must name its visibility: gh would make it private.
+    /// </summary>
     public static IReadOnlyList<string> Arguments(CiTokenSecret secret, OrgSecretVisibility? visibility, IReadOnlyList<string> repositories)
     {
         ArgumentNullException.ThrowIfNull(secret);
@@ -101,6 +99,11 @@ internal sealed class GhSecretWriter(string executable, TimeSpan timeout, TimePr
         {
             arguments.AddRange(["--repo", secret.Owner]);
             return arguments;
+        }
+
+        if (visibility is null)
+        {
+            throw new ArgumentException("an organization secret needs its visibility, or gh makes it private", nameof(visibility));
         }
 
         arguments.AddRange(["--org", secret.Owner]);
@@ -140,22 +143,7 @@ internal sealed class GhSecretWriter(string executable, TimeSpan timeout, TimePr
     {
         ArgumentException.ThrowIfNullOrEmpty(value);
         IReadOnlyList<string> arguments = Arguments(secret, visibility, repositories);
-        await _writes.WaitAsync(cancellationToken);
-        Result<GhExit, string> set;
-        try
-        {
-            if (_lastWriteEnded is long ended && WriteSpacing - _clock.GetElapsedTime(ended) is { Ticks: > 0 } wait)
-            {
-                await Task.Delay(wait, _clock, cancellationToken);
-            }
-
-            set = await GhProcess.RunAsync(executable, arguments, value, timeout, cancellationToken);
-        }
-        finally
-        {
-            _lastWriteEnded = _clock.GetTimestamp();
-            _writes.Release();
-        }
+        Result<GhExit, string> set = await gate.RunAsync(() => GhProcess.RunAsync(executable, arguments, value, timeout, cancellationToken), cancellationToken);
 
         if (set.IsFailure)
         {
@@ -174,8 +162,6 @@ internal sealed class GhSecretWriter(string executable, TimeSpan timeout, TimePr
                 "gh secret set exited with code " + set.Value.ExitCode
                 + "; check `gh auth status` and that you may write secrets for " + secret.Owner);
     }
-
-    public void Dispose() => _writes.Dispose();
 
     /// <summary>Runs gh with <paramref name="input"/>, if any, on its standard input, and returns its exit code alone.</summary>
     private async Task<Result<int, string>> RunAsync(IReadOnlyList<string> arguments, string? input, CancellationToken cancellationToken)

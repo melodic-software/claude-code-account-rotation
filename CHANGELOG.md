@@ -14,8 +14,8 @@ All notable changes to this project are documented in this file. The format foll
   organization or repository, with token secret `<PREFIX>_CLAUDE_CODE_OAUTH_TOKEN` and key secret
   `<PREFIX>_CLAUDE_API_KEY`, and the date each half was set. The bare `CLAUDE_CODE_OAUTH_TOKEN` is
   the `legacy (review lanes)` role, with a token half only. One account backs each role, and an
-  account can back several. Claiming a role takes it off its previous holder whatever either's
-  dates. On an account that backs a token half, `ciTokenGeneratedOn` is always its newest token
+  account can back several. Claiming a role half takes that half off its previous holder whatever
+  either's dates; the other half stays with whoever set it. On an account that backs a token half, `ciTokenGeneratedOn` is always its newest token
   half's date, so it drops when that role is taken off and clears with the last token half (#259).
 - `roster.json` entries carry `ciRoles` and `consoleApiKeySetOn`; `GET /api/dashboard` returns
   them as `accounts[].roster.ciRoles` and `accounts[].roster.consoleApiKeySetOn`, and still returns
@@ -53,10 +53,15 @@ All notable changes to this project are documented in this file. The format foll
   secret, one at a time and at least a second apart. Each existing organization secret's
   visibility is read first and passed back, since `gh secret set` otherwise makes it private; a
   new secret is visible to all repositories. A role with a key half is refused before sign-in
-  until the account's Console key is stored. When only some halves are set, the roster records
-  those, the message names the rest, and the card shows a role left half from this account as
-  `split`. `POST /api/accounts/{email}/ci-token` takes `roles`; the 2.1.0 single-secret body still
-  works (#259).
+  until the OS store holds the account's Console key (read on the click, not only the roster's
+  record). When only some halves are set, the roster records those, the account that set a half
+  that failed keeps that half, and both cards show the role as `split`, naming the account behind
+  each half; the message names every half not set. Every claim moves only the halves it sets:
+  re-sending one half of a split role (Push API key, or a new token) or naming one token secret
+  (the 2.1.0 body, or the Edit repair) leaves another account that role's other half. Edit sends
+  the role list only when you untick a role, so a form opened before another account took a role
+  cannot take it back. `POST /api/accounts/{email}/ci-token` takes `roles`; the 2.1.0
+  single-secret body still works and writes the token half only (#259).
 - **Push API key.** `POST /api/accounts/{email}/api-key/push`, on the card's ··· menu, re-sends
   the stored Console key to the key secret of every role the account backs, with no sign-in, and
   logs `push` in the lane history (#259).
@@ -78,9 +83,9 @@ All notable changes to this project are documented in this file. The format foll
   `POST /api/roles/limit-stops` once with `{"from": [<emails>]}`, which reads the failed runs of
   the last 7 days in each `laneRepositories` repository (at most 30 runs in all, newest first),
   their failed jobs and those jobs' annotations. A `class=rate-limit` annotation naming a half an
-  account backed when the run started is a "subscription limit" (token) or "credit stop" (key). The panel
-  says "This account hit a limit in the last 7 days." with Move anyway and Cancel, and never blocks
-  the move. With no `laneRepositories` it says the check did not run; the first rate-limit answer
+  account backed when the run started is a "subscription limit" (token) or "credit stop" (key).
+  The panel says "This account hit a limit in the last 7 days." with Move anyway and Cancel, and
+  never blocks the move. With no `laneRepositories` it says the check did not run; the first rate-limit answer
   ends the check as partial, with no retry (#259).
 
 ### Changed
@@ -96,11 +101,14 @@ All notable changes to this project are documented in this file. The format foll
   reads every dated account as a marker set by hand, and its next edit to one dated account clears
   `ciTokenGeneratedOn` on the others (#259).
 - `POST /api/accounts/{email}/ci-token` with one organization `secretName` and no `visibility` now
-  reads the secret's visibility from GitHub and passes it back (a new secret is visible to all
-  repositories), where 2.1.0 made it private (#259).
-- The manual commands a failed CI token names now pass `--visibility all` (or `--repos`) to
-  `gh secret set --org`, which otherwise makes the secret private. Writes through `gh secret set`
-  run one at a time, at least a second apart, and a rate-limit answer is named as one (#259).
+  reads the secret's visibility from GitHub and passes it back, where 2.1.0 made it private. A
+  secret that does not exist yet is still created private, unless its name ends in
+  `CLAUDE_CODE_OAUTH_TOKEN`, a role's, which is created visible to all repositories (#259).
+- The manual commands a failed CI token names now tell you to pass the secret's current visibility
+  to `gh secret set --org` (`--visibility all`, `--visibility private`, or `--repos a,b`), since gh
+  otherwise makes it private. Every gh write, secret sets and kill-switch toggles alike, now runs
+  one at a time through one gate, at least a second after the last one ended, and a rate-limit
+  answer to `gh secret set` is named as one (#259).
 
 ## [2.2.0] - 2026-10-20
 

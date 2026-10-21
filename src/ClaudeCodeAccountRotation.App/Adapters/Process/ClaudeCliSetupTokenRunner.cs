@@ -75,7 +75,7 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
     private const int MaximumCodeLength = 256;
 
     internal const string ManualFallback =
-        " To do it by hand: run `claude setup-token`, sign in as the account, then `gh secret set <name> --repo <owner/name>` (or `--org <org> --visibility all`, or `--repos <names>` for a secret visible to selected repositories, since gh otherwise makes it private) and paste the token.";
+        " To do it by hand: run `claude setup-token`, sign in as the account, then `gh secret set <name> --repo <owner/name>` (or `--org <org>` with the secret's current visibility: `--visibility all`, `--visibility private`, or `--repos a,b` for selected repositories, since gh otherwise makes it private) and paste the token.";
 
     private const string RejectedMessage = "That code was rejected. Start again and paste the whole code from the browser." + ManualFallback;
     private const string ExpiredMessage = "This CI token session expired after ten minutes. Start it again.";
@@ -511,8 +511,8 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
                         return roster;
                     }
 
-                    // Who set each half that was not set this time, so the message
-                    // can say whose value that secret still holds.
+                    // Who set each half that was not set this time: that secret
+                    // still holds their value, so the message names them.
                     foreach ((RoleTarget role, bool isKey, _) in failed)
                     {
                         if (roster.Entries.FirstOrDefault(other => other.Email != request.Email && other.CiRoles.Any(held => held.Role.Equals(role.Role) && (isKey ? held.HasKey : held.HasToken))) is RosterEntry holder)
@@ -526,6 +526,8 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
                         entry = isKey ? entry.ClaimingKey(role.Role, today, setAt) : entry.ClaimingToken(role.Role, today, setAt);
                     }
 
+                    // Claimed by halves: a half not set this time still holds its
+                    // holder's value, and stays theirs.
                     return roster.With(entry);
                 },
                 CancellationToken.None,

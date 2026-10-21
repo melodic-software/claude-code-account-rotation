@@ -40,9 +40,10 @@ Status: a tagged release exists.
   on a timer. It reads GitHub only through `gh api`, with gh's own User-Agent and sign-in, and
   only when you click Check roles, Generate CI token or Push API key: those read secret names,
   dates and visibility, never a value. Start sign-in, when it moves a role off another account,
-  also reads up to 30 failed lane runs of the last 7 days, their jobs and annotations. The first rate-limit answer stops what was clicked, and
-  nothing retries it. Writes go one at a time, at least a second apart. It changes a lane kill
-  switch's value only when you confirm its toggle, and never creates one.
+  also reads up to 30 failed lane runs of the last 7 days, their jobs and annotations. The first
+  rate-limit answer stops what was clicked, and nothing retries it. Writes go one at a time, at
+  least a second apart. It changes a lane kill switch's value only when you confirm its toggle,
+  and never creates one.
 - The parked-pair refresh presents Claude Code's public OAuth `client_id`.
 - An optional Admin key, stored per account like the Console key, lets Check API key read the
   organization's key list from the Admin API (`GET /v1/organizations/api_keys`) and say whether
@@ -153,7 +154,7 @@ its terms at any time.
 | OAuth `client_id` for parked refreshes | Claude Code's public one | [Posture](#posture); [`AnthropicEndpoints.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Http/AnthropicEndpoints.cs) |
 | CI tokens | Only on a click: the unmodified `claude setup-token` makes the token, you sign in on Anthropic's page and paste the code, and the token goes from the CLI's output to `gh secret set` in memory, never to disk, a log, or the page | [Assigning accounts to CI roles](#assigning-accounts-to-ci-roles); [`ClaudeCliSetupTokenRunner.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Process/ClaudeCliSetupTokenRunner.cs) |
 | Console API keys | Kept only in the OS store, per machine; read only to hand to `gh secret set` on its standard input | [Posture](#posture); [`ApiKeyEndpoints.cs`](src/ClaudeCodeAccountRotation.App/Endpoints/ApiKeyEndpoints.cs) |
-| GitHub reads | Only on a click, through `gh api`: secret names, dates and visibility, never a value | [Posture](#posture); [`GhApiReader.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Process/GhApiReader.cs) |
+| GitHub reads | Only on a click, through `gh api`: secret names, dates and visibility, never a value; before a role moves, up to 30 failed lane runs and their annotations | [Posture](#posture); [`GhApiReader.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Process/GhApiReader.cs) |
 
 Two points are gray:
 
@@ -420,7 +421,7 @@ earlier release is a role with a token secret only. The lane launcher spends a r
 first and falls back to its token. Role secrets are organization secrets visible to all
 repositories, on purpose.
 
-One account backs each role, and an account can back several. Both halves of a role come from the
+One account backs each role half, and an account can back several roles. Both halves of a role come from the
 same account: the token from that account's `claude setup-token`, the key from that account's
 Console API key, which you paste once per machine with Set API key and which stays in the OS store
 (see [Posture](#posture)). A card shows one badge per role it backs, such as
@@ -444,24 +445,32 @@ those secrets (`admin:org` for organization secrets). The tool checks this befor
    key, one at a time and at least a second apart. Before any token is made it reads who may see
    each existing secret and passes that back (`--visibility all`, `private`, or `--repos` with the
    selected repositories), since `gh secret set` otherwise makes a secret private; a new secret is
-   visible to all repositories. A role the account takes is taken off the account that backed it.
+   visible to all repositories. Each half set from this account is taken off the account that
+   backed it.
 
 The token and key never leave memory: they are not shown, logged, written to disk, or passed as an
 argument. A failure before any secret is set (a rejected code, `gh` refusing every write, or a CLI
 release whose screen the tool cannot read) ends the session without storing anything, and the
 message gives the manual commands: `claude setup-token`, then `gh secret set <name> --repo
-<owner/name>`, or `--org <org> --visibility all` (`--repos <names>` for selected repositories).
-When some halves are set and others are not, the roster records the halves that were set and the
-message names each one that was not. A role whose token was set but whose key was not is `split`
-(token from one account, key from another) until the key is re-sent: Push API key, in the ···
-menu, sends the stored key to the key secret of every role the account backs, with no sign-in.
+<owner/name>`, or `--org <org>` with the secret's current visibility (`--visibility all`,
+`--visibility private`, or `--repos a,b` for selected repositories), since gh otherwise makes it
+private. When some halves are set and others are not, the roster records the halves that were
+set and the message names each one that was not. A role whose token was set but whose key was not
+is `split` (token from one account, key from another): the account that set the half that failed
+keeps it, and both cards say `split` and name both accounts until that half is re-sent.
+Every claim moves only the halves it sets. Push API
+key, in the ··· menu, sends the stored key to the key secret of every role the account backs,
+with no sign-in.
 Use it after replacing a Console key too. The first rate-limit answer from GitHub stops every
 write after it, and nothing retries it.
 
 The same start is `POST /api/accounts/{email}/ci-token` with `{"roles":[{"prefix":"AUTOMATIONS",
 "organization":"octo"}]}` (`tokenSecret` in place of `prefix` for a token-only role, and
 `repository` in place of `organization`). The 2.1.0 body, one `secretName` with its repository or
-organization, `visibility` and `repositories`, still works and sets that one secret as named.
+organization, `visibility` and `repositories`, still works: it writes the token half only, to
+that one secret. With an organization and no `visibility`, it keeps the visibility the secret has;
+a secret that does not exist yet is created visible to all repositories when its name ends in
+`CLAUDE_CODE_OAUTH_TOKEN` (a role's), and private otherwise, as gh's default made it.
 Push is `POST /api/accounts/{email}/api-key/push`.
 
 `claude setup-token` draws its screen only when its input is a terminal, so the tool runs it
@@ -526,7 +535,7 @@ it off the account. The same writes are `PATCH /api/accounts/{email}`, sent with
 account's whole list: each item names `prefix` (or `tokenSecret` for a token-only role), then
 `repository` or `organization`, and the halves set from this account, `tokenSetOn` and
 `keySetOn` (`yyyy-MM-dd`). A token half needs its date; a key half alone needs no token date.
-Naming a role takes it off the account that backed it before. A marker set in Edit that names no
+Naming a role half takes that half off the account that backed it before; the other half stays. A marker set in Edit that names no
 secret is a hand marker: hand markers keep replacing each other, so at most one account carries
 one, and a role claim never clears one. Clearing the date clears every token half. On an
 account that backs a token half, the date is always that of its newest token half, whatever the

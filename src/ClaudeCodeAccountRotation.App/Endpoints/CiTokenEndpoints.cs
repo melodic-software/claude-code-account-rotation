@@ -45,6 +45,7 @@ internal static partial class CiTokenEndpoints
             RosterFile rosterFile,
             ICiTokenSessionRunner runner,
             IGhApiReader github,
+            ISecretStore store,
             IBrowserLauncher browsers,
             CancellationToken cancellationToken) =>
         {
@@ -93,7 +94,12 @@ internal static partial class CiTokenEndpoints
             {
                 // An organization secret named with no visibility keeps the one
                 // it has: gh would otherwise make it private.
-                Result<SecretTarget, GhApiFailure> read = await github.ReadAccessAsync(unnamed, cancellationToken);
+                // A new secret named in the role pattern is a role's, visible to
+                // all repositories; any other new one is private, as gh made it.
+                Result<SecretTarget, GhApiFailure> read = await github.ReadAccessAsync(
+                    unnamed,
+                    cancellationToken,
+                    whenNew: CiRole.FromTokenSecret(unnamed).TokenSecretOverride is null ? OrgSecretVisibility.All : OrgSecretVisibility.Private);
                 if (read.IsFailure)
                 {
                     return Refused("SecretUnreadable", Describe(read.Error));
@@ -106,9 +112,22 @@ internal static partial class CiTokenEndpoints
             {
                 // Before any token exists: a role written whole needs the key
                 // beside the token, or it would be left half from this account.
-                if (entry.ConsoleApiKeySetOn is null && named.FirstOrDefault(static role => role.HasKeyHalf) is CiRole keyed)
+                if (named.FirstOrDefault(static role => role.HasKeyHalf) is CiRole keyed)
                 {
-                    return Refused("NoConsoleKey", "paste this account's Console key first (Set API key): " + keyed + " has a key half.");
+                    // The store, not only the roster's record of it: a key the
+                    // store has lost would leave every key half unset.
+                    Result<string?, string> stored = entry.ConsoleApiKeySetOn is null
+                        ? Result<string?, string>.Success(null)
+                        : await store.ReadAsync(SecretKind.ConsoleApiKey, parsed.Value, cancellationToken);
+                    if (stored.IsFailure)
+                    {
+                        return Refused("KeyStoreUnavailable", stored.Error);
+                    }
+
+                    if (stored.Value is null)
+                    {
+                        return Refused("NoConsoleKey", "paste this account's Console key first (Set API key): " + keyed + " has a key half.");
+                    }
                 }
 
                 Result<CiTokenRequest, string> resolved = await ResolveAsync(parsed.Value, named, github, cancellationToken);
