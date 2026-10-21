@@ -553,7 +553,8 @@ data directory: one JSON line with the time, the role, `token` or `key`, the acc
 previous account (or null), and the route (`assign`, `push`, `edit` or `delete`). It holds names
 and dates only, never a secret value, and a line that does not parse is skipped.
 `GET /api/lane-history?since=<date or ISO time>` returns the entries, and the page's History
-disclosure reads the last 30 days when you open it.
+disclosure reads the last 30 days when you open it, one line per entry naming the role and its
+organization or repository.
 
 ## Build
 

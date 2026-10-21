@@ -71,13 +71,6 @@ internal static class GhProcess
             ChildProcess.TryKill(process);
             return Result<GhExit, string>.Failure("gh did not finish in time");
         }
-        catch (OperationCanceledException)
-        {
-            // The caller went away: a read it no longer waits on stops here.
-            // A write that must finish is handed CancellationToken.None.
-            ChildProcess.TryKill(process);
-            throw;
-        }
         catch (IOException)
         {
             ChildProcess.TryKill(process);
