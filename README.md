@@ -357,10 +357,14 @@ account, the tool restarts the task:
 
 1. It records the task's process tree: the process whose command line carries the task action's
    arguments, and everything under it (`conhost.exe`, `pwsh.exe`, then the `claude.exe` server).
-   A `claude remote-control` you started in a terminal is not under that process and is never
-   touched.
+   A `claude remote-control` you started in a terminal is not under that process and is not
+   touched while the terminal runs. A `claude.exe` with exactly the task's `remote-control`
+   arguments whose parent has exited is taken for the task's server left behind and is recorded
+   too, even if a terminal you have since closed started it; one whose parent is still running
+   is not.
 2. It ends the task. That ends only the root process, so it then ends the recorded processes
-   still running, `claude.exe` first.
+   still running, `claude.exe` first. A task that had already stopped is not ended, but a server
+   it left behind still is.
 3. It waits up to 15 seconds for the task to stop, then runs it again.
 
 - A task that was not running is left alone, and the switch asks nothing. When the page cannot
@@ -371,7 +375,8 @@ account, the tool restarts the task:
 - A second switch sent while the first one's restart is running is refused (`MutationInProgress`).
 - A switch of the WSL side, and any switch on Linux, restarts nothing.
 - A restart that fails never fails the switch. A process that cannot be ended stops the restart
-  before the task runs again, so two servers never run. A running task whose processes cannot be
+  before the task runs again, so two servers never run. The leader's log records each restart,
+  each server ended after its parent exited, and why a restart failed. A running task whose processes cannot be
   identified is neither ended nor run. The result says why and what to run by
   hand: `Stop-ScheduledTask claude-remote-control`, end the `claude.exe` running `remote-control`
   that it leaves behind, then `Start-ScheduledTask claude-remote-control`.

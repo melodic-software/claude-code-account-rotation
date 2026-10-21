@@ -15,6 +15,7 @@ using ClaudeCodeAccountRotation.Core.Ports;
 using ClaudeCodeAccountRotation.Core.Switching;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Endpoints;
 
@@ -131,6 +132,7 @@ public sealed class SwitchEndpointTests
             TimeProvider.System,
             TimeSpan.FromSeconds(5),
             TimeSpan.FromMilliseconds(1),
+            NullLogger<ScheduledTaskRemoteControl>.Instance,
             ScheduledTaskRemoteControlTests.Expand)));
         using HttpClient client = factory.CreateMutatingClient();
 
@@ -161,6 +163,7 @@ public sealed class SwitchEndpointTests
             TimeProvider.System,
             TimeSpan.FromSeconds(5),
             TimeSpan.FromMilliseconds(1),
+            NullLogger<ScheduledTaskRemoteControl>.Instance,
             ScheduledTaskRemoteControlTests.Expand)));
         using HttpClient client = factory.CreateMutatingClient();
 
@@ -258,6 +261,7 @@ public sealed class SwitchEndpointTests
             TimeProvider.System,
             TimeSpan.FromSeconds(5),
             TimeSpan.FromMilliseconds(1),
+            NullLogger<ScheduledTaskRemoteControl>.Instance,
             ScheduledTaskRemoteControlTests.Expand)));
         using HttpClient client = factory.CreateMutatingClient();
 
@@ -290,6 +294,7 @@ public sealed class SwitchEndpointTests
             TimeProvider.System,
             TimeSpan.FromSeconds(5),
             TimeSpan.FromMilliseconds(1),
+            NullLogger<ScheduledTaskRemoteControl>.Instance,
             ScheduledTaskRemoteControlTests.Expand)));
         using HttpClient client = factory.CreateMutatingClient();
 

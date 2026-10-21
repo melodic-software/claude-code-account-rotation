@@ -1,5 +1,6 @@
 using ClaudeCodeAccountRotation.App.Adapters.Process;
 using ClaudeCodeAccountRotation.Core;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Adapters;
 
@@ -50,16 +51,17 @@ public sealed class ScheduledTaskRemoteControlTests
         new(120, 110, "claude.exe", "\\Profiles\\someone\\.local\\bin\\claude.exe remote-control"),
     ];
 
-    private static ScheduledTaskRemoteControl RemoteControl(Script script, Killer? killer = null, TimeSpan? stopBound = null) =>
+    private static ScheduledTaskRemoteControl RemoteControl(Script script, Killer? killer = null, TimeSpan? stopBound = null, IReadOnlyList<ProcessEntry>? table = null) =>
         new(
             "claude-remote-control",
             script.Run,
             script.Run,
-            _ => Task.FromResult(Result<IReadOnlyList<ProcessEntry>, string>.Success(Machine)),
+            _ => Task.FromResult(Result<IReadOnlyList<ProcessEntry>, string>.Success(table ?? Machine)),
             (killer ?? new Killer()).Kill,
             TimeProvider.System,
             stopBound ?? TimeSpan.FromSeconds(5),
             TimeSpan.FromMilliseconds(1),
+            NullLogger<ScheduledTaskRemoteControl>.Instance,
             Expand);
 
     private static Script Restartable() => new Script()
@@ -203,6 +205,116 @@ public sealed class ScheduledTaskRemoteControlTests
         killer.Killed.ShouldBe([30, 20, 10]);
     }
 
+    /// <summary>
+    /// After a switch: the task's conhost and pwsh have exited, the task reads
+    /// Ready, and the server they started is still running under the previous
+    /// account with a parent id that no longer exists.
+    /// </summary>
+    private static IReadOnlyList<ProcessEntry> Orphaned { get; } = [.. Machine.Where(static process => process.Id is not (10 or 20))];
+
+    [Fact]
+    public async Task AServerWhoseTaskTreeExitedIsEndedBeforeTheTaskRunsAgain()
+    {
+        Script script = new Script().Answer("/XML", 0, TaskXml).Answer("/Query", 0, Ready).Answer("/End", 0).Answer("/Run", 0);
+        Killer killer = new() { Log = script };
+
+        Result<Unit, string> restart = await RemoteControl(script, killer, table: Orphaned).RestartAsync(startIfStopped: true, Token);
+
+        restart.IsSuccess.ShouldBeTrue(restart.IsFailure ? restart.Error : "");
+        script.Calls.ShouldBe([
+            "/Query /TN claude-remote-control /XML",
+            "State",
+            "Kill 30",
+            "/Run /TN claude-remote-control"]);
+    }
+
+    [Fact]
+    public async Task AnOrphanedServerThatCannotBeEndedIsNeverJoinedByASecond()
+    {
+        Script script = new Script().Answer("/XML", 0, TaskXml).Answer("/Query", 0, Ready).Answer("/End", 0).Answer("/Run", 0);
+
+        Result<Unit, string> restart = await RemoteControl(script, new Killer { Refuse = 30 }, table: Orphaned).RestartAsync(startIfStopped: true, Token);
+
+        restart.IsFailure.ShouldBeTrue();
+        restart.Error.ShouldContain("claude.exe (process 30): Access is denied.");
+        script.Calls.ShouldNotContain(static call => call.StartsWith("/Run", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AnOrphanLeftBesideARunningTreeIsEndedWithIt()
+    {
+        Killer killer = new();
+        IReadOnlyList<ProcessEntry> table = [.. Machine, new(40, 25, "claude.exe", "\\Profiles\\someone\\.local\\bin\\claude.exe remote-control --permission-mode auto")];
+
+        Result<Unit, string> restart = await RemoteControl(Restartable(), killer, table: table).RestartAsync(startIfStopped: true, Token);
+
+        restart.IsSuccess.ShouldBeTrue(restart.IsFailure ? restart.Error : "");
+        killer.Killed.ShouldBe([30, 20, 40, 10]);
+    }
+
+    [Fact]
+    public async Task ATerminalServerWithTheTasksArgumentsAndALiveParentIsLeftAlone()
+    {
+        Script script = new Script().Answer("/XML", 0, TaskXml).Answer("/Query", 0, Ready).Answer("/End", 0).Answer("/Run", 0);
+        Killer killer = new();
+        IReadOnlyList<ProcessEntry> table =
+        [
+            .. Machine.Where(static process => process.Id is not (10 or 20 or 30 or 120)),
+            new(120, 110, "claude.exe", "\\Profiles\\someone\\.local\\bin\\claude.exe remote-control --permission-mode auto"),
+        ];
+
+        Result<Unit, string> restart = await RemoteControl(script, killer, table: table).RestartAsync(startIfStopped: true, Token);
+
+        restart.IsSuccess.ShouldBeTrue(restart.IsFailure ? restart.Error : "");
+        killer.Killed.ShouldBeEmpty();
+        script.Calls[^1].ShouldBe("/Run /TN claude-remote-control");
+    }
+
+    [Fact]
+    public void AParentIdHeldByAProcessStartedAfterTheServerIsAReusedIdAndTheServerIsOrphaned()
+    {
+        DateTimeOffset logon = new(2026, 10, 21, 8, 0, 0, TimeSpan.Zero);
+        IReadOnlyList<ProcessEntry> table =
+        [
+            new(4, 0, "svchost.exe", null, logon.AddMinutes(-5)),
+            new(20, 4, "notepad.exe", "notepad.exe", logon.AddHours(2)),
+            new(30, 20, "claude.exe", "claude.exe remote-control --permission-mode auto", logon),
+            new(110, 4, "pwsh.exe", "pwsh.exe", logon.AddMinutes(-1)),
+            new(120, 110, "claude.exe", "claude.exe remote-control --permission-mode auto", logon),
+        ];
+        (string command, string arguments) = ScheduledTaskRemoteControl.Action(TaskXml)!.Value;
+
+        ScheduledTaskRemoteControl.TaskTree(table, command, arguments, Expand).Select(static process => process.Id).ShouldBe([30]);
+    }
+
+    [Fact]
+    public void OnlyTheServersOwnArgumentsMarkAnOrphan()
+    {
+        (string command, string arguments) = ScheduledTaskRemoteControl.Action(TaskXml)!.Value;
+        IReadOnlyList<ProcessEntry> table =
+        [
+            new(30, 20, "claude.exe", "claude.exe remote-control"),
+            new(31, 21, "claude.exe", "\"\\Program Files\\claude\\claude.exe\" remote-control --permission-mode auto --verbose"),
+            new(32, 22, "node.exe", "node.exe remote-control --permission-mode auto"),
+            new(33, 23, "claude.exe", "\"\\Program Files\\claude\\claude.exe\" remote-control --permission-mode auto"),
+        ];
+
+        ScheduledTaskRemoteControl.TaskTree(table, command, arguments, Expand).Select(static process => process.Id).ShouldBe([33]);
+    }
+
+    [Fact]
+    public void AnIdNowHeldByAProcessStartedAtAnotherTimeIsNotTheRecordedProcess()
+    {
+        DateTimeOffset started = new(2026, 10, 21, 8, 0, 0, TimeSpan.Zero);
+        ProcessEntry recorded = new(30, 20, "claude.exe", "claude.exe remote-control", started);
+
+        ScheduledTaskRemoteControl.IsRecorded(recorded, "claude", started.AddTicks(9)).ShouldBeTrue();
+        ScheduledTaskRemoteControl.IsRecorded(recorded, "claude", started.ToOffset(TimeSpan.FromHours(-5))).ShouldBeTrue();
+        ScheduledTaskRemoteControl.IsRecorded(recorded, "claude", started.AddMinutes(3)).ShouldBeFalse();
+        ScheduledTaskRemoteControl.IsRecorded(recorded, "pwsh", started).ShouldBeFalse();
+        ScheduledTaskRemoteControl.IsRecorded(recorded with { Started = null }, "claude", started.AddMinutes(3)).ShouldBeTrue();
+    }
+
     [Fact]
     public async Task AnInteractiveRemoteControlInATerminalIsLeftAlone()
     {
@@ -284,19 +396,28 @@ public sealed class ScheduledTaskRemoteControlTests
     }
 
     [Fact]
-    public async Task ATaskThatStoppedByItselfIsRunWithNothingToEnd()
+    public async Task ATaskThatStoppedByItselfIsRunOnlyOnceNoServerOfItsOwnSurvives()
     {
-        Script script = new Script()
-            .Answer("/XML", 0, TaskXml.Replace("--permission-mode auto", "--permission-mode plan", StringComparison.Ordinal))
+        static Script Stopped() => new Script()
+            .Answer("/XML", 0, TaskXml)
             .Answer("/Query", 0, Ready)
             .Answer("/End", 0)
             .Answer("/Run", 0);
+        Script empty = Stopped();
+        Script survivor = Stopped();
+        Killer killer = new();
 
-        Result<Unit, string> restart = await RemoteControl(script).RestartAsync(startIfStopped: true, Token);
+        Result<Unit, string> ran = await RemoteControl(empty, killer, table: [.. Machine.Where(static process => process.Id is not (10 or 20 or 30))])
+            .RestartAsync(startIfStopped: true, Token);
+        Result<Unit, string> blocked = await RemoteControl(survivor, new Killer { Refuse = 30 }, table: Orphaned)
+            .RestartAsync(startIfStopped: true, Token);
 
-        restart.IsSuccess.ShouldBeTrue(restart.IsFailure ? restart.Error : "");
-        script.Calls[^1].ShouldBe("/Run /TN claude-remote-control");
-        script.Calls.ShouldNotContain(static call => call.StartsWith("/End", StringComparison.Ordinal));
+        ran.IsSuccess.ShouldBeTrue(ran.IsFailure ? ran.Error : "");
+        empty.Calls[^1].ShouldBe("/Run /TN claude-remote-control");
+        empty.Calls.ShouldNotContain(static call => call.StartsWith("/End", StringComparison.Ordinal));
+        killer.Killed.ShouldBeEmpty();
+        blocked.IsFailure.ShouldBeTrue();
+        survivor.Calls.ShouldNotContain(static call => call.StartsWith("/Run", StringComparison.Ordinal) || call.StartsWith("/End", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -311,7 +432,8 @@ public sealed class ScheduledTaskRemoteControlTests
             new Killer().Kill,
             TimeProvider.System,
             TimeSpan.FromSeconds(5),
-            TimeSpan.FromMilliseconds(1));
+            TimeSpan.FromMilliseconds(1),
+            NullLogger<ScheduledTaskRemoteControl>.Instance);
 
         Result<Unit, string> restart = await remoteControl.RestartAsync(startIfStopped: true, Token);
 
@@ -360,10 +482,12 @@ public sealed class ScheduledTaskRemoteControlTests
     public void TheProcessTableIsReadFromCimJson()
     {
         Result<IReadOnlyList<ProcessEntry>, string> table = ScheduledTaskRemoteControl.ParseProcessTable(
-            """[{"ProcessId":4,"ParentProcessId":0,"Name":"System","CommandLine":null},{"ProcessId":30,"ParentProcessId":20,"Name":"claude.exe","CommandLine":"claude.exe remote-control"}]""");
+            """[{"ProcessId":4,"ParentProcessId":0,"Name":"System","CommandLine":null,"Started":null},{"ProcessId":30,"ParentProcessId":20,"Name":"claude.exe","CommandLine":"claude.exe remote-control","Started":134055072000000000}]""");
 
         table.IsSuccess.ShouldBeTrue();
-        table.Value.ShouldBe([new ProcessEntry(4, 0, "System", null), new ProcessEntry(30, 20, "claude.exe", "claude.exe remote-control")]);
+        table.Value.ShouldBe([
+            new ProcessEntry(4, 0, "System", null),
+            new ProcessEntry(30, 20, "claude.exe", "claude.exe remote-control", new DateTimeOffset(2025, 10, 21, 8, 0, 0, TimeSpan.Zero))]);
         ScheduledTaskRemoteControl.ParseProcessTable("not json").IsFailure.ShouldBeTrue();
     }
 
@@ -374,8 +498,12 @@ public sealed class ScheduledTaskRemoteControlTests
 
         public int? Refuse { get; init; }
 
+        /// <summary>A script to record each kill in, so its order against /Run shows.</summary>
+        public Script? Log { get; init; }
+
         public Task<Result<Unit, string>> Kill(ProcessEntry process, CancellationToken cancellationToken)
         {
+            Log?.Calls.Add("Kill " + process.Id);
             if (process.Id == Refuse)
             {
                 return Task.FromResult(Result<Unit, string>.Failure("Access is denied."));
