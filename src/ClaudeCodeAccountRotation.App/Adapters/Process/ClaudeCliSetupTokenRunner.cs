@@ -501,15 +501,18 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
         string setNames = string.Join(", ", set.Select(static half => Secret(half.Role, half.IsKey).ToString()));
         string tokenNames = string.Join("; ", set.Where(static half => !half.IsKey).Select(static half => half.Role.Token.Secret.ToString()));
         Dictionary<(RoleTarget, bool), string> holders = [];
+        bool removed = false;
         try
         {
             await _roster.UpdateAsync(
                 roster =>
                 {
-                    if (roster.Find(request.Email) is not RosterEntry entry)
-                    {
-                        return roster;
-                    }
+                    // An account removed while its session ran is not put back,
+                    // but each half it set is still taken off the account that
+                    // held it: that secret no longer holds their value.
+                    RosterEntry? found = roster.Find(request.Email);
+                    removed = found is null;
+                    RosterEntry entry = found ?? new RosterEntry(request.Email);
 
                     // Who set each half that was not set this time: that secret
                     // still holds their value, so the message names them.
@@ -528,7 +531,7 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
 
                     // Claimed by halves: a half not set this time still holds its
                     // holder's value, and stays theirs.
-                    return roster.With(entry);
+                    return removed ? roster.With(entry).Without(request.Email) : roster.With(entry);
                 },
                 CancellationToken.None,
                 via: LaneVia.Assign);
@@ -550,10 +553,13 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
         }
 
         string expires = " The token expires around " + today.AddDays((int)TokenLifetime.TotalDays).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + ".";
+        string outcome = removed
+            ? "Set " + setNames + " from " + request.Email.Value + ", but the roster was not updated because that account was removed while this ran; no account on the roster backs those halves now."
+            : "Set " + setNames + " from " + request.Email.Value + ".";
         Settle(
             session,
             failed.Count == 0 ? LoginSessionState.Completed : LoginSessionState.Failed,
-            "Set " + setNames + " from " + request.Email.Value + "." + (failed.Count == 0 ? string.Empty : " " + NotSet(failed, holders, request.Email.Value)) + expires);
+            outcome + (failed.Count == 0 ? string.Empty : " " + NotSet(failed, holders, request.Email.Value)) + expires);
     }
 
     /// <summary>The account's stored Console key, or why there is none.</summary>

@@ -67,6 +67,9 @@ internal static partial class RosterEndpoints
             }
 
             AccountEmail email = parsed.Value;
+
+            // Read early so a duplicate spawns no CLI and touches no folder; the
+            // write below checks again on the roster it is handed.
             if ((await rosterFile.ReadAsync(cancellationToken)).Find(email) is not null)
             {
                 return Refused("AlreadyOnRoster", email.Value + " is already on the roster.");
@@ -98,7 +101,19 @@ internal static partial class RosterEndpoints
                 directory.Value,
                 Paused: false,
                 Text(body, "notes"));
-            await rosterFile.UpdateAsync(roster => roster.With(entry), cancellationToken);
+            bool added = false;
+            await rosterFile.UpdateAsync(
+                roster =>
+                {
+                    added = roster.Find(email) is null;
+                    return added ? roster.With(entry) : roster;
+                },
+                cancellationToken);
+            if (!added)
+            {
+                return Refused("AlreadyOnRoster", email.Value + " is already on the roster.");
+            }
+
             return Results.Ok(new AccountCardView(
                 email.Value,
                 IsLive: false,
@@ -146,12 +161,6 @@ internal static partial class RosterEndpoints
                 return Results.BadRequest(new { error = parsed.Error });
             }
 
-            RosterEntry? existing = (await rosterFile.ReadAsync(cancellationToken)).Find(parsed.Value);
-            if (existing is null)
-            {
-                return Results.NotFound(new { error = parsed.Value.Value + " is not on the roster." });
-            }
-
             Result<BrowserFamily?, string> browser = ParseBrowser(body, "browser");
             if (browser.IsFailure)
             {
@@ -184,52 +193,31 @@ internal static partial class RosterEndpoints
                 return Results.BadRequest(new { error = ciRoles.Error });
             }
 
-            // Presence-based, key by key: a record of nullable fields cannot tell
-            // "clear the alias" from "leave the alias alone", and an edit that
-            // silently reset the fields it did not mention would be worse than
-            // one that refused.
-            DateOnly? date = body.ContainsKey("ciTokenGeneratedOn") ? ciTokenGeneratedOn.Value : existing.CiTokenGeneratedOn;
-            RosterEntry edited = existing with
+            Result<IReadOnlyList<CiRole>, string> removeCiRoles = ParseRemoveCiRoles(body);
+            if (removeCiRoles.IsFailure)
             {
-                Alias = body.ContainsKey("alias") ? Text(body, "alias") : existing.Alias,
-                Browser = body.ContainsKey("browser") ? browser.Value : existing.Browser,
-                BrowserProfileDirectory = body.ContainsKey("browserProfileDirectory") ? directory.Value : existing.BrowserProfileDirectory,
-                Paused = Flag(body, "paused") ?? existing.Paused,
-                Notes = body.ContainsKey("notes") ? Text(body, "notes") : existing.Notes,
-                CiTokenGeneratedOn = date,
-            };
-
-            // A cleared date leaves no token behind any role, so every token half
-            // goes with it, and a role left with no half goes too.
-            IEnumerable<CiRoleAssignment> roles = ciRoles.Value ?? existing.CiRoles;
-            if (body.ContainsKey("ciTokenGeneratedOn") && date is null)
-            {
-                roles = roles
-                    .Select(static assignment => assignment with { TokenSetOn = null, TokenSetAt = null })
-                    .Where(static assignment => assignment.HasKey);
+                return Results.BadRequest(new { error = removeCiRoles.Error });
             }
 
-            // The date settles once, on the final list: the newest token half's,
-            // or none once the last one goes (see RosterEntry.WithCiRoles).
-            RosterEntry updated = edited.WithCiRoles(roles);
-
-            // A single secret named by hand is the repair for a CI token whose
-            // secret was set but whose roster write failed: it claims that role's
-            // token half, dated by the request's ciTokenGeneratedOn or, when the
-            // request sends none, by the date the entry already holds. With
-            // neither it is refused. A ciRoles item carries its own dates instead.
-            if (ciTokenSecret.Value is CiTokenSecret secret)
-            {
-                if (date is not DateOnly setOn)
+            // Built from the roster as the write finds it, so an assignment that
+            // landed after the page was drawn is what this edit is judged against.
+            IResult? refusal = null;
+            RosterEntry? updated = null;
+            await rosterFile.UpdateAsync(
+                roster =>
                 {
-                    return Results.BadRequest(new { error = "a CI secret needs the date its token was generated (ciTokenGeneratedOn)" });
-                }
+                    if (roster.Find(parsed.Value) is not RosterEntry existing)
+                    {
+                        refusal = Results.NotFound(new { error = parsed.Value.Value + " is not on the roster." });
+                        return roster;
+                    }
 
-                updated = updated.ClaimingToken(CiRole.FromTokenSecret(secret), setOn, setAt: null);
-            }
-
-            await rosterFile.UpdateAsync(roster => roster.With(updated), cancellationToken, via: LaneVia.Edit);
-            return Results.Ok(DashboardAssembler.View(updated));
+                    (updated, refusal) = Edited(roster, existing, body, browser.Value, directory.Value, ciTokenGeneratedOn.Value, ciTokenSecret.Value, ciRoles.Value, removeCiRoles.Value);
+                    return updated is null ? roster : roster.With(updated);
+                },
+                cancellationToken,
+                via: LaneVia.Edit);
+            return refusal ?? Results.Ok(DashboardAssembler.View(updated));
         });
 
         mutations.MapDelete("/accounts/{email}", static async (
@@ -447,8 +435,16 @@ internal static partial class RosterEndpoints
                 return Refused("NotAMaxAccount", reason!);
             }
 
-            RosterEntry entry = (await rosterFile.ReadAsync(cancellationToken)).Find(live) ?? new RosterEntry(live);
-            await rosterFile.UpdateAsync(roster => roster.With(entry), cancellationToken);
+            // Found in the roster the write is handed, so an edit that landed
+            // since the checks above is kept rather than written over.
+            RosterEntry entry = new(live);
+            await rosterFile.UpdateAsync(
+                roster =>
+                {
+                    entry = roster.Find(live) ?? new RosterEntry(live);
+                    return roster.With(entry);
+                },
+                cancellationToken);
             return Results.Ok(new AccountCardView(
                 live.Value,
                 IsLive: true,
@@ -497,6 +493,101 @@ internal static partial class RosterEndpoints
 
     private static IResult Refused(string refusal, string message) =>
         Results.Json(new SwitchRefusalView(refusal, message), statusCode: StatusCodes.Status409Conflict);
+
+    /// <summary>
+    /// What a PATCH leaves of <paramref name="existing"/>, the entry as the roster
+    /// holds it at write time, or why it is refused.
+    /// <para>
+    /// Presence-based, key by key: a record of nullable fields cannot tell "clear
+    /// the alias" from "leave the alias alone", and an edit that silently reset
+    /// the fields it did not mention would be worse than one that refused.
+    /// </para>
+    /// <para>
+    /// Edit only takes roles off: <c>removeCiRoles</c> drops each role it names
+    /// from this entry and touches no other, and <c>ciRoles</c>, the whole list,
+    /// may name only halves the entry holds with the same dates, so a list read
+    /// before another account took a half cannot take it back. The one claim is
+    /// the repair: a single secret named by hand claims that role's token half,
+    /// for a CI token whose secret was set but whose roster write failed. It is
+    /// dated by the request's <c>ciTokenGeneratedOn</c> or, when the request
+    /// sends none, by the date the entry already holds; with neither it is refused.
+    /// It is refused too when another account holds that token half set on a
+    /// later day, or set through the tool (with an instant) on the same day: that
+    /// half is newer than the token being recorded, so a form drawn before it was
+    /// set must not take it.
+    /// </para>
+    /// </summary>
+    private static (RosterEntry? Updated, IResult? Refusal) Edited(
+        Roster roster,
+        RosterEntry existing,
+        JsonObject body,
+        BrowserFamily? browser,
+        string? directory,
+        DateOnly? ciTokenGeneratedOn,
+        CiTokenSecret? ciTokenSecret,
+        IReadOnlyList<CiRoleAssignment>? ciRoles,
+        IReadOnlyList<CiRole> removeCiRoles)
+    {
+        if (ciRoles?.FirstOrDefault(named => !Holds(existing, named)) is CiRoleAssignment notHeld)
+        {
+            return (null, Refused(
+                "RoleHalfNotHeld",
+                existing.Email.Value + " does not back " + notHeld.Role + " with the halves and dates named, and Edit only takes roles off; Generate CI token assigns one. Reload the page and edit again."));
+        }
+
+        DateOnly? date = body.ContainsKey("ciTokenGeneratedOn") ? ciTokenGeneratedOn : existing.CiTokenGeneratedOn;
+        RosterEntry edited = existing with
+        {
+            Alias = body.ContainsKey("alias") ? Text(body, "alias") : existing.Alias,
+            Browser = body.ContainsKey("browser") ? browser : existing.Browser,
+            BrowserProfileDirectory = body.ContainsKey("browserProfileDirectory") ? directory : existing.BrowserProfileDirectory,
+            Paused = Flag(body, "paused") ?? existing.Paused,
+            Notes = body.ContainsKey("notes") ? Text(body, "notes") : existing.Notes,
+            CiTokenGeneratedOn = date,
+        };
+
+        IEnumerable<CiRoleAssignment> roles = (ciRoles ?? existing.CiRoles).Where(assignment => !removeCiRoles.Contains(assignment.Role));
+
+        // A cleared date leaves no token behind any role, so every token half
+        // goes with it, and a role left with no half goes too.
+        if (body.ContainsKey("ciTokenGeneratedOn") && date is null)
+        {
+            roles = roles
+                .Select(static assignment => assignment with { TokenSetOn = null, TokenSetAt = null })
+                .Where(static assignment => assignment.HasKey);
+        }
+
+        // The date settles once, on the final list: the newest token half's,
+        // or none once the last one goes (see RosterEntry.WithCiRoles).
+        RosterEntry updated = edited.WithCiRoles(roles);
+        if (ciTokenSecret is CiTokenSecret secret)
+        {
+            if (date is not DateOnly setOn)
+            {
+                return (null, Results.BadRequest(new { error = "a CI secret needs the date its token was generated (ciTokenGeneratedOn)" }));
+            }
+
+            var role = CiRole.FromTokenSecret(secret);
+            if (roster.Entries.FirstOrDefault(other => other.Email != existing.Email && other.CiRoles.Any(held =>
+                    held.Role.Equals(role) && (held.TokenSetOn > setOn || (held.TokenSetOn == setOn && held.TokenSetAt is not null)))) is RosterEntry holder)
+            {
+                return (null, Refused(
+                    "TokenHalfHeldElsewhere",
+                    holder.Email.Value + " holds the token of " + role + ", set after " + setOn.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+                    + " or through the tool that same day, so it is newer than the token this repair records and naming that secret here would take it from them. To move the role, run Generate CI token for it again."));
+            }
+
+            updated = updated.ClaimingToken(role, setOn, setAt: null);
+        }
+
+        return (updated, null);
+    }
+
+    /// <summary>Whether <paramref name="entry"/> holds every half <paramref name="named"/> names, with the same dates and instants.</summary>
+    private static bool Holds(RosterEntry entry, CiRoleAssignment named) =>
+        entry.CiRoles.FirstOrDefault(held => held.Role.Equals(named.Role)) is CiRoleAssignment held
+        && (!named.HasToken || (named.TokenSetOn, named.TokenSetAt) == (held.TokenSetOn, held.TokenSetAt))
+        && (!named.HasKey || (named.KeySetOn, named.KeySetAt) == (held.KeySetOn, held.KeySetAt));
 
     private static Result<BrowserFamily?, string> ParseBrowser(JsonObject body, string key)
     {
@@ -612,11 +703,43 @@ internal static partial class RosterEndpoints
         return Result<IReadOnlyList<CiRoleAssignment>?, string>.Success(roles);
     }
 
-    private static Result<CiRoleAssignment, string> ParseCiRole(JsonNode? node)
+    /// <summary>
+    /// The roles a body takes off the account, each named as a <c>ciRoles</c>
+    /// item is but with no halves, or none when the key is absent or JSON null.
+    /// </summary>
+    private static Result<IReadOnlyList<CiRole>, string> ParseRemoveCiRoles(JsonObject body)
+    {
+        if (!body.TryGetPropertyValue("removeCiRoles", out JsonNode? node) || node is null)
+        {
+            return Result<IReadOnlyList<CiRole>, string>.Success([]);
+        }
+
+        if (node is not JsonArray items)
+        {
+            return Result<IReadOnlyList<CiRole>, string>.Failure("removeCiRoles must be a list of roles");
+        }
+
+        List<CiRole> roles = [];
+        foreach (JsonNode? item in items)
+        {
+            Result<CiRole, string> role = ParseRoleName(item);
+            if (role.IsFailure)
+            {
+                return Result<IReadOnlyList<CiRole>, string>.Failure("removeCiRoles: " + role.Error);
+            }
+
+            roles.Add(role.Value);
+        }
+
+        return Result<IReadOnlyList<CiRole>, string>.Success(roles);
+    }
+
+    /// <summary>The role an item names: <c>prefix</c> or <c>tokenSecret</c>, and exactly one of <c>repository</c> or <c>organization</c>.</summary>
+    private static Result<CiRole, string> ParseRoleName(JsonNode? node)
     {
         if (node is not JsonObject item)
         {
-            return Result<CiRoleAssignment, string>.Failure("each role is an object with prefix and repository or organization");
+            return Result<CiRole, string>.Failure("each role is an object with prefix and repository or organization");
         }
 
         const string notText = "prefix, tokenSecret, repository and organization are strings";
@@ -624,17 +747,20 @@ internal static partial class RosterEndpoints
         Result<string?, string> tokenSecret = RequiredString(item, "tokenSecret", notText);
         Result<string?, string> repository = RequiredString(item, "repository", notText);
         Result<string?, string> organization = RequiredString(item, "organization", notText);
-        if (prefix.IsFailure || tokenSecret.IsFailure || repository.IsFailure || organization.IsFailure)
-        {
-            return Result<CiRoleAssignment, string>.Failure(notText);
-        }
+        return prefix.IsFailure || tokenSecret.IsFailure || repository.IsFailure || organization.IsFailure
+            ? Result<CiRole, string>.Failure(notText)
+            : CiRole.Parse(prefix.Value, Blank(tokenSecret.Value), Blank(repository.Value), Blank(organization.Value));
+    }
 
-        Result<CiRole, string> role = CiRole.Parse(prefix.Value, Blank(tokenSecret.Value), Blank(repository.Value), Blank(organization.Value));
+    private static Result<CiRoleAssignment, string> ParseCiRole(JsonNode? node)
+    {
+        Result<CiRole, string> role = ParseRoleName(node);
         if (role.IsFailure)
         {
             return Result<CiRoleAssignment, string>.Failure(role.Error);
         }
 
+        var item = (JsonObject)node!;
         Result<DateOnly?, string> tokenSetOn = ParseDate(item, "tokenSetOn");
         Result<DateOnly?, string> keySetOn = ParseDate(item, "keySetOn");
         Result<DateTimeOffset?, string> tokenSetAt = ParseInstant(item, "tokenSetAt");

@@ -100,16 +100,57 @@ public sealed class RosterFileCiRoleTests : IDisposable
 
         await file.UpdateAsync(roster => roster.With(entry), TestContext.Current.CancellationToken);
         string written = await File.ReadAllTextAsync(RosterPath, TestContext.Current.CancellationToken);
-        await file.UpdateAsync(static roster => roster, TestContext.Current.CancellationToken);
+        await file.UpdateAsync(static roster => new Roster(roster.Entries), TestContext.Current.CancellationToken);
 
         RosterEntry stored = (await file.ReadAsync(TestContext.Current.CancellationToken)).Find(Email("a@example.com"))!;
         stored.ShouldBe(entry);
         stored.CiRoles.ShouldBe(entry.CiRoles);
         (await File.ReadAllTextAsync(RosterPath, TestContext.Current.CancellationToken)).ShouldBe(written);
         JsonObject account = JsonNode.Parse(written)!["accounts"]![0]!.AsObject();
-        account.ContainsKey("ciTokenSecret").ShouldBeFalse();
+        // The newest token half's secret, for a 2.2.0 downgrade: AUTOMATIONS, set 2026-10-06.
+        account["ciTokenSecret"]!["name"]!.GetValue<string>().ShouldBe("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN");
+        account["ciTokenSecret"]!["organization"]!.GetValue<string>().ShouldBe("octo");
         account["ciTokenGeneratedOn"]!.GetValue<string>().ShouldBe("2026-10-06");
         account["ciRoles"]!.AsArray().Count.ShouldBe(3);
+    }
+
+    [Fact]
+    public async Task AFileWithBothKeysReadsItsRolesAndNotTheSingleSecret()
+    {
+        Directory.CreateDirectory(_appData);
+        await File.WriteAllTextAsync(
+            RosterPath,
+            """
+            { "accounts": [ { "email": "a@example.com", "ciTokenGeneratedOn": "2026-10-06",
+              "ciTokenSecret": { "name": "CLAUDE_CODE_OAUTH_TOKEN", "repository": "octo/lane-one" },
+              "ciRoles": [ { "prefix": "REVIEWS", "organization": "octo", "tokenSetOn": "2026-10-06" } ] } ] }
+            """,
+            TestContext.Current.CancellationToken);
+        using RosterFile file = new(_appData);
+
+        RosterEntry stored = (await file.ReadAsync(TestContext.Current.CancellationToken)).Find(Email("a@example.com"))!;
+
+        stored.CiRoles.ShouldBe([new CiRoleAssignment(new CiRole("REVIEWS", CiSecretScope.Organization, "octo"), new DateOnly(2026, 10, 6))]);
+    }
+
+    [Fact]
+    public async Task AFileA220DowngradeRewroteGivesBackItsNewestTokenRoleOnReUpgrade()
+    {
+        RosterEntry entry = new RosterEntry(Email("a@example.com"))
+            .ClaimingToken(new CiRole("AUTOMATIONS", CiSecretScope.Organization, "octo"), new DateOnly(2026, 9, 1), null)
+            .ClaimingToken(new CiRole(string.Empty, CiSecretScope.Repository, "octo/lane-one"), new DateOnly(2026, 10, 6), null)
+            .ClaimingKey(new CiRole("REVIEWS", CiSecretScope.Organization, "octo"), new DateOnly(2026, 10, 7), null);
+        using RosterFile file = new(_appData);
+        await file.UpdateAsync(roster => roster.With(entry), TestContext.Current.CancellationToken);
+
+        // 2.2.0 knows no ciRoles key and drops it on its next write; everything it keeps it writes back as read.
+        JsonObject root = JsonNode.Parse(await File.ReadAllTextAsync(RosterPath, TestContext.Current.CancellationToken))!.AsObject();
+        root["accounts"]![0]!.AsObject().Remove("ciRoles");
+        await File.WriteAllTextAsync(RosterPath, root.ToJsonString(), TestContext.Current.CancellationToken);
+
+        RosterEntry stored = (await file.ReadAsync(TestContext.Current.CancellationToken)).Find(Email("a@example.com"))!;
+        stored.CiRoles.ShouldBe([new CiRoleAssignment(new CiRole(string.Empty, CiSecretScope.Repository, "octo/lane-one"), new DateOnly(2026, 10, 6))]);
+        stored.CiTokenGeneratedOn.ShouldBe(new DateOnly(2026, 10, 6));
     }
 
     [Fact]

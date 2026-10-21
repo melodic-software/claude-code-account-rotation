@@ -29,7 +29,8 @@
       ciRoleBadges: ciRoleBadges,
       ciTokenExpiries: ciTokenExpiries,
       ciExpirySentence: ciExpirySentence,
-      keptCiRoles: keptCiRoles,
+      removedCiRoles: removedCiRoles,
+      changedCiTokenDate: changedCiTokenDate,
       ciTag: ciTag,
       ciSecretBody: ciSecretBody,
       remoteControlQuestion: remoteControlQuestion,
@@ -266,12 +267,13 @@
     toastTimer = setTimeout(function () { toast.hidden = true; }, 6000);
   }
 
-  // One line per lane-history entry, newest first: when, which role half, and
-  // which account took it from which. Names and dates only.
+  // One line per lane-history entry, newest first: when, which role half and
+  // where, and which account took it from which. Names and dates only.
   function historyLines(entries) {
     return (entries || []).slice().reverse().map(function (entry) {
       var role = entry.role || {};
-      var name = role.tokenSecret || role.prefix || "legacy (review lanes)";
+      var name = (role.tokenSecret || role.prefix || "legacy (review lanes)")
+        + " in " + (role.repository || "org " + role.organization);
       var moved = (entry.previous || "no account") + " \u2192 " + (entry.account || "no account");
       return String(entry.at).slice(0, 16).replace("T", " ") + " \u00b7 " + name + " " + entry.half + ": " + moved + " (" + entry.via + ")";
     });
@@ -1286,9 +1288,10 @@
       // A present key can clear the field. Sending notes on every save, including
       // a blank one, is what lets the operator take a warning back off the card.
       body.notes = notes.value.trim() || null;
-      body.ciTokenGeneratedOn = ciToken.value || null;
-      var kept = keptCiRoles(ciRoles, ciKeep.map(function (box) { return box.checked; }));
-      if (kept) { body.ciRoles = kept; }
+      var date = changedCiTokenDate(account.roster, ciToken.value);
+      if (date !== undefined) { body.ciTokenGeneratedOn = date; }
+      var removed = removedCiRoles(ciRoles, ciKeep.map(function (box) { return box.checked; }));
+      if (removed) { body.removeCiRoles = removed; }
       body.ciTokenSecret = ciSecretBody(ciSecretName.value, ciSecretWhere.value);
       mutate(accountPath(account.email), "PATCH", body, function (result) {
         showToast(result.ok ? account.email + " updated" : refused(result.body), result.ok ? "ok" : "error");
@@ -1546,10 +1549,11 @@
   }
 
   // The roles whose token half was set on one date lose it together, a year
-  // on. Lanes spend the API key first, so a role with a key half keeps running
-  // on its key and one without stops. One entry per expiry date within the
-  // warning window or past it, soonest first; the tone is tokenExpiry's.
-  function ciTokenExpiries(roster, at) {
+  // on. Lanes spend the API key first, so a role whose key half any account
+  // holds (this one, or the other side of a split) keeps running on its key,
+  // and one without stops. One entry per expiry date within the warning
+  // window or past it, soonest first; the tone is tokenExpiry's.
+  function ciTokenExpiries(roster, at, accounts, email) {
     var groups = {};
     ((roster && roster.ciRoles) || []).forEach(function (role) {
       if (!role.tokenSetOn) { return; }
@@ -1557,7 +1561,7 @@
       if (!life || !life.tone) { return; }
       var key = life.expires.toISOString().slice(0, 10);
       var group = groups[key] || (groups[key] = { expiresOn: key, tone: life.tone, fallback: [], stop: [] });
-      (role.keySetOn ? group.fallback : group.stop).push(ciRoleLabel(role));
+      (role.keySetOn || splitPartner(role, accounts, email) ? group.fallback : group.stop).push(ciRoleLabel(role));
     });
     return Object.keys(groups).sort().map(function (key) { return groups[key]; });
   }
@@ -1605,24 +1609,24 @@
     return { kind: "ok", text: text, title: title };
   }
 
-  // The roles an Edit keeps, as the PATCH names them: each by its token
-  // secret's name, which the server reads back into the same role, with the
-  // dates its halves were set. Null when every box is still ticked: the PATCH
-  // then sends no ciRoles and the server keeps the roles it holds, so a form
-  // opened before another account took a role cannot hand it back.
-  function keptCiRoles(roles, keep) {
-    if (keep.every(Boolean)) { return null; }
-    return roles.filter(function (_, index) { return keep[index]; }).map(function (role) {
-      return {
-        tokenSecret: role.tokenSecret,
-        repository: role.repository,
-        organization: role.organization,
-        tokenSetOn: role.tokenSetOn,
-        tokenSetAt: role.tokenSetAt,
-        keySetOn: role.keySetOn,
-        keySetAt: role.keySetAt
-      };
+  // The roles an Edit takes off, as the PATCH names them: each by its token
+  // secret's name, which the server reads back into the same role. Null when
+  // every box is still ticked. Only the unticked roles are sent, never the
+  // ticked ones, so a form opened before another account took a role cannot
+  // hand it back.
+  function removedCiRoles(roles, keep) {
+    var removed = roles.filter(function (_, index) { return !keep[index]; }).map(function (role) {
+      return { tokenSecret: role.tokenSecret, repository: role.repository, organization: role.organization };
     });
+    return removed.length ? removed : null;
+  }
+
+  // The "CI token generated on" an Edit sends: undefined when the field still
+  // holds the date the form was drawn with, so a stale form neither clears
+  // token halves set since nor turns a date the account has since lost into a
+  // hand marker; else the new date, or null when it was cleared.
+  function changedCiTokenDate(roster, value) {
+    return value === ((roster && roster.ciTokenGeneratedOn) || "") ? undefined : value || null;
   }
 
   // The CI secret an Edit names: null when either field is blank, else its name
@@ -2264,7 +2268,7 @@
     var status = element("div", "st");
     status.appendChild(element("p", "say " + say.kind, say.text));
     status.appendChild(statusLines(account, dashboard, at));
-    ciTokenExpiries(roster, at).forEach(function (expiry) {
+    ciTokenExpiries(roster, at, lastAccounts, account.email).forEach(function (expiry) {
       status.appendChild(element("p", "say " + expiry.tone, ciExpirySentence(expiry)));
     });
     line.appendChild(status);

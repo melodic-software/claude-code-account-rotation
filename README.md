@@ -38,12 +38,14 @@ Status: a tagged release exists.
   (no Anthropic statement either way), not ALLOWED. It reads only when the dashboard is opened,
   Refresh is pressed, or the rate-limit stop hook fires, at most once a minute per account, never
   on a timer. It reads GitHub only through `gh api`, with gh's own User-Agent and sign-in, and
-  only when you click Check roles, Generate CI token or Push API key: those read secret names,
-  dates and visibility, never a value. Start sign-in, when it moves a role off another account,
-  also reads up to 30 failed lane runs of the last 7 days, their jobs and annotations. The first
-  rate-limit answer stops what was clicked, and nothing retries it. Writes go one at a time, at
-  least a second apart. It changes a lane kill switch's value only when you confirm its toggle,
-  and never creates one.
+  only when you click Check roles, Generate CI token, Push API key, or a kill switch's Stop or
+  Start: those read secret names, dates and visibility, never a secret's value, and the kill
+  switches' values. Stop or Start reads the variable's visibility first and reads the switch back
+  after the write. Start sign-in, when it moves a role off another account, also reads up to 30
+  failed lane runs of the last 7 days, their jobs and annotations. The first rate-limit answer
+  stops what was clicked, and nothing retries it. Writes go one at a time, at least a second
+  apart. It changes a lane kill switch's value only when you confirm its toggle, and never creates
+  one.
 - The parked-pair refresh presents Claude Code's public OAuth `client_id`.
 - An optional Admin key, stored per account like the Console key, lets Check API key read the
   organization's key list from the Admin API (`GET /v1/organizations/api_keys`) and say whether
@@ -154,7 +156,7 @@ its terms at any time.
 | OAuth `client_id` for parked refreshes | Claude Code's public one | [Posture](#posture); [`AnthropicEndpoints.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Http/AnthropicEndpoints.cs) |
 | CI tokens | Only on a click: the unmodified `claude setup-token` makes the token, you sign in on Anthropic's page and paste the code, and the token goes from the CLI's output to `gh secret set` in memory, never to disk, a log, or the page | [Assigning accounts to CI roles](#assigning-accounts-to-ci-roles); [`ClaudeCliSetupTokenRunner.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Process/ClaudeCliSetupTokenRunner.cs) |
 | Console API keys | Kept only in the OS store, per machine; read only to hand to `gh secret set` on its standard input | [Posture](#posture); [`ApiKeyEndpoints.cs`](src/ClaudeCodeAccountRotation.App/Endpoints/ApiKeyEndpoints.cs) |
-| GitHub reads | Only on a click, through `gh api`: secret names, dates and visibility, never a value; before a role moves, up to 30 failed lane runs and their annotations | [Posture](#posture); [`GhApiReader.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Process/GhApiReader.cs) |
+| GitHub reads | Only on a click, through `gh api`: secret names, dates and visibility, never a secret's value, and the kill switches' values; on a kill switch's Stop or Start, its visibility first and the switch read back after; before a role moves, up to 30 failed lane runs and their annotations | [Posture](#posture); [`GhApiReader.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Process/GhApiReader.cs) |
 
 Two points are gray:
 
@@ -418,17 +420,18 @@ organization (or repository): its token secret is `<PREFIX>_CLAUDE_CODE_OAUTH_TO
 secret `<PREFIX>_CLAUDE_API_KEY`. The bare `CLAUDE_CODE_OAUTH_TOKEN` is the
 `legacy (review lanes)` role, with a token secret only, and any other name the roster kept from an
 earlier release is a role with a token secret only. The lane launcher spends a role's API key
-first and falls back to its token. Role secrets are organization secrets visible to all
-repositories, on purpose.
+first and falls back to its token. An organization role's new secrets are created visible to all
+repositories, on purpose; existing ones keep their visibility.
 
-One account backs each role half, and an account can back several roles. Both halves of a role come from the
-same account: the token from that account's `claude setup-token`, the key from that account's
-Console API key, which you paste once per machine with Set API key and which stays in the OS store
-(see [Posture](#posture)). A card shows one badge per role it backs, such as
-`automations · token+key` (hover it for the secret names and dates). A token badge warns in the
-last 30 days of the token's one year and says when it has expired, and the card lists, per expiry
-date, which roles fall back to their API key only and which stop. CI draws on that account's
-5-hour and 7-day limits alongside your interactive sessions on it.
+One account backs each role half, and an account can back several roles. Both halves normally
+come from the same account: the token from that account's `claude setup-token`, the key from that
+account's Console API key, which you paste once per machine with Set API key and which stays in
+the OS store (see [Posture](#posture)); when one half fails to send, the role is split (below). A
+card shows one badge per role it backs, such as `automations · token+key` (hover it for the
+secret names and dates). A token badge warns in the last 30 days of the token's one year and says
+when it has expired, and the card lists, per expiry date, which roles fall back to their API key
+only (any account holds the key half) and which stop. CI draws on that account's 5-hour and 7-day
+limits alongside your interactive sessions on it.
 
 Prerequisite: the GitHub CLI (`gh`) on PATH, signed in (`gh auth login`) as someone who may write
 those secrets (`admin:org` for organization secrets). The tool checks this before a token is made.
@@ -455,14 +458,13 @@ message gives the manual commands: `claude setup-token`, then `gh secret set <na
 <owner/name>`, or `--org <org>` with the secret's current visibility (`--visibility all`,
 `--visibility private`, or `--repos a,b` for selected repositories), since gh otherwise makes it
 private. When some halves are set and others are not, the roster records the halves that were
-set and the message names each one that was not. A role whose token was set but whose key was not
-is `split` (token from one account, key from another): the account that set the half that failed
-keeps it, and both cards say `split` and name both accounts until that half is re-sent.
-Every claim moves only the halves it sets. Push API
-key, in the ··· menu, sends the stored key to the key secret of every role the account backs,
-with no sign-in.
-Use it after replacing a Console key too. The first rate-limit answer from GitHub stops every
-write after it, and nothing retries it.
+set and the message names each one that was not. A role whose token was set but whose key failed,
+or whose key was set but whose token failed, is `split` (token from one account, key from
+another): the account that set the half that failed keeps it, and both cards say `split` and name
+both accounts until that half is re-sent. Every claim moves only the halves it sets. Push API key,
+in the ··· menu, sends the stored key to the key secret of every role the account backs, with no
+sign-in. Use it after replacing a Console key too. The first rate-limit answer from GitHub stops
+every write after it, and nothing retries it.
 
 The same start is `POST /api/accounts/{email}/ci-token` with `{"roles":[{"prefix":"AUTOMATIONS",
 "organization":"octo"}]}` (`tokenSecret` in place of `prefix` for a token-only role, and
@@ -504,10 +506,11 @@ is `selected`, the ids of its repositories), runs `gh api --method PATCH
 orgs/<org>/actions/variables/<name> -f value=<true|false> -f visibility=<as read>` (plus
 `-F selected_repository_ids[]=<id>` per id), and reads the switch back. GitHub's documentation
 marks visibility optional but does not promise an omitted one is kept, so the tool sends back the
-visibility it just read. If that read fails, nothing is written. A variable GitHub answers 404 for is
-reported as not set or not visible to this sign-in, and never created. The repository switch is read-only, and no repository or environment
-variable is ever written. The route is `POST /api/kill-switches` with `{"org", "name", "value"}`;
-any other name, or a value other than `true` or `false`, is refused before `gh` runs.
+visibility it just read. If that read fails, nothing is written. A variable GitHub answers 404
+for is reported as not set or not visible to this sign-in, and never created. The repository
+switch is read-only, and no repository or environment variable is ever written. The route is
+`POST /api/kill-switches` with `{"org", "name", "value"}`; any other name, or a value other than
+`true` or `false`, is refused before `gh` runs.
 
 Before Start sign-in moves roles off other accounts, the page checks those accounts for limit
 stops with one request, only on that click. For each repository in `laneRepositories` it lists
@@ -527,17 +530,24 @@ no credential, so their stops are not seen. The route is `POST /api/roles/limit-
 To mark an account by hand instead (for a token made outside the tool, or when the tool set the
 secret but could not update the roster), open Edit and set "CI token generated on". Optionally
 also set "CI secret name" and "CI secret in" (`owner/repository`, or an organization), then
-Save; that adds the secret's role with its token set on that date. Untick a role in Edit to take
-it off the account. The same writes are `PATCH /api/accounts/{email}`, sent with the headers
+Save; that adds the secret's role with its token set on that date, taking that token half off the
+account that backed it before; the other half stays. That is the only role Edit gives an account,
+and it is refused (409) when another account holds that token half set on a later day, or set
+through the tool on the same day: that half is newer than the token you are recording, so run
+Generate CI token instead.
+Untick a role in Edit to take it off this account only. Edit sends the date only when you change
+it and names only the roles you untick, so a form opened before another account took a role
+cannot take it back. The same writes are `PATCH /api/accounts/{email}`, sent with the headers
 `POST /api/shutdown` takes, with
 `{"ciTokenGeneratedOn":"yyyy-MM-dd","ciTokenSecret":{"name":"...","repository":"owner/name"}}`
-(or `"organization"` in place of `"repository"`) to add one role, or with `"ciRoles"`, the
-account's whole list: each item names `prefix` (or `tokenSecret` for a token-only role), then
-`repository` or `organization`, and the halves set from this account, `tokenSetOn` and
-`keySetOn` (`yyyy-MM-dd`). A token half needs its date; a key half alone needs no token date.
-Naming a role half takes that half off the account that backed it before; the other half stays. A marker set in Edit that names no
-secret is a hand marker: hand markers keep replacing each other, so at most one account carries
-one, and a role claim never clears one. Clearing the date clears every token half. On an
+(or `"organization"` in place of `"repository"`) to add one role, and with
+`"removeCiRoles":[{"prefix":"AUTOMATIONS","organization":"octo"}]` (`tokenSecret` in place of
+`prefix` for a token-only role, `repository` in place of `organization`) to take roles off. The
+older `"ciRoles"`, the account's whole list with each half's `tokenSetOn` and `keySetOn`
+(`yyyy-MM-dd`) and their instants, can only leave out roles or halves: naming a half the account
+does not hold, with the same dates and instants, is refused with 409. A marker set in Edit that
+names no secret is a hand marker: hand markers keep replacing each other, so at most one account
+carries one, and a role claim never clears one. Clearing the date clears every token half. On an
 account that backs a token half, the date is always that of its newest token half, whatever the
 request sends, so taking off the newest role lowers it and taking off the last one clears it.
 
@@ -546,7 +556,8 @@ data directory: one JSON line with the time, the role, `token` or `key`, the acc
 previous account (or null), and the route (`assign`, `push`, `edit` or `delete`). It holds names
 and dates only, never a secret value, and a line that does not parse is skipped.
 `GET /api/lane-history?since=<date or ISO time>` returns the entries, and the page's History
-disclosure reads the last 30 days when you open it.
+disclosure reads the last 30 days when you open it, one line per entry naming the role and its
+organization or repository.
 
 ## Build
 

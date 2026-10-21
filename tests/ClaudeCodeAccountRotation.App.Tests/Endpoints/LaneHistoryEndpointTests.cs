@@ -28,7 +28,7 @@ public sealed class LaneHistoryEndpointTests
         using HttpClient client = factory.CreateMutatingClient();
         await client.PostAsJsonAsync(_accounts, new { email = NewEmail }, TestContext.Current.CancellationToken);
         using StringContent roles = new(
-            """{ "ciRoles": [ { "prefix": "", "organization": "octo", "tokenSetOn": "2026-10-01" } ] }""",
+            """{ "ciTokenGeneratedOn": "2026-10-01", "ciTokenSecret": { "name": "CLAUDE_CODE_OAUTH_TOKEN", "organization": "octo" } }""",
             System.Text.Encoding.UTF8,
             "application/json");
         (await client.PatchAsync(_account, roles, TestContext.Current.CancellationToken)).StatusCode.ShouldBe(HttpStatusCode.OK);

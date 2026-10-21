@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const { takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, promptWording, uniqueName, renameLabel, nearestLimit, tier, asOf, usageAge, sentence, ciRoleBadges, keptCiRoles, ciTag, ciSecretBody, remoteControlQuestion, switchedToast, historyLines, historyReadLines, assignableRoles, newRoleItem, ciPanelWords } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+const { takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, promptWording, uniqueName, renameLabel, nearestLimit, tier, asOf, usageAge, sentence, ciRoleBadges, removedCiRoles, changedCiTokenDate, ciTag, ciSecretBody, remoteControlQuestion, switchedToast, historyLines, historyReadLines, assignableRoles, newRoleItem, ciPanelWords } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
 
 function limit(kind, percent, fields) {
   return Object.assign({ kind, percent, known: true, windowReset: false }, fields);
@@ -374,17 +374,28 @@ test("a card with two roles shows two badges", () => {
     ["automations · token+key", "legacy (review lanes) (lane-one) · token"]);
 });
 
-test("keptCiRoles sends back only the ticked roles, each by its token secret and dates", () => {
-  assert.deepStrictEqual(keptCiRoles([AUTOMATIONS, LEGACY_LANE_ONE], [false, true]), [{
-    tokenSecret: "CLAUDE_CODE_OAUTH_TOKEN", repository: "octo/lane-one", organization: null,
-    tokenSetOn: "2026-01-01", tokenSetAt: null, keySetOn: null, keySetAt: null
-  }]);
+test("removedCiRoles sends only the unticked roles, each by its token secret and where, with no dates", () => {
+  assert.deepStrictEqual(removedCiRoles([AUTOMATIONS, LEGACY_LANE_ONE], [true, false]), [
+    { tokenSecret: "CLAUDE_CODE_OAUTH_TOKEN", repository: "octo/lane-one", organization: null }
+  ]);
+  assert.deepStrictEqual(removedCiRoles([AUTOMATIONS], [false]), [
+    { tokenSecret: "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", repository: null, organization: "octo" }
+  ]);
 });
 
-test("keptCiRoles sends nothing when no role was unticked, so a stale form cannot take a role back", () => {
-  assert.strictEqual(keptCiRoles([AUTOMATIONS, LEGACY_LANE_ONE], [true, true]), null);
-  assert.strictEqual(keptCiRoles([], []), null);
-  assert.deepStrictEqual(keptCiRoles([AUTOMATIONS], [false]), []);
+test("removedCiRoles sends nothing when no role was unticked", () => {
+  assert.strictEqual(removedCiRoles([AUTOMATIONS, LEGACY_LANE_ONE], [true, true]), null);
+  assert.strictEqual(removedCiRoles([], []), null);
+});
+
+test("an Edit sends the CI token date only when the operator changed it", () => {
+  // A form drawn with no date, saved untouched after a token half was set: sending null would clear it.
+  assert.strictEqual(changedCiTokenDate({ ciTokenGeneratedOn: null }, ""), undefined);
+  // A form drawn with 2026-01-01, saved untouched after the account lost that token: sending it back would make a hand marker.
+  assert.strictEqual(changedCiTokenDate({ ciTokenGeneratedOn: "2026-01-01" }, "2026-01-01"), undefined);
+  assert.strictEqual(changedCiTokenDate({ ciTokenGeneratedOn: "2026-01-01" }, "2026-02-01"), "2026-02-01");
+  assert.strictEqual(changedCiTokenDate({ ciTokenGeneratedOn: "2026-01-01" }, ""), null);
+  assert.strictEqual(changedCiTokenDate({ ciTokenGeneratedOn: null }, "2026-02-01"), "2026-02-01");
 });
 
 test("ciSecretBody reads a repository by its slash, an organization without one, and blank as none", () => {
@@ -504,14 +515,14 @@ test("roleCheckLines marks a missing secret critical", () => {
   assert.strictEqual(line.text, "reviews in org octo · no secrets · a@example.com · token: missing");
 });
 
-test("history lines run newest first and name the role half, both accounts and the route", () => {
+test("history lines run newest first and name the role half and where, both accounts and the route", () => {
   const entries = [
     { at: "2026-10-01T11:00:00.0000000Z", role: { prefix: "AUTOMATIONS", organization: "octo" }, half: "token", account: "b@example.com", previous: "a@example.com", via: "push" },
-    { at: "2026-10-02T09:30:00.0000000Z", role: { prefix: "", organization: "octo" }, half: "token", account: null, previous: "b@example.com", via: "delete" }
+    { at: "2026-10-02T09:30:00.0000000Z", role: { prefix: "", repository: "octo/lane-one" }, half: "token", account: null, previous: "b@example.com", via: "delete" }
   ];
   assert.deepStrictEqual(historyLines(entries), [
-    "2026-10-02 09:30 \u00b7 legacy (review lanes) token: b@example.com \u2192 no account (delete)",
-    "2026-10-01 11:00 \u00b7 AUTOMATIONS token: a@example.com \u2192 b@example.com (push)"
+    "2026-10-02 09:30 \u00b7 legacy (review lanes) in octo/lane-one token: b@example.com \u2192 no account (delete)",
+    "2026-10-01 11:00 \u00b7 AUTOMATIONS in org octo token: a@example.com \u2192 b@example.com (push)"
   ]);
   assert.deepStrictEqual(historyLines(null), []);
 });
@@ -565,6 +576,19 @@ test("after the date the sentence reads in the past", () => {
   const roster = { ciRoles: [expiryRole("A", "2026-01-01", "2026-01-01"), expiryRole("LEGACY", "2026-01-01", null)] };
   const [late] = ciTokenExpiries(roster, Date.parse("2027-01-02T00:00:00Z"));
   assert.strictEqual(ciExpirySentence(late), "The token expired on 2027-01-01; these roles now run on their API key only: A; these roles stopped: LEGACY");
+});
+
+test("a split role whose key half another account holds falls back to its key rather than stopping", () => {
+  const role = Object.assign({}, AUTOMATIONS, { keySetOn: null, keySetAt: null });
+  const keyHolder = Object.assign({}, AUTOMATIONS, { tokenSetOn: null, tokenSetAt: null });
+  const accounts = [
+    { email: "a@example.com", roster: { ciRoles: [role] } },
+    { email: "b@example.com", roster: { ciRoles: [keyHolder] } }
+  ];
+  const [split] = ciTokenExpiries(accounts[0].roster, Date.parse("2026-12-20T00:00:00Z"), accounts, "a@example.com");
+  assert.deepStrictEqual([split.fallback, split.stop], [["automations"], []]);
+  const [alone] = ciTokenExpiries(accounts[0].roster, Date.parse("2026-12-20T00:00:00Z"), [accounts[0]], "a@example.com");
+  assert.deepStrictEqual([alone.fallback, alone.stop], [[], ["automations"]]);
 });
 
 test("expiry lines name a repository's role with its repository, as the badge does", () => {

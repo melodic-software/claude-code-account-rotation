@@ -58,7 +58,9 @@ internal sealed partial class RosterFile : IDisposable
     /// <summary>
     /// Applies <paramref name="change"/> to the stored roster and writes the result back,
     /// then appends to the lane history one line per role half whose account changed,
-    /// tagged <paramref name="via"/>.
+    /// tagged <paramref name="via"/>. A change that hands back the roster it was given
+    /// writes nothing, so a refused edit leaves the file as it found it, even one that
+    /// does not parse.
     /// </summary>
     public async Task<Roster> UpdateAsync(Func<Roster, Roster> change, CancellationToken cancellationToken, string via = LaneVia.Edit)
     {
@@ -68,6 +70,11 @@ internal sealed partial class RosterFile : IDisposable
         {
             Roster before = await ReadUnguardedAsync(cancellationToken);
             Roster updated = change(before);
+            if (ReferenceEquals(updated, before))
+            {
+                return updated;
+            }
+
             Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
             await AtomicJsonFile.WriteAsync(_path, ToJson(updated), cancellationToken);
             try
@@ -110,6 +117,11 @@ internal sealed partial class RosterFile : IDisposable
                 ["paused"] = entry.Paused,
                 ["notes"] = entry.Notes,
                 ["ciTokenGeneratedOn"] = DateText(entry.CiTokenGeneratedOn),
+
+                // Read back only by 2.2.0 and earlier, which keep one account per
+                // secret by it; a release that reads ciRoles ignores it, and
+                // after a downgrade it gives back that one role (see LegacyRole).
+                ["ciTokenSecret"] = SecretToJson(entry.CiTokenSecret),
                 ["consoleApiKeySetOn"] = DateText(entry.ConsoleApiKeySetOn),
                 ["adminKeySetOn"] = DateText(entry.AdminKeySetOn),
                 ["ciRoles"] = new JsonArray([.. entry.CiRoles.Select(RoleToJson)]),
@@ -118,6 +130,12 @@ internal sealed partial class RosterFile : IDisposable
 
         return new JsonObject { ["accounts"] = accounts };
     }
+
+    private static JsonObject? SecretToJson(CiTokenSecret? secret) => secret is null ? null : new JsonObject
+    {
+        ["name"] = secret.Name,
+        [secret.Scope == CiSecretScope.Repository ? "repository" : "organization"] = secret.Owner,
+    };
 
     private static JsonNode RoleToJson(CiRoleAssignment assignment)
     {

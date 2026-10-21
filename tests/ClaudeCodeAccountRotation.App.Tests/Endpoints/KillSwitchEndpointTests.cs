@@ -275,6 +275,21 @@ public sealed class KillSwitchEndpointTests
     }
 
     [Fact]
+    public async Task TheVariableWriteIsHandedATokenTheRequestCannotCancel()
+    {
+        (AppFactory factory, SpyReader reader, SpyWriter writer) = await StartAsync();
+        await using AppFactory _ = factory;
+        using HttpClient client = factory.CreateMutatingClient();
+        reader.Answers.Enqueue(Variable("CLAUDE_LANES_DISABLED", "false"));
+        reader.Answers.Enqueue(Variable("CLAUDE_LANES_DISABLED", "true"));
+
+        using HttpResponseMessage response = await client.PostAsJsonAsync(_toggle, new { org = "octo", name = "CLAUDE_LANES_DISABLED", value = "true" }, Token);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        writer.Cancellable.ShouldBe([false]);
+    }
+
+    [Fact]
     public async Task ASelectedVariableSendsBackEveryRepositoryId()
     {
         (AppFactory factory, SpyReader reader, SpyWriter writer) = await StartAsync();
@@ -413,11 +428,15 @@ public sealed class KillSwitchEndpointTests
     {
         public List<(string Organization, string Name, bool Value, string Visibility, string Ids)> Calls { get; } = [];
 
+        /// <summary>Whether each write's token could have been cancelled.</summary>
+        public List<bool> Cancellable { get; } = [];
+
         public Result<Unit, GhApiFailure> Answer { get; set; } = Result<Unit, GhApiFailure>.Success(Unit.Value);
 
         public Task<Result<Unit, GhApiFailure>> SetOrganizationVariableAsync(string organization, string name, bool value, VariableVisibility visibility, CancellationToken cancellationToken)
         {
             Calls.Add((organization, name, value, visibility.Kind, string.Join(',', visibility.SelectedRepositoryIds)));
+            Cancellable.Add(cancellationToken.CanBeCanceled);
             return Task.FromResult(Answer);
         }
     }
