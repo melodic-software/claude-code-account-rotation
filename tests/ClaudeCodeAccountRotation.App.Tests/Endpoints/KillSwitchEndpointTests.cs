@@ -339,7 +339,9 @@ public sealed class KillSwitchEndpointTests
         using HttpResponseMessage response = await client.PostAsJsonAsync(_toggle, new { org = "octo", name = "CLAUDE_REVIEW_DISABLED", value = false }, Token);
 
         response.StatusCode.ShouldBe(HttpStatusCode.NotFound);
-        (await response.Content.ReadFromJsonAsync<JsonObject>(Token))!["error"]!.GetValue<string>().ShouldContain("never creates it");
+        string error = (await response.Content.ReadFromJsonAsync<JsonObject>(Token))!["error"]!.GetValue<string>();
+        error.ShouldContain("not set in org octo or not visible to this sign-in");
+        error.ShouldContain("never creates it");
         writer.Calls.ShouldBeEmpty();
         reader.Paths.ShouldBe(["orgs/octo/actions/variables/CLAUDE_REVIEW_DISABLED"]);
     }

@@ -144,7 +144,7 @@ internal static class RoleEndpoints
             if (visibility.IsFailure)
             {
                 return visibility.Error.RateLimited ? RateLimited(visibility.Error)
-                    : visibility.Error.Status == 404 ? Results.NotFound(new { error = kill.Name + " does not exist in org " + organization + ", or the sign-in may not see it. The tool never creates it." })
+                    : visibility.Error.Status == 404 ? Results.NotFound(new { error = kill.Name + " is not set in org " + organization + " or not visible to this sign-in. The tool never creates it." })
                     : Results.Json(new { error = "nothing was written: " + visibility.Error.Message }, statusCode: StatusCodes.Status502BadGateway);
             }
 

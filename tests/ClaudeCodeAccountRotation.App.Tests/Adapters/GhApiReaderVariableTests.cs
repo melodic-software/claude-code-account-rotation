@@ -13,17 +13,17 @@ public sealed class GhApiReaderVariableTests
     private const string Path404 = "orgs/zz-no-such-org/actions/variables/CLAUDE_LANES_DISABLED";
 
     /// <summary>
-    /// The <c>gh api -i --method GET</c> answer recorded against an
-    /// organization that does not exist (gh 2.x, 2026-10-20), as
-    /// <c>GhApiReaderTests</c> holds it: printed on standard output, exit 1.
+    /// The <c>gh api -i --method GET</c> answer for this path, recorded against
+    /// an organization that does not exist (gh 2.x, 2026-10-21), headers
+    /// trimmed: printed on standard output, exit 1.
     /// </summary>
     private const string Recorded404 =
         "HTTP/2.0 404 Not Found\r\n"
         + "Content-Type: application/json; charset=utf-8\r\n"
         + "X-Ratelimit-Limit: 5000\r\n"
-        + "X-Ratelimit-Remaining: 4794\r\n"
+        + "X-Ratelimit-Remaining: 4722\r\n"
         + "\r\n"
-        + "{\"message\":\"Not Found\",\"documentation_url\":\"https://docs.github.com/rest/actions/secrets#list-organization-secrets\",\"status\":\"404\"}";
+        + "{\"message\":\"Not Found\",\"documentation_url\":\"https://docs.github.com/rest/actions/variables#get-an-organization-variable\",\"status\":\"404\"}";
 
     [Fact]
     public void ARecordedNotFoundCarriesItsStatus() =>

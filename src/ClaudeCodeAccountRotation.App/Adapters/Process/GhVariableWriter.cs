@@ -124,7 +124,7 @@ internal sealed partial class GhVariableWriter(string executable, TimeSpan timeo
         if (status == 404)
         {
             return Result<Unit, GhApiFailure>.Failure(new GhApiFailure(
-                "GitHub answered HTTP 404 for " + path + ": the variable does not exist, or the sign-in may not see it. The tool never creates it.",
+                "GitHub answered HTTP 404 for " + path + ": the variable is not set or not visible to this sign-in. The tool never creates it.",
                 RateLimited: false,
                 404));
         }

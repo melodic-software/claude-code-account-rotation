@@ -455,8 +455,8 @@ is `selected`, the ids of its repositories), runs `gh api --method PATCH
 orgs/<org>/actions/variables/<name> -f value=<true|false> -f visibility=<as read>` (plus
 `-F selected_repository_ids[]=<id>` per id), and reads the switch back. GitHub's documentation
 marks visibility optional but does not promise an omitted one is kept, so the tool sends back the
-visibility it just read. If that read fails, nothing is written. A variable that does not exist is
-reported, never created. The repository switch is read-only, and no repository or environment
+visibility it just read. If that read fails, nothing is written. A variable GitHub answers 404 for is
+reported as not set or not visible to this sign-in, and never created. The repository switch is read-only, and no repository or environment
 variable is ever written. The route is `POST /api/kill-switches` with `{"org", "name", "value"}`;
 any other name, or a value other than `true` or `false`, is refused before `gh` runs.
 

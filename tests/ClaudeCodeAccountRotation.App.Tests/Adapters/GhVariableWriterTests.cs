@@ -5,16 +5,19 @@ using ClaudeCodeAccountRotation.Core;
 namespace ClaudeCodeAccountRotation.App.Tests.Adapters;
 
 /// <summary>
-/// The kill-switch PATCH: exactly the value of one organization variable, no
-/// visibility, never <c>gh variable set</c>, never a repository or environment
-/// path, one at a time a second apart, and a 404 told apart from a rate limit.
+/// The kill-switch PATCH: the value of one organization variable plus the
+/// visibility read back before it, never <c>gh variable set</c>, never a
+/// repository or environment path, one at a time a second apart, and a 404
+/// told apart from a rate limit.
 /// </summary>
 public sealed class GhVariableWriterTests : IDisposable
 {
     /// <summary>
-    /// Recorded from <c>gh api --method GET</c> (no <c>--include</c>) against an
-    /// organization that does not exist (gh 2.x, 2026-10-20): the body on
-    /// standard output, the status on standard error, exit 1.
+    /// The 404 body GitHub returned to <c>gh api -i --method GET</c> for an
+    /// organization variable in an organization that does not exist (gh 2.x,
+    /// 2026-10-21), headers dropped, as gh prints it without <c>--include</c>:
+    /// the body on standard output, the status on standard error, exit 1. A
+    /// GET, not a PATCH: the tests never send a write to GitHub.
     /// </summary>
     private const string Recorded404Body =
         "{\"message\":\"Not Found\",\"documentation_url\":\"https://docs.github.com/rest/actions/variables#get-an-organization-variable\",\"status\":\"404\"}";
@@ -78,6 +81,7 @@ public sealed class GhVariableWriterTests : IDisposable
 
         read.Error.Status.ShouldBe(404);
         read.Error.RateLimited.ShouldBeFalse();
+        read.Error.Message.ShouldContain("not set or not visible to this sign-in");
         read.Error.Message.ShouldContain("never creates it");
         read.Error.Message.ShouldNotContain("gh: Not Found");
     }

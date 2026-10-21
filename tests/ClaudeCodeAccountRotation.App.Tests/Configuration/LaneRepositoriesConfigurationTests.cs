@@ -76,6 +76,27 @@ public sealed class LaneRepositoriesConfigurationTests : IDisposable
     }
 
     [Theory]
+    [InlineData("\"octo/lanes\"")]
+    [InlineData("{\"repository\": \"octo/lanes\"}")]
+    [InlineData("[\"octo/lanes\", 7]")]
+    [InlineData("[\"octo/lanes\", null]")]
+    [InlineData("[[\"octo/lanes\"]]")]
+    public async Task AValueThatIsNotAnArrayOfStringsIsRefused(string value)
+    {
+        (Result<ClaudeCodeAccountRotationConfiguration, string> loaded, _) = await LoadAsync("{\"laneRepositories\": " + value + "}");
+
+        loaded.Error.ShouldContain("laneRepositories that is not an array of owner/name strings");
+    }
+
+    [Fact]
+    public async Task ANullValueLoadsAsNoLaneRepositories()
+    {
+        (Result<ClaudeCodeAccountRotationConfiguration, string> loaded, _) = await LoadAsync("""{"laneRepositories": null}""");
+
+        (loaded.Value.LaneRepositories ?? []).ShouldBeEmpty();
+    }
+
+    [Theory]
     [InlineData("octo")]
     [InlineData("octo/..")]
     [InlineData("octo/.")]
