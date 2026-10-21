@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-10-21
+
 ### Added
 
 - **Token expiry by role.** In the last 30 days of a token's year, and after it, a card says on
