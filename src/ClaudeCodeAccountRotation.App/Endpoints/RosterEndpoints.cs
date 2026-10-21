@@ -511,9 +511,10 @@ internal static partial class RosterEndpoints
     /// for a CI token whose secret was set but whose roster write failed. It is
     /// dated by the request's <c>ciTokenGeneratedOn</c> or, when the request
     /// sends none, by the date the entry already holds; with neither it is refused.
-    /// It is refused too when another account holds that token half set through
-    /// the tool (with an instant) or on a later day: that half was not lost to a
-    /// failed write, and a form drawn before it was set must not take it.
+    /// It is refused too when another account holds that token half set on a
+    /// later day, or set through the tool (with an instant) on the same day: that
+    /// half is newer than the token being recorded, so a form drawn before it was
+    /// set must not take it.
     /// </para>
     /// </summary>
     private static (RosterEntry? Updated, IResult? Refusal) Edited(
@@ -568,12 +569,12 @@ internal static partial class RosterEndpoints
 
             var role = CiRole.FromTokenSecret(secret);
             if (roster.Entries.FirstOrDefault(other => other.Email != existing.Email && other.CiRoles.Any(held =>
-                    held.Role.Equals(role) && held.HasToken && (held.TokenSetAt is not null || held.TokenSetOn > setOn))) is RosterEntry holder)
+                    held.Role.Equals(role) && (held.TokenSetOn > setOn || (held.TokenSetOn == setOn && held.TokenSetAt is not null)))) is RosterEntry holder)
             {
                 return (null, Refused(
                     "TokenHalfHeldElsewhere",
-                    holder.Email.Value + " holds the token of " + role + ", set through the tool or after " + setOn.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
-                    + ", so naming that secret here is not the repair for a failed roster write and would take it from them. To move the role, run Generate CI token for it again."));
+                    holder.Email.Value + " holds the token of " + role + ", set after " + setOn.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+                    + " or through the tool that same day, so it is newer than the token this repair records and naming that secret here would take it from them. To move the role, run Generate CI token for it again."));
             }
 
             updated = updated.ClaimingToken(role, setOn, setAt: null);

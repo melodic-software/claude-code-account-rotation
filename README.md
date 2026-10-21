@@ -532,8 +532,9 @@ secret but could not update the roster), open Edit and set "CI token generated o
 also set "CI secret name" and "CI secret in" (`owner/repository`, or an organization), then
 Save; that adds the secret's role with its token set on that date, taking that token half off the
 account that backed it before; the other half stays. That is the only role Edit gives an account,
-and it is refused (409) when another account holds that token half set through the tool or on a
-later day: such a half was not lost to a failed roster write, so run Generate CI token instead.
+and it is refused (409) when another account holds that token half set on a later day, or set
+through the tool on the same day: that half is newer than the token you are recording, so run
+Generate CI token instead.
 Untick a role in Edit to take it off this account only. Edit sends the date only when you change
 it and names only the roles you untick, so a form opened before another account took a role
 cannot take it back. The same writes are `PATCH /api/accounts/{email}`, sent with the headers

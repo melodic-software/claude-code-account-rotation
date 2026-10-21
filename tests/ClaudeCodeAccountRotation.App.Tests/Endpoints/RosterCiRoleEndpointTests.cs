@@ -109,6 +109,46 @@ public sealed class RosterCiRoleEndpointTests
     }
 
     [Fact]
+    public async Task TheRepairAfterAFailedRosterWriteTakesATokenHalfTheToolSetOnAnEarlierDay()
+    {
+        // B was assigned AUTOMATIONS through the tool in January; A's session set the secret today but its roster write failed.
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        AccountEmail a = AccountEmail.Parse(NewEmail).Value;
+        AccountEmail b = AccountEmail.Parse("other@example.com").Value;
+        DateTimeOffset assignedAt = new(2026, 1, 15, 9, 0, 0, TimeSpan.Zero);
+        await SeedAsync(factory, roster => roster.With(new RosterEntry(a)));
+        await SeedAsync(factory, roster => roster.With(new RosterEntry(b).ClaimingToken(_automations, new DateOnly(2026, 1, 15), assignedAt)), LaneVia.Assign);
+
+        using HttpResponseMessage response = await PatchAsync(
+            client,
+            """{ "ciTokenGeneratedOn": "2026-10-06", "ciTokenSecret": { "name": "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", "organization": "octo" } }""");
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        Roster roster = await factory.Services.GetRequiredService<RosterFile>().ReadAsync(TestContext.Current.CancellationToken);
+        roster.Find(a)!.CiRoles.ShouldBe([new CiRoleAssignment(_automations, new DateOnly(2026, 10, 6))]);
+        roster.Find(b)!.CiRoles.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task TheRepairIsRefusedWhenTheToolSetTheHalfOnTheSameDay()
+    {
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        AccountEmail a = AccountEmail.Parse(NewEmail).Value;
+        AccountEmail b = AccountEmail.Parse("other@example.com").Value;
+        DateTimeOffset assignedAt = new(2026, 10, 6, 9, 0, 0, TimeSpan.Zero);
+        await SeedAsync(factory, roster => roster.With(new RosterEntry(a)).With(new RosterEntry(b).ClaimingToken(_automations, new DateOnly(2026, 10, 6), assignedAt)));
+
+        using HttpResponseMessage response = await PatchAsync(
+            client,
+            """{ "ciTokenGeneratedOn": "2026-10-06", "ciTokenSecret": { "name": "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", "organization": "octo" } }""");
+
+        response.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        (await factory.Services.GetRequiredService<RosterFile>().ReadAsync(TestContext.Current.CancellationToken)).Find(b)!.CiRoles.ShouldBe([new CiRoleAssignment(_automations, new DateOnly(2026, 10, 6), assignedAt)]);
+    }
+
+    [Fact]
     public async Task TheRepairStillTakesATokenHalfSetByHandOnAnEarlierDay()
     {
         await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);

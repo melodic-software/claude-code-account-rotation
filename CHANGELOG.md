@@ -66,7 +66,7 @@ All notable changes to this project are documented in this file. The format foll
   takes roles off: it names just the roles you untick, and sends the CI token date only when you
   change it, so a form opened before another account took a role cannot take it back. The Edit
   repair, a CI secret named by hand, is the one way Edit claims a role, and it is refused (409)
-  when another account holds that token half set through the tool or on a later day.
+  when another account holds that token half set on a later day, or through the tool that day.
   `POST /api/accounts/{email}/ci-token` takes `roles`; the 2.1.0 single-secret body still works
   and writes the token half only (#259).
 - **Push API key.** `POST /api/accounts/{email}/api-key/push`, on the card's ··· menu, re-sends
