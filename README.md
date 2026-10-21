@@ -38,7 +38,8 @@ Status: a tagged release exists.
   (no Anthropic statement either way), not ALLOWED. It reads only when the dashboard is opened,
   Refresh is pressed, or the rate-limit stop hook fires, at most once a minute per account, never
   on a timer. It reads GitHub only through `gh api`, with gh's own User-Agent and sign-in, and
-  only when you click Check roles; the first rate-limit answer stops that check.
+  only when you click Check roles; the first rate-limit answer stops that check. It changes a
+  lane kill switch's value only when you confirm its toggle, and never creates one.
 - The parked-pair refresh presents Claude Code's public OAuth `client_id`.
 - An optional Admin key, stored per account like the Console key, lets Check API key read the
   organization's key list from the Admin API (`GET /v1/organizations/api_keys`) and say whether
@@ -449,6 +450,23 @@ one GitHub lists as older than the tool's write or with no readable time; and `m
 secret is gone. A role whose secrets exist but that no account backs is `unclaimed`. It reads
 only on that click, and the first rate-limit answer ends the check with no retry.
 
+The same click reads the lane kill switches: the organization variables `CLAUDE_LANES_DISABLED`,
+`CLAUDE_REVIEW_DISABLED` and `CLAUDE_SECURITY_REVIEW_DISABLED` of each organization it read, and
+`CLAUDE_LANES_REPO_DISABLED` of each repository listed in `laneRepositories` in `config.json`
+(`["owner/name", ...]`; absent means none). `CLAUDE_LANES_DISABLED` and
+`CLAUDE_LANES_REPO_DISABLED` show running only when exactly `false`, and stopped on any other
+value or when the variable does not exist. The two review switches show stopped only when exactly
+`true`. Values compare exactly, so `False` or ` false` is not `false`. Each organization switch
+has a Stop or Start button that asks first. It then reads the variable's visibility (and, when it
+is `selected`, the ids of its repositories), runs `gh api --method PATCH
+orgs/<org>/actions/variables/<name> -f value=<true|false> -f visibility=<as read>` (plus
+`-F selected_repository_ids[]=<id>` per id), and reads the switch back. GitHub's documentation
+marks visibility optional but does not promise an omitted one is kept, so the tool sends back the
+visibility it just read. If that read fails, nothing is written. A variable GitHub answers 404 for is
+reported as not set or not visible to this sign-in, and never created. The repository switch is read-only, and no repository or environment
+variable is ever written. The route is `POST /api/kill-switches` with `{"org", "name", "value"}`;
+any other name, or a value other than `true` or `false`, is refused before `gh` runs.
+
 To mark an account by hand instead (for a token made outside the tool, or when the tool set the
 secret but could not update the roster), open Edit and set "CI token generated on". Optionally
 also set "CI secret name" and "CI secret in" (`owner/repository`, or an organization), then
@@ -510,7 +528,8 @@ Releases from v1.0.0 on read the files the previous release wrote. There is no m
 schema bump. Do not edit `config.json`, `roster.json`, or `state/live-owner.json`, and do not
 copy a template over an existing config.
 
-The app calls the GitHub API only through `gh`, for Check roles and CI secret writes, and never
+The app calls the GitHub API only through `gh`, for Check roles, CI secret writes and kill-switch
+toggles, and never
 to look for releases; the dashboard has no "update available" line. Compare
 `claude-code-account-rotation --version` with
 <https://github.com/melodic-software/claude-code-account-rotation/releases/latest>.

@@ -56,6 +56,14 @@ internal static class ConfigurationFile
             return Result<ClaudeCodeAccountRotationConfiguration, string>.Failure("the configuration file " + fullPath + " could not be parsed: " + exception.Message);
         }
 
+        // Each entry becomes part of a GitHub API path, so a value of the wrong
+        // shape is refused rather than read as no repositories.
+        if (raw["laneRepositories"] is JsonNode lanes
+            && (lanes is not JsonArray entries || entries.Any(static entry => entry?.GetValueKind() != JsonValueKind.String)))
+        {
+            return Result<ClaudeCodeAccountRotationConfiguration, string>.Failure("the configuration file " + fullPath + " has laneRepositories that is not an array of owner/name strings");
+        }
+
         return Result<ClaudeCodeAccountRotationConfiguration, string>.Success(Merge(defaults, raw));
     }
 
@@ -92,6 +100,7 @@ internal static class ConfigurationFile
         ["mailbox"] = configuration.Mailbox,
         ["peers"] = PeersToJson(configuration.Peers),
         ["remoteControlTask"] = configuration.RemoteControlTask,
+        ["laneRepositories"] = configuration.LaneRepositories is null ? null : new JsonArray([.. configuration.LaneRepositories.Select(static repository => (JsonNode)repository)]),
     };
 
     private static JsonArray PeersToJson(IReadOnlyList<PeerConfiguration>? peers)
@@ -166,8 +175,19 @@ internal static class ConfigurationFile
             Peers(raw) ?? defaults.Peers,
             // Absent keeps the default, so a file written before this key restarts
             // the default task; a null or empty value written there turns it off.
-            raw.ContainsKey("remoteControlTask") ? Text(raw, "remoteControlTask") : defaults.RemoteControlTask);
+            raw.ContainsKey("remoteControlTask") ? Text(raw, "remoteControlTask") : defaults.RemoteControlTask,
+            LaneRepositories(raw) ?? defaults.LaneRepositories);
     }
+
+    /// <summary>
+    /// <c>laneRepositories</c>: <c>owner/name</c> entries, trimmed, blanks
+    /// skipped. The load has already refused any shape but an array of
+    /// strings; the validator holds each entry to GitHub's repository rule.
+    /// </summary>
+    private static List<string>? LaneRepositories(JsonObject raw) =>
+        raw["laneRepositories"] is JsonArray entries
+            ? [.. entries.Select(static entry => entry!.GetValue<string>().Trim()).Where(static text => text.Length > 0)]
+            : null;
 
     /// <summary>
     /// <c>peers[]</c>: the other sides of this machine. An entry missing

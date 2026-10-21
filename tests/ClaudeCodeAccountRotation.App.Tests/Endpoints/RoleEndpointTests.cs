@@ -137,7 +137,7 @@ public sealed class RoleEndpointTests
                 ("AUTOMATIONS", HolderEmail, "changed", null),
                 ("ISSUE_LANE", null, "unclaimed", "unclaimed"),
             ]);
-        reader.Paths.ShouldBe(["orgs/octo/actions/secrets?per_page=100&page=1"]);
+        reader.Paths.ShouldBe(["orgs/octo/actions/secrets?per_page=100&page=1", "orgs/octo/actions/variables/CLAUDE_LANES_DISABLED", "orgs/octo/actions/variables/CLAUDE_REVIEW_DISABLED", "orgs/octo/actions/variables/CLAUDE_SECURITY_REVIEW_DISABLED"]);
     }
 
     [Fact]

@@ -261,6 +261,10 @@ internal static class AppComposition
         services.AddSingleton<IGhApiReader>(gh.IsSuccess
             ? new GhApiReader(gh.Value, TimeSpan.FromSeconds(60))
             : new UnavailableGhApiReader(gh.Error));
+        // The kill-switch toggle: a PATCH of an existing organization variable's value.
+        services.AddSingleton<IGhVariableWriter>(_ => gh.IsSuccess
+            ? new GhVariableWriter(gh.Value, TimeSpan.FromSeconds(60), TimeProvider.System)
+            : new UnavailableGhVariableWriter(gh.Error));
         services.AddSingleton<ICiTokenSessionRunner>(provider => new ClaudeCliSetupTokenRunner(
             setupTokenChild,
             provider.GetRequiredService<ICiSecretWriter>(),
