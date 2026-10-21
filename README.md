@@ -454,7 +454,8 @@ message gives the manual commands: `claude setup-token`, then `gh secret set <na
 private. When some halves are set and others are not, the roster records the halves that were
 set and the message names each one that was not. A role whose token was set but whose key was not
 is `split` (token from one account, key from another): the account that set the half that failed
-keeps it, and both cards say `split` and name both accounts until that half is re-sent. Push API
+keeps it, and both cards say `split` and name both accounts until that half is re-sent.
+Re-sending one half of a role an account already backs moves only that half. Push API
 key, in the ··· menu, sends the stored key to the key secret of every role the account backs,
 with no sign-in.
 Use it after replacing a Console key too. The first rate-limit answer from GitHub stops every

@@ -128,6 +128,22 @@ public sealed class CiRoleTests
     }
 
     [Fact]
+    public void ReSendingOneHalfOfASplitRoleTakesOnlyThatHalf()
+    {
+        // b set the token, a still holds the key.
+        RosterEntry tokenHolder = new RosterEntry(Email("b@example.com")).ClaimingToken(Org("AUTOMATIONS"), _june, null);
+        var keyHolder = new RosterEntry(Email("a@example.com")) { CiRoles = [new CiRoleAssignment(Org("AUTOMATIONS"), KeySetOn: _january)] };
+        Roster split = new([tokenHolder, keyHolder]);
+
+        Roster keyResent = split.With(keyHolder.ClaimingKey(Org("AUTOMATIONS"), _june, null));
+        Roster tokenResent = split.With(tokenHolder.ClaimingToken(Org("AUTOMATIONS"), new DateOnly(2026, 10, 6), null));
+
+        keyResent.Find(Email("b@example.com"))!.CiRoles.ShouldBe([new CiRoleAssignment(Org("AUTOMATIONS"), _june)]);
+        keyResent.Find(Email("a@example.com"))!.CiRoles.ShouldBe([new CiRoleAssignment(Org("AUTOMATIONS"), KeySetOn: _june)]);
+        tokenResent.Find(Email("a@example.com"))!.CiRoles.ShouldBe([new CiRoleAssignment(Org("AUTOMATIONS"), KeySetOn: _january)]);
+    }
+
+    [Fact]
     public void ARoleClaimLeavesAHandMarkerAlone()
     {
         Roster roster = Roster.Empty

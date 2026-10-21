@@ -268,6 +268,48 @@ public sealed class CiTokenRoleEndpointTests
     }
 
     [Fact]
+    public async Task AFullAssignmentByANewAccountTakesBothHalvesOffThePreviousHolder()
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken);
+        await using AppFactory host = factory;
+        DateOnly before = new(2026, 6, 1);
+        await SeedAsync(factory, new RosterEntry(Parse(Previous)).ClaimingToken(_automations, before, null).ClaimingKey(_automations, before, null));
+        AnswerAll(reader, "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", "AUTOMATIONS_CLAUDE_API_KEY");
+        using HttpClient client = factory.CreateMutatingClient();
+
+        await AssignAsync(client, new { roles = new[] { new { prefix = "AUTOMATIONS", organization = "octo" } } }, TestContext.Current.CancellationToken);
+
+        Roster roster = await RosterAsync(factory);
+        roster.Find(Parse(Previous))!.CiRoles.ShouldBeEmpty();
+        roster.Find(Parse(Email))!.CiRoles.Select(static held => (held.Role, held.HasToken, held.HasKey)).ShouldBe([(_automations, true, true)]);
+    }
+
+    [Fact]
+    public async Task PushFromTheKeyHolderOfASplitRoleLeavesTheOtherAccountsTokenHalf()
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken);
+        await using AppFactory host = factory;
+        DateOnly before = new(2026, 6, 1);
+        RosterEntry keyHolder = (await RosterAsync(factory)).Find(Parse(Email))! with { CiRoles = [new CiRoleAssignment(_automations, KeySetOn: before)] };
+        RosterEntry tokenHolder = new RosterEntry(Parse(Previous)).ClaimingToken(_automations, before, null);
+        await factory.Services.GetRequiredService<RosterFile>().UpdateAsync(_ => new Roster([keyHolder, tokenHolder]), TestContext.Current.CancellationToken);
+        string history = Path.Combine(factory.AppData, LaneHistoryFile.FileName);
+        File.Delete(history);
+        reader.Answers["orgs/octo/actions/secrets/AUTOMATIONS_CLAUDE_API_KEY"] = PathReader.Secret("AUTOMATIONS_CLAUDE_API_KEY", "all");
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage pushed = await client.PostAsync(Account(Email, "/api-key/push"), content: null, TestContext.Current.CancellationToken);
+
+        pushed.StatusCode.ShouldBe(HttpStatusCode.OK);
+        factory.Secrets.Sets.Single().Secret.Name.ShouldBe("AUTOMATIONS_CLAUDE_API_KEY");
+        Roster roster = await RosterAsync(factory);
+        roster.Find(Parse(Previous))!.CiRoles.ShouldBe([new CiRoleAssignment(_automations, before)]);
+        roster.Find(Parse(Email))!.CiRoles.Single().HasKey.ShouldBeTrue();
+        // The key stayed with the same account and the token never moved, so no half changed hands.
+        (File.Exists(history) ? await File.ReadAllTextAsync(history, TestContext.Current.CancellationToken) : string.Empty).ShouldNotContain("\"half\":\"token\"");
+    }
+
+    [Fact]
     public async Task ARateLimitStopsEveryWriteAfterIt()
     {
         (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken);
