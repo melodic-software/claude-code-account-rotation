@@ -108,6 +108,26 @@ public sealed class CiRoleTests
     }
 
     [Fact]
+    public void ARoleAnEntryAlreadyHeldUnchangedTakesNothingFromTheHolderOfItsOtherHalf()
+    {
+        // A split: b set the token, a still holds the key. Editing either
+        // account's other fields leaves both halves where they are.
+        RosterEntry tokenHolder = new RosterEntry(Email("b@example.com")).ClaimingToken(Org("AUTOMATIONS"), _june, null);
+        var keyHolder = new RosterEntry(Email("a@example.com")) { CiRoles = [new CiRoleAssignment(Org("AUTOMATIONS"), KeySetOn: _january)] };
+        Roster split = new([tokenHolder, keyHolder]);
+
+        Roster edited = split.With(keyHolder with { Alias = "renamed" }).With(tokenHolder with { Notes = "edited" });
+
+        edited.Find(Email("a@example.com"))!.CiRoles.Single().HasKey.ShouldBeTrue();
+        edited.Find(Email("b@example.com"))!.CiRoles.Single().HasToken.ShouldBeTrue();
+
+        // Setting the key from b changes b's claim, which takes the role whole.
+        Roster repaired = edited.With(edited.Find(Email("b@example.com"))!.ClaimingKey(Org("AUTOMATIONS"), _june, null));
+
+        repaired.Find(Email("a@example.com"))!.CiRoles.ShouldBeEmpty();
+    }
+
+    [Fact]
     public void ARoleClaimLeavesAHandMarkerAlone()
     {
         Roster roster = Roster.Empty

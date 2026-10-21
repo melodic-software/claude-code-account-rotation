@@ -34,7 +34,8 @@ internal sealed class UnavailableGhVariableWriter(string reason) : IGhVariableWr
 /// <summary>
 /// <c>gh api --method PATCH orgs/&lt;org&gt;/actions/variables/&lt;name&gt; -f value=&lt;true|false&gt; -f visibility=&lt;kind&gt;</c>,
 /// plus <c>-F selected_repository_ids[]=&lt;id&gt;</c> per id when the kind is
-/// <c>selected</c>, one at a time and at least <see cref="Spacing"/> apart.
+/// <c>selected</c>, through the shared <see cref="GhWriteGate"/>: one gh write
+/// at a time, at least a second apart.
 /// <para>
 /// "Update an organization variable" marks <c>visibility</c> optional but
 /// does not say an omitted one is kept, so the caller reads the current
@@ -49,14 +50,8 @@ internal sealed class UnavailableGhVariableWriter(string reason) : IGhVariableWr
 /// its output. Nothing gh prints is relayed.
 /// </para>
 /// </summary>
-internal sealed partial class GhVariableWriter(string executable, TimeSpan timeout, TimeProvider clock) : IGhVariableWriter, IDisposable
+internal sealed partial class GhVariableWriter(string executable, TimeSpan timeout, GhWriteGate gate) : IGhVariableWriter
 {
-    /// <summary>The least time between two writes. Basis: the tool's rule that gh writes go one at a time, at least a second apart.</summary>
-    public static readonly TimeSpan Spacing = TimeSpan.FromSeconds(1);
-
-    private readonly SemaphoreSlim _gate = new(1, 1);
-    private DateTimeOffset? _lastWrite;
-
     /// <summary>
     /// <c>-f</c> for the value and the visibility, which GitHub takes as
     /// strings; <c>-F</c> for each repository id, an integer. A selected
@@ -86,24 +81,10 @@ internal sealed partial class GhVariableWriter(string executable, TimeSpan timeo
     public async Task<Result<Unit, GhApiFailure>> SetOrganizationVariableAsync(string organization, string name, bool value, VariableVisibility visibility, CancellationToken cancellationToken)
     {
         IReadOnlyList<string> arguments = Arguments(organization, name, value, visibility);
-        await _gate.WaitAsync(cancellationToken);
-        try
-        {
-            if (_lastWrite is DateTimeOffset last && last + Spacing - clock.GetUtcNow() is { Ticks: > 0 } wait)
-            {
-                await Task.Delay(wait, clock, cancellationToken);
-            }
-
-            Result<GhExit, string> run = await GhProcess.RunAsync(executable, arguments, input: null, timeout, cancellationToken);
-            _lastWrite = clock.GetUtcNow();
-            return run.IsFailure
-                ? Result<Unit, GhApiFailure>.Failure(new GhApiFailure(run.Error, RateLimited: false))
-                : Read(VariablePath(organization, name), run.Value);
-        }
-        finally
-        {
-            _gate.Release();
-        }
+        Result<GhExit, string> run = await gate.RunAsync(() => GhProcess.RunAsync(executable, arguments, input: null, timeout, cancellationToken), cancellationToken);
+        return run.IsFailure
+            ? Result<Unit, GhApiFailure>.Failure(new GhApiFailure(run.Error, RateLimited: false))
+            : Read(VariablePath(organization, name), run.Value);
     }
 
     /// <summary>Exit 0 is GitHub's 204. Otherwise the status gh names, or the body's own <c>status</c>, decides.</summary>
@@ -135,8 +116,6 @@ internal sealed partial class GhVariableWriter(string executable, TimeSpan timeo
             RateLimited: false,
             status == 0 ? null : status));
     }
-
-    public void Dispose() => _gate.Dispose();
 
     private static string VariablePath(string organization, string name) => "orgs/" + organization + "/actions/variables/" + name;
 

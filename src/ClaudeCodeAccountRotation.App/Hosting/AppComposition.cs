@@ -254,16 +254,19 @@ internal static class AppComposition
             ? PseudoTerminalChild.Factory(cli.Value)
             : (_, _) => Result<ILoginChild, string>.Failure(cli.Error);
         Result<string, string> gh = GhSecretWriter.Locate(Environment.GetEnvironmentVariable("PATH"), OperatingSystem.IsWindows());
+        // One gate for every gh write, secrets and variables alike: one at a
+        // time, at least a second apart, on the wall clock.
+        services.AddSingleton(_ => new GhWriteGate(TimeProvider.System));
         services.AddSingleton<ICiSecretWriter>(provider => gh.IsSuccess
-            ? new GhSecretWriter(gh.Value, TimeSpan.FromSeconds(60), provider.GetRequiredService<TimeProvider>())
+            ? new GhSecretWriter(gh.Value, TimeSpan.FromSeconds(60), provider.GetRequiredService<GhWriteGate>())
             : new UnavailableCiSecretWriter(gh.Error));
         // "Check roles": GitHub reads through the same gh, only on that click.
         services.AddSingleton<IGhApiReader>(gh.IsSuccess
             ? new GhApiReader(gh.Value, TimeSpan.FromSeconds(60))
             : new UnavailableGhApiReader(gh.Error));
         // The kill-switch toggle: a PATCH of an existing organization variable's value.
-        services.AddSingleton<IGhVariableWriter>(_ => gh.IsSuccess
-            ? new GhVariableWriter(gh.Value, TimeSpan.FromSeconds(60), TimeProvider.System)
+        services.AddSingleton<IGhVariableWriter>(provider => gh.IsSuccess
+            ? new GhVariableWriter(gh.Value, TimeSpan.FromSeconds(60), provider.GetRequiredService<GhWriteGate>())
             : new UnavailableGhVariableWriter(gh.Error));
         services.AddSingleton<ICiTokenSessionRunner>(provider => new ClaudeCliSetupTokenRunner(
             setupTokenChild,

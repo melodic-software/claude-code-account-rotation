@@ -10,6 +10,7 @@ namespace ClaudeCodeAccountRotation.App.Tests.Adapters;
 /// repository or environment path, one at a time a second apart, and a 404
 /// told apart from a rate limit.
 /// </summary>
+[Collection(StandInScripts.Name)]
 public sealed class GhVariableWriterTests : IDisposable
 {
     /// <summary>
@@ -26,9 +27,15 @@ public sealed class GhVariableWriterTests : IDisposable
 
     private readonly string _root = Path.Combine(Path.GetTempPath(), "claude-code-account-rotation-tests", Guid.NewGuid().ToString("N"));
 
+    private readonly GhWriteGate _gate = new(TimeProvider.System);
+
     public GhVariableWriterTests() => Directory.CreateDirectory(_root);
 
-    public void Dispose() => Directory.Delete(_root, recursive: true);
+    public void Dispose()
+    {
+        _gate.Dispose();
+        Directory.Delete(_root, recursive: true);
+    }
 
     public static bool OnUnix => !OperatingSystem.IsWindows();
 
@@ -118,7 +125,7 @@ public sealed class GhVariableWriterTests : IDisposable
     {
         string calls = Path.Combine(_root, "calls");
         string gh = await StandInAsync(calls, "printf '%s' '" + Recorded404Body + "'\nprintf 'gh: Not Found (HTTP 404)\\n' >&2\nexit 1\n");
-        using GhVariableWriter writer = new(gh, TimeSpan.FromSeconds(30), TimeProvider.System);
+        GhVariableWriter writer = new(gh, TimeSpan.FromSeconds(30), _gate);
 
         Result<Unit, GhApiFailure> set = await writer.SetOrganizationVariableAsync("octo", "CLAUDE_LANES_DISABLED", true, new VariableVisibility("all", []), TestContext.Current.CancellationToken);
 
@@ -136,7 +143,7 @@ public sealed class GhVariableWriterTests : IDisposable
         string calls = Path.Combine(_root, "calls");
         string stamps = Path.Combine(_root, "stamps");
         string gh = await StandInAsync(calls, "date +%s%N >> '" + stamps + "'\nsleep 0.2\ndate +%s%N >> '" + stamps + "'\nexit 0\n");
-        using GhVariableWriter writer = new(gh, TimeSpan.FromSeconds(30), TimeProvider.System);
+        GhVariableWriter writer = new(gh, TimeSpan.FromSeconds(30), _gate);
 
         Result<Unit, GhApiFailure>[] both = await Task.WhenAll(
             writer.SetOrganizationVariableAsync("octo", "CLAUDE_LANES_DISABLED", true, new VariableVisibility("all", []), TestContext.Current.CancellationToken),
@@ -145,7 +152,28 @@ public sealed class GhVariableWriterTests : IDisposable
         both.ShouldAllBe(static set => set.IsSuccess);
         long[] at = [.. (await File.ReadAllLinesAsync(stamps, TestContext.Current.CancellationToken)).Select(static line => long.Parse(line, System.Globalization.CultureInfo.InvariantCulture))];
         at.Length.ShouldBe(4);
-        TimeSpan.FromTicks((at[2] - at[1]) / 100).ShouldBeGreaterThanOrEqualTo(GhVariableWriter.Spacing);
+        TimeSpan.FromTicks((at[2] - at[1]) / 100).ShouldBeGreaterThanOrEqualTo(GhWriteGate.Spacing);
+    }
+
+    [Fact(SkipUnless = nameof(OnUnix), Skip = "The stand-in gh is a shell script")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public async Task ASecretSetThenAVariablePatchShareOneGateASecondApart()
+    {
+        string calls = Path.Combine(_root, "calls");
+        string stamps = Path.Combine(_root, "stamps");
+        string gh = await StandInAsync(calls, "date +%s%N >> '" + stamps + "'\ncat > /dev/null\ndate +%s%N >> '" + stamps + "'\nexit 0\n");
+        GhSecretWriter secrets = new(gh, TimeSpan.FromSeconds(30), _gate);
+        GhVariableWriter variables = new(gh, TimeSpan.FromSeconds(30), _gate);
+
+        (await secrets.SetAsync(ClaudeCodeAccountRotation.Core.Accounts.CiTokenSecret.Parse("A_CLAUDE_API_KEY", null, "octo").Value, OrgSecretVisibility.All, [], "value", TestContext.Current.CancellationToken))
+            .IsSuccess.ShouldBeTrue();
+        (await variables.SetOrganizationVariableAsync("octo", "CLAUDE_LANES_DISABLED", true, new VariableVisibility("all", []), TestContext.Current.CancellationToken))
+            .IsSuccess.ShouldBeTrue();
+
+        long[] at = [.. (await File.ReadAllLinesAsync(stamps, TestContext.Current.CancellationToken)).Select(static line => long.Parse(line, System.Globalization.CultureInfo.InvariantCulture))];
+        at.Length.ShouldBe(4);
+        (await File.ReadAllLinesAsync(calls, TestContext.Current.CancellationToken))[1].ShouldStartWith("api --method PATCH");
+        (at[2] - at[1]).ShouldBeGreaterThanOrEqualTo(1_000_000_000L);
     }
 
     /// <summary>A gh that appends its arguments to <paramref name="calls"/>, then runs <paramref name="then"/>.</summary>

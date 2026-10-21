@@ -449,18 +449,24 @@ The token and key never leave memory: they are not shown, logged, written to dis
 argument. A failure before any secret is set (a rejected code, `gh` refusing every write, or a CLI
 release whose screen the tool cannot read) ends the session without storing anything, and the
 message gives the manual commands: `claude setup-token`, then `gh secret set <name> --repo
-<owner/name>`, or `--org <org> --visibility all` (`--repos <names>` for selected repositories).
-When some halves are set and others are not, the roster records the halves that were set and the
-message names each one that was not. A role whose token was set but whose key was not is `split`
-(token from one account, key from another) until the key is re-sent: Push API key, in the ···
-menu, sends the stored key to the key secret of every role the account backs, with no sign-in.
+<owner/name>`, or `--org <org>` with the secret's current visibility (`--visibility all`,
+`--visibility private`, or `--repos a,b` for selected repositories), since gh otherwise makes it
+private. When some halves are set and others are not, the roster records the halves that were
+set and the message names each one that was not. A role whose token was set but whose key was not
+is `split` (token from one account, key from another): the account that set the half that failed
+keeps it, and both cards say `split` and name both accounts until that half is re-sent. Push API
+key, in the ··· menu, sends the stored key to the key secret of every role the account backs,
+with no sign-in.
 Use it after replacing a Console key too. The first rate-limit answer from GitHub stops every
 write after it, and nothing retries it.
 
 The same start is `POST /api/accounts/{email}/ci-token` with `{"roles":[{"prefix":"AUTOMATIONS",
 "organization":"octo"}]}` (`tokenSecret` in place of `prefix` for a token-only role, and
 `repository` in place of `organization`). The 2.1.0 body, one `secretName` with its repository or
-organization, `visibility` and `repositories`, still works and sets that one secret as named.
+organization, `visibility` and `repositories`, still works: it writes the token half only, to
+that one secret. With an organization and no `visibility`, it keeps the visibility the secret has;
+a secret that does not exist yet is created visible to all repositories when its name ends in
+`CLAUDE_CODE_OAUTH_TOKEN` (a role's), and private otherwise, as gh's default made it.
 Push is `POST /api/accounts/{email}/api-key/push`.
 
 `claude setup-token` draws its screen only when its input is a terminal, so the tool runs it

@@ -979,10 +979,10 @@
     form.addEventListener("submit", function (event) {
       event.preventDefault();
       var picked = roles.filter(function (_, index) { return boxes[index].checked; }).map(function (role) { return role.item; });
-      var created = newRoleItem(prefix.value, where.value);
+      var created = newRoleItem(prefix.value, where.value, lastRoleCheck);
       if (created) {
-        // A role with no secrets yet: GitHub gets two new secrets, visible to
-        // every repository, so the page asks first.
+        // A role typed by hand may create secrets, visible to every
+        // repository, so the page asks first and says which.
         if (!window.confirm(created.confirm)) { return; }
         picked.push(created.item);
       }
@@ -1452,7 +1452,7 @@
   // day it was set; within 30 days the badge warns, and past it the badge says
   // so. A date with no role is a marker set by hand and keeps its one badge.
   // Empty when the account backs nothing.
-  function ciRoleBadges(roster, at) {
+  function ciRoleBadges(roster, at, accounts, email) {
     if (!roster) { return []; }
     var roles = roster.ciRoles || [];
     if (!roles.length) {
@@ -1465,18 +1465,34 @@
       // repository, for a repository's role) and the hover says the rest.
       var where = role.repository || "org " + role.organization;
       var halves = [role.tokenSetOn ? "token" : null, role.keySetOn ? "key" : null].filter(Boolean).join("+");
-      // Split: an account with a stored key backs a role with a key half, but
-      // only one of the two secrets was set from it, so the other holds
-      // another account's value (or none).
-      var split = roster.consoleApiKeySetOn && role.keySecret && !role.tokenSetOn !== !role.keySetOn;
+      // Split: another account holds the role's other half, because the half
+      // set from here was set alone.
+      var partner = splitPartner(role, accounts, email);
+      var split = partner !== null;
       var text = ciRoleLabel(role) + " · " + halves + (split ? " · split" : "");
       var title = role.tokenSecret + (role.keySecret ? " and " + role.keySecret : "") + " in " + where + ". "
         + (role.keySetOn ? "Key set " + role.keySetOn + ". " : "")
-        + (split ? (role.keySetOn ? "The token secret was not set from this account; Generate CI token re-sends it. " : "The key secret was not set from this account; Push API key re-sends it. ") : "");
+        + (split ? "split: token from " + (role.tokenSetOn ? email : partner) + ", key from " + (role.keySetOn ? email : partner)
+          + (role.keySetOn ? "; Generate CI token re-sends the token. " : "; Push API key re-sends the key. ") : "");
       var badge = (role.tokenSetOn && tokenExpiry(text, role.tokenSetOn, title, at)) || { kind: "ok", text: text, title: title.trim() };
       if (split && badge.kind === "ok") { badge.kind = "warn"; }
       return badge;
     });
+  }
+
+  // The other account that holds the half of a key-carrying role this one
+  // lacks, or null: a role whose two secrets hold two accounts' values.
+  function splitPartner(role, accounts, email) {
+    if (!role.keySecret || !role.tokenSetOn === !role.keySetOn) { return null; }
+    var owner = (role.repository || role.organization || "").toLowerCase();
+    var found = (accounts || []).filter(function (account) {
+      return account.email !== email && ((account.roster && account.roster.ciRoles) || []).some(function (other) {
+        return other.tokenSecret.toLowerCase() === role.tokenSecret.toLowerCase()
+          && (other.repository || other.organization || "").toLowerCase() === owner
+          && (role.tokenSetOn ? other.keySetOn && !other.tokenSetOn : other.tokenSetOn && !other.keySetOn);
+      });
+    })[0];
+    return found ? found.email : null;
   }
 
   // The roles whose token half was set on one date lose it together, a year
@@ -1607,19 +1623,32 @@
   }
 
   // A role named in the panel's free-text row, or null when the prefix is
-  // blank: the request item and the confirmation naming the secrets it creates.
-  function newRoleItem(prefix, where) {
+  // blank: the request item and the confirmation naming its two secrets. It
+  // says "creates" for an organization secret the last Check roles did not
+  // list and "sets" for one it did; Check roles reads no repository secrets.
+  function newRoleItem(prefix, where, check) {
     var name = (prefix || "").trim().toUpperCase();
     var place = (where || "").trim();
     if (!name) { return null; }
     var repository = place.indexOf("/") >= 0;
     var item = { prefix: name };
     item[repository ? "repository" : "organization"] = place;
-    return {
-      item: item,
-      confirm: "This creates " + name + "_CLAUDE_CODE_OAUTH_TOKEN and " + name + "_CLAUDE_API_KEY in "
-        + (repository ? "repository " : "org ") + place + (repository ? "" : ", visible to all repositories") + ". Go ahead?"
+    var secrets = [name + "_CLAUDE_CODE_OAUTH_TOKEN", name + "_CLAUDE_API_KEY"];
+    if (repository) {
+      return { item: item, confirm: "This sets " + secrets.join(" and ") + " in repository " + place + ", creating any that do not exist. Go ahead?" };
+    }
+    var listed = function (secret) {
+      return ((check && check.roles) || []).some(function (role) {
+        return (role.organization || "").toLowerCase() === place.toLowerCase()
+          && ((role.hasToken && role.tokenSecret === secret) || (role.hasKey && role.keySecret === secret));
+      });
     };
+    var created = secrets.filter(function (secret) { return !listed(secret); });
+    var kept = secrets.filter(listed);
+    var parts = [];
+    if (created.length) { parts.push("creates " + created.join(" and ") + ", visible to all repositories"); }
+    if (kept.length) { parts.push("sets " + kept.join(" and ") + ", keeping who may read " + (kept.length > 1 ? "them" : "it")); }
+    return { item: item, confirm: "In org " + place + " this " + parts.join(", and ") + ". Go ahead?" };
   }
 
   // The PUT body for a pasted Console API key, trimmed, or null when nothing
@@ -2085,7 +2114,7 @@
       badges.appendChild(element("span", "badge " + chip.replace(/ /g, "-"), chip));
     }
     if (!roster) { badges.appendChild(element("span", "badge off-roster", "not on roster")); }
-    ciRoleBadges(roster, at).forEach(function (ci) {
+    ciRoleBadges(roster, at, lastAccounts, account.email).forEach(function (ci) {
       var ciBadge = element("span", "badge ci-token " + ci.kind, ci.text);
       ciBadge.title = ci.title;
       badges.appendChild(ciBadge);

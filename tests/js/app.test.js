@@ -579,16 +579,23 @@ test("roleCheckLines gives each unknown half the cause the server sent", () => {
   assert.strictEqual(unknownLine(null).text, "automations in org octo · token · a@example.com · token: unknown");
 });
 
-test("a role set from an account with a stored key but only one half set reads split", () => {
+test("a role whose other half another account holds reads split and names both accounts", () => {
   const tokenOnly = Object.assign({}, AUTOMATIONS, { keySetOn: null });
-  const [badge] = ciRoleBadges({ consoleApiKeySetOn: "2026-05-01", ciRoles: [tokenOnly] }, Date.parse("2026-06-01T00:00:00Z"));
-  assert.strictEqual(badge.text, "automations · token · split");
-  assert.strictEqual(badge.kind, "warn");
-  assert.match(badge.title, /Push API key re-sends it/);
-  // Both halves, or a token-only role, are never split; nor is a role on an account with no stored key.
-  assert.strictEqual(ciRoleBadges({ consoleApiKeySetOn: "2026-05-01", ciRoles: [AUTOMATIONS, LEGACY_LANE_ONE] }, Date.parse("2026-06-01T00:00:00Z")).map((b) => b.text).join("|"),
-    "automations · token+key|legacy (review lanes) (lane-one) · token");
-  assert.strictEqual(ciRoleBadges({ ciRoles: [tokenOnly] }, Date.parse("2026-06-01T00:00:00Z"))[0].text, "automations · token");
+  const keyOnly = Object.assign({}, AUTOMATIONS, { tokenSetOn: null, tokenSetAt: null });
+  const accounts = [
+    { email: "b@example.com", roster: { ciRoles: [tokenOnly] } },
+    { email: "a@example.com", roster: { ciRoles: [keyOnly] } }
+  ];
+  const at = Date.parse("2026-06-01T00:00:00Z");
+  const [holder] = ciRoleBadges(accounts[0].roster, at, accounts, "b@example.com");
+  assert.strictEqual(holder.text, "automations · token · split");
+  assert.strictEqual(holder.kind, "warn");
+  assert.match(holder.title, /split: token from b@example\.com, key from a@example\.com; Push API key re-sends the key\./);
+  const [previous] = ciRoleBadges(accounts[1].roster, at, accounts, "a@example.com");
+  assert.strictEqual(previous.text, "automations · key · split");
+  assert.match(previous.title, /split: token from b@example\.com, key from a@example\.com/);
+  // With no other holder, a lone half is not split.
+  assert.strictEqual(ciRoleBadges(accounts[0].roster, at, [accounts[0]], "b@example.com")[0].text, "automations · token");
 });
 
 test("the CI panel says what Start does before anything starts", () => {
@@ -613,11 +620,17 @@ test("assignableRoles offers each roster role once, then the unclaimed roles Che
   assert.deepStrictEqual(assignableRoles([], null), []);
 });
 
-test("newRoleItem names the two secrets it creates and is null with no prefix", () => {
-  assert.deepStrictEqual(newRoleItem(" reviews ", "octo"), {
+test("newRoleItem says creates only for the secrets the last Check roles did not list, and is null with no prefix", () => {
+  assert.deepStrictEqual(newRoleItem(" reviews ", "octo", null), {
     item: { prefix: "REVIEWS", organization: "octo" },
-    confirm: "This creates REVIEWS_CLAUDE_CODE_OAUTH_TOKEN and REVIEWS_CLAUDE_API_KEY in org octo, visible to all repositories. Go ahead?"
+    confirm: "In org octo this creates REVIEWS_CLAUDE_CODE_OAUTH_TOKEN and REVIEWS_CLAUDE_API_KEY, visible to all repositories. Go ahead?"
   });
+  const check = { roles: [{ organization: "octo", tokenSecret: "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", keySecret: "REVIEWS_CLAUDE_API_KEY", hasToken: true, hasKey: false }] };
+  assert.strictEqual(newRoleItem("reviews", "octo", check).confirm,
+    "In org octo this creates REVIEWS_CLAUDE_API_KEY, visible to all repositories, and sets REVIEWS_CLAUDE_CODE_OAUTH_TOKEN, keeping who may read it. Go ahead?");
+  check.roles[0].hasKey = true;
+  assert.strictEqual(newRoleItem("reviews", "octo", check).confirm,
+    "In org octo this sets REVIEWS_CLAUDE_CODE_OAUTH_TOKEN and REVIEWS_CLAUDE_API_KEY, keeping who may read them. Go ahead?");
   assert.deepStrictEqual(newRoleItem("X", "octo/repo").item, { prefix: "X", repository: "octo/repo" });
   assert.strictEqual(newRoleItem("  ", "octo"), null);
 });

@@ -194,6 +194,39 @@ public sealed class CiTokenRoleEndpointTests
     }
 
     [Fact]
+    public async Task ARoleWithAKeyHalfIsRefusedBeforeSetupTokenWhenTheStoreHasLostTheKeyTheRosterRecords()
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: false, TestContext.Current.CancellationToken);
+        await using AppFactory host = factory;
+        RosterEntry entry = (await RosterAsync(factory)).Find(Parse(Email))!;
+        await SeedAsync(factory, entry with { ConsoleApiKeySetOn = new DateOnly(2026, 9, 1) });
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage started = await client.PostAsJsonAsync(Account(Email, "/ci-token"), _bothRoles, TestContext.Current.CancellationToken);
+
+        started.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        (await started.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).ShouldContain("paste this account's Console key first");
+        factory.SetupToken.Children.ShouldBeEmpty();
+        reader.Paths.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData("MY_TOKEN", "--visibility private")]
+    [InlineData("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", "--visibility all")]
+    public async Task ANewSecretNamedByTheOldBodyIsPrivateUnlessItIsARoles(string name, string flags)
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: false, TestContext.Current.CancellationToken);
+        await using AppFactory host = factory;
+        reader.Answers["orgs/octo/actions/secrets/" + name] = PathReader.NotFound();
+        using HttpClient client = factory.CreateMutatingClient();
+
+        await AssignAsync(client, new { secretName = name, organization = "octo" }, TestContext.Current.CancellationToken);
+
+        (CiTokenSecret secret, OrgSecretVisibility? visibility, IReadOnlyList<string> repositories, _) = factory.Secrets.Sets.Single();
+        string.Join(' ', GhSecretWriter.Arguments(secret, visibility, repositories)).ShouldEndWith("--org octo " + flags);
+    }
+
+    [Fact]
     public async Task TheLegacyRoleNeedsNoKey()
     {
         (AppFactory factory, PathReader reader) = await StartAsync(withKey: false, TestContext.Current.CancellationToken);
@@ -227,7 +260,8 @@ public sealed class CiTokenRoleEndpointTests
         factory.Secrets.Sets.Count.ShouldBe(4);
         Roster roster = await RosterAsync(factory);
         roster.Find(Parse(Email))!.CiRoles.Select(static held => (held.Role, held.HasToken, held.HasKey)).ShouldBe([(_automations, true, false), (_issueLane, true, true)]);
-        roster.Find(Parse(Previous))!.CiRoles.ShouldBeEmpty();
+        // The key secret still holds the previous holder's key, so that half stays theirs.
+        roster.Find(Parse(Previous))!.CiRoles.ShouldBe([new CiRoleAssignment(_automations, KeySetOn: before)]);
         string message = JsonNode.Parse(bodies[^1])!["message"]!.GetValue<string>();
         message.ShouldContain("AUTOMATIONS key (AUTOMATIONS_CLAUDE_API_KEY in org octo): gh secret set exited with code 1");
         message.ShouldContain("split: token from " + Email + ", key from " + Previous);
