@@ -39,7 +39,8 @@ Status: a tagged release exists.
   Refresh is pressed, or the rate-limit stop hook fires, at most once a minute per account, never
   on a timer. It reads GitHub only through `gh api`, with gh's own User-Agent and sign-in, and
   only when you click Check roles, Generate CI token or Push API key: those read secret names,
-  dates and visibility, never a value. The first rate-limit answer stops what was clicked, and
+  dates and visibility, never a value. Start sign-in, when it moves a role off another account,
+  also reads up to 30 failed lane runs of the last 7 days, their jobs and annotations. The first rate-limit answer stops what was clicked, and
   nothing retries it. Writes go one at a time, at least a second apart. It changes a lane kill
   switch's value only when you confirm its toggle, and never creates one.
 - The parked-pair refresh presents Claude Code's public OAuth `client_id`.
@@ -499,6 +500,20 @@ reported as not set or not visible to this sign-in, and never created. The repos
 variable is ever written. The route is `POST /api/kill-switches` with `{"org", "name", "value"}`;
 any other name, or a value other than `true` or `false`, is refused before `gh` runs.
 
+Before Start sign-in moves a role off another account, the page checks that account for limit
+stops, one account at a time, and only on that click. For each repository in `laneRepositories` it
+lists the failed runs created in the last 7 days, reads at most 30 runs in all, newest first, then
+reads the annotations of each failed job. A run counts when an annotation's message holds
+`class=rate-limit` and `credential=<secret>`, where the secret is a half that account backed when
+the run started (by `lane-history.jsonl`, else the roster), in the run's organization or
+repository: a token half reads "subscription limit" and a key half "credit stop". The panel then
+says "This account hit a limit in the last 7 days." and lists the runs, with Move anyway and
+Cancel; it never blocks the move. With no `laneRepositories` it says "limit stops not checked: no
+lane repositories configured", and a check that failed or ran into GitHub's rate limit says it
+checked only in part; both still offer Move anyway. The first rate-limit answer ends the check,
+with no retry. A clean check starts the sign-in at once. The review lanes print no credential, so
+their stops are not seen. The route is `POST /api/roles/limit-stops` with `{"from": "<email>"}`.
+
 To mark an account by hand instead (for a token made outside the tool, or when the tool set the
 secret but could not update the roster), open Edit and set "CI token generated on". Optionally
 also set "CI secret name" and "CI secret in" (`owner/repository`, or an organization), then
@@ -561,7 +576,8 @@ schema bump. Do not edit `config.json`, `roster.json`, or `state/live-owner.json
 copy a template over an existing config.
 
 The app calls the GitHub API only through `gh`, for Check roles, CI secret writes, kill-switch
-toggles and the secret metadata it reads on those clicks, and never
+toggles, the limit-stop check before a role moves, and the secret metadata it reads on those
+clicks, and never
 to look for releases; the dashboard has no "update available" line. Compare
 `claude-code-account-rotation --version` with
 <https://github.com/melodic-software/claude-code-account-rotation/releases/latest>.

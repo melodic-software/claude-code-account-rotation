@@ -673,3 +673,62 @@ test("a toggle sends nothing until the page's confirmation is accepted", async (
   await toggleKillSwitch(row.toggle, () => true, post);
   assert.deepStrictEqual(sent, [["/api/kill-switches", "POST", { org: "octo", name: "CLAUDE_LANES_DISABLED", value: "true" }]]);
 });
+
+const { limitStopSources, scanLimitStops, limitStopNotice } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+
+test("a start scans each other account that backs a picked role, once, and none when no picked role has another holder", () => {
+  const picked = [
+    { holder: "a@example.com" },
+    { holder: "b@example.com" },
+    { holder: "a@example.com" },
+    { holder: "me@example.com" },
+    { holder: null }
+  ];
+  assert.deepStrictEqual(limitStopSources(picked, "me@example.com"), ["a@example.com", "b@example.com"]);
+  assert.deepStrictEqual(limitStopSources([{ holder: "me@example.com" }, { holder: null }], "me@example.com"), []);
+});
+
+test("the scans go one after another, each with its from, and a failed request is kept so the move can go ahead", async () => {
+  const sent = [];
+  let inFlight = 0;
+  function post(path, method, body) {
+    sent.push([path, method, body]);
+    inFlight += 1;
+    assert.strictEqual(inFlight, 1);
+    return new Promise((resolve, reject) => setTimeout(() => {
+      inFlight -= 1;
+      if (body.from === "b@example.com") { reject(new Error("offline")); } else { resolve({ ok: true, body: { outcome: "checked", hits: [], problems: [] } }); }
+    }, 1));
+  }
+  const results = await scanLimitStops(["a@example.com", "b@example.com"], post);
+  assert.deepStrictEqual(sent, [
+    ["/api/roles/limit-stops", "POST", { from: "a@example.com" }],
+    ["/api/roles/limit-stops", "POST", { from: "b@example.com" }]
+  ]);
+  assert.strictEqual(results[1].result.ok, false);
+  assert.strictEqual(limitStopNotice(results)[0].text, "b@example.com: limit stops not checked. Refused: Error: offline");
+});
+
+test("a whole scan with no hits shows nothing, so the move starts at once", () => {
+  assert.strictEqual(limitStopNotice([{ from: "a@example.com", result: { ok: true, body: { outcome: "checked", hits: [], problems: [] } } }]), null);
+});
+
+test("with no lane repositories the warning says limit stops were not checked", () => {
+  const lines = limitStopNotice([{ from: "a@example.com", result: { ok: true, body: { outcome: "notChecked", hits: [], problems: [] } } }]);
+  assert.deepStrictEqual(lines.map((line) => line.text), ["limit stops not checked: no lane repositories configured"]);
+});
+
+test("a hit reads that the account hit a limit in the last 7 days, names the run, and never mentions Anthropic support", () => {
+  const hit = {
+    repository: "octo/lanes", runId: 101, url: "https://github.com/octo/lanes/actions/runs/101", createdAt: "2026-10-18T09:00:00+00:00",
+    role: "AUTOMATIONS", half: "key", credential: "AUTOMATIONS_CLAUDE_API_KEY", label: "credit stop"
+  };
+  const lines = limitStopNotice([{ from: "a@example.com", result: { ok: true, body: { outcome: "partial", hits: [hit], problems: ["GitHub's API rate limit was reached"] } } }]);
+  assert.deepStrictEqual(lines.map((line) => line.text), [
+    "a@example.com: This account hit a limit in the last 7 days.",
+    "credit stop · AUTOMATIONS (AUTOMATIONS_CLAUDE_API_KEY) · octo/lanes · 2026-10-18",
+    "a@example.com: limit stops checked only in part: GitHub's API rate limit was reached"
+  ]);
+  assert.strictEqual(lines[1].url, "https://github.com/octo/lanes/actions/runs/101");
+  assert.ok(lines.every((line) => line.text.indexOf("Anthropic support") < 0));
+});

@@ -47,6 +47,9 @@
     module.exports.apiKeyCheckToast = apiKeyCheckToast;
     module.exports.killSwitchRows = killSwitchRows;
     module.exports.toggleKillSwitch = toggleKillSwitch;
+    module.exports.limitStopSources = limitStopSources;
+    module.exports.scanLimitStops = scanLimitStops;
+    module.exports.limitStopNotice = limitStopNotice;
     return;
   }
 
@@ -987,12 +990,51 @@
         picked.push(created.item);
       }
       if (!picked.length) { status.textContent = "Pick at least one role."; return; }
-      startCiToken(account.email, { roles: picked }, form, status, panel);
+      var go = function () { startCiToken(account.email, { roles: picked }, form, status, panel); };
+      var froms = limitStopSources(roles.filter(function (_, index) { return boxes[index].checked; }), account.email);
+      if (!froms.length) { go(); return; }
+      checkLimitStops(froms, panel, status, go);
     });
     panel.appendChild(form);
     panel.appendChild(status);
     card.appendChild(panel);
     start.focus();
+  }
+
+  // Before roles move off other accounts: scan each for limit stops, one at a
+  // time, then start at once when every scan was whole and found nothing, or
+  // show what was found with Move anyway and Cancel. It never blocks the move.
+  function checkLimitStops(froms, panel, status, go) {
+    var existing = panel.querySelector(".limit-stops");
+    if (existing) { existing.parentNode.removeChild(existing); }
+    busy = true;
+    setButtonsDisabled(true);
+    status.textContent = "Checking " + froms.join(", ") + " for limit stops in the last 7 days...";
+    return scanLimitStops(froms, send)
+      .then(function (results) {
+        busy = false;
+        setButtonsDisabled(false);
+        status.textContent = "";
+        var notice = limitStopNotice(results);
+        if (!notice) { go(); return; }
+        var box = element("div", "limit-stops");
+        notice.forEach(function (line) {
+          var row = element("p", "say " + line.kind, line.text);
+          if (line.url) {
+            var link = element("a", null, "run");
+            link.href = line.url;
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            row.appendChild(document.createTextNode(" · "));
+            row.appendChild(link);
+          }
+          box.appendChild(row);
+        });
+        var close = function () { box.parentNode.removeChild(box); };
+        box.appendChild(actionButton("Move anyway", null, function () { close(); go(); }));
+        box.appendChild(actionButton("Cancel", "secondary", close));
+        panel.insertBefore(box, status);
+      });
   }
 
   // Push API key: the stored Console key to the key secret of every role this
@@ -1620,6 +1662,60 @@
       confirm: "This creates " + name + "_CLAUDE_CODE_OAUTH_TOKEN and " + name + "_CLAUDE_API_KEY in "
         + (repository ? "repository " : "org ") + place + (repository ? "" : ", visible to all repositories") + ". Go ahead?"
     };
+  }
+
+  // The accounts a start moves roles off: each other account that backs a
+  // picked role, once. Empty when none does, and then no scan runs.
+  function limitStopSources(picked, email) {
+    var froms = [];
+    (picked || []).forEach(function (role) {
+      if (role.holder && role.holder !== email && froms.indexOf(role.holder) < 0) { froms.push(role.holder); }
+    });
+    return froms;
+  }
+
+  // One POST /api/roles/limit-stops per account, one after another, never
+  // together. A request that fails is kept as a refusal, so the move can
+  // still go ahead.
+  function scanLimitStops(froms, post) {
+    var results = [];
+    return froms.reduce(function (chain, from) {
+      return chain
+        .then(function () { return post("/api/roles/limit-stops", "POST", { from: from }); })
+        .catch(function (error) { return { ok: false, body: { error: String(error) } }; })
+        .then(function (result) { results.push({ from: from, result: result }); });
+    }, Promise.resolve()).then(function () { return results; });
+  }
+
+  // The warning's lines, or null when every scan was whole and found
+  // nothing. A hit names its run; a scan that could not run, or ran only in
+  // part, says so.
+  function limitStopNotice(results) {
+    var lines = [];
+    function add(kind, text, url) {
+      if (!lines.some(function (line) { return line.text === text; })) { lines.push({ kind: kind, text: text, url: url || null }); }
+    }
+    (results || []).forEach(function (scan) {
+      var view = scan.result && scan.result.body;
+      if (!scan.result || !scan.result.ok) {
+        add("warn", scan.from + ": limit stops not checked. " + refused(view || {}));
+        return;
+      }
+      if (view.outcome === "notChecked") {
+        add("warn", "limit stops not checked: no lane repositories configured");
+        return;
+      }
+      if ((view.hits || []).length) {
+        add("crit", scan.from + ": This account hit a limit in the last 7 days.");
+        view.hits.forEach(function (hit) {
+          add("crit", hit.label + " · " + hit.role + " (" + hit.credential + ") · " + hit.repository + " · " + String(hit.createdAt).slice(0, 10), hit.url);
+        });
+      }
+      if (view.outcome === "partial") {
+        add("warn", scan.from + ": limit stops checked only in part: " + (view.problems || []).join("; "));
+      }
+    });
+    return lines.length ? lines : null;
   }
 
   // The PUT body for a pasted Console API key, trimmed, or null when nothing

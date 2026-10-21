@@ -74,6 +74,14 @@ All notable changes to this project are documented in this file. The format foll
   fails); it never
   creates a variable, and the repository switch is read-only. Each toggle logs the switch, the
   organization, the value asked for and the outcome (#259).
+- **Limit-stop warning.** Before Start sign-in moves a role off another account, the page asks
+  `POST /api/roles/limit-stops` with `{"from": "<email>"}`, which reads the failed runs of the last
+  7 days in each `laneRepositories` repository (at most 30 runs in all, newest first), their failed
+  jobs and those jobs' annotations. A `class=rate-limit` annotation naming a half that account
+  backed when the run started is a "subscription limit" (token) or "credit stop" (key). The panel
+  says "This account hit a limit in the last 7 days." with Move anyway and Cancel, and never blocks
+  the move. With no `laneRepositories` it says the check did not run; the first rate-limit answer
+  ends the check as partial, with no retry (#259).
 
 ### Changed
 
