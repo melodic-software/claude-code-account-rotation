@@ -43,21 +43,30 @@ public sealed class CiRoleTests
         CiRole.Parse(prefix, null, null, "octo").IsSuccess.ShouldBeFalse();
 
     [Fact]
-    public void ClaimingARoleTakesItOffItsHolderWhateverTheDatesAndLeavesItsOtherRoles()
+    public void ClaimingAHalfTakesThatHalfOffItsHolderWhateverTheDatesAndLeavesItsOtherRoles()
     {
-        // The new holder sets only the key half and carries no token date at all,
-        // while the old holder's token is newer: the move happens anyway.
+        // The claimant's key is older than the holder's and it carries no token
+        // date at all: the key half moves anyway, and only the key half.
         RosterEntry holder = new RosterEntry(Email("a@example.com"))
             .ClaimingToken(Org("AUTOMATIONS"), _january, null)
+            .ClaimingKey(Org("AUTOMATIONS"), _june, null)
             .ClaimingToken(Org("REVIEWS"), _june, null);
-        var claimant = new RosterEntry(Email("b@example.com")) { CiRoles = [new CiRoleAssignment(Org("AUTOMATIONS"), KeySetOn: _january)] };
+        var keyClaimant = new RosterEntry(Email("b@example.com")) { CiRoles = [new CiRoleAssignment(Org("AUTOMATIONS"), KeySetOn: _january)] };
 
-        Roster roster = Roster.Empty.With(holder).With(claimant);
+        Roster keyMoved = Roster.Empty.With(holder).With(keyClaimant);
 
-        RosterEntry a = roster.Find(Email("a@example.com"))!;
-        a.CiRoles.Select(static held => held.Role.Prefix).ShouldBe(["REVIEWS"]);
+        RosterEntry a = keyMoved.Find(Email("a@example.com"))!;
+        a.CiRoles.Select(static held => (held.Role.Prefix, held.HasToken, held.HasKey)).ShouldBe([("AUTOMATIONS", true, false), ("REVIEWS", true, false)]);
         a.CiTokenGeneratedOn.ShouldBe(_june);
-        roster.Find(Email("b@example.com"))!.CiRoles.Single().Role.ShouldBe(Org("AUTOMATIONS"));
+        keyMoved.Find(Email("b@example.com"))!.CiRoles.Single().ShouldBe(new CiRoleAssignment(Org("AUTOMATIONS"), KeySetOn: _january));
+
+        // A claim of both halves takes both, and the holder keeps its other role.
+        var bothClaimant = new RosterEntry(Email("c@example.com")) { CiRoles = [new CiRoleAssignment(Org("AUTOMATIONS"), _january, KeySetOn: _january)] };
+
+        Roster bothMoved = Roster.Empty.With(holder).With(bothClaimant);
+
+        bothMoved.Find(Email("a@example.com"))!.CiRoles.Select(static held => held.Role.Prefix).ShouldBe(["REVIEWS"]);
+        bothMoved.Find(Email("a@example.com"))!.CiTokenGeneratedOn.ShouldBe(_june);
     }
 
     [Fact]

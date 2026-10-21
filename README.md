@@ -419,7 +419,7 @@ earlier release is a role with a token secret only. The lane launcher spends a r
 first and falls back to its token. Role secrets are organization secrets visible to all
 repositories, on purpose.
 
-One account backs each role, and an account can back several. Both halves of a role come from the
+One account backs each role half, and an account can back several roles. Both halves of a role come from the
 same account: the token from that account's `claude setup-token`, the key from that account's
 Console API key, which you paste once per machine with Set API key and which stays in the OS store
 (see [Posture](#posture)). A card shows one badge per role it backs, such as
@@ -443,7 +443,8 @@ those secrets (`admin:org` for organization secrets). The tool checks this befor
    key, one at a time and at least a second apart. Before any token is made it reads who may see
    each existing secret and passes that back (`--visibility all`, `private`, or `--repos` with the
    selected repositories), since `gh secret set` otherwise makes a secret private; a new secret is
-   visible to all repositories. A role the account takes is taken off the account that backed it.
+   visible to all repositories. Each half set from this account is taken off the account that
+   backed it.
 
 The token and key never leave memory: they are not shown, logged, written to disk, or passed as an
 argument. A failure before any secret is set (a rejected code, `gh` refusing every write, or a CLI
@@ -455,7 +456,7 @@ private. When some halves are set and others are not, the roster records the hal
 set and the message names each one that was not. A role whose token was set but whose key was not
 is `split` (token from one account, key from another): the account that set the half that failed
 keeps it, and both cards say `split` and name both accounts until that half is re-sent.
-Re-sending one half of a role an account already backs moves only that half. Push API
+Every claim moves only the halves it sets. Push API
 key, in the ··· menu, sends the stored key to the key secret of every role the account backs,
 with no sign-in.
 Use it after replacing a Console key too. The first rate-limit answer from GitHub stops every
@@ -517,7 +518,7 @@ it off the account. The same writes are `PATCH /api/accounts/{email}`, sent with
 account's whole list: each item names `prefix` (or `tokenSecret` for a token-only role), then
 `repository` or `organization`, and the halves set from this account, `tokenSetOn` and
 `keySetOn` (`yyyy-MM-dd`). A token half needs its date; a key half alone needs no token date.
-Naming a role takes it off the account that backed it before. A marker set in Edit that names no
+Naming a role half takes that half off the account that backed it before; the other half stays. A marker set in Edit that names no
 secret is a hand marker: hand markers keep replacing each other, so at most one account carries
 one, and a role claim never clears one. Clearing the date clears every token half. On an
 account that backs a token half, the date is always that of its newest token half, whatever the

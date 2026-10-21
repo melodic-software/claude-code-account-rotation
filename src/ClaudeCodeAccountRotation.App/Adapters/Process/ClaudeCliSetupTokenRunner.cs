@@ -526,13 +526,9 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
                         entry = isKey ? entry.ClaimingKey(role.Role, today, setAt) : entry.ClaimingToken(role.Role, today, setAt);
                     }
 
-                    // A role with a key half that was not set whole this time (its
-                    // key failed, or was never asked for) is claimed by halves: the
-                    // other secret still holds its holder's value, and stays theirs.
-                    List<CiRole> partial = [.. request.Roles
-                        .Where(role => role.Role.HasKeyHalf && set.Count(half => half.Role == role) < 2)
-                        .Select(static role => role.Role)];
-                    return roster.With(entry, partial);
+                    // Claimed by halves: a half not set this time still holds its
+                    // holder's value, and stays theirs.
+                    return roster.With(entry);
                 },
                 CancellationToken.None,
                 via: LaneVia.Assign);

@@ -14,8 +14,8 @@ All notable changes to this project are documented in this file. The format foll
   organization or repository, with token secret `<PREFIX>_CLAUDE_CODE_OAUTH_TOKEN` and key secret
   `<PREFIX>_CLAUDE_API_KEY`, and the date each half was set. The bare `CLAUDE_CODE_OAUTH_TOKEN` is
   the `legacy (review lanes)` role, with a token half only. One account backs each role, and an
-  account can back several. Claiming a role takes it off its previous holder whatever either's
-  dates. On an account that backs a token half, `ciTokenGeneratedOn` is always its newest token
+  account can back several. Claiming a role half takes that half off its previous holder whatever
+  either's dates; the other half stays with whoever set it. On an account that backs a token half, `ciTokenGeneratedOn` is always its newest token
   half's date, so it drops when that role is taken off and clears with the last token half (#259).
 - `roster.json` entries carry `ciRoles` and `consoleApiKeySetOn`; `GET /api/dashboard` returns
   them as `accounts[].roster.ciRoles` and `accounts[].roster.consoleApiKeySetOn`, and still returns
@@ -56,11 +56,12 @@ All notable changes to this project are documented in this file. The format foll
   until the OS store holds the account's Console key (read on the click, not only the roster's
   record). When only some halves are set, the roster records those, the account that set a half
   that failed keeps that half, and both cards show the role as `split`, naming the account behind
-  each half; the message names every half not set. Re-sending one half of a split role (Push API
-  key, or a new token) moves only that half, and so does naming one token secret (the 2.1.0 body,
-  or the Edit repair): another account keeps that role's key half. Edit sends the role list only
-  when you untick a role, so a form opened before another account took a role cannot take it back. `POST /api/accounts/{email}/ci-token` takes
-  `roles`; the 2.1.0 single-secret body still works and writes the token half only (#259).
+  each half; the message names every half not set. Every claim moves only the halves it sets:
+  re-sending one half of a split role (Push API key, or a new token) or naming one token secret
+  (the 2.1.0 body, or the Edit repair) leaves another account that role's other half. Edit sends
+  the role list only when you untick a role, so a form opened before another account took a role
+  cannot take it back. `POST /api/accounts/{email}/ci-token` takes `roles`; the 2.1.0
+  single-secret body still works and writes the token half only (#259).
 - **Push API key.** `POST /api/accounts/{email}/api-key/push`, on the card's ··· menu, re-sends
   the stored Console key to the key secret of every role the account backs, with no sign-in, and
   logs `push` in the lane history (#259).

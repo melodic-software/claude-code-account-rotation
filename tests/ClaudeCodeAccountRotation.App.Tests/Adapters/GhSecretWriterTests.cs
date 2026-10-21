@@ -125,7 +125,8 @@ public sealed class GhSecretWriterTests : IDisposable
         for (int call = 1; call < 4; call++)
         {
             lines[call * 2].ShouldStartWith("start");
-            (stamps[call * 2] - stamps[(call * 2) - 1]).ShouldBeGreaterThanOrEqualTo(1_000_000_000L);
+            long gap = stamps[call * 2] - stamps[(call * 2) - 1];
+            gap.ShouldBeGreaterThanOrEqualTo(1_000_000_000L, "call " + call + " started " + gap + " ns after the one before it ended; the log was: " + string.Join(" | ", lines));
         }
     }
 
