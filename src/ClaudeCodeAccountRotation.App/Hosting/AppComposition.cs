@@ -254,8 +254,8 @@ internal static class AppComposition
             ? PseudoTerminalChild.Factory(cli.Value)
             : (_, _) => Result<ILoginChild, string>.Failure(cli.Error);
         Result<string, string> gh = GhSecretWriter.Locate(Environment.GetEnvironmentVariable("PATH"), OperatingSystem.IsWindows());
-        services.AddSingleton<ICiSecretWriter>(gh.IsSuccess
-            ? new GhSecretWriter(gh.Value, TimeSpan.FromSeconds(60))
+        services.AddSingleton<ICiSecretWriter>(provider => gh.IsSuccess
+            ? new GhSecretWriter(gh.Value, TimeSpan.FromSeconds(60), provider.GetRequiredService<TimeProvider>())
             : new UnavailableCiSecretWriter(gh.Error));
         // "Check roles": GitHub reads through the same gh, only on that click.
         services.AddSingleton<IGhApiReader>(gh.IsSuccess
@@ -266,7 +266,8 @@ internal static class AppComposition
             provider.GetRequiredService<ICiSecretWriter>(),
             provider.GetRequiredService<RosterFile>(),
             provider.GetRequiredService<TimeProvider>(),
-            provider.GetRequiredService<ILogger<ClaudeCliSetupTokenRunner>>()));
+            provider.GetRequiredService<ILogger<ClaudeCliSetupTokenRunner>>(),
+            keys: provider.GetRequiredService<ISecretStore>()));
         // Console and Admin keys live in the OS store or nowhere: no file fallback.
         services.AddSingleton<ISecretStore>(
             OperatingSystem.IsWindows() ? new WindowsCredentialStore()

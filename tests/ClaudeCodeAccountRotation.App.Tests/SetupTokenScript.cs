@@ -130,6 +130,9 @@ internal sealed class RecordingSecretWriter : ICiSecretWriter
 
     public string? SetError { get; set; }
 
+    /// <summary>A failure for one secret only, before <see cref="SetError"/> is consulted; null lets it through.</summary>
+    public Func<CiTokenSecret, string?>? SetErrorFor { get; set; }
+
     public List<(CiTokenSecret Secret, OrgSecretVisibility? Visibility, IReadOnlyList<string> Repositories, string Value)> Sets { get; } = [];
 
     public int Checks { get; private set; }
@@ -148,6 +151,7 @@ internal sealed class RecordingSecretWriter : ICiSecretWriter
         CancellationToken cancellationToken)
     {
         Sets.Add((secret, visibility, repositories, value));
-        return Task.FromResult(SetError is string error ? Result<Unit, string>.Failure(error) : Result<Unit, string>.Success(Unit.Value));
+        string? failure = SetErrorFor?.Invoke(secret) ?? SetError;
+        return Task.FromResult(failure is string error ? Result<Unit, string>.Failure(error) : Result<Unit, string>.Success(Unit.Value));
     }
 }

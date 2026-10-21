@@ -53,11 +53,18 @@ public sealed record RosterEntry(
     /// Records a new token for <paramref name="role"/>, keeping that role's key
     /// half and every other role as they are; see <see cref="WithCiRoles"/> for the date.
     /// </summary>
-    public RosterEntry ClaimingToken(CiRole role, DateOnly setOn, DateTimeOffset? setAt)
+    public RosterEntry ClaimingToken(CiRole role, DateOnly setOn, DateTimeOffset? setAt) =>
+        Claiming(role, held => held with { TokenSetOn = setOn, TokenSetAt = setAt });
+
+    /// <summary>Records <paramref name="role"/>'s key half as set from this account, keeping its token half.</summary>
+    public RosterEntry ClaimingKey(CiRole role, DateOnly setOn, DateTimeOffset? setAt) =>
+        Claiming(role, held => held with { KeySetOn = setOn, KeySetAt = setAt });
+
+    private RosterEntry Claiming(CiRole role, Func<CiRoleAssignment, CiRoleAssignment> set)
     {
         ArgumentNullException.ThrowIfNull(role);
         CiRoleAssignment held = CiRoles.FirstOrDefault(assignment => assignment.Role.Equals(role)) ?? new CiRoleAssignment(role);
-        CiRoleAssignment claimed = held with { Role = role, TokenSetOn = setOn, TokenSetAt = setAt };
+        CiRoleAssignment claimed = set(held with { Role = role });
         return WithCiRoles(CiRoles.Any(assignment => assignment.Role.Equals(role))
             ? CiRoles.Select(assignment => assignment.Role.Equals(role) ? claimed : assignment)
             : CiRoles.Add(claimed));

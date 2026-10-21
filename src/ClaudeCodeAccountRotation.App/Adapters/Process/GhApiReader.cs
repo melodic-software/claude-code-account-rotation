@@ -6,8 +6,11 @@ using ClaudeCodeAccountRotation.Core.Accounts;
 
 namespace ClaudeCodeAccountRotation.App.Adapters.Process;
 
-/// <summary>Why a <c>gh api</c> read gave no answer. A rate limit ends whatever asked; nothing retries it.</summary>
-internal sealed record GhApiFailure(string Message, bool RateLimited);
+/// <summary>
+/// Why a <c>gh api</c> read gave no answer. A rate limit ends whatever asked;
+/// nothing retries it. <paramref name="NotFound"/> is GitHub's 404.
+/// </summary>
+internal sealed record GhApiFailure(string Message, bool RateLimited, bool NotFound = false);
 
 /// <summary>Reads the GitHub REST API through <c>gh api</c>, one GET per call, so the request carries gh's own User-Agent and sign-in.</summary>
 internal interface IGhApiReader
@@ -77,7 +80,8 @@ internal sealed class GhApiReader(string executable, TimeSpan timeout) : IGhApiR
             string answered = status == 0 ? "gh api exited with code " + exit.ExitCode : "GitHub answered HTTP " + status;
             return Result<JsonNode, GhApiFailure>.Failure(new GhApiFailure(
                 answered + " for " + path + "; check `gh auth status`, the name, and that the sign-in may read it (admin:org for organization secrets)",
-                RateLimited: false));
+                RateLimited: false,
+                NotFound: status == 404));
         }
 
         try
@@ -190,6 +194,85 @@ internal static class GhApiReads
         return Result<OrganizationSecrets, GhApiFailure>.Failure(new GhApiFailure(
             "the secret list for " + organization + " ran past " + MaxPages.ToString(CultureInfo.InvariantCulture)
             + " pages, so the check read none of it rather than part",
+            RateLimited: false));
+    }
+
+    /// <summary>
+    /// Who may read <paramref name="secret"/> now, so that setting it again
+    /// passes that back: <c>gh secret set</c> makes an organization secret
+    /// private when told nothing. A repository secret has no visibility. A
+    /// secret GitHub answers 404 for does not exist yet and is created visible
+    /// to all repositories, as the organization's role secrets are. Any other
+    /// failure is returned, never guessed past, and so is a selected secret
+    /// with no repositories, which no <c>--repos</c> list can express.
+    /// Basis: https://docs.github.com/en/rest/actions/secrets#get-an-organization-secret and
+    /// https://docs.github.com/en/rest/actions/secrets#list-selected-repositories-for-an-organization-secret.
+    /// </summary>
+    public static async Task<Result<SecretTarget, GhApiFailure>> ReadAccessAsync(
+        this IGhApiReader reader,
+        CiTokenSecret secret,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(reader);
+        ArgumentNullException.ThrowIfNull(secret);
+        if (secret.Scope == CiSecretScope.Repository)
+        {
+            return Result<SecretTarget, GhApiFailure>.Success(new SecretTarget(secret, null, []));
+        }
+
+        string path = "orgs/" + secret.Owner + "/actions/secrets/" + secret.Name;
+        Result<JsonNode, GhApiFailure> read = await reader.GetAsync(path, cancellationToken);
+        if (read.IsFailure)
+        {
+            return read.Error.NotFound
+                ? Result<SecretTarget, GhApiFailure>.Success(new SecretTarget(secret, OrgSecretVisibility.All, []))
+                : Result<SecretTarget, GhApiFailure>.Failure(read.Error);
+        }
+
+        string? visibility = read.Value["visibility"] is JsonValue value && value.TryGetValue(out string? text) ? text : null;
+        switch (visibility)
+        {
+            case "all":
+                return Result<SecretTarget, GhApiFailure>.Success(new SecretTarget(secret, OrgSecretVisibility.All, []));
+            case "private":
+                return Result<SecretTarget, GhApiFailure>.Success(new SecretTarget(secret, OrgSecretVisibility.Private, []));
+            case "selected":
+                break;
+            default:
+                return Result<SecretTarget, GhApiFailure>.Failure(
+                    new GhApiFailure("GitHub gave " + secret + " no visibility this tool knows, so it was not set", RateLimited: false));
+        }
+
+        List<string> repositories = [];
+        for (int page = 1; page <= MaxPages; page++)
+        {
+            Result<JsonNode, GhApiFailure> listed = await reader.GetAsync(
+                path + "/repositories?per_page=" + PageSize.ToString(CultureInfo.InvariantCulture) + "&page=" + page.ToString(CultureInfo.InvariantCulture),
+                cancellationToken);
+            if (listed.IsFailure)
+            {
+                return Result<SecretTarget, GhApiFailure>.Failure(listed.Error);
+            }
+
+            if (listed.Value["repositories"] is not JsonArray items)
+            {
+                return Result<SecretTarget, GhApiFailure>.Failure(
+                    new GhApiFailure("GitHub's repository list for " + secret + " was not in the shape its documentation gives", RateLimited: false));
+            }
+
+            repositories.AddRange(items.Select(static item => item?["name"] is JsonValue name && name.TryGetValue(out string? repository) ? repository : null).OfType<string>());
+            if (items.Count < PageSize)
+            {
+                return repositories.Count == 0
+                    ? Result<SecretTarget, GhApiFailure>.Failure(new GhApiFailure(
+                        secret + " is visible to selected repositories but lists none; set it by hand so its visibility is kept",
+                        RateLimited: false))
+                    : Result<SecretTarget, GhApiFailure>.Success(new SecretTarget(secret, OrgSecretVisibility.Selected, repositories));
+            }
+        }
+
+        return Result<SecretTarget, GhApiFailure>.Failure(new GhApiFailure(
+            "the repository list for " + secret + " ran past " + MaxPages.ToString(CultureInfo.InvariantCulture) + " pages, so it was not set",
             RateLimited: false));
     }
 }

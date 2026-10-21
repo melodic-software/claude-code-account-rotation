@@ -214,8 +214,10 @@ internal static partial class RosterEndpoints
             RosterEntry updated = edited.WithCiRoles(roles);
 
             // A single secret named by hand is the repair for a CI token whose
-            // secret was set but whose roster write failed: that role's token
-            // half, set on the date the request names. Only a token half needs it.
+            // secret was set but whose roster write failed: it claims that role's
+            // token half, dated by the request's ciTokenGeneratedOn or, when the
+            // request sends none, by the date the entry already holds. With
+            // neither it is refused. A ciRoles item carries its own dates instead.
             if (ciTokenSecret.Value is CiTokenSecret secret)
             {
                 if (date is not DateOnly setOn)

@@ -48,7 +48,8 @@ public sealed class GhSecretWriterTests : IDisposable
         string recorded = Path.Combine(_root, "recorded");
         string gh = StandIn(recorded, exitCode: 0);
 
-        Result<Unit, string> set = await new GhSecretWriter(gh, TimeSpan.FromSeconds(30)).SetAsync(
+        using GhSecretWriter writer = new(gh, TimeSpan.FromSeconds(30));
+        Result<Unit, string> set = await writer.SetAsync(
             CiTokenSecret.Parse("CLAUDE_CODE_OAUTH_TOKEN", "octo/repo", null).Value,
             null,
             [],
@@ -68,7 +69,8 @@ public sealed class GhSecretWriterTests : IDisposable
     {
         string gh = StandIn(Path.Combine(_root, "recorded"), exitCode: 4);
 
-        Result<Unit, string> set = await new GhSecretWriter(gh, TimeSpan.FromSeconds(30)).SetAsync(
+        using GhSecretWriter writer = new(gh, TimeSpan.FromSeconds(30));
+        Result<Unit, string> set = await writer.SetAsync(
             CiTokenSecret.Parse("TOKEN", null, "octo").Value,
             OrgSecretVisibility.Private,
             [],
@@ -85,9 +87,57 @@ public sealed class GhSecretWriterTests : IDisposable
     {
         string gh = StandIn(Path.Combine(_root, "recorded"), exitCode: 1);
 
-        Result<Unit, string> check = await new GhSecretWriter(gh, TimeSpan.FromSeconds(30)).CheckAsync(TestContext.Current.CancellationToken);
+        using GhSecretWriter writer = new(gh, TimeSpan.FromSeconds(30));
+        Result<Unit, string> check = await writer.CheckAsync(TestContext.Current.CancellationToken);
 
         check.Error.ShouldContain("gh auth login");
+    }
+
+    [Fact(SkipUnless = nameof(OnUnix), Skip = "The stand-in gh is a shell script")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public async Task FourSetsInARowStartAtLeastOneSecondAfterTheLastEnded()
+    {
+        string log = Path.Combine(_root, "calls");
+        // Each call logs when it started and when it ended, in nanoseconds.
+        string gh = Script("echo \"start $(date +%s%N)\" >> '" + log + "'\ncat > /dev/null\necho \"end $(date +%s%N)\" >> '" + log + "'\n");
+        using GhSecretWriter writer = new(gh, TimeSpan.FromSeconds(30));
+
+        foreach (string name in new[] { "A_CLAUDE_CODE_OAUTH_TOKEN", "A_CLAUDE_API_KEY", "B_CLAUDE_CODE_OAUTH_TOKEN", "B_CLAUDE_API_KEY" })
+        {
+            (await writer.SetAsync(CiTokenSecret.Parse(name, null, "octo").Value, OrgSecretVisibility.All, [], "value", TestContext.Current.CancellationToken))
+                .IsSuccess.ShouldBeTrue();
+        }
+
+        string[] lines = await File.ReadAllLinesAsync(log, TestContext.Current.CancellationToken);
+        lines.Length.ShouldBe(8);
+        long[] stamps = [.. lines.Select(static line => long.Parse(line.Split(' ')[1], System.Globalization.CultureInfo.InvariantCulture))];
+        for (int call = 1; call < 4; call++)
+        {
+            lines[call * 2].ShouldStartWith("start");
+            (stamps[call * 2] - stamps[(call * 2) - 1]).ShouldBeGreaterThanOrEqualTo(1_000_000_000L);
+        }
+    }
+
+    [Fact(SkipUnless = nameof(OnUnix), Skip = "The stand-in gh is a shell script")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public async Task ARateLimitAnswerIsNamedAsOneWithoutGhsOutput()
+    {
+        string gh = Script("cat > /dev/null\necho 'HTTP 403: API rate limit exceeded for user ID 1 (stand-in)' >&2\nexit 1\n");
+        using GhSecretWriter writer = new(gh, TimeSpan.FromSeconds(30));
+
+        Result<Unit, string> set = await writer.SetAsync(CiTokenSecret.Parse("TOKEN", null, "octo").Value, OrgSecretVisibility.All, [], "value", TestContext.Current.CancellationToken);
+
+        set.Error.ShouldBe(GhSecretWriter.RateLimitMessage);
+    }
+
+    /// <summary>A gh that runs <paramref name="body"/>.</summary>
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    private string Script(string body)
+    {
+        string path = Path.Combine(_root, "gh");
+        File.WriteAllText(path, "#!/bin/sh\n" + body);
+        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        return path;
     }
 
     /// <summary>A gh that records its arguments and standard input, prints something, and exits as told.</summary>

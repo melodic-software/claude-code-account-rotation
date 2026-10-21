@@ -38,6 +38,20 @@ All notable changes to this project are documented in this file. The format foll
   outside the tool`, `unknown` or `missing`, and lists roles no account backs as `unclaimed`. The
   first rate-limit answer ends the check with no retry. The route is `POST /api/roles/check`
   (#259).
+- **Assign roles.** Generate CI token now picks the roles an account is to back (every role an
+  account backs, those Check roles found, or a new one, after a confirmation) and says first that
+  Start sign-in opens Anthropic's sign-in in the account's browser profile. One `claude
+  setup-token` run sets each role's token secret, and the account's stored Console key its key
+  secret, one at a time and at least a second apart. Each existing organization secret's
+  visibility is read first and passed back, since `gh secret set` otherwise makes it private; a
+  new secret is visible to all repositories. A role with a key half is refused before sign-in
+  until the account's Console key is stored. When only some halves are set, the roster records
+  those, the message names the rest, and the card shows a role left half from this account as
+  `split`. `POST /api/accounts/{email}/ci-token` takes `roles`; the 2.1.0 single-secret body still
+  works (#259).
+- **Push API key.** `POST /api/accounts/{email}/api-key/push`, on the card's ··· menu, re-sends
+  the stored Console key to the key secret of every role the account backs, with no sign-in, and
+  logs `push` in the lane history (#259).
 - **Lane history.** Every change of which account backs a role half is appended to
   `lane-history.jsonl` under app data (time, role, token or key, account, previous account, route),
   names and dates only. `GET /api/lane-history?since=` returns it, and a History disclosure on the
@@ -55,6 +69,9 @@ All notable changes to this project are documented in this file. The format foll
   `ciTokenGeneratedOn`. Downgrading to 2.2.0 drops `ciRoles` on its next roster write. 2.2.0 then
   reads every dated account as a marker set by hand, and its next edit to one dated account clears
   `ciTokenGeneratedOn` on the others (#259).
+- The manual commands a failed CI token names now pass `--visibility all` (or `--repos`) to
+  `gh secret set --org`, which otherwise makes the secret private. Writes through `gh secret set`
+  run one at a time, at least a second apart, and a rate-limit answer is named as one (#259).
 
 ## [2.2.0] - 2026-10-20
 

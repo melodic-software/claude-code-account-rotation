@@ -51,10 +51,10 @@ internal sealed record LaneHistoryEntry(
 /// <summary>The routes a role half can change by; a line naming any other is skipped on read.</summary>
 internal static class LaneVia
 {
-    /// <summary>Generate CI token recorded a token half.</summary>
+    /// <summary>Generate CI token recorded a token or key half.</summary>
     public const string Assign = "assign";
 
-    /// <summary>For the push action; nothing writes it yet.</summary>
+    /// <summary>Push API key recorded a key half.</summary>
     public const string Push = "push";
 
     /// <summary>An edit of the roster entry.</summary>
