@@ -243,6 +243,66 @@ public sealed class SwitchEndpointTests
     }
 
     [Fact]
+    public async Task AStoppedTaskWhoseServerOutlivedItsShellIsRestartedAndTheOrphanEnded()
+    {
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        // Ready before the switch and in the restart; conhost 10 and pwsh 20 are gone, server 30 is not.
+        ScheduledTaskRemoteControlTests.Script script = new ScheduledTaskRemoteControlTests.Script()
+            .Answer("/Query", 0, "3")
+            .Answer("/XML", 0, ScheduledTaskRemoteControlTests.TaskXml)
+            .Answer("/End", 0)
+            .Answer("/Run", 0);
+        ScheduledTaskRemoteControlTests.Killer killer = new() { Log = script };
+        IReadOnlyList<ProcessEntry> table = [.. ScheduledTaskRemoteControlTests.Machine.Where(static process => process.Id is not (10 or 20))];
+        factory.Overrides = services => services.Replace(ServiceDescriptor.Singleton<IRemoteControlTask>(StoppedTask(script, killer, table)));
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+        body["remoteControlRestarted"]!.GetValue<bool>().ShouldBeTrue();
+        killer.Killed.ShouldBe([30]);
+        script.Calls.IndexOf("Kill 30").ShouldBeLessThan(script.Calls.IndexOf("/Run /TN claude-remote-control"));
+        script.Calls.ShouldNotContain(static call => call.StartsWith("/End", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AStoppedTaskWithNoServerLeftIsNotStartedByTheSwitch()
+    {
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        ScheduledTaskRemoteControlTests.Script script = new ScheduledTaskRemoteControlTests.Script()
+            .Answer("/Query", 0, "3")
+            .Answer("/XML", 0, ScheduledTaskRemoteControlTests.TaskXml)
+            .Answer("/End", 0)
+            .Answer("/Run", 0);
+        ScheduledTaskRemoteControlTests.Killer killer = new();
+        IReadOnlyList<ProcessEntry> table = [.. ScheduledTaskRemoteControlTests.Machine.Where(static process => process.Id is not (10 or 20 or 30))];
+        factory.Overrides = services => services.Replace(ServiceDescriptor.Singleton<IRemoteControlTask>(StoppedTask(script, killer, table)));
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["remoteControlRestarted"]!.GetValue<bool>().ShouldBeFalse();
+        killer.Killed.ShouldBeEmpty();
+        script.Calls.ShouldNotContain(static call => call.StartsWith("/Run", StringComparison.Ordinal) || call.StartsWith("/End", StringComparison.Ordinal));
+    }
+
+    private static ScheduledTaskRemoteControl StoppedTask(ScheduledTaskRemoteControlTests.Script script, ScheduledTaskRemoteControlTests.Killer killer, IReadOnlyList<ProcessEntry> table) =>
+        new(
+            "claude-remote-control",
+            script.Run,
+            script.Run,
+            _ => Task.FromResult(Result<IReadOnlyList<ProcessEntry>, string>.Success(table)),
+            killer.Kill,
+            TimeProvider.System,
+            TimeSpan.FromSeconds(5),
+            TimeSpan.FromMilliseconds(1),
+            NullLogger<ScheduledTaskRemoteControl>.Instance,
+            ScheduledTaskRemoteControlTests.Expand);
+
+    [Fact]
     public async Task AnOrphanedServerThatCannotBeEndedIsAWarningAndTheSwitchStands()
     {
         using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);

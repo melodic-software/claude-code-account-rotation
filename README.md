@@ -367,7 +367,9 @@ account, the tool restarts the task:
    it left behind still is.
 3. It waits up to 15 seconds for the task to stop, then runs it again.
 
-- A task that was not running is left alone, and the switch asks nothing. When the page cannot
+- A task that was not running is left alone, and the switch asks nothing, unless a server it
+  left behind (as in step 1) is still running: then the switch asks, ends that server, and runs
+  the task. When the page cannot
   read the task's state, it still asks, as a condition. The state comes from
   `Get-ScheduledTask`, whose state is a number, so it reads the same in every display language.
 - A task whose state could not be read before the switch is restarted only if its processes are

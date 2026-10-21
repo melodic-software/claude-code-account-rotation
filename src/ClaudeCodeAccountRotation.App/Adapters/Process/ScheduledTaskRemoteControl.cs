@@ -101,7 +101,41 @@ internal sealed partial class ScheduledTaskRemoteControl(
 
     public string? Name => name;
 
-    public Task<Result<bool, string>> IsRunningAsync(CancellationToken cancellationToken) => StatusAsync(cancellationToken);
+    /// <summary>
+    /// Whether the task is Running, or has stopped while a server of its own,
+    /// orphaned when its shell exited, still runs: either needs the restart,
+    /// which ends that server before it runs the task. The process table is
+    /// read only for a task found stopped, once per call.
+    /// </summary>
+    public async Task<Result<bool, string>> IsRunningAsync(CancellationToken cancellationToken)
+    {
+        Result<bool, string> status = await StatusAsync(cancellationToken);
+        if (status.IsFailure || status.Value)
+        {
+            return status;
+        }
+
+        Result<(int ExitCode, string Output), string> definition = await schtasks(["/Query", "/TN", name, "/XML"], cancellationToken);
+        if (definition.IsFailure)
+        {
+            return Result<bool, string>.Failure("the task is not running, but its action could not be read: " + definition.Error);
+        }
+
+        (string Command, string Arguments)? action = definition.Value.ExitCode == 0 ? Action(definition.Value.Output) : null;
+        if (action is null)
+        {
+            // Not registered, or no action to match a server by: nothing of its own can be running.
+            return status;
+        }
+
+        Result<IReadOnlyList<ProcessEntry>, string> table = await listProcesses(cancellationToken);
+        if (table.IsFailure)
+        {
+            return Result<bool, string>.Failure("the task is not running, but its processes could not be listed: " + table.Error);
+        }
+
+        return Result<bool, string>.Success(Orphans(table.Value, action.Value.Arguments, _expand).Count > 0);
+    }
 
     /// <summary>
     /// Whether the task is Running, or why that could not be read, from the

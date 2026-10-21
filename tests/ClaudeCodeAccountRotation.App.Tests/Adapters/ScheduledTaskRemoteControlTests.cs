@@ -74,7 +74,7 @@ public sealed class ScheduledTaskRemoteControlTests
     public async Task RunningIsReadFromTheStatusColumn()
     {
         (await RemoteControl(new Script().Answer("/Query", 0, Running)).IsRunningAsync(Token)).Value.ShouldBeTrue();
-        (await RemoteControl(new Script().Answer("/Query", 0, Ready)).IsRunningAsync(Token)).Value.ShouldBeFalse();
+        (await RemoteControl(new Script().Answer("/Query", 0, Ready).Answer("/XML", 0, TaskXml)).IsRunningAsync(Token)).Value.ShouldBeFalse();
     }
 
     [Fact]
@@ -85,7 +85,7 @@ public sealed class ScheduledTaskRemoteControlTests
         Script running = new Script()
             .Answer("/Query", 0, "4\r\n")
             .Answer("/XML", 1, "FEHLER: Zugriff verweigert");
-        Script ready = new Script().Answer("/Query", 0, "3\r\n");
+        Script ready = new Script().Answer("/Query", 0, "3\r\n").Answer("/XML", 0, TaskXml);
 
         (await RemoteControl(running).IsRunningAsync(Token)).Value.ShouldBeTrue();
         (await RemoteControl(ready).IsRunningAsync(Token)).Value.ShouldBeFalse();
@@ -141,7 +141,7 @@ public sealed class ScheduledTaskRemoteControlTests
     [Fact]
     public async Task AMissingTaskIsNotRunning()
     {
-        Result<bool, string> state = await RemoteControl(new Script().Answer("/Query", 0, "")).IsRunningAsync(Token);
+        Result<bool, string> state = await RemoteControl(new Script().Answer("/Query", 0, "").Answer("/XML", 1, "ERROR: The system cannot find the file specified.")).IsRunningAsync(Token);
 
         state.IsSuccess.ShouldBeTrue();
         state.Value.ShouldBeFalse();

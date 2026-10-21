@@ -17,7 +17,9 @@ All notable changes to this project are documented in this file. The format foll
   cannot be ended, the task is not run and the result says so. A server whose parent is still
   running, such as one in an open terminal, is not touched. Before ending a recorded process the
   restart checks its start time as well as its name: an id now held by a later process is left
-  alone, and the task is not run. The restart's outcome is now written to the leader's log.
+  alone, and the task is not run. A task found stopped while such a server still runs counts as
+  running for the switch, so the server is ended and the task run under the new account. The
+  restart's outcome is now written to the leader's log.
 
 ## [2.3.1] - 2026-10-21
 
