@@ -4,6 +4,7 @@ using ClaudeCodeAccountRotation.Core.Ports;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Adapters;
 
+[Collection(StandInScripts.Name)]
 public sealed class ClaudeCliProcessAuthStatusTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "claude-code-account-rotation-tests", Guid.NewGuid().ToString("N"));

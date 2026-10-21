@@ -9,13 +9,20 @@ namespace ClaudeCodeAccountRotation.App.Tests.Adapters;
 /// a stand-in <c>gh</c>, that the value travels on standard input and never on
 /// the command line.
 /// </summary>
+[Collection(StandInScripts.Name)]
 public sealed class GhSecretWriterTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "claude-code-account-rotation-tests", Guid.NewGuid().ToString("N"));
 
+    private readonly GhWriteGate _gate = new(TimeProvider.System);
+
     public GhSecretWriterTests() => Directory.CreateDirectory(_root);
 
-    public void Dispose() => Directory.Delete(_root, recursive: true);
+    public void Dispose()
+    {
+        _gate.Dispose();
+        Directory.Delete(_root, recursive: true);
+    }
 
     public static bool OnUnix => !OperatingSystem.IsWindows();
 
@@ -30,6 +37,10 @@ public sealed class GhSecretWriterTests : IDisposable
     public void AnOrganizationSecretCarriesItsVisibility(string visibility, string flag) =>
         GhSecretWriter.Arguments(CiTokenSecret.Parse("TOKEN", null, "octo").Value, Enum.Parse<OrgSecretVisibility>(visibility), [])
             .ShouldBe(["secret", "set", "TOKEN", "--app", "actions", "--org", "octo", "--visibility", flag]);
+
+    [Fact]
+    public void AnOrganizationSecretWithNoVisibilityIsRefusedRatherThanMadePrivate() =>
+        Should.Throw<ArgumentException>(() => GhSecretWriter.Arguments(CiTokenSecret.Parse("TOKEN", null, "octo").Value, null, []));
 
     [Fact]
     public void ASelectedOrganizationSecretListsItsRepositories() =>
@@ -48,7 +59,8 @@ public sealed class GhSecretWriterTests : IDisposable
         string recorded = Path.Combine(_root, "recorded");
         string gh = StandIn(recorded, exitCode: 0);
 
-        Result<Unit, string> set = await new GhSecretWriter(gh, TimeSpan.FromSeconds(30)).SetAsync(
+        GhSecretWriter writer = new(gh, TimeSpan.FromSeconds(30), _gate);
+        Result<Unit, string> set = await writer.SetAsync(
             CiTokenSecret.Parse("CLAUDE_CODE_OAUTH_TOKEN", "octo/repo", null).Value,
             null,
             [],
@@ -68,7 +80,8 @@ public sealed class GhSecretWriterTests : IDisposable
     {
         string gh = StandIn(Path.Combine(_root, "recorded"), exitCode: 4);
 
-        Result<Unit, string> set = await new GhSecretWriter(gh, TimeSpan.FromSeconds(30)).SetAsync(
+        GhSecretWriter writer = new(gh, TimeSpan.FromSeconds(30), _gate);
+        Result<Unit, string> set = await writer.SetAsync(
             CiTokenSecret.Parse("TOKEN", null, "octo").Value,
             OrgSecretVisibility.Private,
             [],
@@ -85,9 +98,58 @@ public sealed class GhSecretWriterTests : IDisposable
     {
         string gh = StandIn(Path.Combine(_root, "recorded"), exitCode: 1);
 
-        Result<Unit, string> check = await new GhSecretWriter(gh, TimeSpan.FromSeconds(30)).CheckAsync(TestContext.Current.CancellationToken);
+        GhSecretWriter writer = new(gh, TimeSpan.FromSeconds(30), _gate);
+        Result<Unit, string> check = await writer.CheckAsync(TestContext.Current.CancellationToken);
 
         check.Error.ShouldContain("gh auth login");
+    }
+
+    [Fact(SkipUnless = nameof(OnUnix), Skip = "The stand-in gh is a shell script")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public async Task FourSetsInARowStartAtLeastOneSecondAfterTheLastEnded()
+    {
+        string log = Path.Combine(_root, "calls");
+        // Each call logs when it started and when it ended, in nanoseconds.
+        string gh = Script("echo \"start $(date +%s%N)\" >> '" + log + "'\ncat > /dev/null\necho \"end $(date +%s%N)\" >> '" + log + "'\n");
+        GhSecretWriter writer = new(gh, TimeSpan.FromSeconds(30), _gate);
+
+        foreach (string name in new[] { "A_CLAUDE_CODE_OAUTH_TOKEN", "A_CLAUDE_API_KEY", "B_CLAUDE_CODE_OAUTH_TOKEN", "B_CLAUDE_API_KEY" })
+        {
+            (await writer.SetAsync(CiTokenSecret.Parse(name, null, "octo").Value, OrgSecretVisibility.All, [], "value", TestContext.Current.CancellationToken))
+                .IsSuccess.ShouldBeTrue();
+        }
+
+        string[] lines = await File.ReadAllLinesAsync(log, TestContext.Current.CancellationToken);
+        lines.Length.ShouldBe(8);
+        long[] stamps = [.. lines.Select(static line => long.Parse(line.Split(' ')[1], System.Globalization.CultureInfo.InvariantCulture))];
+        for (int call = 1; call < 4; call++)
+        {
+            lines[call * 2].ShouldStartWith("start");
+            long gap = stamps[call * 2] - stamps[(call * 2) - 1];
+            gap.ShouldBeGreaterThanOrEqualTo(1_000_000_000L, "call " + call + " started " + gap + " ns after the one before it ended; the log was: " + string.Join(" | ", lines));
+        }
+    }
+
+    [Fact(SkipUnless = nameof(OnUnix), Skip = "The stand-in gh is a shell script")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public async Task ARateLimitAnswerIsNamedAsOneWithoutGhsOutput()
+    {
+        string gh = Script("cat > /dev/null\necho 'HTTP 403: API rate limit exceeded for user ID 1 (stand-in)' >&2\nexit 1\n");
+        GhSecretWriter writer = new(gh, TimeSpan.FromSeconds(30), _gate);
+
+        Result<Unit, string> set = await writer.SetAsync(CiTokenSecret.Parse("TOKEN", null, "octo").Value, OrgSecretVisibility.All, [], "value", TestContext.Current.CancellationToken);
+
+        set.Error.ShouldBe(GhSecretWriter.RateLimitMessage);
+    }
+
+    /// <summary>A gh that runs <paramref name="body"/>.</summary>
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    private string Script(string body)
+    {
+        string path = Path.Combine(_root, "gh");
+        File.WriteAllText(path, "#!/bin/sh\n" + body);
+        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        return path;
     }
 
     /// <summary>A gh that records its arguments and standard input, prints something, and exits as told.</summary>

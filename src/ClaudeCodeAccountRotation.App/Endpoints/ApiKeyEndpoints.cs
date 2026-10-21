@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
+using ClaudeCodeAccountRotation.App.Adapters.Process;
 using ClaudeCodeAccountRotation.App.Dashboard;
 using ClaudeCodeAccountRotation.App.Security;
 using ClaudeCodeAccountRotation.App.Switching;
@@ -155,6 +156,134 @@ internal static partial class ApiKeyEndpoints
             LogChecked(logger, target.Value, view.Outcome, standing);
             return Results.Ok(view);
         });
+
+        mutations.MapPost("/accounts/{email}/api-key/push", PushAsync);
+    }
+
+    /// <summary>
+    /// Re-sends the stored Console key to the key secret of every role the
+    /// account backs that has one, with no <c>setup-token</c> run: the step after
+    /// replacing a key, and the repair for a role left split. Every secret's
+    /// visibility is read back first and the first read that fails ends it,
+    /// before any write. The sets run one at a time; a failed one does not stop
+    /// the rest, except a rate limit, which stops every one after it. The
+    /// roster records the halves that were set.
+    /// </summary>
+    private static async Task<IResult> PushAsync(
+        string email,
+        RosterFile rosterFile,
+        ISecretStore store,
+        ICiSecretWriter writer,
+        IGhApiReader github,
+        TimeProvider clock,
+        ILoggerFactory loggers,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(rosterFile);
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(clock);
+        ArgumentNullException.ThrowIfNull(loggers);
+        Result<AccountEmail, string> parsed = AccountEmail.Parse(email);
+        if (parsed.IsFailure)
+        {
+            return Results.BadRequest(new { error = parsed.Error });
+        }
+
+        AccountEmail target = parsed.Value;
+        RosterEntry? entry = (await rosterFile.ReadAsync(cancellationToken)).Find(target);
+        if (entry is null)
+        {
+            return NotOnRoster(target);
+        }
+
+        List<CiTokenSecret> secrets = [.. entry.CiRoles.Select(static held => held.Role.KeySecret).OfType<CiTokenSecret>()];
+        if (secrets.Count == 0)
+        {
+            return Refused("NoKeyHalf", target.Value + " backs no role with a key half; assign one with Generate CI token.");
+        }
+
+        if (entry.ConsoleApiKeySetOn is null)
+        {
+            return Refused("NoConsoleKey", "paste this account's Console key first (Set API key).");
+        }
+
+        List<SecretTarget> targets = [];
+        foreach (CiTokenSecret secret in secrets)
+        {
+            Result<SecretTarget, GhApiFailure> access = await github.ReadAccessAsync(secret, cancellationToken);
+            if (access.IsFailure)
+            {
+                return Refused("SecretUnreadable", CiTokenEndpoints.Describe(access.Error));
+            }
+
+            targets.Add(access.Value);
+        }
+
+        Result<string?, string> key = await store.ReadAsync(SecretKind.ConsoleApiKey, target, cancellationToken);
+        if (key.IsFailure)
+        {
+            return Refused("KeyStoreUnavailable", key.Error);
+        }
+
+        if (key.Value is not string value)
+        {
+            return Refused("NoConsoleKey", "the OS store holds no Console key for " + target.Value + "; paste it again (Set API key).");
+        }
+
+        // From the first write on, the request's token is not consulted: a set
+        // that reached GitHub must reach the roster.
+        ILogger logger = loggers.CreateLogger(typeof(ApiKeyEndpoints).FullName!);
+        List<(CiTokenSecret Secret, DateTimeOffset SetAt)> sent = [];
+        List<string> failed = [];
+        bool stopped = false;
+        foreach (SecretTarget secret in targets)
+        {
+            Result<Unit, string> set = stopped
+                ? Result<Unit, string>.Failure("not sent, because an earlier write hit GitHub's rate limit")
+                : await writer.SetAsync(secret.Secret, secret.Visibility, secret.Repositories, value, CancellationToken.None);
+            if (set.IsSuccess)
+            {
+                LogKeyPushed(logger, target.Value, secret.Secret.Name);
+                sent.Add((secret.Secret, clock.GetUtcNow()));
+                continue;
+            }
+
+            LogKeyPushFailed(logger, target.Value, secret.Secret.Name);
+            failed.Add(secret.Secret + ": " + set.Error);
+            stopped |= set.Error == GhSecretWriter.RateLimitMessage;
+        }
+
+        var today = DateOnly.FromDateTime(clock.GetLocalNow().DateTime);
+        string message = (sent.Count == 0 ? "No key secret was set." : "Set " + string.Join(", ", sent.Select(static half => half.Secret.ToString())) + " from " + target.Value + ".")
+            + (failed.Count == 0 ? string.Empty : " Not set: " + string.Join("; ", failed) + ".");
+        RosterEntry? updated = null;
+        try
+        {
+            await rosterFile.UpdateAsync(
+                roster =>
+                {
+                    updated = roster.Find(target);
+                    foreach ((CiTokenSecret secret, DateTimeOffset setAt) in sent)
+                    {
+                        if (updated?.CiRoles.FirstOrDefault(held => secret.Equals(held.Role.KeySecret)) is CiRoleAssignment held)
+                        {
+                            updated = updated.ClaimingKey(held.Role, today, setAt);
+                        }
+                    }
+
+                    return updated is null ? roster : roster.With(updated);
+                },
+                CancellationToken.None,
+                via: LaneVia.Push);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // The secrets are set whatever went wrong here, so the answer says which.
+            return Failed(message + " The roster could not record it (" + exception.GetType().Name + "), so the card does not show it yet; push again to record it.");
+        }
+
+        return Results.Ok(new ApiKeyPushView(DashboardAssembler.View(updated), message, failed.Count));
     }
 
     private static string? Flag(ApiKeyWarning? flag) => flag switch
@@ -456,6 +585,12 @@ internal static partial class ApiKeyEndpoints
     [LoggerMessage(Level = LogLevel.Error, Message = "{Key} for {Account} deleted from the store but the roster still records it; the card's badge is stale")]
     private static partial void LogBadgeStale(ILogger logger, string key, string account);
 
+    [LoggerMessage(Level = LogLevel.Information, Message = "console API key for {Account} pushed to secret {Secret}")]
+    private static partial void LogKeyPushed(ILogger logger, string account, string secret);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "console API key for {Account} could not be pushed to secret {Secret}")]
+    private static partial void LogKeyPushFailed(ILogger logger, string account, string secret);
+
     [LoggerMessage(Level = LogLevel.Information, Message = "no stored {Key} recorded for {Account}")]
     private static partial void LogNoKeyRecorded(ILogger logger, string key, string account);
 
@@ -472,6 +607,9 @@ internal static partial class ApiKeyEndpoints
 /// store confirmed every delete.
 /// </summary>
 internal sealed record StoredKeyRemoval(string? Refusal, string? Warning, bool AllDeleted);
+
+/// <summary>The roster entry after a push, what was set and what was not, and how many secrets were not.</summary>
+internal sealed record ApiKeyPushView(RosterEntryView? Roster, string Message, int Failed);
 
 /// <summary>The roster entry after a key delete, and the warning when the key was left in the store.</summary>
 internal sealed record ApiKeyDeletionView(RosterEntryView Roster, string? Warning);

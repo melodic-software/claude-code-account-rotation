@@ -8,6 +8,7 @@ namespace ClaudeCodeAccountRotation.App.Tests.Adapters;
 /// The <c>gh api --include</c> reader: a rate limit told from any other refusal
 /// by the status and headers GitHub documents, and the body returned only on success.
 /// </summary>
+[Collection(StandInScripts.Name)]
 public sealed class GhApiReaderTests : IDisposable
 {
     private const string Path404 = "orgs/zz-no-such-org/actions/secrets?per_page=100&page=1";

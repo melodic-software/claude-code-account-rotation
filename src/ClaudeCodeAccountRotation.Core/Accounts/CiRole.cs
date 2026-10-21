@@ -32,6 +32,8 @@ public sealed record CiRole(string Prefix, CiSecretScope Scope, string Owner, st
 
     public CiTokenSecret TokenSecret => new(TokenSecretName, Scope, Owner);
 
+    public CiTokenSecret? KeySecret => KeySecretName is string name ? new CiTokenSecret(name, Scope, Owner) : null;
+
     /// <summary>
     /// The role a token secret belongs to: the prefix before
     /// <c>_CLAUDE_CODE_OAUTH_TOKEN</c>, the legacy role for the bare name, and a

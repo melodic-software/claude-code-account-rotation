@@ -26,10 +26,14 @@ public sealed class Roster
 
     /// <summary>
     /// Adds <paramref name="entry"/>, replacing any entry for the same account.
-    /// One account backs each CI role at a time: every role <paramref name="entry"/>
-    /// backs is taken off every other entry, whatever either's dates, the way
-    /// adopting a new live account elsewhere already leaves only one seat live.
-    /// The other entry keeps its other roles; its token date becomes that of its
+    /// One account backs each CI role half at a time, since each half is its own
+    /// secret: every half <paramref name="entry"/> now holds that it did not
+    /// hold with the same dates before is taken off every other entry, whatever
+    /// either's dates, the way adopting a new live account elsewhere already
+    /// leaves only one seat live. A half the entry does not hold stays with the
+    /// account that set it, so a role can be split between two accounts, and an
+    /// edit of the entry's other fields takes nothing.
+    /// The other entry keeps its other roles and halves; its token date becomes that of its
     /// newest remaining token half, or none once its last token half goes (see
     /// <see cref="RosterEntry.WithCiRoles"/>). Markers set by hand, with no role, count as one
     /// role among themselves, so they keep their old behavior.
@@ -40,8 +44,9 @@ public sealed class Roster
         IEnumerable<RosterEntry> others = _entries.Where(existing => existing.Email != entry.Email);
         if (!entry.CiRoles.IsEmpty)
         {
+            RosterEntry? before = Find(entry.Email);
             others = others.Select(existing => existing.WithCiRoles(
-                existing.CiRoles.Where(held => !entry.CiRoles.Any(claimed => claimed.Role.Equals(held.Role)))));
+                existing.CiRoles.Select(held => Released(held, entry, before)).OfType<CiRoleAssignment>()));
         }
         else if (entry.CiTokenGeneratedOn is not null)
         {
@@ -51,6 +56,31 @@ public sealed class Roster
         }
 
         return new Roster(others.Append(entry));
+    }
+
+    /// <summary>
+    /// What another entry keeps of <paramref name="held"/> once <paramref name="entry"/>
+    /// is stored, or null when it keeps no half.
+    /// </summary>
+    private static CiRoleAssignment? Released(CiRoleAssignment held, RosterEntry entry, RosterEntry? before)
+    {
+        CiRoleAssignment? claim = entry.CiRoles.FirstOrDefault(assignment => assignment.Role.Equals(held.Role));
+        if (claim is null)
+        {
+            return held;
+        }
+
+        CiRoleAssignment? prior = before?.CiRoles.FirstOrDefault(assignment => assignment.Role.Equals(held.Role));
+        bool tokenTaken = claim.HasToken && (claim.TokenSetOn, claim.TokenSetAt) != (prior?.TokenSetOn, prior?.TokenSetAt);
+        bool keyTaken = claim.HasKey && (claim.KeySetOn, claim.KeySetAt) != (prior?.KeySetOn, prior?.KeySetAt);
+        CiRoleAssignment kept = held with
+        {
+            TokenSetOn = tokenTaken ? null : held.TokenSetOn,
+            TokenSetAt = tokenTaken ? null : held.TokenSetAt,
+            KeySetOn = keyTaken ? null : held.KeySetOn,
+            KeySetAt = keyTaken ? null : held.KeySetAt,
+        };
+        return kept.HasToken || kept.HasKey ? kept : null;
     }
 
     public Roster Without(AccountEmail email) => new(_entries.Where(entry => entry.Email != email));

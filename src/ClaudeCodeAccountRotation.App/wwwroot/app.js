@@ -41,6 +41,9 @@
     module.exports.apiKeyBadge = apiKeyBadge;
     module.exports.keptKeyToast = keptKeyToast;
     module.exports.roleCheckLines = roleCheckLines;
+    module.exports.assignableRoles = assignableRoles;
+    module.exports.newRoleItem = newRoleItem;
+    module.exports.ciPanelWords = ciPanelWords;
     module.exports.apiKeyCheckToast = apiKeyCheckToast;
     module.exports.killSwitchRows = killSwitchRows;
     module.exports.toggleKillSwitch = toggleKillSwitch;
@@ -71,6 +74,9 @@
   // read named. A side's Now strip and every row's switch buttons are drawn
   // from the two together.
   var lastAccounts = [];
+  // What the last Check roles click found, so the CI panel can offer roles
+  // with no holder yet. Null until Check roles runs; nothing else reads GitHub.
+  var lastRoleCheck = null;
   var lastDashboard = null;
   var lastSides = [];
   // The sides, and what each held, that the rows' switch buttons were last drawn for.
@@ -925,85 +931,82 @@
       .then(function () { busy = false; setButtonsDisabled(false); });
   }
 
-  // Generate CI token: pick the secret, then the same sign-in as a login, in
-  // the account's mapped browser profile. The token goes from the CLI to
-  // `gh secret set` on the server and never reaches this page. The panel is a
-  // details.login, so an open one holds the poll's re-render the same way.
+  // Generate CI token: pick the roles this account is to back, then the same
+  // sign-in as a login, in the account's mapped browser profile. The token goes
+  // from the CLI to `gh secret set` on the server, once per role, with the
+  // account's stored Console key going to each role's key secret; neither
+  // reaches this page. The panel is a details.login, so an open one holds the
+  // poll's re-render the same way.
   function openCiTokenPanel(account) {
     var card = cardNodes[account.email];
     if (!card) { return; }
     var existing = card.querySelector("details.ci-token");
     if (existing) { existing.parentNode.removeChild(existing); }
 
-    var previous = (account.roster && account.roster.ciTokenSecret) || null;
     var panel = element("details", "login ci-token");
     panel.open = true;
     panel.appendChild(element("summary", null, "CI token for " + account.email));
-    panel.appendChild(element("p", "muted",
-      "Runs `claude setup-token` for this account and stores the token as a GitHub Actions secret with `gh secret set`. "
-      + "You sign in on Anthropic's page as this account; the token is never shown here or written to disk."));
+    var words = ciPanelWords();
+    panel.appendChild(element("p", null, words.intro));
+    panel.appendChild(element("p", "muted", words.detail));
 
     var form = element("form", "roster-form");
-    var name = element("input");
-    name.type = "text";
-    name.value = (previous && previous.name) || "CLAUDE_CODE_OAUTH_TOKEN";
-    labeled(form, "Secret name", name);
-    var scope = element("select");
-    [["repository", "Repository secret"], ["organization", "Organization secret"]].forEach(function (pair) {
-      var option = element("option", null, pair[1]);
-      option.value = pair[0];
-      scope.appendChild(option);
+    var roles = assignableRoles(lastAccounts, lastRoleCheck);
+    var boxes = roles.map(function (role) {
+      var box = element("input");
+      box.type = "checkbox";
+      box.checked = role.holder === account.email;
+      labeled(form, role.label, box);
+      return box;
     });
-    scope.value = previous && previous.organization ? "organization" : "repository";
-    labeled(form, "Where", scope);
-    var owner = element("input");
-    owner.type = "text";
-    owner.value = (previous && (previous.repository || previous.organization)) || "";
-    var ownerRow = labeled(form, "Repository (owner/name)", owner);
-    var visibility = element("select");
-    [["private", "Private repositories"], ["all", "All repositories"], ["selected", "Selected repositories"]].forEach(function (pair) {
-      var option = element("option", null, pair[1]);
-      option.value = pair[0];
-      visibility.appendChild(option);
-    });
-    var visibilityRow = labeled(form, "Visible to", visibility);
-    var repositories = element("input");
-    repositories.type = "text";
-    repositories.placeholder = "repo-one, repo-two";
-    var repositoriesRow = labeled(form, "Repositories (names, comma separated)", repositories);
-    function shape() {
-      var org = scope.value === "organization";
-      ownerRow.firstChild.textContent = org ? "Organization" : "Repository (owner/name)";
-      visibilityRow.hidden = !org;
-      repositoriesRow.hidden = !org || visibility.value !== "selected";
+    if (!roles.length) {
+      form.appendChild(element("p", "muted", "No roles known yet: run Check roles in the header, or name a new role below."));
     }
-    scope.addEventListener("change", shape);
-    visibility.addEventListener("change", shape);
-    shape();
+    var prefix = element("input");
+    prefix.type = "text";
+    prefix.placeholder = "AUTOMATIONS";
+    labeled(form, "New role (prefix, optional)", prefix);
+    var where = element("input");
+    where.type = "text";
+    where.placeholder = "octo-org, or owner/repository";
+    labeled(form, "New role's organization or repository", where);
 
-    var start = element("button", null, "Start");
+    var start = element("button", null, words.start);
     start.type = "submit";
     form.appendChild(start);
     form.appendChild(actionButton("Cancel", "secondary", function () { panel.parentNode.removeChild(panel); }));
     var status = element("p", "muted");
     form.addEventListener("submit", function (event) {
       event.preventDefault();
-      var body = { secretName: name.value.trim() };
-      if (scope.value === "organization") {
-        body.organization = owner.value.trim();
-        body.visibility = visibility.value;
-        if (visibility.value === "selected") {
-          body.repositories = repositories.value.split(",").map(function (item) { return item.trim(); }).filter(Boolean);
-        }
-      } else {
-        body.repository = owner.value.trim();
+      var picked = roles.filter(function (_, index) { return boxes[index].checked; }).map(function (role) { return role.item; });
+      var created = newRoleItem(prefix.value, where.value, lastRoleCheck);
+      if (created) {
+        // A role typed by hand may create secrets, visible to every
+        // repository, so the page asks first and says which.
+        if (!window.confirm(created.confirm)) { return; }
+        picked.push(created.item);
       }
-      startCiToken(account.email, body, form, status, panel);
+      if (!picked.length) { status.textContent = "Pick at least one role."; return; }
+      startCiToken(account.email, { roles: picked }, form, status, panel);
     });
     panel.appendChild(form);
     panel.appendChild(status);
     card.appendChild(panel);
-    owner.focus();
+    start.focus();
+  }
+
+  // Push API key: the stored Console key to the key secret of every role this
+  // account backs, with no setup-token run. After replacing a key, or to
+  // repair a role left split.
+  function pushApiKey(email) {
+    if (!window.confirm("Send " + email + "'s stored Console API key to the key secret of every role it backs?")) {
+      return Promise.resolve();
+    }
+    return mutate(accountPath(email, "/api-key/push"), "POST", null, function (result) {
+      if (!result.ok) { showToast(refused(result.body), "error"); return null; }
+      showToast(result.body.message, result.body.failed ? "warn" : "ok");
+      return null;
+    });
   }
 
   // Set API key: the account's Console API key, pasted once on this machine
@@ -1172,8 +1175,9 @@
         });
     }
     if (session.state !== "Completed") {
+      // Some halves may have been set; the cards show what the roster records.
       status.textContent = session.message || "That did not work. Start again.";
-      return null;
+      return refresh(true);
     }
     if (panel.parentNode) { panel.parentNode.removeChild(panel); }
     showToast(session.message || ("CI token set from " + email), "ok");
@@ -1234,7 +1238,8 @@
       // a blank one, is what lets the operator take a warning back off the card.
       body.notes = notes.value.trim() || null;
       body.ciTokenGeneratedOn = ciToken.value || null;
-      body.ciRoles = keptCiRoles(ciRoles, ciKeep.map(function (box) { return box.checked; }));
+      var kept = keptCiRoles(ciRoles, ciKeep.map(function (box) { return box.checked; }));
+      if (kept) { body.ciRoles = kept; }
       body.ciTokenSecret = ciSecretBody(ciSecretName.value, ciSecretWhere.value);
       mutate(accountPath(account.email), "PATCH", body, function (result) {
         showToast(result.ok ? account.email + " updated" : refused(result.body), result.ok ? "ok" : "error");
@@ -1448,7 +1453,7 @@
   // day it was set; within 30 days the badge warns, and past it the badge says
   // so. A date with no role is a marker set by hand and keeps its one badge.
   // Empty when the account backs nothing.
-  function ciRoleBadges(roster, at) {
+  function ciRoleBadges(roster, at, accounts, email) {
     if (!roster) { return []; }
     var roles = roster.ciRoles || [];
     if (!roles.length) {
@@ -1461,11 +1466,34 @@
       // repository, for a repository's role) and the hover says the rest.
       var where = role.repository || "org " + role.organization;
       var halves = [role.tokenSetOn ? "token" : null, role.keySetOn ? "key" : null].filter(Boolean).join("+");
-      var text = ciRoleLabel(role) + " · " + halves;
+      // Split: another account holds the role's other half, because the half
+      // set from here was set alone.
+      var partner = splitPartner(role, accounts, email);
+      var split = partner !== null;
+      var text = ciRoleLabel(role) + " · " + halves + (split ? " · split" : "");
       var title = role.tokenSecret + (role.keySecret ? " and " + role.keySecret : "") + " in " + where + ". "
-        + (role.keySetOn ? "Key set " + role.keySetOn + ". " : "");
-      return (role.tokenSetOn && tokenExpiry(text, role.tokenSetOn, title, at)) || { kind: "ok", text: text, title: title.trim() };
+        + (role.keySetOn ? "Key set " + role.keySetOn + ". " : "")
+        + (split ? "split: token from " + (role.tokenSetOn ? email : partner) + ", key from " + (role.keySetOn ? email : partner)
+          + (role.keySetOn ? "; Generate CI token re-sends the token. " : "; Push API key re-sends the key. ") : "");
+      var badge = (role.tokenSetOn && tokenExpiry(text, role.tokenSetOn, title, at)) || { kind: "ok", text: text, title: title.trim() };
+      if (split && badge.kind === "ok") { badge.kind = "warn"; }
+      return badge;
     });
+  }
+
+  // The other account that holds the half of a key-carrying role this one
+  // lacks, or null: a role whose two secrets hold two accounts' values.
+  function splitPartner(role, accounts, email) {
+    if (!role.keySecret || !role.tokenSetOn === !role.keySetOn) { return null; }
+    var owner = (role.repository || role.organization || "").toLowerCase();
+    var found = (accounts || []).filter(function (account) {
+      return account.email !== email && ((account.roster && account.roster.ciRoles) || []).some(function (other) {
+        return other.tokenSecret.toLowerCase() === role.tokenSecret.toLowerCase()
+          && (other.repository || other.organization || "").toLowerCase() === owner
+          && (role.tokenSetOn ? other.keySetOn && !other.tokenSetOn : other.tokenSetOn && !other.keySetOn);
+      });
+    })[0];
+    return found ? found.email : null;
   }
 
   // The roles whose token half was set on one date lose it together, a year
@@ -1530,8 +1558,11 @@
 
   // The roles an Edit keeps, as the PATCH names them: each by its token
   // secret's name, which the server reads back into the same role, with the
-  // dates its halves were set.
+  // dates its halves were set. Null when every box is still ticked: the PATCH
+  // then sends no ciRoles and the server keeps the roles it holds, so a form
+  // opened before another account took a role cannot hand it back.
   function keptCiRoles(roles, keep) {
+    if (keep.every(Boolean)) { return null; }
     return roles.filter(function (_, index) { return keep[index]; }).map(function (role) {
       return {
         tokenSecret: role.tokenSecret,
@@ -1555,6 +1586,73 @@
     return trimmedWhere.indexOf("/") >= 0
       ? { name: trimmedName, repository: trimmedWhere }
       : { name: trimmedName, organization: trimmedWhere };
+  }
+
+  // The CI panel's words: what happens after Start, before anything does. A
+  // function, since the Node export runs before any var below is assigned.
+  function ciPanelWords() {
+    return {
+      intro: "Pick the roles, then Start sign-in opens Anthropic's sign-in in this account's browser profile; paste the code it shows here.",
+      detail: "The tool runs `claude setup-token` once and sets each role's token secret from it, and each role's key secret from this account's stored Console key. "
+        + "Neither is shown here or written to disk. A role with a key half needs the Console key stored first (Set API key).",
+      start: "Start sign-in"
+    };
+  }
+
+  // The roles the CI panel offers: every role an account on the roster backs,
+  // then every role the last Check roles found that none does, once each. An
+  // item names its token secret, which the server reads back into the role.
+  function assignableRoles(accounts, check) {
+    var seen = {};
+    var roles = [];
+    function add(role, holder) {
+      var where = role.repository || role.organization;
+      var key = (role.tokenSecret + "@" + where).toLowerCase();
+      if (seen[key]) { return; }
+      seen[key] = true;
+      var item = { tokenSecret: role.tokenSecret };
+      item[role.repository ? "repository" : "organization"] = where;
+      roles.push({
+        item: item,
+        holder: holder,
+        label: ciRoleLabel(role) + " in " + (role.repository ? where : "org " + where)
+          + (role.keySecret ? " · token+key" : " · token only") + " · " + (holder ? "backed by " + holder : "no holder")
+      });
+    }
+    (accounts || []).forEach(function (account) {
+      ((account.roster && account.roster.ciRoles) || []).forEach(function (role) { add(role, account.email); });
+    });
+    ((check && check.roles) || []).forEach(function (role) { add(role, role.holder || null); });
+    return roles;
+  }
+
+  // A role named in the panel's free-text row, or null when the prefix is
+  // blank: the request item and the confirmation naming its two secrets. It
+  // says "creates" for an organization secret the last Check roles did not
+  // list and "sets" for one it did; Check roles reads no repository secrets.
+  function newRoleItem(prefix, where, check) {
+    var name = (prefix || "").trim().toUpperCase();
+    var place = (where || "").trim();
+    if (!name) { return null; }
+    var repository = place.indexOf("/") >= 0;
+    var item = { prefix: name };
+    item[repository ? "repository" : "organization"] = place;
+    var secrets = [name + "_CLAUDE_CODE_OAUTH_TOKEN", name + "_CLAUDE_API_KEY"];
+    if (repository) {
+      return { item: item, confirm: "This sets " + secrets.join(" and ") + " in repository " + place + ", creating any that do not exist. Go ahead?" };
+    }
+    var listed = function (secret) {
+      return ((check && check.roles) || []).some(function (role) {
+        return (role.organization || "").toLowerCase() === place.toLowerCase()
+          && ((role.hasToken && role.tokenSecret === secret) || (role.hasKey && role.keySecret === secret));
+      });
+    };
+    var created = secrets.filter(function (secret) { return !listed(secret); });
+    var kept = secrets.filter(listed);
+    var parts = [];
+    if (created.length) { parts.push("creates " + created.join(" and ") + ", visible to all repositories"); }
+    if (kept.length) { parts.push("sets " + kept.join(" and ") + ", keeping who may read " + (kept.length > 1 ? "them" : "it")); }
+    return { item: item, confirm: "In org " + place + " this " + parts.join(", and ") + ". Go ahead?" };
   }
 
   // The PUT body for a pasted Console API key, trimmed, or null when nothing
@@ -2020,7 +2118,7 @@
       badges.appendChild(element("span", "badge " + chip.replace(/ /g, "-"), chip));
     }
     if (!roster) { badges.appendChild(element("span", "badge off-roster", "not on roster")); }
-    ciRoleBadges(roster, at).forEach(function (ci) {
+    ciRoleBadges(roster, at, lastAccounts, account.email).forEach(function (ci) {
       var ciBadge = element("span", "badge ci-token " + ci.kind, ci.text);
       ciBadge.title = ci.title;
       badges.appendChild(ciBadge);
@@ -2091,6 +2189,9 @@
     }
     if (roster) {
       menu.appendChild(menuItem(more, roster.consoleApiKeySetOn ? "Replace API key" : "Set API key", "quiet sm", function () { openApiKeyPanel(account); }));
+      if (roster.consoleApiKeySetOn && (roster.ciRoles || []).some(function (role) { return role.keySecret; })) {
+        menu.appendChild(menuItem(more, "Push API key", "quiet sm", function () { pushApiKey(account.email); }));
+      }
       if (roster.consoleApiKeySetOn) {
         menu.appendChild(menuItem(more, "Delete API key", "quiet sm", function () { clearApiKey(account.email); }));
       }
@@ -2314,6 +2415,7 @@
       send("/api/roles/check", "POST", { organization: organization.value.trim() })
         .then(function (result) {
           if (!result.ok) { status.textContent = refused(result.body); return; }
+          lastRoleCheck = result.body;
           var lines = roleCheckLines(result.body);
           status.textContent = lines.length ? "Checked " + new Date(result.body.checkedAt).toLocaleString() : "No role secrets found.";
           lines.forEach(function (line) {

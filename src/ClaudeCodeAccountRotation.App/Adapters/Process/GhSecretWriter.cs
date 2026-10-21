@@ -11,6 +11,9 @@ internal enum OrgSecretVisibility
     Selected,
 }
 
+/// <summary>One secret to set and who may read it: <c>Visibility</c> and <c>Repositories</c> are as <see cref="ICiSecretWriter.SetAsync"/> takes them.</summary>
+internal sealed record SecretTarget(CiTokenSecret Secret, OrgSecretVisibility? Visibility, IReadOnlyList<string> Repositories);
+
 /// <summary>Writes one GitHub Actions secret. The value is handed over in memory and kept by nothing here.</summary>
 internal interface ICiSecretWriter
 {
@@ -50,12 +53,23 @@ internal sealed class UnavailableCiSecretWriter(string reason) : ICiSecretWriter
 /// process can list. <c>gh</c> reads the value from standard input when
 /// <c>--body</c> is absent and input is not a terminal.
 /// <para>
+/// Sets pass the shared <see cref="GhWriteGate"/>: one gh write at a time,
+/// at least a second apart, whichever writer runs it.
+/// </para>
+/// <para>
 /// Nothing <c>gh</c> prints is returned: a failure is reported by its exit code
-/// alone, with the operator pointed at running the same command by hand.
+/// alone, with the operator pointed at running the same command by hand, or as
+/// <see cref="RateLimitMessage"/> when its error output names a rate limit.
 /// </para>
 /// </summary>
-internal sealed class GhSecretWriter(string executable, TimeSpan timeout) : ICiSecretWriter
+internal sealed class GhSecretWriter(string executable, TimeSpan timeout, GhWriteGate gate) : ICiSecretWriter
 {
+    /// <summary>The gate this writer's sets pass.</summary>
+    internal GhWriteGate Gate => gate;
+
+    public const string RateLimitMessage =
+        "GitHub's API rate limit was reached, so this write and every one after it was stopped and nothing retried them. Wait for the limit to reset, then try again.";
+
     /// <summary>The <c>gh</c> on PATH, or the reason there is none.</summary>
     public static Result<string, string> Locate(string? pathVariable, bool isWindows)
     {
@@ -72,7 +86,10 @@ internal sealed class GhSecretWriter(string executable, TimeSpan timeout) : ICiS
         return Result<string, string>.Failure("the GitHub CLI (gh) was not found on PATH; install it and run `gh auth login` first");
     }
 
-    /// <summary>The argument list, never a command line, and never the value.</summary>
+    /// <summary>
+    /// The argument list, never a command line, and never the value. An
+    /// organization secret must name its visibility: gh would make it private.
+    /// </summary>
     public static IReadOnlyList<string> Arguments(CiTokenSecret secret, OrgSecretVisibility? visibility, IReadOnlyList<string> repositories)
     {
         ArgumentNullException.ThrowIfNull(secret);
@@ -82,6 +99,11 @@ internal sealed class GhSecretWriter(string executable, TimeSpan timeout) : ICiS
         {
             arguments.AddRange(["--repo", secret.Owner]);
             return arguments;
+        }
+
+        if (visibility is null)
+        {
+            throw new ArgumentException("an organization secret needs its visibility, or gh makes it private", nameof(visibility));
         }
 
         arguments.AddRange(["--org", secret.Owner]);
@@ -120,16 +142,24 @@ internal sealed class GhSecretWriter(string executable, TimeSpan timeout) : ICiS
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrEmpty(value);
-        Result<int, string> set = await RunAsync(Arguments(secret, visibility, repositories), value, cancellationToken);
+        IReadOnlyList<string> arguments = Arguments(secret, visibility, repositories);
+        Result<GhExit, string> set = await gate.RunAsync(() => GhProcess.RunAsync(executable, arguments, value, timeout, cancellationToken), cancellationToken);
+
         if (set.IsFailure)
         {
             return Result<Unit, string>.Failure(set.Error);
         }
 
-        return set.Value == 0
-            ? Result<Unit, string>.Success(Unit.Value)
+        if (set.Value.ExitCode == 0)
+        {
+            return Result<Unit, string>.Success(Unit.Value);
+        }
+
+        // Matched, never relayed: the rest of what gh printed stays here.
+        return set.Value.StandardError.Contains("rate limit", StringComparison.OrdinalIgnoreCase)
+            ? Result<Unit, string>.Failure(RateLimitMessage)
             : Result<Unit, string>.Failure(
-                "gh secret set exited with code " + set.Value
+                "gh secret set exited with code " + set.Value.ExitCode
                 + "; check `gh auth status` and that you may write secrets for " + secret.Owner);
     }
 

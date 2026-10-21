@@ -3,19 +3,27 @@ using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
+using ClaudeCodeAccountRotation.App.Adapters.SecretStore;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Identity;
+using ClaudeCodeAccountRotation.Core.Ports;
 using Microsoft.Extensions.Logging;
 
 namespace ClaudeCodeAccountRotation.App.Adapters.Process;
 
-/// <summary>What the dashboard asks for when it generates a CI token: whose, and where it goes.</summary>
-internal sealed record CiTokenRequest(
-    AccountEmail Email,
-    CiTokenSecret Secret,
-    OrgSecretVisibility? Visibility,
-    IReadOnlyList<string> Repositories);
+/// <summary>One role a CI token session writes: its token secret, and its key secret when the key half goes too.</summary>
+internal sealed record RoleTarget(CiRole Role, SecretTarget Token, SecretTarget? Key);
+
+/// <summary>What the dashboard asks for when it generates a CI token: whose, and the roles it is to back, in order.</summary>
+internal sealed record CiTokenRequest(AccountEmail Email, IReadOnlyList<RoleTarget> Roles)
+{
+    /// <summary>One token secret, set as named, with no key half: the 2.1.0 request.</summary>
+    public CiTokenRequest(AccountEmail email, CiTokenSecret secret, OrgSecretVisibility? visibility, IReadOnlyList<string> repositories)
+        : this(email, [new RoleTarget(CiRole.FromTokenSecret(secret), new SecretTarget(secret, visibility, repositories), Key: null)])
+    {
+    }
+}
 
 /// <summary>Runs <c>claude setup-token</c> sessions for the dashboard.</summary>
 internal interface ICiTokenSessionRunner
@@ -29,8 +37,9 @@ internal interface ICiTokenSessionRunner
 
 /// <summary>
 /// Drives <c>claude setup-token</c> under a pseudo-terminal and hands the token
-/// it prints to <c>gh secret set</c> in memory, then records which account backs
-/// which secret on the roster.
+/// it prints to <c>gh secret set</c> in memory, once per role, with the
+/// account's stored Console key going to each role's key secret beside it, then
+/// records on the roster which halves were set from which account.
 /// <para>
 /// <c>setup-token</c> draws its interactive screen only when its standard input
 /// is a terminal, so the child comes from a <see cref="LoginChildFactory"/> that
@@ -66,7 +75,7 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
     private const int MaximumCodeLength = 256;
 
     internal const string ManualFallback =
-        " To do it by hand: run `claude setup-token`, sign in as the account, then `gh secret set <name> --repo <owner/name>` (or `--org <org>`) and paste the token.";
+        " To do it by hand: run `claude setup-token`, sign in as the account, then `gh secret set <name> --repo <owner/name>` (or `--org <org>` with the secret's current visibility: `--visibility all`, `--visibility private`, or `--repos a,b` for selected repositories, since gh otherwise makes it private) and paste the token.";
 
     private const string RejectedMessage = "That code was rejected. Start again and paste the whole code from the browser." + ManualFallback;
     private const string ExpiredMessage = "This CI token session expired after ten minutes. Start it again.";
@@ -77,6 +86,7 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
 
     private readonly LoginChildFactory _start;
     private readonly ICiSecretWriter _secrets;
+    private readonly ISecretStore _keys;
     private readonly RosterFile _roster;
     private readonly TimeProvider _clock;
     private readonly TimeSpan _replyBudget;
@@ -91,7 +101,8 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
         RosterFile roster,
         TimeProvider clock,
         ILogger<ClaudeCliSetupTokenRunner> logger,
-        TimeSpan? replyBudget = null)
+        TimeSpan? replyBudget = null,
+        ISecretStore? keys = null)
     {
         ArgumentNullException.ThrowIfNull(start);
         ArgumentNullException.ThrowIfNull(secrets);
@@ -104,6 +115,7 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
         _clock = clock;
         _logger = logger;
         _replyBudget = replyBudget ?? TimeSpan.FromSeconds(30);
+        _keys = keys ?? new UnavailableSecretStore("no OS store was given to read the key from");
     }
 
     public async Task<Result<LoginSession, string>> StartAsync(CiTokenRequest request, CancellationToken cancellationToken)
@@ -147,7 +159,8 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
             session.Pump = Task.Run(() => PumpAsync(session), CancellationToken.None);
         }
 
-        LogStarted(request.Email.Value, request.Secret.Name);
+        string secrets = string.Join(", ", request.Roles.Select(static role => role.Token.Secret.Name));
+        LogStarted(request.Email.Value, secrets);
         try
         {
             await WaitAsync(session.Started.Task, cancellationToken);
@@ -435,30 +448,88 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
         }
     }
 
-    /// <summary>Sets the secret, then marks the account on the roster. The token goes nowhere else.</summary>
+    /// <summary>
+    /// Sets each role's token secret, then its key secret, one at a time, then
+    /// marks on the roster the halves that were set. A failed half does not stop
+    /// the rest, except a rate limit, which stops every write after it. The token
+    /// and the key go nowhere else.
+    /// </summary>
     private async Task DeliverAsync(Session session, string token)
     {
         CiTokenRequest request = session.Request;
-        Result<Unit, string> set = await _secrets.SetAsync(request.Secret, request.Visibility, request.Repositories, token, CancellationToken.None);
-        if (set.IsFailure)
+        (string? key, string? keyError) = request.Roles.Any(static role => role.Key is not null)
+            ? await ReadKeyAsync(request.Email)
+            : (null, null);
+
+        List<(RoleTarget Role, bool IsKey, DateTimeOffset SetAt)> set = [];
+        List<(RoleTarget Role, bool IsKey, string Error)> failed = [];
+        string? stop = null;
+        foreach ((RoleTarget role, bool isKey, SecretTarget target) in request.Roles.SelectMany(static role => role.Key is SecretTarget keyTarget
+            ? new[] { (role, false, role.Token), (role, true, keyTarget) }
+            : [(role, false, role.Token)]))
         {
-            LogSecretFailed(request.Email.Value, request.Secret.Name);
+            string? value = isKey ? key : token;
+            Result<Unit, string> written = stop is not null ? Result<Unit, string>.Failure(stop)
+                : value is null ? Result<Unit, string>.Failure(keyError!)
+                : await _secrets.SetAsync(target.Secret, target.Visibility, target.Repositories, value, CancellationToken.None);
+            if (written.IsSuccess)
+            {
+                LogSecretSet(request.Email.Value, target.Secret.Name);
+                set.Add((role, isKey, _clock.GetUtcNow()));
+                continue;
+            }
+
+            LogSecretFailed(request.Email.Value, target.Secret.Name);
+            failed.Add((role, isKey, written.Error));
+            if (stop is null && written.Error == GhSecretWriter.RateLimitMessage)
+            {
+                stop = "not sent, because an earlier write hit GitHub's rate limit";
+            }
+        }
+
+        if (set.Count == 0)
+        {
             Settle(
                 session,
                 LoginSessionState.Failed,
-                "The token was made but could not be stored: " + set.Error
+                "The token was made but could not be stored: " + (failed.Count == 1 ? failed[0].Error.TrimEnd('.') : NotSet(failed, holders: null).TrimEnd('.'))
                 + ". The token was not kept anywhere, so it can never be used; start again once that is fixed.");
             return;
         }
 
-        DateTimeOffset setAt = _clock.GetUtcNow();
         var today = DateOnly.FromDateTime(_clock.GetLocalNow().DateTime);
+        string setNames = string.Join(", ", set.Select(static half => Secret(half.Role, half.IsKey).ToString()));
+        string tokenNames = string.Join("; ", set.Where(static half => !half.IsKey).Select(static half => half.Role.Token.Secret.ToString()));
+        Dictionary<(RoleTarget, bool), string> holders = [];
         try
         {
             await _roster.UpdateAsync(
-                roster => roster.Find(request.Email) is RosterEntry entry
-                    ? roster.With(entry.ClaimingToken(CiRole.FromTokenSecret(request.Secret), today, setAt))
-                    : roster,
+                roster =>
+                {
+                    if (roster.Find(request.Email) is not RosterEntry entry)
+                    {
+                        return roster;
+                    }
+
+                    // Who set each half that was not set this time: that secret
+                    // still holds their value, so the message names them.
+                    foreach ((RoleTarget role, bool isKey, _) in failed)
+                    {
+                        if (roster.Entries.FirstOrDefault(other => other.Email != request.Email && other.CiRoles.Any(held => held.Role.Equals(role.Role) && (isKey ? held.HasKey : held.HasToken))) is RosterEntry holder)
+                        {
+                            holders[(role, isKey)] = holder.Email.Value;
+                        }
+                    }
+
+                    foreach ((RoleTarget role, bool isKey, DateTimeOffset setAt) in set)
+                    {
+                        entry = isKey ? entry.ClaimingKey(role.Role, today, setAt) : entry.ClaimingToken(role.Role, today, setAt);
+                    }
+
+                    // Claimed by halves: a half not set this time still holds its
+                    // holder's value, and stays theirs.
+                    return roster.With(entry);
+                },
                 CancellationToken.None,
                 via: LaneVia.Assign);
         }
@@ -466,25 +537,55 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
         catch (Exception)
 #pragma warning restore CA1031
         {
-            // The secret is set whatever went wrong here, and the session must
+            // The secrets are set whatever went wrong here, and the session must
             // say so rather than fall through to "no token was printed".
-            LogSecretSet(request.Email.Value, request.Secret.Name);
             Settle(
                 session,
-                LoginSessionState.Completed,
-                "Set " + request.Secret + ", but the roster could not be updated, so the card does not show it yet. On this card open Edit, set"
-                + " \"CI token generated on\" to " + today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + ", the CI secret name to "
-                + request.Secret.Name + " and where to " + request.Secret.Owner + ", then Save.");
+                failed.Count == 0 ? LoginSessionState.Completed : LoginSessionState.Failed,
+                "Set " + setNames + ", but the roster could not be updated, so the card does not show it yet."
+                + (tokenNames.Length == 0 ? string.Empty : " On this card open Edit, set \"CI token generated on\" to "
+                    + today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + " and the CI secret name and where to each of these in turn, saving each: " + tokenNames + ".")
+                + (failed.Count == 0 ? string.Empty : " " + NotSet(failed, holders: null)));
             return;
         }
 
-        LogSecretSet(request.Email.Value, request.Secret.Name);
+        string expires = " The token expires around " + today.AddDays((int)TokenLifetime.TotalDays).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + ".";
         Settle(
             session,
-            LoginSessionState.Completed,
-            "Set " + request.Secret + " from " + request.Email.Value + ". The token expires around "
-            + today.AddDays((int)TokenLifetime.TotalDays).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + ".");
+            failed.Count == 0 ? LoginSessionState.Completed : LoginSessionState.Failed,
+            "Set " + setNames + " from " + request.Email.Value + "." + (failed.Count == 0 ? string.Empty : " " + NotSet(failed, holders, request.Email.Value)) + expires);
     }
+
+    /// <summary>The account's stored Console key, or why there is none.</summary>
+    private async Task<(string? Key, string? Error)> ReadKeyAsync(AccountEmail email)
+    {
+        Result<string?, string> read = await _keys.ReadAsync(SecretKind.ConsoleApiKey, email, CancellationToken.None);
+        return read.IsFailure ? (null, "the OS store could not read this account's Console key: " + read.Error)
+            : read.Value is null ? (null, "this account has no Console key in the OS store; paste it with Set API key")
+            : (read.Value, null);
+    }
+
+    private static CiTokenSecret Secret(RoleTarget role, bool isKey) => isKey ? role.Key!.Secret : role.Token.Secret;
+
+    /// <summary>
+    /// Every half that was not set, with why. A role whose other half was set is
+    /// split, and when another account set the half that failed, it is named:
+    /// its secret still holds that account's value.
+    /// </summary>
+    private static string NotSet(List<(RoleTarget Role, bool IsKey, string Error)> failed, Dictionary<(RoleTarget, bool), string>? holders, string? email = null) =>
+        "Not set: " + string.Join("; ", failed.Select(half =>
+        {
+            string line = half.Role.Role.Name + " " + (half.IsKey ? "key" : "token") + " (" + Secret(half.Role, half.IsKey) + "): " + half.Error.TrimEnd('.');
+            bool split = half.Role.Key is not null && !failed.Any(other => other.Role == half.Role && other.IsKey != half.IsKey);
+            if (!split || email is null)
+            {
+                return line;
+            }
+
+            string other = holders is not null && holders.TryGetValue((half.Role, half.IsKey), out string? holder) ? "from " + holder : "not from any account on the roster";
+            return line + ". The role is split: " + (half.IsKey ? "token from " + email + ", key " + other : "token " + other + ", key from " + email)
+                + "; " + (half.IsKey ? "re-send the key with Push API key" : "re-send the token with Generate CI token");
+        })) + ".";
 
     private void EnforceExpiry(Session session)
     {

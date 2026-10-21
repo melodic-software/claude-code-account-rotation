@@ -258,7 +258,8 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
                 Secrets,
                 provider.GetRequiredService<RosterFile>(),
                 Clock,
-                provider.GetRequiredService<ILogger<ClaudeCliSetupTokenRunner>>())));
+                provider.GetRequiredService<ILogger<ClaudeCliSetupTokenRunner>>(),
+                keys: provider.GetRequiredService<ISecretStore>())));
             Overrides?.Invoke(services);
         });
     }
