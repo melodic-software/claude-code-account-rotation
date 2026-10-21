@@ -20,8 +20,18 @@ All notable changes to this project are documented in this file. The format foll
 - `roster.json` entries carry `ciRoles` and `consoleApiKeySetOn`; `GET /api/dashboard` returns
   them as `accounts[].roster.ciRoles` and `accounts[].roster.consoleApiKeySetOn`, and still returns
   `ciTokenSecret` (the token secret set last) and `ciTokenGeneratedOn`. `consoleApiKeySetOn` is
-  recorded for the upcoming Console key store; nothing sets it yet.
+  the day the account's Console API key was stored (see the next entry).
   `PATCH /api/accounts/{email}` accepts `ciRoles`, and requires a date only for a token half (#259).
+- **Console API key in the OS store.** Set API key on a card keeps the account's Console API key in
+  Windows Credential Manager (this computer only) or, on Linux, the Secret Service through
+  libsecret. `PUT /api/accounts/{email}/api-key` takes the key in the body and
+  `DELETE /api/accounts/{email}/api-key` removes it; both answer with the roster entry, whose
+  `consoleApiKeySetOn` is the only trace on the page. No route returns the key, and the tool never
+  logs it or writes it to a file of its own. With no usable store (no libsecret, no Secret Service provider, a
+  locked collection, or libsecret's file backend) the PUT is refused with the cause. Removing an
+  account also deletes its stored keys. When the roster records a key the store cannot delete,
+  both deletes answer 409 with the cause and keep the roster entry and its key record; `?keepStoredKey=true` goes ahead and
+  names the key left in the store and the command that removes it (#259).
 - **Check roles.** A header button lists the GitHub Actions secrets of every organization a role
   names, and of one you type, through `gh api`, only when clicked. It lists each role found from
   the secret names with its holder, says whether each half the roster records is `ok`, `changed
