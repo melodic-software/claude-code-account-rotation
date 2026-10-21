@@ -104,6 +104,62 @@ public sealed class PeerTests
         start.Environment["WSLENV"].ShouldBe(expected);
     }
 
+    /// <summary>
+    /// The child's exit handler takes the host's lock while the child holds its
+    /// own, and disposing the child takes the child's lock. Disposing as the
+    /// child exits must not wait on itself, which is what hung a leader after
+    /// <c>/api/shutdown</c> had already stopped the WSL side.
+    /// </summary>
+    [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "The host is disposed on a task with a deadline; a using would dispose it again on the test thread and hang where the deadline should fail.")]
+    public async Task DisposingAsTheChildExitsDoesNotDeadlock()
+    {
+        for (int i = 0; i < 50; i++)
+        {
+            WslDistributionPeerHost host = Host(ShortLivedChild);
+            (await host.StartAsync(TestContext.Current.CancellationToken)).IsSuccess.ShouldBeTrue();
+            await Task.Delay(30 + (i % 40), TestContext.Current.CancellationToken);
+
+            await DisposeWithinAsync(host);
+        }
+    }
+
+    [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "The host is disposed on a task with a deadline; a using would dispose it again on the test thread and hang where the deadline should fail.")]
+    public async Task DisposingKillsALiveChildWithoutDeadlock()
+    {
+        for (int i = 0; i < 10; i++)
+        {
+            WslDistributionPeerHost host = Host(LongLivedChild);
+            (await host.StartAsync(TestContext.Current.CancellationToken)).IsSuccess.ShouldBeTrue();
+            host.IsRunning.ShouldBeTrue();
+
+            await DisposeWithinAsync(host);
+
+            host.IsRunning.ShouldBeFalse();
+        }
+    }
+
+    private static WslDistributionPeerHost Host(Func<ProcessStartInfo> child) => new(
+        SideName.Wsl,
+        new PeerLaunch("Some-Distribution", "someone", "/opt/rotation/claude-code-account-rotation", 48212),
+        child,
+        Microsoft.Extensions.Logging.Abstractions.NullLogger<WslDistributionPeerHost>.Instance);
+
+    private static async Task DisposeWithinAsync(WslDistributionPeerHost host)
+    {
+        var disposing = Task.Run(host.Dispose, TestContext.Current.CancellationToken);
+        await Should.NotThrowAsync(() => disposing.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+    }
+
+    private static ProcessStartInfo ShortLivedChild() => OperatingSystem.IsWindows()
+        ? new ProcessStartInfo("cmd.exe", "/c exit 0") { UseShellExecute = false, CreateNoWindow = true }
+        : new ProcessStartInfo("sleep", "0.05") { UseShellExecute = false };
+
+    private static ProcessStartInfo LongLivedChild() => OperatingSystem.IsWindows()
+        ? new ProcessStartInfo("cmd.exe", "/c ping -n 60 127.0.0.1 >nul") { UseShellExecute = false, CreateNoWindow = true }
+        : new ProcessStartInfo("sleep", "60") { UseShellExecute = false };
+
     public static bool OnLinux => OperatingSystem.IsLinux();
 
     /// <summary>

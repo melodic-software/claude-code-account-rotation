@@ -6,6 +6,14 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Fixed
+
+- **A Windows leader no longer hangs on shutdown.** Stopping the leader after `/api/shutdown` had
+  already stopped the WSL side could wait forever: disposing the `wsl.exe` child and handling its
+  exit took the same two locks in opposite order. The leader now releases its own lock before it
+  kills or disposes the child, so an upgrade no longer stalls after "Application is shutting
+  down...".
+
 ## [2.3.0] - 2026-10-21
 
 ### Added

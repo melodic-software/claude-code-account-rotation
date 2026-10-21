@@ -28,20 +28,27 @@ namespace ClaudeCodeAccountRotation.App.Adapters.Peers;
 internal sealed partial class WslDistributionPeerHost : IPeerProcessHost, IDisposable
 {
     private readonly PeerLaunch _launch;
-    private readonly string _leaderVersion;
+    private readonly Func<ProcessStartInfo> _startInfo;
     private readonly ILogger<WslDistributionPeerHost> _logger;
     private readonly Lock _mutex = new();
     private System.Diagnostics.Process? _child;
     private bool _disposed;
 
     public WslDistributionPeerHost(SideName side, PeerLaunch launch, string leaderVersion, ILogger<WslDistributionPeerHost> logger)
+        : this(side, launch, () => StartInfo(launch, leaderVersion, Environment.GetEnvironmentVariable("WSLENV")), logger)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(leaderVersion);
+    }
+
+    /// <summary>Starts what <paramref name="startInfo"/> describes in place of <c>wsl.exe</c>, so a test can run a real child.</summary>
+    internal WslDistributionPeerHost(SideName side, PeerLaunch launch, Func<ProcessStartInfo> startInfo, ILogger<WslDistributionPeerHost> logger)
     {
         ArgumentNullException.ThrowIfNull(launch);
-        ArgumentException.ThrowIfNullOrWhiteSpace(leaderVersion);
+        ArgumentNullException.ThrowIfNull(startInfo);
         ArgumentNullException.ThrowIfNull(logger);
         Side = side;
         _launch = launch;
-        _leaderVersion = leaderVersion;
+        _startInfo = startInfo;
         _logger = logger;
     }
 
@@ -53,55 +60,106 @@ internal sealed partial class WslDistributionPeerHost : IPeerProcessHost, IDispo
     {
         get
         {
+            System.Diagnostics.Process? child;
             lock (_mutex)
             {
-                return _child is { HasExited: false };
+                child = _child;
             }
+
+            return IsAlive(child);
         }
     }
 
     public Task<Result<Unit, string>> StartAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_mutex)
+        while (true)
         {
-            if (_child is { HasExited: false })
+            System.Diagnostics.Process? seen;
+            lock (_mutex)
+            {
+                seen = _child;
+            }
+
+            if (IsAlive(seen))
             {
                 return Task.FromResult(Result<Unit, string>.Success(Unit.Value));
             }
 
-            if (_disposed)
+            System.Diagnostics.Process? stale;
+            Result<Unit, string> result;
+            lock (_mutex)
             {
-                return Task.FromResult(Result<Unit, string>.Failure("the leader is stopping"));
-            }
-
-            _child?.Dispose();
-            _child = null;
-
-            System.Diagnostics.Process child = new()
-            {
-                StartInfo = StartInfo(_launch, _leaderVersion, Environment.GetEnvironmentVariable("WSLENV")),
-                EnableRaisingEvents = true,
-            };
-            child.Exited += OnChildExited;
-            try
-            {
-                if (!child.Start())
+                if (_disposed)
                 {
-                    child.Dispose();
-                    return Task.FromResult(Result<Unit, string>.Failure("the " + Side.Value + " side could not be started: wsl.exe did not start"));
+                    return Task.FromResult(Result<Unit, string>.Failure("the leader is stopping"));
                 }
+
+                if (!ReferenceEquals(_child, seen))
+                {
+                    // Another start got here first; look at its child instead.
+                    continue;
+                }
+
+                stale = _child;
+                _child = null;
+                result = StartChild();
             }
-            catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or InvalidOperationException)
+
+            stale?.Dispose();
+            return Task.FromResult(result);
+        }
+    }
+
+    /// <summary>
+    /// Starts the child under <see cref="_mutex"/>, so two starts cannot both
+    /// spawn one. Nothing here touches the child once it is started: its exit
+    /// handler runs under the child's own lock and takes <see cref="_mutex"/>.
+    /// </summary>
+    private Result<Unit, string> StartChild()
+    {
+        System.Diagnostics.Process child = new()
+        {
+            StartInfo = _startInfo(),
+            EnableRaisingEvents = true,
+        };
+        child.Exited += OnChildExited;
+        try
+        {
+            if (!child.Start())
             {
                 child.Dispose();
-                LogStartFailed(Side.Value, exception.Message);
-                return Task.FromResult(Result<Unit, string>.Failure("the " + Side.Value + " side could not be started: " + exception.Message));
+                return Result<Unit, string>.Failure("the " + Side.Value + " side could not be started: wsl.exe did not start");
             }
+        }
+        catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            child.Dispose();
+            LogStartFailed(Side.Value, exception.Message);
+            return Result<Unit, string>.Failure("the " + Side.Value + " side could not be started: " + exception.Message);
+        }
 
-            _child = child;
-            LogStarted(Side.Value, _launch.Distribution);
-            return Task.FromResult(Result<Unit, string>.Success(Unit.Value));
+        _child = child;
+        LogStarted(Side.Value, _launch.Distribution);
+        return Result<Unit, string>.Success(Unit.Value);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="child"/> is still running. Never called under
+    /// <see cref="_mutex"/>: <see cref="System.Diagnostics.Process.HasExited"/>
+    /// can raise <see cref="System.Diagnostics.Process.Exited"/> under the
+    /// child's own lock, and that handler takes <see cref="_mutex"/>. A child
+    /// disposed meanwhile is not running.
+    /// </summary>
+    private static bool IsAlive(System.Diagnostics.Process? child)
+    {
+        try
+        {
+            return child is { HasExited: false };
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
         }
     }
 
@@ -179,25 +237,35 @@ internal sealed partial class WslDistributionPeerHost : IPeerProcessHost, IDispo
     /// </summary>
     public void Dispose()
     {
+        System.Diagnostics.Process? child;
         lock (_mutex)
         {
             // Before the kill, so the exit it causes is not reported as one to act on.
             _disposed = true;
-            try
-            {
-                if (_child is { HasExited: false })
-                {
-                    _child.Kill(entireProcessTree: true);
-                }
-            }
-            catch (Exception exception) when (exception is InvalidOperationException or NotSupportedException or System.ComponentModel.Win32Exception)
-            {
-                // The child is already gone, which is the outcome wanted.
-            }
-
-            _child?.Dispose();
+            child = _child;
             _child = null;
         }
+
+        // Outside _mutex: the child's exit handler takes _mutex under the
+        // child's own lock, which Kill and Dispose also take.
+        if (child is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (!child.HasExited)
+            {
+                child.Kill(entireProcessTree: true);
+            }
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or NotSupportedException or System.ComponentModel.Win32Exception)
+        {
+            // The child is already gone, which is the outcome wanted.
+        }
+
+        child.Dispose();
     }
 
     /// <summary>
