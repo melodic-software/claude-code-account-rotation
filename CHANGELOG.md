@@ -79,6 +79,9 @@ All notable changes to this project are documented in this file. The format foll
   `ciTokenGeneratedOn`. Downgrading to 2.2.0 drops `ciRoles` on its next roster write. 2.2.0 then
   reads every dated account as a marker set by hand, and its next edit to one dated account clears
   `ciTokenGeneratedOn` on the others (#259).
+- `POST /api/accounts/{email}/ci-token` with one organization `secretName` and no `visibility` now
+  reads the secret's visibility from GitHub and passes it back (a new secret is visible to all
+  repositories), where 2.1.0 made it private (#259).
 - The manual commands a failed CI token names now pass `--visibility all` (or `--repos`) to
   `gh secret set --org`, which otherwise makes the secret private. Writes through `gh secret set`
   run one at a time, at least a second apart, and a rate-limit answer is named as one (#259).

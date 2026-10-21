@@ -263,26 +263,34 @@ internal static partial class ApiKeyEndpoints
         }
 
         var today = DateOnly.FromDateTime(clock.GetLocalNow().DateTime);
-        RosterEntry? updated = null;
-        await rosterFile.UpdateAsync(
-            roster =>
-            {
-                updated = roster.Find(target);
-                foreach ((CiTokenSecret secret, DateTimeOffset setAt) in sent)
-                {
-                    if (updated?.CiRoles.FirstOrDefault(held => secret.Equals(held.Role.KeySecret)) is CiRoleAssignment held)
-                    {
-                        updated = updated.ClaimingKey(held.Role, today, setAt);
-                    }
-                }
-
-                return updated is null ? roster : roster.With(updated);
-            },
-            CancellationToken.None,
-            via: LaneVia.Push);
-
         string message = (sent.Count == 0 ? "No key secret was set." : "Set " + string.Join(", ", sent.Select(static half => half.Secret.ToString())) + " from " + target.Value + ".")
             + (failed.Count == 0 ? string.Empty : " Not set: " + string.Join("; ", failed) + ".");
+        RosterEntry? updated = null;
+        try
+        {
+            await rosterFile.UpdateAsync(
+                roster =>
+                {
+                    updated = roster.Find(target);
+                    foreach ((CiTokenSecret secret, DateTimeOffset setAt) in sent)
+                    {
+                        if (updated?.CiRoles.FirstOrDefault(held => secret.Equals(held.Role.KeySecret)) is CiRoleAssignment held)
+                        {
+                            updated = updated.ClaimingKey(held.Role, today, setAt);
+                        }
+                    }
+
+                    return updated is null ? roster : roster.With(updated);
+                },
+                CancellationToken.None,
+                via: LaneVia.Push);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // The secrets are set whatever went wrong here, so the answer says which.
+            return Failed(message + " The roster could not record it (" + exception.GetType().Name + "), so the card does not show it yet; push again to record it.");
+        }
+
         return Results.Ok(new ApiKeyPushView(DashboardAssembler.View(updated), message, failed.Count));
     }
 

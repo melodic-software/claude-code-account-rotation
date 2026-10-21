@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Adapters.Process;
+using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Identity;
@@ -163,6 +164,21 @@ public sealed class CiTokenRoleEndpointTests
     }
 
     [Fact]
+    public async Task AnOrganizationSecretNamedWithNoVisibilityKeepsTheOneGitHubHas()
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: false, TestContext.Current.CancellationToken);
+        await using AppFactory host = factory;
+        reader.Answers["orgs/octo/actions/secrets/MY_TOKEN"] = PathReader.Secret("MY_TOKEN", "selected");
+        reader.Answers["orgs/octo/actions/secrets/MY_TOKEN/repositories?per_page=100&page=1"] = PathReader.Repositories("a", "b");
+        using HttpClient client = factory.CreateMutatingClient();
+
+        await AssignAsync(client, new { secretName = "MY_TOKEN", organization = "octo" }, TestContext.Current.CancellationToken);
+
+        (CiTokenSecret secret, OrgSecretVisibility? visibility, IReadOnlyList<string> repositories, _) = factory.Secrets.Sets.Single();
+        string.Join(' ', GhSecretWriter.Arguments(secret, visibility, repositories)).ShouldEndWith("--org octo --repos a,b");
+    }
+
+    [Fact]
     public async Task ARoleWithAKeyHalfIsRefusedBeforeSetupTokenWhenTheAccountHasNoKey()
     {
         (AppFactory factory, PathReader reader) = await StartAsync(withKey: false, TestContext.Current.CancellationToken);
@@ -292,8 +308,8 @@ public sealed class CiTokenRoleEndpointTests
         factory.Secrets.Sets.Count.ShouldBe(6);
         // Every file the run left, but the instance lock, which the host holds open and which holds only its own token.
         string[] files = [.. Directory.EnumerateFiles(factory.Root, "*", SearchOption.AllDirectories)
-            .Where(static path => Path.GetFileName(path) != "instance.lock")
-            .Select(File.ReadAllText)];
+            .Where(static path => Path.GetFileName(path) != InstanceLock.FileName)
+            .Select(ReadShared)];
         string[] arguments = [.. factory.Secrets.Sets.Select(static set => string.Join(' ', GhSecretWriter.Arguments(set.Secret, set.Visibility, set.Repositories)))];
         foreach (string planted in new[] { SetupTokenScript.Token, PlantedKey })
         {
@@ -302,6 +318,14 @@ public sealed class CiTokenRoleEndpointTests
             files.ShouldAllBe(text => !text.Contains(planted, StringComparison.Ordinal));
             arguments.ShouldAllBe(text => !text.Contains(planted, StringComparison.Ordinal));
         }
+    }
+
+    /// <summary>A file's text, read beside the host, which may still hold it open.</summary>
+    private static string ReadShared(string path)
+    {
+        using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using StreamReader reader = new(stream);
+        return reader.ReadToEnd();
     }
 
     /// <summary>

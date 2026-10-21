@@ -81,10 +81,25 @@ internal static partial class CiTokenEndpoints
                 request = new CiTokenRequest(parsed.Value, secret.Value, visibility, repositories);
             }
 
+            CiTokenSecret? unnamed = request?.Roles[0].Token is { Visibility: null, Secret.Scope: CiSecretScope.Organization } target ? target.Secret : null;
+
             RosterEntry? entry = (await rosterFile.ReadAsync(cancellationToken)).Find(parsed.Value);
             if (entry is null)
             {
                 return Refused("NotOnRoster", parsed.Value.Value + " is not on the roster; add it first so its browser mapping is known.");
+            }
+
+            if (unnamed is not null)
+            {
+                // An organization secret named with no visibility keeps the one
+                // it has: gh would otherwise make it private.
+                Result<SecretTarget, GhApiFailure> read = await github.ReadAccessAsync(unnamed, cancellationToken);
+                if (read.IsFailure)
+                {
+                    return Refused("SecretUnreadable", Describe(read.Error));
+                }
+
+                request = new CiTokenRequest(parsed.Value, unnamed, read.Value.Visibility, read.Value.Repositories);
             }
 
             if (roles.Value is IReadOnlyList<CiRole> named)
@@ -237,8 +252,8 @@ internal static partial class CiTokenEndpoints
 
     /// <summary>
     /// Who may read an organization secret. A repository secret takes neither
-    /// field; an organization secret defaults to private, the way <c>gh</c> does,
-    /// and <c>selected</c> needs the repositories, by name, that may read it.
+    /// field; an organization secret with neither keeps what GitHub has (null
+    /// here), and <c>selected</c> needs the repositories, by name, that may read it.
     /// </summary>
     private static Result<(OrgSecretVisibility?, IReadOnlyList<string>), string> ParseAccess(JsonObject body, CiTokenSecret secret)
     {
@@ -253,9 +268,17 @@ internal static partial class CiTokenEndpoints
                 : Result<(OrgSecretVisibility?, IReadOnlyList<string>), string>.Failure("visibility and repositories apply to an organization secret only");
         }
 
+        // None named: the caller reads it back from GitHub (see ReadAccessAsync).
+        if (visibility is null)
+        {
+            return repositories.Count == 0
+                ? Result<(OrgSecretVisibility?, IReadOnlyList<string>), string>.Success((null, []))
+                : Result<(OrgSecretVisibility?, IReadOnlyList<string>), string>.Failure("repositories apply only to selected visibility");
+        }
+
         OrgSecretVisibility? parsed = visibility switch
         {
-            null or "private" => OrgSecretVisibility.Private,
+            "private" => OrgSecretVisibility.Private,
             "all" => OrgSecretVisibility.All,
             "selected" => OrgSecretVisibility.Selected,
             _ => null,
