@@ -455,6 +455,22 @@ test("the API key badge shows only once the roster records a stored key, and nam
   assert.match(badge.title, /2026-10-20/);
 });
 
+test("the Check API key toast shows each status, a near expiry, a key it cannot tell, and a refusal", () => {
+  const { apiKeyCheckToast } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+  const found = (status, flag, expiresAt) => ({ ok: true, body: { outcome: "found", name: "ci", status: status, flag: flag, expiresAt: expiresAt || null } });
+  assert.deepStrictEqual(apiKeyCheckToast(found("archived", "archived")), { text: "The Console API key \"ci\" is archived.", kind: "error" });
+  assert.deepStrictEqual(apiKeyCheckToast(found("inactive", "inactive")), { text: "The Console API key \"ci\" is inactive.", kind: "error" });
+  assert.deepStrictEqual(apiKeyCheckToast(found("expired", "expired", "2026-10-01T00:00:00Z")), { text: "The Console API key \"ci\" has expired (2026-10-01).", kind: "error" });
+  assert.deepStrictEqual(apiKeyCheckToast(found("active", "expiresSoon", "2026-11-01T00:00:00Z")), { text: "The Console API key \"ci\" expires on 2026-11-01.", kind: "warn" });
+  assert.deepStrictEqual(apiKeyCheckToast(found("active", null)), { text: "The Console API key \"ci\" is active.", kind: "ok" });
+  assert.deepStrictEqual(
+    apiKeyCheckToast({ ok: true, body: { outcome: "cannotTell", reason: "2 keys fit this key's hint" } }),
+    { text: "Cannot tell which listed key is this account's Console API key: 2 keys fit this key's hint.", kind: "warn" });
+  assert.deepStrictEqual(
+    apiKeyCheckToast({ ok: false, body: { refusal: "AdminApiUnavailable", message: "Admin API unavailable for this account (403)." } }),
+    { text: "Refused: Admin API unavailable for this account (403).", kind: "error" });
+});
+
 const { roleCheckLines } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
 
 test("roleCheckLines names each role, its holder and its verdicts, and marks a change outside the tool", () => {

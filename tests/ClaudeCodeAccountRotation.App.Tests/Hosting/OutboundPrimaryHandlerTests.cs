@@ -28,7 +28,7 @@ public sealed class OutboundPrimaryHandlerTests
     }
 
     [Fact]
-    public void BothOutboundClientsInstallThatHandler()
+    public void EveryOutboundClientInstallsThatHandler()
     {
         CapturingFilter captured = new();
         ServiceCollection services = new();
@@ -39,17 +39,17 @@ public sealed class OutboundPrimaryHandlerTests
         IHttpClientFactory factory = provider.GetRequiredService<IHttpClientFactory>();
         using HttpClient usage = factory.CreateClient(nameof(AnthropicUsageEndpointClient));
         using HttpClient tokens = factory.CreateClient(nameof(ClaudeOAuthTokenRefreshClient));
+        using HttpClient admin = factory.CreateClient(nameof(AnthropicAdminKeysClient));
 
-        captured.Handlers.Count.ShouldBe(2);
+        captured.Handlers.Count.ShouldBe(3);
         captured.Handlers.Select(handler => handler.GetType()).ShouldAllBe(type => type == typeof(SocketsHttpHandler));
         SocketsHttpHandler[] sockets = captured.Handlers.Cast<SocketsHttpHandler>().ToArray();
-        sockets[0].AllowAutoRedirect.ShouldBeFalse();
-        sockets[1].AllowAutoRedirect.ShouldBeFalse();
-        sockets[0].PooledConnectionLifetime.ShouldBe(TimeSpan.FromMinutes(2));
-        sockets[1].PooledConnectionLifetime.ShouldBe(TimeSpan.FromMinutes(2));
-        ReferenceEquals(sockets[0], sockets[1]).ShouldBeFalse();
+        sockets.ShouldAllBe(socket => !socket.AllowAutoRedirect);
+        sockets.ShouldAllBe(socket => socket.PooledConnectionLifetime == TimeSpan.FromMinutes(2));
+        sockets.Distinct().Count().ShouldBe(3);
         usage.ShouldNotBeNull();
         tokens.ShouldNotBeNull();
+        admin.ShouldNotBeNull();
     }
 
     private sealed class CapturingFilter : IHttpMessageHandlerBuilderFilter
