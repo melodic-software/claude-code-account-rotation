@@ -7,10 +7,11 @@ using ClaudeCodeAccountRotation.Core.Accounts;
 namespace ClaudeCodeAccountRotation.App.Adapters.Process;
 
 /// <summary>
-/// Why a <c>gh api</c> read gave no answer. A rate limit ends whatever asked;
-/// nothing retries it. <paramref name="NotFound"/> is GitHub's 404.
+/// Why a <c>gh api</c> call gave no answer. A rate limit ends whatever asked;
+/// nothing retries it. <paramref name="Status"/> is the HTTP status GitHub
+/// answered with, or null when none was seen.
 /// </summary>
-internal sealed record GhApiFailure(string Message, bool RateLimited, bool NotFound = false);
+internal sealed record GhApiFailure(string Message, bool RateLimited, int? Status = null);
 
 /// <summary>Reads the GitHub REST API through <c>gh api</c>, one GET per call, so the request carries gh's own User-Agent and sign-in.</summary>
 internal interface IGhApiReader
@@ -81,7 +82,7 @@ internal sealed class GhApiReader(string executable, TimeSpan timeout) : IGhApiR
             return Result<JsonNode, GhApiFailure>.Failure(new GhApiFailure(
                 answered + " for " + path + "; check `gh auth status`, the name, and that the sign-in may read it (admin:org for organization secrets)",
                 RateLimited: false,
-                NotFound: status == 404));
+                status == 0 ? null : status));
         }
 
         try
@@ -96,7 +97,8 @@ internal sealed class GhApiReader(string executable, TimeSpan timeout) : IGhApiR
         }
     }
 
-    private static bool RateLimited(int status, string[] head, string body)
+    /// <summary>Whether a 403 or 429 answer is a rate limit, by its headers (the status line first) and its body's message.</summary>
+    internal static bool RateLimited(int status, string[] head, string body)
     {
         if (status == 429 || Header(head, "x-ratelimit-remaining") == "0" || Header(head, "retry-after") is not null)
         {
@@ -224,7 +226,7 @@ internal static class GhApiReads
         Result<JsonNode, GhApiFailure> read = await reader.GetAsync(path, cancellationToken);
         if (read.IsFailure)
         {
-            return read.Error.NotFound
+            return read.Error.Status == 404 && !read.Error.RateLimited
                 ? Result<SecretTarget, GhApiFailure>.Success(new SecretTarget(secret, OrgSecretVisibility.All, []))
                 : Result<SecretTarget, GhApiFailure>.Failure(read.Error);
         }
@@ -273,6 +275,105 @@ internal static class GhApiReads
 
         return Result<SecretTarget, GhApiFailure>.Failure(new GhApiFailure(
             "the repository list for " + secret + " ran past " + MaxPages.ToString(CultureInfo.InvariantCulture) + " pages, so it was not set",
+            RateLimited: false));
+    }
+
+    /// <summary>
+    /// The value of one Actions variable at <paramref name="path"/>
+    /// (<c>orgs/{org}/actions/variables/{name}</c> or
+    /// <c>repos/{owner}/{repo}/actions/variables/{name}</c>), or null when
+    /// GitHub answers 404: the variable does not exist. Every name in the path
+    /// must already be held to GitHub's rules.
+    /// Basis: https://docs.github.com/en/rest/actions/variables#get-an-organization-variable.
+    /// </summary>
+    public static async Task<Result<string?, GhApiFailure>> GetVariableAsync(
+        this IGhApiReader reader,
+        string path,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(reader);
+        Result<JsonNode, GhApiFailure> read = await reader.GetAsync(path, cancellationToken);
+        if (read.IsFailure)
+        {
+            return read.Error.Status == 404 && !read.Error.RateLimited
+                ? Result<string?, GhApiFailure>.Success(null)
+                : Result<string?, GhApiFailure>.Failure(read.Error);
+        }
+
+        return read.Value["value"] is JsonValue value && value.TryGetValue(out string? text)
+            ? Result<string?, GhApiFailure>.Success(text)
+            : Result<string?, GhApiFailure>.Failure(new GhApiFailure("GitHub's answer for " + path + " was not in the shape its documentation gives", RateLimited: false));
+    }
+
+    /// <summary>
+    /// The current visibility of an organization variable: <c>all</c>,
+    /// <c>private</c>, or <c>selected</c> with every selected repository's id,
+    /// a page per call until a page comes back short. Any failure, a 404
+    /// included, is returned as it came, so the caller writes nothing.
+    /// Basis: https://docs.github.com/en/rest/actions/variables#get-an-organization-variable and
+    /// https://docs.github.com/en/rest/actions/variables#list-selected-repositories-for-an-organization-variable.
+    /// </summary>
+    public static async Task<Result<VariableVisibility, GhApiFailure>> GetOrganizationVariableVisibilityAsync(
+        this IGhApiReader reader,
+        string organization,
+        string name,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(reader);
+        string path = "orgs/" + organization + "/actions/variables/" + name;
+        Result<JsonNode, GhApiFailure> read = await reader.GetAsync(path, cancellationToken);
+        if (read.IsFailure)
+        {
+            return Result<VariableVisibility, GhApiFailure>.Failure(read.Error);
+        }
+
+        string? kind = read.Value["visibility"] is JsonValue visibility && visibility.TryGetValue(out string? text) ? text : null;
+        if (kind is not ("all" or "private" or "selected"))
+        {
+            return Result<VariableVisibility, GhApiFailure>.Failure(new GhApiFailure("GitHub gave no visibility GitHub documents for " + path, RateLimited: false));
+        }
+
+        if (kind != "selected")
+        {
+            return Result<VariableVisibility, GhApiFailure>.Success(new VariableVisibility(kind, []));
+        }
+
+        List<long> ids = [];
+        for (int page = 1; page <= MaxPages; page++)
+        {
+            string listing = path + "/repositories?per_page=" + PageSize.ToString(CultureInfo.InvariantCulture) + "&page=" + page.ToString(CultureInfo.InvariantCulture);
+            Result<JsonNode, GhApiFailure> listed = await reader.GetAsync(listing, cancellationToken);
+            if (listed.IsFailure)
+            {
+                return Result<VariableVisibility, GhApiFailure>.Failure(listed.Error);
+            }
+
+            if (listed.Value["repositories"] is not JsonArray repositories)
+            {
+                return Result<VariableVisibility, GhApiFailure>.Failure(new GhApiFailure("GitHub's repository list for " + path + " was not in the shape its documentation gives", RateLimited: false));
+            }
+
+            foreach (JsonNode? repository in repositories)
+            {
+                // Read from its JSON text, so an id held as any integer type reads the same.
+                if (repository?["id"] is not JsonValue id
+                    || id.GetValueKind() != JsonValueKind.Number
+                    || !long.TryParse(id.ToJsonString(), NumberStyles.None, CultureInfo.InvariantCulture, out long number))
+                {
+                    return Result<VariableVisibility, GhApiFailure>.Failure(new GhApiFailure("GitHub listed a repository with no id for " + path, RateLimited: false));
+                }
+
+                ids.Add(number);
+            }
+
+            if (repositories.Count < PageSize)
+            {
+                return Result<VariableVisibility, GhApiFailure>.Success(new VariableVisibility(kind, ids));
+            }
+        }
+
+        return Result<VariableVisibility, GhApiFailure>.Failure(new GhApiFailure(
+            "the repository list for " + path + " ran past " + MaxPages.ToString(CultureInfo.InvariantCulture) + " pages, so nothing was written",
             RateLimited: false));
     }
 }

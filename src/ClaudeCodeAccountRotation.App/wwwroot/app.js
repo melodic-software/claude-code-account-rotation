@@ -44,6 +44,8 @@
     module.exports.assignableRoles = assignableRoles;
     module.exports.newRoleItem = newRoleItem;
     module.exports.ciPanelWords = ciPanelWords;
+    module.exports.killSwitchRows = killSwitchRows;
+    module.exports.toggleKillSwitch = toggleKillSwitch;
     return;
   }
 
@@ -1656,6 +1658,39 @@
     return lines;
   }
 
+  // The kill switches Check roles read, one row each. The server decides
+  // running or stopped. An organization switch that exists and was read
+  // carries the toggle that flips it; a repository switch never does, and
+  // neither does one that is missing or could not be read.
+  function killSwitchRows(view) {
+    return (view.killSwitches || []).map(function (item) {
+      var where = item.scope === "repository" ? " in " + item.owner : " in org " + item.owner;
+      var said = item.error ? "could not be read: " + item.error
+        : item.state + " (" + (item.exists ? item.value : "not set") + ")";
+      var toggle = null;
+      if (item.writable && item.scope === "organization" && item.exists && item.state) {
+        var stopping = item.state === "running";
+        toggle = {
+          label: stopping ? "Stop" : "Start",
+          question: (stopping ? "Stop" : "Start") + " every lane " + item.name + " governs in org " + item.owner + "?\n\n"
+            + "This sets the organization variable " + item.name + " to " + (stopping ? "true" : "false") + " on GitHub, sending back the visibility it has now.",
+          body: { org: item.owner, name: item.name, value: stopping ? "true" : "false" }
+        };
+      }
+      return {
+        kind: item.error ? "crit" : item.state === "running" ? "ok" : "warn",
+        text: item.name + where + " · " + said + (item.writable ? "" : " · read-only"),
+        toggle: toggle
+      };
+    });
+  }
+
+  // Flips one switch only once the operator confirms; a cancel sends nothing.
+  function toggleKillSwitch(toggle, ask, post) {
+    if (!toggle || !ask(toggle.question)) { return Promise.resolve(null); }
+    return post("/api/kill-switches", "POST", toggle.body);
+  }
+
   function sentence(account, at) {
     if (account.cliLoggedOut) {
       return { kind: "crit", text: "Logged out" + (account.loggedOutOn ? " on " + sideLabel(account.loggedOutOn) : "") };
@@ -2303,10 +2338,32 @@
             if (line.title) { item.title = line.title; }
             found.appendChild(item);
           });
+          killSwitchRows(result.body).forEach(function (row) { found.appendChild(killSwitchItem(row)); });
         })
         .catch(function (error) { status.textContent = "Request failed: " + error; })
         .then(function () { busy = false; setButtonsDisabled(false); });
     });
+
+    // One kill switch, with its toggle when it has one. A flip that went
+    // through redraws the row from the server's re-read.
+    function killSwitchItem(row) {
+      var item = element("li", row.kind === "ok" ? "muted" : "say " + row.kind, row.text);
+      if (!row.toggle) { return item; }
+      item.appendChild(document.createTextNode(" "));
+      item.appendChild(actionButton(row.toggle.label, "secondary sm", function () {
+        busy = true;
+        setButtonsDisabled(true);
+        toggleKillSwitch(row.toggle, function (question) { return window.confirm(question); }, send)
+          .then(function (result) {
+            if (!result) { return; }
+            if (!result.ok) { showToast(refused(result.body), "error"); return; }
+            item.replaceWith(killSwitchItem(killSwitchRows({ killSwitches: [result.body] })[0]));
+          })
+          .catch(function (error) { showToast("Request failed: " + error, "error"); })
+          .then(function () { busy = false; setButtonsDisabled(false); });
+      }));
+      return item;
+    }
   })();
 
   function showStopped(sides) {

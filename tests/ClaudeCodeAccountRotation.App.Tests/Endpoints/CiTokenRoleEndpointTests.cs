@@ -333,7 +333,7 @@ public sealed class CiTokenRoleEndpointTests
         });
 
         public static Result<JsonNode, GhApiFailure> NotFound() =>
-            Result<JsonNode, GhApiFailure>.Failure(new GhApiFailure("GitHub answered HTTP 404", RateLimited: false, NotFound: true));
+            Result<JsonNode, GhApiFailure>.Failure(new GhApiFailure("GitHub answered HTTP 404", RateLimited: false, Status: 404));
 
         public Task<Result<JsonNode, GhApiFailure>> GetAsync(string path, CancellationToken cancellationToken)
         {
