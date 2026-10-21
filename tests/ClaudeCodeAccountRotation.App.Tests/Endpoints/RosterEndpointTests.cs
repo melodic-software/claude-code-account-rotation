@@ -725,11 +725,10 @@ public sealed class RosterEndpointTests
         script.ShouldContain("labeled(form, \"Notes\", notes)");
         script.ShouldContain("body.notes = notes.value.trim() || null");
         script.ShouldContain("labeled(container, \"Display name\", alias)");
-        // The CI token marker: an edit-panel date field, presence-based on save
-        // like every other field, and a badge that shows on whichever one card
-        // carries it.
+        // The CI token marker: an edit-panel date field, sent on save only when
+        // changed, and a badge that shows on whichever one card carries it.
         script.ShouldContain("ciToken.type = \"date\"");
-        script.ShouldContain("body.ciTokenGeneratedOn = ciToken.value || null");
+        script.ShouldContain("changedCiTokenDate(account.roster, ciToken.value)");
         script.ShouldContain("badge ci-token");
         // Leaving the field by pressing another control must not disable that
         // control before its click runs, and opening Edit must not refresh the card.

@@ -57,6 +57,34 @@ public sealed class ClaudeCliSetupTokenRunnerRoleTests : IDisposable
         history.ShouldNotContain(SetupTokenScript.Token);
     }
 
+    [Fact]
+    public async Task AnAccountRemovedWhileItsSessionRanIsNotPutBackAndTheHalfItSetLeavesThePreviousHolder()
+    {
+        AccountEmail email = AccountEmail.Parse("ci@example.com").Value;
+        AccountEmail previous = AccountEmail.Parse("previous@example.com").Value;
+        CiRole automations = new("AUTOMATIONS", CiSecretScope.Organization, "octo");
+        CiRole reviews = new("REVIEWS", CiSecretScope.Organization, "octo");
+        await _roster.UpdateAsync(
+            roster => roster
+                .With(new RosterEntry(email))
+                .With(new RosterEntry(previous).ClaimingToken(automations, new DateOnly(2026, 1, 1), null).ClaimingToken(reviews, new DateOnly(2026, 1, 1), null)),
+            TestContext.Current.CancellationToken);
+        using ClaudeCliSetupTokenRunner runner = new(_script.Start, _secrets, _roster, new UtcClock(_now), new RecordingLogger<ClaudeCliSetupTokenRunner>(), TimeSpan.FromSeconds(10));
+        CiTokenSecret secret = CiTokenSecret.Parse("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", null, "octo").Value;
+
+        LoginSession started = (await runner.StartAsync(new CiTokenRequest(email, secret, OrgSecretVisibility.All, []), TestContext.Current.CancellationToken)).Value;
+        await _roster.UpdateAsync(roster => roster.Without(email), TestContext.Current.CancellationToken);
+        await runner.SubmitCodeAsync(started.Id, "code#state", TestContext.Current.CancellationToken);
+        await runner.FinishedAsync(started.Id);
+
+        LoginSession settled = runner.Status(started.Id)!;
+        settled.State.ShouldBe(LoginSessionState.Completed);
+        settled.Message!.ShouldContain("the roster was not updated because that account was removed");
+        Roster stored = await _roster.ReadAsync(TestContext.Current.CancellationToken);
+        stored.Find(email).ShouldBeNull();
+        stored.Find(previous)!.CiRoles.ShouldBe([new CiRoleAssignment(reviews, new DateOnly(2026, 1, 1))]);
+    }
+
     /// <summary>A fixed clock whose local zone is UTC, so the day it reads is the same on every machine.</summary>
     private sealed class UtcClock(DateTimeOffset now) : TimeProvider
     {

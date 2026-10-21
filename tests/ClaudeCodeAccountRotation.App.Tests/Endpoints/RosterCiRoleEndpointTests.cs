@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Identity;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Endpoints;
 
@@ -14,6 +15,8 @@ public sealed class RosterCiRoleEndpointTests
     private const string NewEmail = "new@example.com";
 
     private static readonly Uri _accounts = new("/api/accounts", UriKind.Relative);
+    private static readonly CiRole _automations = new("AUTOMATIONS", CiSecretScope.Organization, "octo");
+    private static readonly CiRole _reviews = new("REVIEWS", CiSecretScope.Organization, "octo");
 
     private static Uri Account(string email) => new("/api/accounts/" + Uri.EscapeDataString(email), UriKind.Relative);
 
@@ -38,8 +41,11 @@ public sealed class RosterCiRoleEndpointTests
         return await client.PatchAsync(Account(NewEmail), content, TestContext.Current.CancellationToken);
     }
 
+    private static Task<Roster> SeedAsync(AppFactory factory, Func<Roster, Roster> change, string via = LaneVia.Edit) =>
+        factory.Services.GetRequiredService<RosterFile>().UpdateAsync(change, TestContext.Current.CancellationToken, via);
+
     [Fact]
-    public async Task AKeyHalfNeedsNoTokenDate()
+    public async Task ARoleHalfTheAccountDoesNotHoldIsRefusedAndNothingChanges()
     {
         await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
         using HttpClient client = factory.CreateMutatingClient();
@@ -49,10 +55,49 @@ public sealed class RosterCiRoleEndpointTests
             client,
             """{ "ciRoles": [ { "prefix": "AUTOMATIONS", "organization": "octo", "keySetOn": "2026-10-01" } ] }""");
 
-        response.StatusCode.ShouldBe(HttpStatusCode.OK);
-        RosterEntry stored = await StoredAsync(factory, TestContext.Current.CancellationToken);
-        stored.CiRoles.ShouldBe([new CiRoleAssignment(new CiRole("AUTOMATIONS", CiSecretScope.Organization, "octo"), KeySetOn: new DateOnly(2026, 10, 1))]);
-        stored.CiTokenGeneratedOn.ShouldBeNull();
+        response.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["refusal"]!.GetValue<string>().ShouldBe("RoleHalfNotHeld");
+        (await StoredAsync(factory, TestContext.Current.CancellationToken)).CiRoles.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task AStaleFormThatUnticksOneRoleLeavesTheRoleAnotherAccountTookSinceWithIt()
+    {
+        // A backs R and S; B is then assigned R; A's form, drawn before that, unticks S.
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        AccountEmail a = AccountEmail.Parse(NewEmail).Value;
+        AccountEmail b = AccountEmail.Parse("other@example.com").Value;
+        DateOnly january = new(2026, 1, 15);
+        await SeedAsync(factory, roster => roster.With(new RosterEntry(a)
+            .ClaimingToken(_automations, january, null).ClaimingKey(_automations, january, null)
+            .ClaimingToken(_reviews, january, null).ClaimingKey(_reviews, january, null)));
+        DateTimeOffset assignedAt = new(2026, 10, 6, 9, 0, 0, TimeSpan.Zero);
+        await SeedAsync(
+            factory,
+            roster => roster.With(new RosterEntry(b).ClaimingToken(_automations, new DateOnly(2026, 10, 6), assignedAt).ClaimingKey(_automations, new DateOnly(2026, 10, 6), assignedAt)),
+            LaneVia.Assign);
+
+        // The older whole-list body, as a stale page drew it, still names R with A's dates.
+        using HttpResponseMessage stale = await PatchAsync(
+            client,
+            """{ "ciRoles": [ { "prefix": "AUTOMATIONS", "organization": "octo", "tokenSetOn": "2026-01-15", "keySetOn": "2026-01-15" } ] }""");
+        using HttpResponseMessage removed = await PatchAsync(
+            client,
+            """{ "removeCiRoles": [ { "tokenSecret": "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", "organization": "octo" } ] }""");
+
+        stale.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        removed.StatusCode.ShouldBe(HttpStatusCode.OK);
+        Roster roster = await factory.Services.GetRequiredService<RosterFile>().ReadAsync(TestContext.Current.CancellationToken);
+        roster.Find(a)!.CiRoles.ShouldBeEmpty();
+        CiRoleAssignment kept = roster.Find(b)!.CiRoles.Single();
+        kept.Role.ShouldBe(_automations);
+        kept.TokenSetAt.ShouldBe(assignedAt);
+        kept.KeySetAt.ShouldBe(assignedAt);
+        JsonArray history = (await client.GetFromJsonAsync<JsonArray>(new Uri("/api/lane-history", UriKind.Relative), TestContext.Current.CancellationToken))!;
+        List<(string?, string?)> moves = [.. history.Select(static line => ((string?)line!["previous"], (string?)line["account"]))];
+        moves.ShouldContain((a.Value, b.Value));
+        moves.ShouldNotContain((b.Value, a.Value));
     }
 
     [Theory]
@@ -79,29 +124,19 @@ public sealed class RosterCiRoleEndpointTests
         await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
         using HttpClient client = factory.CreateMutatingClient();
         await client.PostAsJsonAsync(_accounts, new { email = NewEmail }, TestContext.Current.CancellationToken);
-        (await PatchAsync(
-            client,
-            """
-            { "ciTokenGeneratedOn": "2026-10-06", "ciRoles": [
-              { "prefix": "AUTOMATIONS", "organization": "octo", "tokenSetOn": "2026-10-06" },
-              { "prefix": "REVIEWS", "organization": "octo", "tokenSetOn": "2026-09-01", "keySetOn": "2026-09-01" } ] }
-            """)).StatusCode.ShouldBe(HttpStatusCode.OK);
+        await SeedAsync(factory, roster => roster.With(roster.Find(AccountEmail.Parse(NewEmail).Value)!
+            .ClaimingToken(_automations, new DateOnly(2026, 10, 6), null)
+            .ClaimingToken(_reviews, new DateOnly(2026, 9, 1), null).ClaimingKey(_reviews, new DateOnly(2026, 9, 1), null)));
 
-        // The Edit form sends the date field back on every save.
         (await PatchAsync(
             client,
-            """
-            { "ciTokenGeneratedOn": "2026-10-06", "ciRoles": [
-              { "prefix": "REVIEWS", "organization": "octo", "tokenSetOn": "2026-09-01", "keySetOn": "2026-09-01" } ] }
-            """)).StatusCode.ShouldBe(HttpStatusCode.OK);
+            """{ "removeCiRoles": [ { "prefix": "AUTOMATIONS", "organization": "octo" } ] }""")).StatusCode.ShouldBe(HttpStatusCode.OK);
         (await StoredAsync(factory, TestContext.Current.CancellationToken)).CiTokenGeneratedOn.ShouldBe(new DateOnly(2026, 9, 1));
 
+        // The whole-list body may still drop a half the account holds.
         (await PatchAsync(
             client,
-            """
-            { "ciTokenGeneratedOn": "2026-10-06", "ciRoles": [
-              { "prefix": "REVIEWS", "organization": "octo", "keySetOn": "2026-09-01" } ] }
-            """)).StatusCode.ShouldBe(HttpStatusCode.OK);
+            """{ "ciRoles": [ { "prefix": "REVIEWS", "organization": "octo", "keySetOn": "2026-09-01" } ] }""")).StatusCode.ShouldBe(HttpStatusCode.OK);
         RosterEntry stored = await StoredAsync(factory, TestContext.Current.CancellationToken);
         stored.CiTokenGeneratedOn.ShouldBeNull();
         stored.CiRoles.Single().KeySetOn.ShouldBe(new DateOnly(2026, 9, 1));
@@ -113,17 +148,30 @@ public sealed class RosterCiRoleEndpointTests
         await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
         using HttpClient client = factory.CreateMutatingClient();
         await client.PostAsJsonAsync(_accounts, new { email = NewEmail }, TestContext.Current.CancellationToken);
-        (await PatchAsync(
-            client,
-            """{ "ciRoles": [ { "prefix": "AUTOMATIONS", "organization": "octo", "tokenSetOn": "2026-01-15" } ] }""")).StatusCode.ShouldBe(HttpStatusCode.OK);
+        await SeedAsync(factory, roster => roster.With(roster.Find(AccountEmail.Parse(NewEmail).Value)!.ClaimingToken(_automations, new DateOnly(2026, 1, 15), null)));
 
         using HttpResponseMessage response = await PatchAsync(
             client,
-            """{ "ciTokenGeneratedOn": "2026-10-06", "ciRoles": [], "ciTokenSecret": { "name": "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", "organization": "octo" } }""");
+            """{ "ciTokenGeneratedOn": "2026-10-06", "removeCiRoles": [ { "prefix": "AUTOMATIONS", "organization": "octo" } ], "ciTokenSecret": { "name": "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", "organization": "octo" } }""");
 
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
         RosterEntry stored = await StoredAsync(factory, TestContext.Current.CancellationToken);
-        stored.CiRoles.ShouldBe([new CiRoleAssignment(new CiRole("REVIEWS", CiSecretScope.Organization, "octo"), new DateOnly(2026, 10, 6))]);
+        stored.CiRoles.ShouldBe([new CiRoleAssignment(_reviews, new DateOnly(2026, 10, 6))]);
+        stored.CiTokenGeneratedOn.ShouldBe(new DateOnly(2026, 10, 6));
+    }
+
+    [Fact]
+    public async Task AnEditWithNoDateKeepsTokenHalvesSetSinceTheFormWasDrawn()
+    {
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        await client.PostAsJsonAsync(_accounts, new { email = NewEmail }, TestContext.Current.CancellationToken);
+        await SeedAsync(factory, roster => roster.With(roster.Find(AccountEmail.Parse(NewEmail).Value)!.ClaimingToken(_automations, new DateOnly(2026, 10, 6), null)), LaneVia.Assign);
+
+        (await PatchAsync(client, """{ "notes": "edited" }""")).StatusCode.ShouldBe(HttpStatusCode.OK);
+
+        RosterEntry stored = await StoredAsync(factory, TestContext.Current.CancellationToken);
+        stored.CiRoles.ShouldBe([new CiRoleAssignment(_automations, new DateOnly(2026, 10, 6))]);
         stored.CiTokenGeneratedOn.ShouldBe(new DateOnly(2026, 10, 6));
     }
 
@@ -133,14 +181,11 @@ public sealed class RosterCiRoleEndpointTests
         await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
         using HttpClient client = factory.CreateMutatingClient();
         await client.PostAsJsonAsync(_accounts, new { email = NewEmail }, TestContext.Current.CancellationToken);
+        await SeedAsync(factory, roster => roster.With(roster.Find(AccountEmail.Parse(NewEmail).Value)!
+            .ClaimingToken(_automations, new DateOnly(2026, 10, 6), null)
+            .ClaimingToken(_reviews, new DateOnly(2026, 3, 1), null)));
 
-        using HttpResponseMessage response = await PatchAsync(
-            client,
-            """
-            { "ciTokenGeneratedOn": "2026-01-15", "ciRoles": [
-              { "prefix": "AUTOMATIONS", "organization": "octo", "tokenSetOn": "2026-10-06" },
-              { "prefix": "REVIEWS", "organization": "octo", "tokenSetOn": "2026-03-01" } ] }
-            """);
+        using HttpResponseMessage response = await PatchAsync(client, """{ "ciTokenGeneratedOn": "2026-01-15" }""");
 
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
         (await StoredAsync(factory, TestContext.Current.CancellationToken)).CiTokenGeneratedOn.ShouldBe(new DateOnly(2026, 10, 6));
@@ -152,13 +197,10 @@ public sealed class RosterCiRoleEndpointTests
         await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
         using HttpClient client = factory.CreateMutatingClient();
         await client.PostAsJsonAsync(_accounts, new { email = NewEmail }, TestContext.Current.CancellationToken);
-        (await PatchAsync(
-            client,
-            """
-            { "ciRoles": [
-              { "prefix": "AUTOMATIONS", "organization": "octo", "tokenSetOn": "2026-10-06", "tokenSetAt": "2026-10-06T14:30:05+00:00", "keySetOn": "2026-10-02" },
-              { "tokenSecret": "CLAUDE_CODE_OAUTH_TOKEN", "repository": "octo/lane-one", "tokenSetOn": "2026-09-01" } ] }
-            """)).StatusCode.ShouldBe(HttpStatusCode.OK);
+        await SeedAsync(factory, roster => roster.With(roster.Find(AccountEmail.Parse(NewEmail).Value)!
+            .ClaimingToken(_automations, new DateOnly(2026, 10, 6), new DateTimeOffset(2026, 10, 6, 14, 30, 5, TimeSpan.Zero))
+            .ClaimingKey(_automations, new DateOnly(2026, 10, 2), null)
+            .ClaimingToken(new CiRole(string.Empty, CiSecretScope.Repository, "octo/lane-one"), new DateOnly(2026, 9, 1), null)));
 
         JsonObject dashboard = (await client.GetFromJsonAsync<JsonObject>(new Uri("/api/dashboard", UriKind.Relative), TestContext.Current.CancellationToken))!;
         JsonNode roster = dashboard["accounts"]!.AsArray().Single(card => card!["email"]!.GetValue<string>() == NewEmail)!["roster"]!;

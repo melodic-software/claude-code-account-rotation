@@ -291,7 +291,9 @@ internal static partial class RoleEndpoints
                     : Results.Json(new { error = "nothing was written: " + visibility.Error.Message }, statusCode: StatusCodes.Status502BadGateway);
             }
 
-            Result<Unit, GhApiFailure> set = await writer.SetOrganizationVariableAsync(organization, kill.Name, value, visibility.Value, cancellationToken);
+            // Not the request's token, as secret sets do not take it: a page that
+            // goes away must not leave a PATCH that may have landed unaudited.
+            Result<Unit, GhApiFailure> set = await writer.SetOrganizationVariableAsync(organization, kill.Name, value, visibility.Value, CancellationToken.None);
             if (set.IsFailure)
             {
                 LogKillSwitchNotSet(log, kill.Name, organization, value, set.Error.Message);

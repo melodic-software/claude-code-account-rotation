@@ -8,20 +8,24 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
-- **Token expiry by role.** In the last 30 days of a token's year, and after it, a card says on which date
-  which roles fall back to their API key only and which (token-only) roles stop.
+- **Token expiry by role.** In the last 30 days of a token's year, and after it, a card says on
+  which date which roles fall back to their API key only (any account holds the key half, the
+  other side of a split included) and which roles, with no key half anywhere, stop.
 - **CI roles.** The roster records the CI funding roles an account backs: a prefix plus its
   organization or repository, with token secret `<PREFIX>_CLAUDE_CODE_OAUTH_TOKEN` and key secret
   `<PREFIX>_CLAUDE_API_KEY`, and the date each half was set. The bare `CLAUDE_CODE_OAUTH_TOKEN` is
   the `legacy (review lanes)` role, with a token half only. One account backs each role, and an
   account can back several. Claiming a role half takes that half off its previous holder whatever
-  either's dates; the other half stays with whoever set it. On an account that backs a token half, `ciTokenGeneratedOn` is always its newest token
-  half's date, so it drops when that role is taken off and clears with the last token half (#259).
+  either's dates; the other half stays with whoever set it. On an account that backs a token half,
+  `ciTokenGeneratedOn` is always its newest token half's date, so it drops when that role is taken
+  off and clears with the last token half (#259).
 - `roster.json` entries carry `ciRoles` and `consoleApiKeySetOn`; `GET /api/dashboard` returns
   them as `accounts[].roster.ciRoles` and `accounts[].roster.consoleApiKeySetOn`, and still returns
   `ciTokenSecret` (the token secret set last) and `ciTokenGeneratedOn`. `consoleApiKeySetOn` is
   the day the account's Console API key was stored (see the next entry).
-  `PATCH /api/accounts/{email}` accepts `ciRoles`, and requires a date only for a token half (#259).
+  `PATCH /api/accounts/{email}` takes `removeCiRoles`, the roles to take off that account only.
+  It also accepts `ciRoles`, the whole list, but only to leave out roles or halves: a half the
+  account does not hold with the same dates is refused with 409 (#259).
 - **Console API key in the OS store.** Set API key on a card keeps the account's Console API key in
   Windows Credential Manager (this computer only) or, on Linux, the Secret Service through
   libsecret. `PUT /api/accounts/{email}/api-key` takes the key in the body and
@@ -58,17 +62,20 @@ All notable changes to this project are documented in this file. The format foll
   that failed keeps that half, and both cards show the role as `split`, naming the account behind
   each half; the message names every half not set. Every claim moves only the halves it sets:
   re-sending one half of a split role (Push API key, or a new token) or naming one token secret
-  (the 2.1.0 body, or the Edit repair) leaves another account that role's other half. Edit sends
-  the role list only when you untick a role, so a form opened before another account took a role
-  cannot take it back. `POST /api/accounts/{email}/ci-token` takes `roles`; the 2.1.0
-  single-secret body still works and writes the token half only (#259).
+  (the 2.1.0 body, or the Edit repair) leaves another account that role's other half. Edit only
+  takes roles off: it names just the roles you untick, and sends the CI token date only when you
+  change it, so a form opened before another account took a role cannot take it back. The Edit
+  repair, a CI secret named by hand, is the one way Edit claims a role.
+  `POST /api/accounts/{email}/ci-token` takes `roles`; the 2.1.0 single-secret body still works
+  and writes the token half only (#259).
 - **Push API key.** `POST /api/accounts/{email}/api-key/push`, on the card's ··· menu, re-sends
   the stored Console key to the key secret of every role the account backs, with no sign-in, and
   logs `push` in the lane history (#259).
 - **Lane history.** Every change of which account backs a role half is appended to
   `lane-history.jsonl` under app data (time, role, token or key, account, previous account, route),
   names and dates only. `GET /api/lane-history?since=` returns it, and a History disclosure on the
-  page reads the last 30 days when opened (#259).
+  page reads the last 30 days when opened, each line naming the role's organization or
+  repository (#259).
 - **Kill switches.** Check roles also reads the organization variables `CLAUDE_LANES_DISABLED`,
   `CLAUDE_REVIEW_DISABLED` and `CLAUDE_SECURITY_REVIEW_DISABLED`, and `CLAUDE_LANES_REPO_DISABLED`
   of each repository in the new optional `config.json` key `laneRepositories` (absent means none),
@@ -94,12 +101,19 @@ All notable changes to this project are documented in this file. The format foll
   with a tick box each. The side strip's tag reads `CI` (was `CI token`) and also shows for an
   account that backs only a key half. Generate CI token records the instant the token was set
   (#259).
-- `roster.json` no longer writes `ciTokenSecret`. A file written by 2.1.0 or 2.2.0 reads its
-  `ciTokenSecret` as one role: a name ending `_CLAUDE_CODE_OAUTH_TOKEN` gives the prefix before
-  it, the bare name the legacy role, and any other name a token-only role under that name, set on
-  `ciTokenGeneratedOn`. Downgrading to 2.2.0 drops `ciRoles` on its next roster write. 2.2.0 then
-  reads every dated account as a marker set by hand, and its next edit to one dated account clears
-  `ciTokenGeneratedOn` on the others (#259).
+- `roster.json` writes `ciTokenSecret` as the token secret set last, beside `ciRoles`, which wins
+  when both are there. A file written by 2.1.0 or 2.2.0 reads its `ciTokenSecret` as one role: a
+  name ending `_CLAUDE_CODE_OAUTH_TOKEN` gives the prefix before it, the bare name the legacy
+  role, and any other name a token-only role under that name, set on `ciTokenGeneratedOn`.
+  Downgrading to 2.2.0 drops `ciRoles` on its next roster write, and 2.2.0 keeps one account per
+  `ciTokenSecret`; upgrading again reads back from it each account's role whose token was set
+  last, with that token half only. 2.2.0 also drops `consoleApiKeySetOn` and `adminKeySetOn`
+  while the keys stay in the OS store, so an account removed under 2.2.0 leaves its keys there:
+  remove them by hand with `cmdkey /delete:claude-code-account-rotation:<kind>:<email>` on
+  Windows, or on Linux unlock the keyring and run `secret-tool clear kind <kind> email <email>`,
+  where `<kind>` is `console-api-key` or `admin-key`. After upgrading again a card shows no key
+  until it is pasted again. Role changes made under 2.2.0 never reach `lane-history.jsonl`
+  (#259).
 - `POST /api/accounts/{email}/ci-token` with one organization `secretName` and no `visibility` now
   reads the secret's visibility from GitHub and passes it back, where 2.1.0 made it private. A
   secret that does not exist yet is still created private, unless its name ends in
