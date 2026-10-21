@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [2.3.1] - 2026-10-21
+
 ### Fixed
 
 - **A Windows leader no longer hangs on shutdown.** Stopping the leader after `/api/shutdown` had
