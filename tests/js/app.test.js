@@ -732,3 +732,38 @@ test("a hit reads that the account hit a limit in the last 7 days, names the run
   assert.strictEqual(lines[1].url, "https://github.com/octo/lanes/actions/runs/101");
   assert.ok(lines.every((line) => line.text.indexOf("Anthropic support") < 0));
 });
+
+const { limitStopGate } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+
+function answering(body) {
+  const sent = [];
+  return { sent: sent, post: (path, method, request) => { sent.push(request.from); return Promise.resolve({ ok: true, body: body }); } };
+}
+
+test("with no other holder no scan runs and the move goes ahead", async () => {
+  const server = answering({ outcome: "checked", hits: [], problems: [] });
+  assert.strictEqual(await limitStopGate([], server.post, () => { throw new Error("asked"); }), true);
+  assert.deepStrictEqual(server.sent, []);
+});
+
+test("a clean scan moves at once without asking", async () => {
+  const server = answering({ outcome: "checked", hits: [], problems: [] });
+  assert.strictEqual(await limitStopGate(["a@example.com"], server.post, () => { throw new Error("asked"); }), true);
+  assert.deepStrictEqual(server.sent, ["a@example.com"]);
+});
+
+test("not checked, or a hit, asks first and moves only on Move anyway", async () => {
+  const notChecked = answering({ outcome: "notChecked", hits: [], problems: [] });
+  const asked = [];
+  assert.strictEqual(await limitStopGate(["a@example.com"], notChecked.post, (lines) => { asked.push(lines[0].text); return Promise.resolve(true); }), true);
+  assert.strictEqual(await limitStopGate(["a@example.com"], notChecked.post, () => Promise.resolve(false)), false);
+  const hit = { repository: "octo/lanes", url: null, createdAt: "2026-10-18T09:00:00Z", role: "AUTOMATIONS", credential: "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", label: "subscription limit" };
+  const hits = answering({ outcome: "checked", hits: [hit], problems: [] });
+  assert.strictEqual(await limitStopGate(["a@example.com"], hits.post, (lines) => { asked.push(lines[0].text); return Promise.resolve(true); }), true);
+  assert.deepStrictEqual(asked, ["limit stops not checked: no lane repositories configured", "a@example.com: This account hit a limit in the last 7 days."]);
+});
+
+test("an answer with no body says the check did not run, so the move is asked about, not blocked", () => {
+  const lines = limitStopNotice([{ from: "a@example.com", result: { ok: true, body: null } }]);
+  assert.deepStrictEqual(lines.map((line) => line.text), ["a@example.com: limit stops not checked. Refused: unknown reason"]);
+});

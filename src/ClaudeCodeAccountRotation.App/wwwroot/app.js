@@ -50,6 +50,7 @@
     module.exports.limitStopSources = limitStopSources;
     module.exports.scanLimitStops = scanLimitStops;
     module.exports.limitStopNotice = limitStopNotice;
+    module.exports.limitStopGate = limitStopGate;
     return;
   }
 
@@ -1001,22 +1002,20 @@
     start.focus();
   }
 
-  // Before roles move off other accounts: scan each for limit stops, one at a
-  // time, then start at once when every scan was whole and found nothing, or
-  // show what was found with Move anyway and Cancel. It never blocks the move.
+  // Before roles move off other accounts: scan each for limit stops, then
+  // start at once when every scan was whole and found nothing, or show what
+  // was found with Move anyway and Cancel. It never blocks the move.
   function checkLimitStops(froms, panel, status, go) {
     var existing = panel.querySelector(".limit-stops");
     if (existing) { existing.parentNode.removeChild(existing); }
     busy = true;
     setButtonsDisabled(true);
     status.textContent = "Checking " + froms.join(", ") + " for limit stops in the last 7 days...";
-    return scanLimitStops(froms, send)
-      .then(function (results) {
-        busy = false;
-        setButtonsDisabled(false);
-        status.textContent = "";
-        var notice = limitStopNotice(results);
-        if (!notice) { go(); return; }
+    return limitStopGate(froms, send, function (notice) {
+      busy = false;
+      setButtonsDisabled(false);
+      status.textContent = "";
+      return new Promise(function (resolve) {
         var box = element("div", "limit-stops");
         notice.forEach(function (line) {
           var row = element("p", "say " + line.kind, line.text);
@@ -1030,11 +1029,17 @@
           }
           box.appendChild(row);
         });
-        var close = function () { box.parentNode.removeChild(box); };
-        box.appendChild(actionButton("Move anyway", null, function () { close(); go(); }));
-        box.appendChild(actionButton("Cancel", "secondary", close));
+        var close = function (answer) { box.parentNode.removeChild(box); resolve(answer); };
+        box.appendChild(actionButton("Move anyway", null, function () { close(true); }));
+        box.appendChild(actionButton("Cancel", "secondary", function () { close(false); }));
         panel.insertBefore(box, status);
       });
+    }).then(function (proceed) {
+      busy = false;
+      setButtonsDisabled(false);
+      status.textContent = "";
+      if (proceed) { go(); }
+    });
   }
 
   // Push API key: the stored Console key to the key secret of every role this
@@ -1687,6 +1692,17 @@
     }, Promise.resolve()).then(function () { return results; });
   }
 
+  // Whether the move goes ahead: at once when no other account is moved off
+  // or every scan was whole and found nothing, else on the operator's answer
+  // to the warning (confirm resolves true for Move anyway).
+  function limitStopGate(froms, post, confirm) {
+    if (!froms.length) { return Promise.resolve(true); }
+    return scanLimitStops(froms, post).then(function (results) {
+      var notice = limitStopNotice(results);
+      return notice ? confirm(notice) : true;
+    });
+  }
+
   // The warning's lines, or null when every scan was whole and found
   // nothing. A hit names its run; a scan that could not run, or ran only in
   // part, says so.
@@ -1696,9 +1712,9 @@
       if (!lines.some(function (line) { return line.text === text; })) { lines.push({ kind: kind, text: text, url: url || null }); }
     }
     (results || []).forEach(function (scan) {
-      var view = scan.result && scan.result.body;
-      if (!scan.result || !scan.result.ok) {
-        add("warn", scan.from + ": limit stops not checked. " + refused(view || {}));
+      var view = (scan.result && scan.result.body) || {};
+      if (!scan.result || !scan.result.ok || !view.outcome) {
+        add("warn", scan.from + ": limit stops not checked. " + refused(view));
         return;
       }
       if (view.outcome === "notChecked") {
