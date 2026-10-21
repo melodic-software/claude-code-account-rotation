@@ -105,7 +105,8 @@ internal sealed partial class DashboardAssembler(
                 assignment.TokenSetAt,
                 assignment.KeySetOn,
                 assignment.KeySetAt))],
-            entry.ConsoleApiKeySetOn);
+            entry.ConsoleApiKeySetOn,
+            entry.AdminKeySetOn);
 
     public async Task<DashboardView> AssembleAsync(CancellationToken cancellationToken)
     {

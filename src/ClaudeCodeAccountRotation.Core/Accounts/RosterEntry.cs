@@ -40,6 +40,9 @@ public sealed record RosterEntry(
     /// <summary>The date this account's Console API key was stored, or null when none is.</summary>
     public DateOnly? ConsoleApiKeySetOn { get; init; }
 
+    /// <summary>The date this account's Admin key was stored, or null when none is.</summary>
+    public DateOnly? AdminKeySetOn { get; init; }
+
     /// <summary>The token secret of the role whose token half was set last, or null when no role has one.</summary>
     public CiTokenSecret? CiTokenSecret => CiRoles
         .Where(static assignment => assignment.HasToken)
@@ -99,6 +102,7 @@ public sealed record RosterEntry(
             && Notes == other.Notes
             && CiTokenGeneratedOn == other.CiTokenGeneratedOn
             && ConsoleApiKeySetOn == other.ConsoleApiKeySetOn
+            && AdminKeySetOn == other.AdminKeySetOn
             && CiRoles.SequenceEqual(other.CiRoles));
 
     public override int GetHashCode() =>

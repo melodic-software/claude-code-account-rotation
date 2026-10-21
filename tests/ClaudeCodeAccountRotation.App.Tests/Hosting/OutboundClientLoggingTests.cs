@@ -51,6 +51,31 @@ public sealed class OutboundClientLoggingTests
         logs.Lines.ShouldAllBe(line => !line.Contains(UserAgent, StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task NoAdminKeyReachesALogLine()
+    {
+        string adminKey = "sk-ant-" + "admin01-planted-admin-key-9f2b";
+        using CapturingLoggerProvider logs = new();
+        ServiceCollection services = new();
+        services.AddLogging(builder =>
+        {
+            builder.SetMinimumLevel(LogLevel.Trace);
+            builder.AddProvider(logs);
+        });
+        AppComposition.AddOutboundClients(services, UserAgent);
+        using RecordingHandler handler = new(RecordingHandler.Json(HttpStatusCode.OK, """{"data":[],"has_more":false,"first_id":null,"last_id":null}"""));
+        OutboundHandlerStub.Install(services, handler);
+
+        await using ServiceProvider provider = services.BuildServiceProvider();
+        IAdminApiKeysClient client = provider.GetRequiredService<IAdminApiKeysClient>();
+
+        (await client.ListAsync(adminKey, TestContext.Current.CancellationToken)).IsSuccess.ShouldBeTrue();
+
+        handler.Requests.Single().Headers.GetValues("x-api-key").Single().ShouldBe(adminKey);
+        logs.Lines.ShouldContain(line => line.Contains("x-api-key", StringComparison.Ordinal));
+        logs.Lines.ShouldAllBe(line => !line.Contains(adminKey, StringComparison.Ordinal));
+    }
+
     private sealed class CapturingLoggerProvider : ILoggerProvider
     {
         public ConcurrentBag<string> Lines { get; } = [];

@@ -16,11 +16,12 @@ using Microsoft.Extensions.Logging;
 namespace ClaudeCodeAccountRotation.App.Endpoints;
 
 /// <summary>
-/// An account's Console API key, pasted once on this machine and kept in the
-/// OS store. The key arrives in the request body only, and nothing returns it:
-/// each route answers with the roster entry, whose <c>consoleApiKeySetOn</c>
-/// is all the page knows, so loading the page never reads the store. With no
-/// usable store the key is refused with the cause, and nothing is written.
+/// An account's Console API key, and its optional Admin key, each pasted once
+/// on this machine and kept in the OS store. A key arrives in the request body
+/// only, and nothing returns it: each route answers with the roster entry,
+/// whose <c>consoleApiKeySetOn</c> and <c>adminKeySetOn</c> are all the page
+/// knows, so loading the page never reads the store. With no usable store the
+/// key is refused with the cause, and nothing is written.
 /// </summary>
 internal static partial class ApiKeyEndpoints
 {
@@ -29,7 +30,7 @@ internal static partial class ApiKeyEndpoints
         ArgumentNullException.ThrowIfNull(routes);
         RouteGroupBuilder mutations = routes.MapGroup("/api").AddEndpointFilter<SameOriginMutationFilter>();
 
-        mutations.MapPut("/accounts/{email}/api-key", static async (
+        mutations.MapPut("/accounts/{email}/api-key", static (
             string email,
             JsonObject body,
             RosterFile rosterFile,
@@ -39,71 +40,9 @@ internal static partial class ApiKeyEndpoints
             TimeProvider clock,
             ILoggerFactory loggers,
             CancellationToken cancellationToken) =>
-        {
-            ArgumentNullException.ThrowIfNull(body);
-            ArgumentNullException.ThrowIfNull(clock);
-            ArgumentNullException.ThrowIfNull(loggers);
-            Result<AccountEmail, string> parsed = AccountEmail.Parse(email);
-            if (parsed.IsFailure)
-            {
-                return Results.BadRequest(new { error = parsed.Error });
-            }
+            PutKeyAsync(SecretKind.ConsoleApiKey, email, body, rosterFile, store, gate, options, clock, loggers, cancellationToken));
 
-            // Trimmed, since a paste often brings a line break with it.
-            string? key = body["key"] is JsonValue value && value.TryGetValue(out string? text) ? text.Trim() : null;
-            if (string.IsNullOrEmpty(key))
-            {
-                return Results.BadRequest(new { error = "key must be the Console API key, as text" });
-            }
-
-            AccountEmail target = parsed.Value;
-            ILogger logger = loggers.CreateLogger(typeof(ApiKeyEndpoints).FullName!);
-            // The one credential gate, as account removal takes it, so a removal
-            // cannot land between this check of the roster and its record: that
-            // would leave a key in the store for an account the roster no longer names.
-            using IDisposable? permit = await TryAcquireAsync(gate, options, cancellationToken);
-            if (permit is null)
-            {
-                return Busy();
-            }
-
-            if ((await rosterFile.ReadAsync(cancellationToken)).Find(target) is null)
-            {
-                return NotOnRoster(target);
-            }
-
-            Result<Unit, string> usable = await store.ProbeAsync(cancellationToken);
-            // Not the request's token from here: a write the store may still
-            // complete must be followed by its record, whatever the browser does.
-            Result<Unit, string> written = usable.IsSuccess
-                ? await store.WriteAsync(SecretKind.ConsoleApiKey, target, key, CancellationToken.None)
-                : usable;
-            if (written.IsFailure)
-            {
-                LogStoreRefused(logger, target.Value);
-                return Refused("KeyStoreUnavailable", written.Error);
-            }
-
-            LogKeyStored(logger, target.Value);
-            var today = DateOnly.FromDateTime(clock.GetLocalNow().DateTime);
-            Result<RosterEntry, string> recorded = await TryRecordAsync(rosterFile, target, today);
-            if (recorded.IsSuccess)
-            {
-                return Results.Ok(DashboardAssembler.View(recorded.Value));
-            }
-
-            // A key the roster does not record is one the page cannot show or
-            // delete, so it goes back out of the store.
-            Result<Unit, string> undone = await store.DeleteAsync(SecretKind.ConsoleApiKey, target, CancellationToken.None);
-            LogRecordFailedAfterWrite(logger, target.Value, undone.IsSuccess);
-            return Failed("The key was stored but the roster could not record it ("
-                + recorded.Error + "), so "
-                + (undone.IsSuccess
-                    ? "it was deleted from the store again. Try again."
-                    : "it is still in the store and could not be deleted (" + undone.Error + "); remove it by hand: " + ManualRemoval(SecretKind.ConsoleApiKey, target)));
-        });
-
-        mutations.MapDelete("/accounts/{email}/api-key", static async (
+        mutations.MapDelete("/accounts/{email}/api-key", static (
             string email,
             bool? keepStoredKey,
             RosterFile rosterFile,
@@ -112,7 +51,54 @@ internal static partial class ApiKeyEndpoints
             SwitchOptions options,
             ILoggerFactory loggers,
             CancellationToken cancellationToken) =>
+            DeleteKeyAsync(SecretKind.ConsoleApiKey, email, keepStoredKey, rosterFile, store, gate, options, loggers, cancellationToken));
+
+        MapAdminKey(mutations);
+    }
+
+    /// <summary>
+    /// The optional Admin key, kept like the Console key, and the check that
+    /// spends it: one listing of the organization's API keys through the Admin
+    /// API, on the click only, to say whether the stored Console key is
+    /// archived, inactive, expired or near its expiry. The listing is key
+    /// metadata, not a model call. Neither key reaches a response or a log.
+    /// </summary>
+    private static void MapAdminKey(RouteGroupBuilder mutations)
+    {
+        mutations.MapPut("/accounts/{email}/admin-key", static (
+            string email,
+            JsonObject body,
+            RosterFile rosterFile,
+            ISecretStore store,
+            CredentialMutationGate gate,
+            SwitchOptions options,
+            TimeProvider clock,
+            ILoggerFactory loggers,
+            CancellationToken cancellationToken) =>
+            PutKeyAsync(SecretKind.AdminKey, email, body, rosterFile, store, gate, options, clock, loggers, cancellationToken));
+
+        mutations.MapDelete("/accounts/{email}/admin-key", static (
+            string email,
+            bool? keepStoredKey,
+            RosterFile rosterFile,
+            ISecretStore store,
+            CredentialMutationGate gate,
+            SwitchOptions options,
+            ILoggerFactory loggers,
+            CancellationToken cancellationToken) =>
+            DeleteKeyAsync(SecretKind.AdminKey, email, keepStoredKey, rosterFile, store, gate, options, loggers, cancellationToken));
+
+        mutations.MapPost("/accounts/{email}/api-key/check", static async (
+            string email,
+            RosterFile rosterFile,
+            ISecretStore store,
+            IAdminApiKeysClient admin,
+            TimeProvider clock,
+            ILoggerFactory loggers,
+            CancellationToken cancellationToken) =>
         {
+            ArgumentNullException.ThrowIfNull(admin);
+            ArgumentNullException.ThrowIfNull(clock);
             ArgumentNullException.ThrowIfNull(loggers);
             Result<AccountEmail, string> parsed = AccountEmail.Parse(email);
             if (parsed.IsFailure)
@@ -121,48 +107,54 @@ internal static partial class ApiKeyEndpoints
             }
 
             AccountEmail target = parsed.Value;
-            ILogger logger = loggers.CreateLogger(typeof(ApiKeyEndpoints).FullName!);
-            using IDisposable? permit = await TryAcquireAsync(gate, options, cancellationToken);
-            if (permit is null)
-            {
-                return Busy();
-            }
-
-            RosterEntry? existing = (await rosterFile.ReadAsync(cancellationToken)).Find(target);
-            if (existing is null)
+            if ((await rosterFile.ReadAsync(cancellationToken)).Find(target) is null)
             {
                 return NotOnRoster(target);
             }
 
-            // Past the read, the request's token is not consulted: a delete the
-            // store has done must reach the roster.
-            StoredKeyRemoval removal = await DeleteStoredKeysAsync(store, existing, [SecretKind.ConsoleApiKey], keepStoredKey ?? false, logger, CancellationToken.None);
-            if (removal.Refusal is string refusal)
+            Result<string?, string> consoleKey = await store.ReadAsync(SecretKind.ConsoleApiKey, target, cancellationToken);
+            if (consoleKey.IsFailure)
             {
-                return Refused("StoredKeyKept", refusal);
+                return Refused("KeyStoreUnavailable", consoleKey.Error);
             }
 
-            // "deleted" only when the store said so; a key left behind is logged
-            // where it is left, and an unrecorded key the store could not reach
-            // is not called deleted.
-            if (removal.AllDeleted)
+            if (consoleKey.Value is null)
             {
-                LogKeyDeleted(logger, target.Value);
-            }
-            else if (removal.Warning is null)
-            {
-                LogNoKeyRecorded(logger, target.Value);
+                return Refused("NoConsoleKey", "No Console API key is stored for " + target.Value + " on this machine. Set it first.");
             }
 
-            Result<RosterEntry, string> recorded = await TryRecordAsync(rosterFile, target, null);
-            if (recorded.IsFailure)
+            Result<string?, string> adminKey = await store.ReadAsync(SecretKind.AdminKey, target, cancellationToken);
+            if (adminKey.IsFailure)
             {
-                LogBadgeStale(logger, target.Value);
-                return Failed("The key is out of the store but the roster could not record that (" + recorded.Error
-                    + "), so the card still shows a key. Delete it again to clear the badge.");
+                return Refused("KeyStoreUnavailable", adminKey.Error);
             }
 
-            return Results.Ok(new ApiKeyDeletionView(DashboardAssembler.View(recorded.Value)!, removal.Warning));
+            if (adminKey.Value is null)
+            {
+                return Refused("NoAdminKey", "No Admin key is stored for " + target.Value + " on this machine. Set one to check the Console key.");
+            }
+
+            ILogger logger = loggers.CreateLogger(typeof(ApiKeyEndpoints).FullName!);
+            Result<IReadOnlyList<ListedApiKey>, AdminApiFailure> listed = await admin.ListAsync(adminKey.Value, cancellationToken);
+            if (listed.IsFailure)
+            {
+                LogCheckFailed(logger, target.Value, listed.Error.Kind);
+                return listed.Error.Kind switch
+                {
+                    AdminApiFailureKind.Unavailable => Refused("AdminApiUnavailable", listed.Error.Message),
+                    AdminApiFailureKind.RateLimited => Refused("RateLimited", listed.Error.Message),
+                    _ => Results.Json(new { error = listed.Error.Message }, statusCode: StatusCodes.Status502BadGateway),
+                };
+            }
+
+            DateTimeOffset now = clock.GetUtcNow();
+            KeyHintMatch match = PartialKeyHint.Match(consoleKey.Value, listed.Value);
+            ApiKeyCheckView view = match.Key is ListedApiKey found
+                ? new ApiKeyCheckView("found", null, found.Name, found.Status, found.ExpiresAt, Flag(ApiKeyStanding.Of(found, now)), now)
+                : new ApiKeyCheckView("cannotTell", match.Reason, null, null, null, null, now);
+            string standing = view.Flag ?? view.Status ?? "none";
+            LogChecked(logger, target.Value, view.Outcome, standing);
+            return Results.Ok(view);
         });
 
         mutations.MapPost("/accounts/{email}/api-key/push", PushAsync);
@@ -294,6 +286,165 @@ internal static partial class ApiKeyEndpoints
         return Results.Ok(new ApiKeyPushView(DashboardAssembler.View(updated), message, failed.Count));
     }
 
+    private static string? Flag(ApiKeyWarning? flag) => flag switch
+    {
+        ApiKeyWarning.Archived => "archived",
+        ApiKeyWarning.Inactive => "inactive",
+        ApiKeyWarning.Expired => "expired",
+        ApiKeyWarning.ExpiresSoon => "expiresSoon",
+        _ => null,
+    };
+
+    /// <summary>
+    /// Stores a pasted key of <paramref name="kind"/> and records the day on
+    /// the roster. The key arrives in the body only and is never answered with.
+    /// </summary>
+    private static async Task<IResult> PutKeyAsync(
+        SecretKind kind,
+        string email,
+        JsonObject body,
+        RosterFile rosterFile,
+        ISecretStore store,
+        CredentialMutationGate gate,
+        SwitchOptions options,
+        TimeProvider clock,
+        ILoggerFactory loggers,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+        ArgumentNullException.ThrowIfNull(clock);
+        ArgumentNullException.ThrowIfNull(loggers);
+        Result<AccountEmail, string> parsed = AccountEmail.Parse(email);
+        if (parsed.IsFailure)
+        {
+            return Results.BadRequest(new { error = parsed.Error });
+        }
+
+        // Trimmed, since a paste often brings a line break with it.
+        string? key = body["key"] is JsonValue value && value.TryGetValue(out string? text) ? text.Trim() : null;
+        if (string.IsNullOrEmpty(key))
+        {
+            return Results.BadRequest(new { error = "key must be the " + Title(kind) + ", as text" });
+        }
+
+        AccountEmail target = parsed.Value;
+        string label = Label(kind);
+        ILogger logger = loggers.CreateLogger(typeof(ApiKeyEndpoints).FullName!);
+        // The one credential gate, as account removal takes it, so a removal
+        // cannot land between this check of the roster and its record: that
+        // would leave a key in the store for an account the roster no longer names.
+        using IDisposable? permit = await TryAcquireAsync(gate, options, cancellationToken);
+        if (permit is null)
+        {
+            return Busy();
+        }
+
+        if ((await rosterFile.ReadAsync(cancellationToken)).Find(target) is null)
+        {
+            return NotOnRoster(target);
+        }
+
+        Result<Unit, string> usable = await store.ProbeAsync(cancellationToken);
+        // Not the request's token from here: a write the store may still
+        // complete must be followed by its record, whatever the browser does.
+        Result<Unit, string> written = usable.IsSuccess
+            ? await store.WriteAsync(kind, target, key, CancellationToken.None)
+            : usable;
+        if (written.IsFailure)
+        {
+            LogStoreRefused(logger, target.Value);
+            return Refused("KeyStoreUnavailable", written.Error);
+        }
+
+        LogKeyStored(logger, label, target.Value);
+        var today = DateOnly.FromDateTime(clock.GetLocalNow().DateTime);
+        Result<RosterEntry, string> recorded = await TryRecordAsync(rosterFile, kind, target, today);
+        if (recorded.IsSuccess)
+        {
+            return Results.Ok(DashboardAssembler.View(recorded.Value));
+        }
+
+        // A key the roster does not record is one the page cannot show or
+        // delete, so it goes back out of the store.
+        Result<Unit, string> undone = await store.DeleteAsync(kind, target, CancellationToken.None);
+        LogRecordFailedAfterWrite(logger, label, target.Value, undone.IsSuccess);
+        return Failed("The key was stored but the roster could not record it ("
+            + recorded.Error + "), so "
+            + (undone.IsSuccess
+                ? "it was deleted from the store again. Try again."
+                : "it is still in the store and could not be deleted (" + undone.Error + "); remove it by hand: " + ManualRemoval(kind, target)));
+    }
+
+    private static async Task<IResult> DeleteKeyAsync(
+        SecretKind kind,
+        string email,
+        bool? keepStoredKey,
+        RosterFile rosterFile,
+        ISecretStore store,
+        CredentialMutationGate gate,
+        SwitchOptions options,
+        ILoggerFactory loggers,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(loggers);
+        Result<AccountEmail, string> parsed = AccountEmail.Parse(email);
+        if (parsed.IsFailure)
+        {
+            return Results.BadRequest(new { error = parsed.Error });
+        }
+
+        AccountEmail target = parsed.Value;
+        string label = Label(kind);
+        ILogger logger = loggers.CreateLogger(typeof(ApiKeyEndpoints).FullName!);
+        using IDisposable? permit = await TryAcquireAsync(gate, options, cancellationToken);
+        if (permit is null)
+        {
+            return Busy();
+        }
+
+        RosterEntry? existing = (await rosterFile.ReadAsync(cancellationToken)).Find(target);
+        if (existing is null)
+        {
+            return NotOnRoster(target);
+        }
+
+        // Past the read, the request's token is not consulted: a delete the
+        // store has done must reach the roster.
+        StoredKeyRemoval removal = await DeleteStoredKeysAsync(store, existing, [kind], keepStoredKey ?? false, logger, CancellationToken.None);
+        if (removal.Refusal is string refusal)
+        {
+            return Refused("StoredKeyKept", refusal);
+        }
+
+        // "deleted" only when the store said so; a key left behind is logged
+        // where it is left, and an unrecorded key the store could not reach
+        // is not called deleted.
+        if (removal.AllDeleted)
+        {
+            LogKeyDeleted(logger, label, target.Value);
+        }
+        else if (removal.Warning is null)
+        {
+            LogNoKeyRecorded(logger, label, target.Value);
+        }
+
+        Result<RosterEntry, string> recorded = await TryRecordAsync(rosterFile, kind, target, null);
+        if (recorded.IsFailure)
+        {
+            LogBadgeStale(logger, label, target.Value);
+            return Failed("The key is out of the store but the roster could not record that (" + recorded.Error
+                + "), so the card still shows a key. Delete it again to clear the badge.");
+        }
+
+        return Results.Ok(new ApiKeyDeletionView(DashboardAssembler.View(recorded.Value)!, removal.Warning));
+    }
+
+    /// <summary>The key's name in a log line.</summary>
+    private static string Label(SecretKind kind) => kind == SecretKind.AdminKey ? "Admin key" : "console API key";
+
+    /// <summary>The key's name in a message to the operator.</summary>
+    private static string Title(SecretKind kind) => kind == SecretKind.AdminKey ? "Admin key" : "Console API key";
+
     private static async Task<IDisposable?> TryAcquireAsync(CredentialMutationGate gate, SwitchOptions options, CancellationToken cancellationToken)
     {
         try
@@ -316,11 +467,11 @@ internal static partial class ApiKeyEndpoints
     /// Records the date with no cancellation, since the store has already
     /// changed. A failure is the reason; a vanished entry is one too.
     /// </summary>
-    private static async Task<Result<RosterEntry, string>> TryRecordAsync(RosterFile rosterFile, AccountEmail target, DateOnly? setOn)
+    private static async Task<Result<RosterEntry, string>> TryRecordAsync(RosterFile rosterFile, SecretKind kind, AccountEmail target, DateOnly? setOn)
     {
         try
         {
-            RosterEntry? updated = await RecordAsync(rosterFile, target, setOn, CancellationToken.None);
+            RosterEntry? updated = await RecordAsync(rosterFile, kind, target, setOn, CancellationToken.None);
             return updated is null
                 ? Result<RosterEntry, string>.Failure(target.Value + " is no longer on the roster")
                 : Result<RosterEntry, string>.Success(updated);
@@ -380,9 +531,8 @@ internal static partial class ApiKeyEndpoints
         return new StoredKeyRemoval(null, left.Count == 0 ? null : string.Join(" ", left), allDeleted);
     }
 
-    // Only the Console key has a roster record so far.
     private static bool Recorded(RosterEntry entry, SecretKind kind) =>
-        kind == SecretKind.ConsoleApiKey && entry.ConsoleApiKeySetOn is not null;
+        (kind == SecretKind.AdminKey ? entry.AdminKeySetOn : entry.ConsoleApiKeySetOn) is not null;
 
     /// <summary>The command that removes a stored key by hand, on this platform.</summary>
     // secret-tool clear removes only unlocked items, so the keyring is unlocked first.
@@ -394,13 +544,15 @@ internal static partial class ApiKeyEndpoints
     /// Sets the date on the entry as the roster holds it at write time, so an
     /// edit that landed since the read above is kept. Null when the entry is gone.
     /// </summary>
-    private static async Task<RosterEntry?> RecordAsync(RosterFile rosterFile, AccountEmail target, DateOnly? setOn, CancellationToken cancellationToken)
+    private static async Task<RosterEntry?> RecordAsync(RosterFile rosterFile, SecretKind kind, AccountEmail target, DateOnly? setOn, CancellationToken cancellationToken)
     {
         RosterEntry? updated = null;
         await rosterFile.UpdateAsync(
             roster =>
             {
-                updated = roster.Find(target) is RosterEntry entry ? entry with { ConsoleApiKeySetOn = setOn } : null;
+                updated = roster.Find(target) is not RosterEntry entry ? null
+                    : kind == SecretKind.AdminKey ? entry with { AdminKeySetOn = setOn }
+                    : entry with { ConsoleApiKeySetOn = setOn };
                 return updated is null ? roster : roster.With(updated);
             },
             cancellationToken);
@@ -415,11 +567,11 @@ internal static partial class ApiKeyEndpoints
 
     // The account and the outcome only: never the key, and not the store's
     // own diagnostic either, which reaches the page instead.
-    [LoggerMessage(Level = LogLevel.Information, Message = "console API key for {Account} stored")]
-    private static partial void LogKeyStored(ILogger logger, string account);
+    [LoggerMessage(Level = LogLevel.Information, Message = "{Key} for {Account} stored")]
+    private static partial void LogKeyStored(ILogger logger, string key, string account);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "console API key for {Account} deleted")]
-    private static partial void LogKeyDeleted(ILogger logger, string account);
+    [LoggerMessage(Level = LogLevel.Information, Message = "{Key} for {Account} deleted")]
+    private static partial void LogKeyDeleted(ILogger logger, string key, string account);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "the OS store refused a stored key for {Account}")]
     private static partial void LogStoreRefused(ILogger logger, string account);
@@ -427,11 +579,11 @@ internal static partial class ApiKeyEndpoints
     [LoggerMessage(Level = LogLevel.Warning, Message = "stored key {Target} was left in the OS store at the operator's request; to remove it by hand: {Command}")]
     private static partial void LogStoredKeyLeft(ILogger logger, string target, string command);
 
-    [LoggerMessage(Level = LogLevel.Error, Message = "console API key for {Account} stored but not recorded on the roster; deleted from the store again: {Undone}")]
-    private static partial void LogRecordFailedAfterWrite(ILogger logger, string account, bool undone);
+    [LoggerMessage(Level = LogLevel.Error, Message = "{Key} for {Account} stored but not recorded on the roster; deleted from the store again: {Undone}")]
+    private static partial void LogRecordFailedAfterWrite(ILogger logger, string key, string account, bool undone);
 
-    [LoggerMessage(Level = LogLevel.Error, Message = "console API key for {Account} deleted from the store but the roster still records it; the card's badge is stale")]
-    private static partial void LogBadgeStale(ILogger logger, string account);
+    [LoggerMessage(Level = LogLevel.Error, Message = "{Key} for {Account} deleted from the store but the roster still records it; the card's badge is stale")]
+    private static partial void LogBadgeStale(ILogger logger, string key, string account);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "console API key for {Account} pushed to secret {Secret}")]
     private static partial void LogKeyPushed(ILogger logger, string account, string secret);
@@ -439,8 +591,14 @@ internal static partial class ApiKeyEndpoints
     [LoggerMessage(Level = LogLevel.Warning, Message = "console API key for {Account} could not be pushed to secret {Secret}")]
     private static partial void LogKeyPushFailed(ILogger logger, string account, string secret);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "no stored console API key recorded for {Account}")]
-    private static partial void LogNoKeyRecorded(ILogger logger, string account);
+    [LoggerMessage(Level = LogLevel.Information, Message = "no stored {Key} recorded for {Account}")]
+    private static partial void LogNoKeyRecorded(ILogger logger, string key, string account);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "API key check for {Account}: {Outcome}, {Standing}")]
+    private static partial void LogChecked(ILogger logger, string account, string outcome, string standing);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "API key check for {Account} could not list keys: {Kind}")]
+    private static partial void LogCheckFailed(ILogger logger, string account, AdminApiFailureKind kind);
 }
 
 /// <summary>
@@ -455,3 +613,18 @@ internal sealed record ApiKeyPushView(RosterEntryView? Roster, string Message, i
 
 /// <summary>The roster entry after a key delete, and the warning when the key was left in the store.</summary>
 internal sealed record ApiKeyDeletionView(RosterEntryView Roster, string? Warning);
+
+/// <summary>
+/// What the Admin API says about the stored Console key: <c>found</c> with the
+/// key's name, status, expiry and a flag (<c>archived</c>, <c>inactive</c>,
+/// <c>expired</c>, <c>expiresSoon</c>, or null when it is fine), or
+/// <c>cannotTell</c> with the reason. Never a key or its hint.
+/// </summary>
+internal sealed record ApiKeyCheckView(
+    string Outcome,
+    string? Reason,
+    string? Name,
+    string? Status,
+    DateTimeOffset? ExpiresAt,
+    string? Flag,
+    DateTimeOffset CheckedAt);
