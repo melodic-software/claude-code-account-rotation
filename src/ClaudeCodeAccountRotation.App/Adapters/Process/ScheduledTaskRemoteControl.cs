@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Ports;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeCodeAccountRotation.App.Adapters.Process;
 
@@ -17,8 +18,11 @@ internal delegate Task<Result<IReadOnlyList<ProcessEntry>, string>> ProcessListe
 /// <summary>Ends one recorded process and waits, bounded, for it to exit. Success when it is already gone.</summary>
 internal delegate Task<Result<Unit, string>> ProcessKiller(ProcessEntry process, CancellationToken cancellationToken);
 
-/// <summary>One row of the process table: <c>Win32_Process</c>'s id, parent id, image name and command line.</summary>
-internal sealed record ProcessEntry(int Id, int ParentId, string Name, string? CommandLine);
+/// <summary>
+/// One row of the process table: <c>Win32_Process</c>'s id, parent id, image
+/// name, command line and creation time. No time is a row that did not report one.
+/// </summary>
+internal sealed record ProcessEntry(int Id, int ParentId, string Name, string? CommandLine, DateTimeOffset? Started = null);
 
 /// <summary>No task configured, or not Windows: never running, and nothing to restart.</summary>
 internal sealed class NoRemoteControlTask : IRemoteControlTask
@@ -42,10 +46,19 @@ internal sealed class NoRemoteControlTask : IRemoteControlTask
 /// therefore records the task's process tree first: the process whose command
 /// line carries the task action's own arguments, read from <c>/Query /XML</c>,
 /// and its descendants. A <c>claude remote-control</c> started in a terminal
-/// has no such ancestor and is never touched. After <c>/End</c> the recorded
+/// has no such ancestor and is not touched while its terminal runs. After <c>/End</c> the recorded
 /// descendants still running are ended, deepest first; only those ids. A
 /// running task with no such tree is neither ended nor run, and the restart
 /// fails so the operator is told.
+/// </para>
+/// <para>
+/// The task's server can outlive the shell that started it: then its parent
+/// id names no process, and no walk down from the task reaches it. A
+/// <c>claude.exe</c> whose arguments are exactly the server's, as the action's
+/// command names them, and whose parent is gone, or is a later process holding
+/// a reused id, is the task's too. It is ended with the tree, and the task is
+/// never run while one is left. A server with a live parent outside the tree
+/// is someone else's.
 /// </para>
 /// <para>
 /// The task is registered with MultipleInstances IgnoreNew, so a run sent
@@ -69,6 +82,7 @@ internal sealed partial class ScheduledTaskRemoteControl(
     TimeProvider timeProvider,
     TimeSpan stopBound,
     TimeSpan pollInterval,
+    ILogger<ScheduledTaskRemoteControl> logger,
     Func<string, string>? expandEnvironment = null) : IRemoteControlTask
 {
     private readonly Func<string, string> _expand = expandEnvironment ?? Environment.ExpandEnvironmentVariables;
@@ -78,9 +92,50 @@ internal sealed partial class ScheduledTaskRemoteControl(
     private static readonly TimeSpan _processTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan _killWait = TimeSpan.FromSeconds(5);
 
+    /// <summary>
+    /// How far a live process's start time may sit from the recorded one and
+    /// still be that process: CIM reports microseconds where the process API
+    /// reports 100 ns. An id reused by a later process starts far outside it.
+    /// </summary>
+    private static readonly TimeSpan _startTolerance = TimeSpan.FromSeconds(1);
+
     public string? Name => name;
 
-    public Task<Result<bool, string>> IsRunningAsync(CancellationToken cancellationToken) => StatusAsync(cancellationToken);
+    /// <summary>
+    /// Whether the task is Running, or has stopped while a server of its own,
+    /// orphaned when its shell exited, still runs: either needs the restart,
+    /// which ends that server before it runs the task. The process table is
+    /// read only for a task found stopped, once per call.
+    /// </summary>
+    public async Task<Result<bool, string>> IsRunningAsync(CancellationToken cancellationToken)
+    {
+        Result<bool, string> status = await StatusAsync(cancellationToken);
+        if (status.IsFailure || status.Value)
+        {
+            return status;
+        }
+
+        Result<(int ExitCode, string Output), string> definition = await schtasks(["/Query", "/TN", name, "/XML"], cancellationToken);
+        if (definition.IsFailure)
+        {
+            return Result<bool, string>.Failure("the task is not running, but its action could not be read: " + definition.Error);
+        }
+
+        (string Command, string Arguments)? action = definition.Value.ExitCode == 0 ? Action(definition.Value.Output) : null;
+        if (action is null)
+        {
+            // Not registered, or no action to match a server by: nothing of its own can be running.
+            return status;
+        }
+
+        Result<IReadOnlyList<ProcessEntry>, string> table = await listProcesses(cancellationToken);
+        if (table.IsFailure)
+        {
+            return Result<bool, string>.Failure("the task is not running, but its processes could not be listed: " + table.Error);
+        }
+
+        return Result<bool, string>.Success(Orphans(table.Value, action.Value.Arguments, _expand).Count > 0);
+    }
 
     /// <summary>
     /// Whether the task is Running, or why that could not be read, from the
@@ -132,6 +187,21 @@ internal sealed partial class ScheduledTaskRemoteControl(
 
     public async Task<Result<Unit, string>> RestartAsync(bool startIfStopped, CancellationToken cancellationToken)
     {
+        Result<Unit, string> restart = await RestartCoreAsync(startIfStopped, cancellationToken);
+        if (restart.IsSuccess)
+        {
+            LogRestarted(name);
+        }
+        else
+        {
+            LogRestartFailed(name, restart.Error);
+        }
+
+        return restart;
+    }
+
+    private async Task<Result<Unit, string>> RestartCoreAsync(bool startIfStopped, CancellationToken cancellationToken)
+    {
         Result<(int ExitCode, string Output), string> definition = await schtasks(["/Query", "/TN", name, "/XML"], cancellationToken);
         if (definition.IsFailure)
         {
@@ -150,14 +220,22 @@ internal sealed partial class ScheduledTaskRemoteControl(
             return Result<Unit, string>.Failure("the task's processes could not be listed: " + table.Error);
         }
 
-        IReadOnlyList<ProcessEntry> tree = TaskTree(table.Value, action.Value.Command, action.Value.Arguments, _expand);
-        if (tree.Count == 0)
+        IReadOnlyList<ProcessEntry> roots = Roots(table.Value, action.Value.Command, action.Value.Arguments, _expand);
+        IReadOnlyList<ProcessEntry> orphans = Orphans(table.Value, action.Value.Arguments, _expand);
+        foreach (ProcessEntry orphan in orphans)
+        {
+            LogOrphan(name, orphan.Name, orphan.Id, orphan.ParentId);
+        }
+
+        IReadOnlyList<ProcessEntry> tree = Walk(table.Value, [.. roots, .. orphans]);
+        if (roots.Count == 0)
         {
             // A running task whose processes cannot be told apart is left as it
             // is: /End alone would leave its server running, and /Run would then
             // start a second one. A task that has stopped by itself is run only
             // when it was known to be running before the switch: a task whose
-            // earlier state was unknown may be one the operator stopped.
+            // earlier state was unknown may be one the operator stopped. Either
+            // way it is run only once no server of its own is left.
             Result<bool, string> status = await StatusAsync(cancellationToken);
             if (status.IsFailure)
             {
@@ -169,9 +247,13 @@ internal sealed partial class ScheduledTaskRemoteControl(
                 return Result<Unit, string>.Failure("the task is running but its processes could not be identified");
             }
 
-            return startIfStopped
-                ? await StepAsync("/Run", cancellationToken)
-                : Result<Unit, string>.Failure("the task is not running and its state before the switch could not be read, so it was not started");
+            if (!startIfStopped)
+            {
+                return Result<Unit, string>.Failure("the task is not running and its state before the switch could not be read, so it was not started");
+            }
+
+            Result<Unit, string> cleared = await EndAllAsync(tree, "the task had stopped but could not end ", cancellationToken);
+            return cleared.IsFailure ? cleared : await StepAsync("/Run", cancellationToken);
         }
 
         Result<Unit, string> ended = await StepAsync("/End", cancellationToken);
@@ -180,20 +262,10 @@ internal sealed partial class ScheduledTaskRemoteControl(
             return ended;
         }
 
-        // Deepest first: the server before the shell that started it.
-        List<string> survivors = [];
-        foreach (ProcessEntry process in tree.Reverse())
+        Result<Unit, string> endedAll = await EndAllAsync(tree, "the task was ended but could not end ", cancellationToken);
+        if (endedAll.IsFailure)
         {
-            Result<Unit, string> killed = await kill(process, cancellationToken);
-            if (killed.IsFailure)
-            {
-                survivors.Add(process.Name + " (process " + process.Id + "): " + killed.Error);
-            }
-        }
-
-        if (survivors.Count > 0)
-        {
-            return Result<Unit, string>.Failure("the task was ended but could not end " + string.Join("; ", survivors));
+            return endedAll;
         }
 
         // Only a status read as not Running lets the run go: a run sent while the
@@ -219,6 +291,28 @@ internal sealed partial class ScheduledTaskRemoteControl(
         }
     }
 
+    /// <summary>
+    /// Ends each recorded process, deepest first: the server before the shell
+    /// that started it. Any that could not be ended fail the whole, so nothing
+    /// runs the task beside it.
+    /// </summary>
+    private async Task<Result<Unit, string>> EndAllAsync(IReadOnlyList<ProcessEntry> tree, string failure, CancellationToken cancellationToken)
+    {
+        List<string> survivors = [];
+        foreach (ProcessEntry process in tree.Reverse())
+        {
+            Result<Unit, string> killed = await kill(process, cancellationToken);
+            if (killed.IsFailure)
+            {
+                survivors.Add(process.Name + " (process " + process.Id + "): " + killed.Error);
+            }
+        }
+
+        return survivors.Count > 0
+            ? Result<Unit, string>.Failure(failure + string.Join("; ", survivors))
+            : Result<Unit, string>.Success(Unit.Value);
+    }
+
     /// <summary>The first <c>Exec</c> action's command and arguments from <c>/Query /XML</c>, or null when it has none.</summary>
     internal static (string Command, string Arguments)? Action(string xml)
     {
@@ -233,10 +327,18 @@ internal sealed partial class ScheduledTaskRemoteControl(
     }
 
     /// <summary>
-    /// The task's running tree in breadth-first order, root first: every process
-    /// whose image is the action's command and whose command line carries the
-    /// action's arguments, and every descendant of those. Empty when the
-    /// action has no arguments to tell its process from any other.
+    /// The task's running tree in breadth-first order, roots first: every
+    /// process whose image is the action's command and whose command line
+    /// carries the action's arguments, every orphaned server of the task, and
+    /// every descendant of those. Empty when the action has no arguments to
+    /// tell its process from any other.
+    /// </summary>
+    internal static IReadOnlyList<ProcessEntry> TaskTree(IReadOnlyList<ProcessEntry> table, string command, string arguments, Func<string, string> expand) =>
+        Walk(table, [.. Roots(table, command, arguments, expand), .. Orphans(table, arguments, expand)]);
+
+    /// <summary>
+    /// The processes the task itself started: image the action's command,
+    /// command line carrying the action's arguments.
     /// <para>
     /// Names are compared without <c>.exe</c>, because a task may name its
     /// command <c>pwsh</c> while the process table says <c>pwsh.exe</c>; and
@@ -244,7 +346,7 @@ internal sealed partial class ScheduledTaskRemoteControl(
     /// as Task Scheduler starts them.
     /// </para>
     /// </summary>
-    internal static IReadOnlyList<ProcessEntry> TaskTree(IReadOnlyList<ProcessEntry> table, string command, string arguments, Func<string, string> expand)
+    private static IReadOnlyList<ProcessEntry> Roots(IReadOnlyList<ProcessEntry> table, string command, string arguments, Func<string, string> expand)
     {
         if (string.IsNullOrWhiteSpace(arguments))
         {
@@ -253,11 +355,43 @@ internal sealed partial class ScheduledTaskRemoteControl(
 
         string image = ImageName(expand(command));
         string expanded = expand(arguments);
-        List<ProcessEntry> tree = [.. table.Where(process =>
+        return [.. table.Where(process =>
             string.Equals(ImageName(process.Name), image, StringComparison.OrdinalIgnoreCase)
             && process.CommandLine is string line
             && (line.Contains(arguments, StringComparison.OrdinalIgnoreCase) || line.Contains(expanded, StringComparison.OrdinalIgnoreCase)))];
-        HashSet<int> seen = [.. tree.Select(static process => process.Id)];
+    }
+
+    /// <summary>
+    /// The task's servers no walk from its roots reaches: a <c>claude.exe</c>
+    /// whose arguments are exactly those the action passes to <c>claude</c>,
+    /// and whose parent is not in the table or started after it, which is an
+    /// id reused once the real parent exited. A server with a live parent is
+    /// either in the tree or someone else's, and is not one.
+    /// </summary>
+    private static IReadOnlyList<ProcessEntry> Orphans(IReadOnlyList<ProcessEntry> table, string arguments, Func<string, string> expand)
+    {
+        Match server = ServerArguments().Match(expand(arguments));
+        if (!server.Success)
+        {
+            return [];
+        }
+
+        string expected = Spaced(server.Groups[1].Value);
+        var byId = table.GroupBy(static process => process.Id).ToDictionary(static group => group.Key, static group => group.First());
+        return [.. table.Where(process =>
+            string.Equals(ImageName(process.Name), "claude", StringComparison.OrdinalIgnoreCase)
+            && process.CommandLine is string line
+            && LeadingImage().Match(line) is { Success: true } image
+            && string.Equals(Spaced(line[image.Length..]), expected, StringComparison.OrdinalIgnoreCase)
+            && (!byId.TryGetValue(process.ParentId, out ProcessEntry? parent)
+                || parent.Started > process.Started))];
+    }
+
+    /// <summary>The given roots and every descendant of them, breadth first, each once.</summary>
+    private static List<ProcessEntry> Walk(IReadOnlyList<ProcessEntry> table, IReadOnlyList<ProcessEntry> roots)
+    {
+        HashSet<int> seen = [];
+        List<ProcessEntry> tree = [.. roots.Where(process => seen.Add(process.Id))];
         for (int index = 0; index < tree.Count; index++)
         {
             int parent = tree[index].Id;
@@ -269,6 +403,9 @@ internal sealed partial class ScheduledTaskRemoteControl(
 
         return tree;
     }
+
+    /// <summary>Arguments with their runs of white space as one space, ends trimmed.</summary>
+    private static string Spaced(string text) => string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
     /// <summary>A path's file name without directory, quotes or a trailing <c>.exe</c>.</summary>
     private static string ImageName(string path)
@@ -347,7 +484,8 @@ internal sealed partial class ScheduledTaskRemoteControl(
                 [
                     "-NoProfile", "-NonInteractive", "-Command",
                     "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
-                    + "ConvertTo-Json -Compress -InputObject @(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine)",
+                    + "ConvertTo-Json -Compress -InputObject @(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine,"
+                    + "@{ Name = 'Started'; Expression = { if ($_.CreationDate) { $_.CreationDate.ToFileTime() } } })",
                 ],
                 cancellationToken);
             if (listed.IsFailure)
@@ -379,7 +517,12 @@ internal sealed partial class ScheduledTaskRemoteControl(
 
             return Result<IReadOnlyList<ProcessEntry>, string>.Success([.. rows
                 .Where(static row => row?.Name is not null)
-                .Select(static row => new ProcessEntry(row!.ProcessId, row.ParentProcessId, row.Name!, row.CommandLine))]);
+                .Select(static row => new ProcessEntry(
+                    row!.ProcessId,
+                    row.ParentProcessId,
+                    row.Name!,
+                    row.CommandLine,
+                    row.Started is long started ? DateTimeOffset.FromFileTime(started).ToUniversalTime() : null))]);
         }
         catch (JsonException exception)
         {
@@ -389,7 +532,9 @@ internal sealed partial class ScheduledTaskRemoteControl(
 
     /// <summary>
     /// Ends one recorded process. An id now held by a process of another name
-    /// was reused after the recorded one exited, and is left alone.
+    /// was reused after the recorded one exited, and is left alone. One of the
+    /// same name started at another time is left alone too, but as a failure:
+    /// a start time read wrongly must never let the task run beside its server.
     /// </summary>
     public static async Task<Result<Unit, string>> KillRecordedAsync(ProcessEntry recorded, CancellationToken cancellationToken)
     {
@@ -411,6 +556,11 @@ internal sealed partial class ScheduledTaskRemoteControl(
                 if (!string.Equals(process.ProcessName, Path.GetFileNameWithoutExtension(recorded.Name), StringComparison.OrdinalIgnoreCase))
                 {
                     return Result<Unit, string>.Success(Unit.Value);
+                }
+
+                if (!IsRecorded(recorded, process.ProcessName, recorded.Started is null ? null : new DateTimeOffset(process.StartTime)))
+                {
+                    return Result<Unit, string>.Failure("its id is held by a process started at another time, which was left running");
                 }
 
                 process.Kill();
@@ -435,12 +585,38 @@ internal sealed partial class ScheduledTaskRemoteControl(
         }
     }
 
-    /// <summary>One <c>Win32_Process</c> row as <c>ConvertTo-Json</c> writes it.</summary>
-    private sealed record CimProcess(int ProcessId, int ParentProcessId, string? Name, string? CommandLine);
+    /// <summary>
+    /// Whether a live process is the recorded one: the same image name and,
+    /// when a start time was recorded, a start within <see cref="_startTolerance"/> of it.
+    /// </summary>
+    internal static bool IsRecorded(ProcessEntry recorded, string liveName, DateTimeOffset? liveStarted) =>
+        string.Equals(liveName, Path.GetFileNameWithoutExtension(recorded.Name), StringComparison.OrdinalIgnoreCase)
+        && (recorded.Started is not DateTimeOffset started
+            || (liveStarted is DateTimeOffset live && (live - started).Duration() <= _startTolerance));
+
+    /// <summary>One <c>Win32_Process</c> row as <c>ConvertTo-Json</c> writes it, its creation time as a UTC file time.</summary>
+    private sealed record CimProcess(int ProcessId, int ParentProcessId, string? Name, string? CommandLine, long? Started);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Remote Control task {Task} restarted")]
+    private partial void LogRestarted(string task);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Remote Control task {Task} was not restarted: {Reason}")]
+    private partial void LogRestartFailed(string task, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Remote Control task {Task} left its server {Image} (process {Process}) running after its parent {Parent} exited")]
+    private partial void LogOrphan(string task, string image, int process, int parent);
 
     [GeneratedRegex("<Command>(.*?)</Command>", RegexOptions.Singleline)]
     private static partial Regex CommandElement();
 
     [GeneratedRegex("<Arguments>(.*?)</Arguments>", RegexOptions.Singleline)]
     private static partial Regex ArgumentsElement();
+
+    /// <summary>What the action passes to <c>claude</c>: from <c>remote-control</c> to the closing quote or the end.</summary>
+    [GeneratedRegex("""(?:^|[\s"'\\/])claude(?:\.exe)?"?\s+(remote-control(?:\s[^"']*)?)""", RegexOptions.IgnoreCase)]
+    private static partial Regex ServerArguments();
+
+    /// <summary>A command line's executable: quoted, or up to the first <c>claude</c> or <c>claude.exe</c> that ends a word.</summary>
+    [GeneratedRegex("""^\s*(?:"[^"]*"|.*?claude(?:\.exe)?(?=\s|$))""", RegexOptions.IgnoreCase)]
+    private static partial Regex LeadingImage();
 }

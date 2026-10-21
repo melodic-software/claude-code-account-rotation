@@ -6,6 +6,21 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Fixed
+
+- **A switch no longer leaves the old Remote Control server running beside the new one.** When
+  the task's `conhost.exe` and `pwsh.exe` had exited but its `claude.exe` server had not, the
+  restart could not find the server by walking down from the task, found the task stopped, and
+  ran it again: two servers, the old one still under the previous account. A `claude.exe` with
+  exactly the task's `remote-control` arguments whose parent has exited (or whose parent id now
+  belongs to a later process) is now the task's too, and is ended before the task runs; if it
+  cannot be ended, the task is not run and the result says so. A server whose parent is still
+  running, such as one in an open terminal, is not touched. Before ending a recorded process the
+  restart checks its start time as well as its name: an id now held by a later process is left
+  alone, and the task is not run. A task found stopped while such a server still runs counts as
+  running for the switch, so the server is ended and the task run under the new account. The
+  restart's outcome is now written to the leader's log.
+
 ## [2.3.1] - 2026-10-21
 
 ### Fixed
