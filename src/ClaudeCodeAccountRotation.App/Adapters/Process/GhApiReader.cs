@@ -398,6 +398,10 @@ internal static class GhApiReads
         ArgumentNullException.ThrowIfNull(reader);
         string path = "repos/" + repository + "/actions/runs?status=failure&created=%3E%3D"
             + since.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+            // One page of 30, GitHub's documented default (max 100): the scan
+            // reads at most 30 runs in all, so the newest 30 of each repository
+            // hold the newest 30 overall. Basis:
+            // https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-repository.
             + "&per_page=" + LimitStopScan.MaxRuns.ToString(CultureInfo.InvariantCulture);
         Result<JsonNode, GhApiFailure> read = await reader.GetAsync(path, cancellationToken);
         if (read.IsFailure)
@@ -417,11 +421,8 @@ internal static class GhApiReads
                 && item!["created_at"] is JsonValue created && created.TryGetValue(out string? stamp)
                 && DateTimeOffset.TryParse(stamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTimeOffset createdAt))
             {
-                Uri? url = item["html_url"] is JsonValue html && html.TryGetValue(out string? link)
-                    && Uri.TryCreate(link, UriKind.Absolute, out Uri? page) && page.Scheme == Uri.UriSchemeHttps
-                        ? page
-                        : null;
-                runs.Add(new LaneRun(repository, id, createdAt, url));
+                // The link the page shows is built here, never taken from the answer.
+                runs.Add(new LaneRun(repository, id, createdAt, new Uri("https://github.com/" + repository + "/actions/runs/" + id.ToString(CultureInfo.InvariantCulture))));
             }
         }
 

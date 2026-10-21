@@ -109,12 +109,13 @@ internal static partial class RoleEndpoints
             return Results.Ok(View(roster, catalog, RoleSecretCheck.Evaluate(roster, catalog, clock.GetUtcNow(), clock.LocalTimeZone), failures, switches));
         });
 
-        // The limit-stop warning, asked by the page before it moves a role off
-        // the account in "from": the failed runs of the last 7 days in each
+        // The limit-stop warning, asked once by the page before it moves roles
+        // off the accounts in "from": the failed runs of the last 7 days in each
         // lane repository, at most 30 in all, newest first, then the failed
         // jobs of each and their annotations. GETs only, one at a time; the
         // first rate-limit answer ends the scan as partial. With no lane
-        // repositories configured nothing is read.
+        // repositories configured nothing is read. Every account is judged
+        // from the same read.
         mutations.MapPost("/roles/limit-stops", static async (
             JsonObject? body,
             RosterFile rosterFile,
@@ -123,17 +124,39 @@ internal static partial class RoleEndpoints
             TimeProvider clock,
             CancellationToken cancellationToken) =>
         {
-            string? typed = body?["from"] is JsonValue value && value.TryGetValue(out string? text) ? text : null;
-            Result<AccountEmail, string> from = AccountEmail.Parse(typed ?? string.Empty);
-            if (from.IsFailure)
+            // One address, or a list of them: every account the move takes a
+            // role off, all judged from the one read.
+            List<string?> typed = body?["from"] switch
             {
-                return Results.BadRequest(new { error = "from: " + from.Error });
+                JsonArray many => [.. many.Select(static item => item is JsonValue one && one.TryGetValue(out string? text) ? text : null)],
+                JsonValue one when one.TryGetValue(out string? text) => [text],
+                _ => [],
+            };
+            List<AccountEmail> froms = [];
+            foreach (string? address in typed)
+            {
+                Result<AccountEmail, string> parsed = AccountEmail.Parse(address ?? string.Empty);
+                if (parsed.IsFailure)
+                {
+                    return Results.BadRequest(new { error = "from: " + parsed.Error });
+                }
+
+                if (!froms.Contains(parsed.Value))
+                {
+                    froms.Add(parsed.Value);
+                }
             }
 
+            if (froms.Count == 0)
+            {
+                return Results.BadRequest(new { error = "from: name at least one account" });
+            }
+
+            List<string> accounts = [.. froms.Select(static email => email.Value)];
             IReadOnlyList<string> repositories = configuration.LaneRepositories ?? [];
             if (repositories.Count == 0)
             {
-                return Results.Ok(new LimitStopView(LimitStopView.NotChecked, from.Value.Value, 0, [], []));
+                return Results.Ok(new LimitStopView(LimitStopView.NotChecked, accounts, 0, [], []));
             }
 
             DateTimeOffset now = clock.GetUtcNow();
@@ -200,12 +223,19 @@ internal static partial class RoleEndpoints
                 entry.Half == LaneHistoryEntry.KeyHalf ? RoleHalf.Key : RoleHalf.Token,
                 entry.Account,
                 entry.Previous))];
-            IReadOnlyList<LimitStopHit> hits = LimitStopScan.Hits(from.Value, annotations, history, await rosterFile.ReadAsync(cancellationToken));
+            Roster roster = await rosterFile.ReadAsync(cancellationToken);
+            List<LimitStopHitView> hits = [];
+            foreach (AccountEmail account in froms)
+            {
+                hits.AddRange(LimitStopScan.Hits(account, annotations, history, roster).Select(hit => new LimitStopHitView(
+                    account.Value, hit.Run.Repository, hit.Run.Id, hit.Run.Url, hit.Run.CreatedAt, hit.Role.Name, hit.Half == RoleHalf.Token ? "token" : "key", hit.Credential, hit.Label)));
+            }
+
             return Results.Ok(new LimitStopView(
                 problems.Count == 0 ? LimitStopView.Checked : LimitStopView.Partial,
-                from.Value.Value,
+                accounts,
                 runsRead,
-                [.. hits.Select(static hit => new LimitStopHitView(hit.Run.Repository, hit.Run.Id, hit.Run.Url, hit.Run.CreatedAt, hit.Role.Name, hit.Half == RoleHalf.Token ? "token" : "key", hit.Credential, hit.Label))],
+                hits,
                 problems));
 
             // Notes a failed read; true when it was the rate limit, which ends the scan.
@@ -453,7 +483,7 @@ internal sealed record RoleCheckRowView(
     string? KeyReason = null);
 
 /// <summary>
-/// What a limit-stop scan for <paramref name="Account"/> found:
+/// What one limit-stop scan for <paramref name="Accounts"/> found:
 /// <see cref="NotChecked"/> when no lane repository is configured,
 /// <see cref="Partial"/> when a read failed or GitHub's rate limit ended it
 /// (<paramref name="Problems"/> says which), else <see cref="Checked"/>.
@@ -461,7 +491,7 @@ internal sealed record RoleCheckRowView(
 /// </summary>
 internal sealed record LimitStopView(
     string Outcome,
-    string Account,
+    IReadOnlyList<string> Accounts,
     int RunsRead,
     IReadOnlyList<LimitStopHitView> Hits,
     IReadOnlyList<string> Problems)
@@ -473,8 +503,9 @@ internal sealed record LimitStopView(
     public const string Checked = "checked";
 }
 
-/// <summary>One run that stopped on a limit of a half the account backed: "subscription limit" on a token half, "credit stop" on a key half.</summary>
+/// <summary>One run that stopped on a limit of a half <paramref name="Account"/> backed: "subscription limit" on a token half, "credit stop" on a key half.</summary>
 internal sealed record LimitStopHitView(
+    string Account,
     string Repository,
     long RunId,
     Uri? Url,

@@ -48,7 +48,6 @@
     module.exports.killSwitchRows = killSwitchRows;
     module.exports.toggleKillSwitch = toggleKillSwitch;
     module.exports.limitStopSources = limitStopSources;
-    module.exports.scanLimitStops = scanLimitStops;
     module.exports.limitStopNotice = limitStopNotice;
     module.exports.limitStopGate = limitStopGate;
     return;
@@ -1002,8 +1001,8 @@
     start.focus();
   }
 
-  // Before roles move off other accounts: scan each for limit stops, then
-  // start at once when every scan was whole and found nothing, or show what
+  // Before roles move off other accounts: scan them in one request, then
+  // start at once when the scan was whole and found nothing, or show what
   // was found with Move anyway and Cancel. It never blocks the move.
   function checkLimitStops(froms, panel, status, go) {
     var existing = panel.querySelector(".limit-stops");
@@ -1011,7 +1010,7 @@
     busy = true;
     setButtonsDisabled(true);
     status.textContent = "Checking " + froms.join(", ") + " for limit stops in the last 7 days...";
-    return limitStopGate(froms, send, function (notice) {
+    var ask = function (notice) {
       busy = false;
       setButtonsDisabled(false);
       status.textContent = "";
@@ -1034,12 +1033,15 @@
         box.appendChild(actionButton("Cancel", "secondary", function () { close(false); }));
         panel.insertBefore(box, status);
       });
-    }).then(function (proceed) {
-      busy = false;
-      setButtonsDisabled(false);
-      status.textContent = "";
-      if (proceed) { go(); }
-    });
+    };
+    return limitStopGate(froms, send, ask)
+      .catch(function (error) { return ask([{ kind: "warn", text: "limit stops not checked: " + error, url: null }]); })
+      .then(function (proceed) {
+        busy = false;
+        setButtonsDisabled(false);
+        status.textContent = "";
+        if (proceed) { go(); }
+      });
   }
 
   // Push API key: the stored Console key to the key secret of every role this
@@ -1679,58 +1681,55 @@
     return froms;
   }
 
-  // One POST /api/roles/limit-stops per account, one after another, never
-  // together. A request that fails is kept as a refusal, so the move can
-  // still go ahead.
+  // One POST /api/roles/limit-stops for every account at once: the server
+  // reads the runs once, at most 30, and judges each account from that read.
+  // A request that fails is kept as a refusal, so the move can still go ahead.
   function scanLimitStops(froms, post) {
-    var results = [];
-    return froms.reduce(function (chain, from) {
-      return chain
-        .then(function () { return post("/api/roles/limit-stops", "POST", { from: from }); })
-        .catch(function (error) { return { ok: false, body: { error: String(error) } }; })
-        .then(function (result) { results.push({ from: from, result: result }); });
-    }, Promise.resolve()).then(function () { return results; });
+    return Promise.resolve()
+      .then(function () { return post("/api/roles/limit-stops", "POST", { from: froms }); })
+      .catch(function (error) { return { ok: false, body: { error: String(error) } }; });
   }
 
   // Whether the move goes ahead: at once when no other account is moved off
-  // or every scan was whole and found nothing, else on the operator's answer
-  // to the warning (confirm resolves true for Move anyway).
+  // or the scan was whole and found nothing, else on the operator's answer
+  // to the warning (confirm resolves true for Move anyway). An answer the
+  // warning cannot be read from is shown as not checked, never as a block.
   function limitStopGate(froms, post, confirm) {
     if (!froms.length) { return Promise.resolve(true); }
-    return scanLimitStops(froms, post).then(function (results) {
-      var notice = limitStopNotice(results);
+    return scanLimitStops(froms, post).then(function (result) {
+      var notice;
+      try {
+        notice = limitStopNotice(froms, result);
+      } catch (error) {
+        notice = [{ kind: "warn", text: "limit stops not checked: " + error, url: null }];
+      }
       return notice ? confirm(notice) : true;
     });
   }
 
-  // The warning's lines, or null when every scan was whole and found
-  // nothing. A hit names its run; a scan that could not run, or ran only in
-  // part, says so.
-  function limitStopNotice(results) {
-    var lines = [];
-    function add(kind, text, url) {
-      if (!lines.some(function (line) { return line.text === text; })) { lines.push({ kind: kind, text: text, url: url || null }); }
+  // The warning's lines, or null when the scan was whole and found nothing.
+  // Hits are grouped by account, each naming its run; a scan that could not
+  // run, or ran only in part, says so.
+  function limitStopNotice(froms, result) {
+    var view = (result && result.body) || {};
+    if (!result || !result.ok || !view.outcome) {
+      return [{ kind: "warn", text: "limit stops not checked for " + froms.join(", ") + ". " + refused(view), url: null }];
     }
-    (results || []).forEach(function (scan) {
-      var view = (scan.result && scan.result.body) || {};
-      if (!scan.result || !scan.result.ok || !view.outcome) {
-        add("warn", scan.from + ": limit stops not checked. " + refused(view));
-        return;
-      }
-      if (view.outcome === "notChecked") {
-        add("warn", "limit stops not checked: no lane repositories configured");
-        return;
-      }
-      if ((view.hits || []).length) {
-        add("crit", scan.from + ": This account hit a limit in the last 7 days.");
-        view.hits.forEach(function (hit) {
-          add("crit", hit.label + " · " + hit.role + " (" + hit.credential + ") · " + hit.repository + " · " + String(hit.createdAt).slice(0, 10), hit.url);
-        });
-      }
-      if (view.outcome === "partial") {
-        add("warn", scan.from + ": limit stops checked only in part: " + (view.problems || []).join("; "));
-      }
+    if (view.outcome === "notChecked") {
+      return [{ kind: "warn", text: "limit stops not checked: no lane repositories configured", url: null }];
+    }
+    var lines = [];
+    froms.forEach(function (from) {
+      var hits = (view.hits || []).filter(function (hit) { return hit.account === from; });
+      if (!hits.length) { return; }
+      lines.push({ kind: "crit", text: from + ": This account hit a limit in the last 7 days.", url: null });
+      hits.forEach(function (hit) {
+        lines.push({ kind: "crit", text: hit.label + " · " + hit.role + " (" + hit.credential + ") · " + hit.repository + " · " + String(hit.createdAt).slice(0, 10), url: hit.url || null });
+      });
     });
+    if (view.outcome === "partial") {
+      lines.push({ kind: "warn", text: "limit stops checked only in part: " + (view.problems || []).join("; "), url: null });
+    }
     return lines.length ? lines : null;
   }
 

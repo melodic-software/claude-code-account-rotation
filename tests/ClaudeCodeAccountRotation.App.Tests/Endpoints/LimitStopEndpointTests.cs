@@ -19,6 +19,7 @@ namespace ClaudeCodeAccountRotation.App.Tests.Endpoints;
 public sealed class LimitStopEndpointTests
 {
     private const string A = "a@example.com";
+    private const string B = "b@example.com";
 
     private static readonly Uri _scan = new("/api/roles/limit-stops", UriKind.Relative);
     private static readonly CiRole _automations = new("AUTOMATIONS", CiSecretScope.Organization, "octo");
@@ -150,7 +151,7 @@ public sealed class LimitStopEndpointTests
     }
 
     [Fact]
-    public async Task AtMostThirtyRunsAreReadAcrossEveryRepositoryAndEachRunsRequestAsksForTheLastSevenDays()
+    public async Task AtMostThirtyRunsAreReadInAllForTwoAccountsAndEachRunsRequestAsksForTheLastSevenDays()
     {
         (AppFactory factory, SpyReader reader) = await StartAsync("octo/lanes", "octo/other");
         await using AppFactory _ = factory;
@@ -162,7 +163,7 @@ public sealed class LimitStopEndpointTests
             reader.Answers.Enqueue(Jobs());
         }
 
-        using HttpResponseMessage response = await client.PostAsJsonAsync(_scan, new { from = A }, Token);
+        using HttpResponseMessage response = await client.PostAsJsonAsync(_scan, new { from = new[] { A, B } }, Token);
 
         JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(Token))!;
         body["outcome"]!.GetValue<string>().ShouldBe("checked");
@@ -198,6 +199,78 @@ public sealed class LimitStopEndpointTests
     }
 
     [Fact]
+    public async Task TwoAccountsAreJudgedFromOneReadEachWithItsOwnHits()
+    {
+        (AppFactory factory, SpyReader reader) = await StartAsync("octo/lanes");
+        await using AppFactory _ = factory;
+        using HttpClient client = factory.CreateMutatingClient();
+        DateTimeOffset at = new(2026, 9, 1, 0, 0, 0, TimeSpan.Zero);
+        await factory.Services.GetRequiredService<RosterFile>().History.AppendAsync(
+            [
+                new LaneHistoryEntry(at, _automations, LaneHistoryEntry.TokenHalf, A, null, LaneVia.Assign),
+                new LaneHistoryEntry(at, _automations, LaneHistoryEntry.KeyHalf, B, null, LaneVia.Assign),
+            ],
+            Token);
+        reader.Answers.Enqueue(Runs("octo/lanes", (101, "2026-09-05T09:00:00Z")));
+        reader.Answers.Enqueue(Jobs(("failure", "https://api.github.com/repos/octo/lanes/check-runs/555")));
+        reader.Answers.Enqueue(Annotations(
+            "lane=intake class=rate-limit credential=AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN",
+            "lane=intake class=rate-limit credential=AUTOMATIONS_CLAUDE_API_KEY"));
+
+        using HttpResponseMessage response = await client.PostAsJsonAsync(_scan, new { from = new[] { A, B } }, Token);
+
+        reader.Paths.Count.ShouldBe(3);
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(Token))!;
+        body["accounts"]!.AsArray().Select(static account => account!.GetValue<string>()).ShouldBe([A, B]);
+        body["hits"]!.AsArray().Select(static hit => (hit!["account"]!.GetValue<string>(), hit["label"]!.GetValue<string>())).ShouldBe([
+            (A, "subscription limit"),
+            (B, "credit stop"),
+        ]);
+    }
+
+    [Fact]
+    public async Task ARateLimitWhileListingRunsEndsTheScanAsPartialWithNoFurtherRead()
+    {
+        (AppFactory factory, SpyReader reader) = await StartAsync("octo/lanes", "octo/other");
+        await using AppFactory _ = factory;
+        using HttpClient client = factory.CreateMutatingClient();
+        reader.Answers.Enqueue(RateLimited());
+
+        using HttpResponseMessage response = await client.PostAsJsonAsync(_scan, new { from = A }, Token);
+
+        reader.Paths.ShouldBe([RunsPath("octo/lanes")]);
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(Token))!;
+        body["outcome"]!.GetValue<string>().ShouldBe("partial");
+        body["problems"]!.AsArray().Select(static problem => problem!.GetValue<string>()).ShouldBe([GhApiReader.RateLimitMessage]);
+    }
+
+    [Fact]
+    public async Task ARateLimitWhileReadingAnnotationsEndsTheScanAsPartialWithNoFurtherRead()
+    {
+        (AppFactory factory, SpyReader reader) = await StartAsync("octo/lanes");
+        await using AppFactory _ = factory;
+        using HttpClient client = factory.CreateMutatingClient();
+        await HistoryAsync(factory);
+        reader.Answers.Enqueue(Runs("octo/lanes", (101, "2026-09-05T09:00:00Z"), (102, "2026-09-04T09:00:00Z")));
+        reader.Answers.Enqueue(Jobs(
+            ("failure", "https://api.github.com/repos/octo/lanes/check-runs/555"),
+            ("failure", "https://api.github.com/repos/octo/lanes/check-runs/556")));
+        reader.Answers.Enqueue(RateLimited());
+
+        using HttpResponseMessage response = await client.PostAsJsonAsync(_scan, new { from = A }, Token);
+
+        reader.Paths.ShouldBe([
+            RunsPath("octo/lanes"),
+            "repos/octo/lanes/actions/runs/101/jobs?filter=all&per_page=100",
+            "repos/octo/lanes/check-runs/555/annotations?per_page=100",
+        ]);
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(Token))!;
+        body["outcome"]!.GetValue<string>().ShouldBe("partial");
+        body["runsRead"]!.GetValue<int>().ShouldBe(0);
+        body["problems"]!.AsArray().Select(static problem => problem!.GetValue<string>()).ShouldBe([GhApiReader.RateLimitMessage]);
+    }
+
+    [Fact]
     public async Task AFromThatIsNoAddressIsRefusedBeforeAnyRead()
     {
         (AppFactory factory, SpyReader reader) = await StartAsync("octo/lanes");
@@ -205,8 +278,12 @@ public sealed class LimitStopEndpointTests
         using HttpClient client = factory.CreateMutatingClient();
 
         using HttpResponseMessage response = await client.PostAsJsonAsync(_scan, new { from = "not an address" }, Token);
+        using HttpResponseMessage inList = await client.PostAsJsonAsync(_scan, new { from = new[] { A, "not an address" } }, Token);
+        using HttpResponseMessage empty = await client.PostAsJsonAsync(_scan, new { from = Array.Empty<string>() }, Token);
 
         response.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
+        inList.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
+        empty.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
         reader.Paths.ShouldBeEmpty();
     }
 

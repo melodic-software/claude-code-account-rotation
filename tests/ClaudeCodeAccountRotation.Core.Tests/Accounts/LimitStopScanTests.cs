@@ -76,6 +76,19 @@ public sealed class LimitStopScanTests
     }
 
     [Fact]
+    public void AChangeAtTheInstantTheRunStartedCountsAsAlreadyMade()
+    {
+        IReadOnlyList<RoleHalfChange> history =
+        [
+            Change(new DateTimeOffset(2026, 10, 1, 0, 0, 0, TimeSpan.Zero), RoleHalf.Token, A, null),
+            Change(_run.CreatedAt, RoleHalf.Token, B, A),
+        ];
+
+        HitsFor(B, RateLimit("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN"), history).ShouldHaveSingleItem();
+        HitsFor(A, RateLimit("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN"), history).ShouldBeEmpty();
+    }
+
+    [Fact]
     public void WhenEveryChangeCameAfterTheRunItsPreviousAccountBackedTheHalf()
     {
         IReadOnlyList<RoleHalfChange> history = [Change(new DateTimeOffset(2026, 10, 19, 0, 0, 0, TimeSpan.Zero), RoleHalf.Token, B, A)];

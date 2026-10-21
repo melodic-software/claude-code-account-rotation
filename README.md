@@ -500,19 +500,20 @@ reported as not set or not visible to this sign-in, and never created. The repos
 variable is ever written. The route is `POST /api/kill-switches` with `{"org", "name", "value"}`;
 any other name, or a value other than `true` or `false`, is refused before `gh` runs.
 
-Before Start sign-in moves a role off another account, the page checks that account for limit
-stops, one account at a time, and only on that click. For each repository in `laneRepositories` it
-lists the failed runs created in the last 7 days, reads at most 30 runs in all, newest first, then
-reads the annotations of each failed job. A run counts when an annotation's message holds
-`class=rate-limit` and `credential=<secret>`, where the secret is a half that account backed when
-the run started (by `lane-history.jsonl`, else the roster), in the run's organization or
+Before Start sign-in moves roles off other accounts, the page checks those accounts for limit
+stops with one request, only on that click. For each repository in `laneRepositories` it lists
+the failed runs created in the last 7 days, reads at most 30 runs in all, newest first, then reads
+the annotations of each failed job. A run counts against an account when an annotation's message
+holds `class=rate-limit` and `credential=<secret>`, where the secret is a half that account backed
+when the run started (by `lane-history.jsonl`, else the roster), in the run's organization or
 repository: a token half reads "subscription limit" and a key half "credit stop". The panel then
-says "This account hit a limit in the last 7 days." and lists the runs, with Move anyway and
-Cancel; it never blocks the move. With no `laneRepositories` it says "limit stops not checked: no
-lane repositories configured", and a check that failed or ran into GitHub's rate limit says it
-checked only in part; both still offer Move anyway. The first rate-limit answer ends the check,
-with no retry. A clean check starts the sign-in at once. The review lanes print no credential, so
-their stops are not seen. The route is `POST /api/roles/limit-stops` with `{"from": "<email>"}`.
+says "This account hit a limit in the last 7 days." under each such account and lists its runs,
+with Move anyway and Cancel; it never blocks the move. With no `laneRepositories` it says "limit
+stops not checked: no lane repositories configured", and a check that failed or ran into GitHub's
+rate limit says it checked only in part; both still offer Move anyway. The first rate-limit answer
+ends the check, with no retry. A clean check starts the sign-in at once. The review lanes print
+no credential, so their stops are not seen. The route is `POST /api/roles/limit-stops` with
+`{"from": ["<email>", ...]}` (one address alone also works); each hit names its `account`.
 
 To mark an account by hand instead (for a token made outside the tool, or when the tool set the
 secret but could not update the roster), open Edit and set "CI token generated on". Optionally
