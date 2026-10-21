@@ -843,17 +843,17 @@ public sealed class ConfigurationTests : IDisposable
         try
         {
             string? url = await WaitForDashboardAsync(process, dashboard, cancellationToken);
-            url.ShouldNotBeNull(output.ToString());
+            url.ShouldNotBeNull(Text(output));
             url.ShouldStartWith("http://127.0.0.1:");
             token = (await File.ReadAllLinesAsync(Path.Combine(appData, "instance.url"), cancellationToken))[1].Trim();
 
             using HttpClient client = new() { Timeout = TimeSpan.FromSeconds(20) };
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
             using HttpResponseMessage response = await client.GetAsync(new Uri(url + "/api/dashboard"), cancellationToken);
-            ((int)response.StatusCode).ShouldBe(200, output.ToString());
+            ((int)response.StatusCode).ShouldBe(200, Text(output));
 
             // What a detached --open waits on: this instance's own token is accepted, another is not.
-            (await DetachedLeader.ProbeAsync(url, token, cancellationToken)).ShouldBeTrue(output.ToString());
+            (await DetachedLeader.ProbeAsync(url, token, cancellationToken)).ShouldBeTrue(Text(output));
             (await DetachedLeader.ProbeAsync(url, "not-this-instance", cancellationToken)).ShouldBeFalse();
 
             // The printed port is the origin mutations accept. The file's listenPort
@@ -863,7 +863,7 @@ public sealed class ConfigurationTests : IDisposable
             boundOrigin.Headers.TryAddWithoutValidation(SameOriginMutationFilter.HeaderName, "1");
             boundOrigin.Headers.TryAddWithoutValidation("Origin", url);
             using HttpResponseMessage posted = await client.SendAsync(boundOrigin, cancellationToken);
-            ((int)posted.StatusCode).ShouldBe(400, output.ToString());
+            ((int)posted.StatusCode).ShouldBe(400, Text(output));
 
             int boundPort = new Uri(url).Port;
             if (boundPort != 48211)
@@ -872,7 +872,7 @@ public sealed class ConfigurationTests : IDisposable
                 configuredOrigin.Headers.TryAddWithoutValidation(SameOriginMutationFilter.HeaderName, "1");
                 configuredOrigin.Headers.TryAddWithoutValidation("Origin", "http://127.0.0.1:48211");
                 using HttpResponseMessage rejected = await client.SendAsync(configuredOrigin, cancellationToken);
-                ((int)rejected.StatusCode).ShouldBe(403, output.ToString());
+                ((int)rejected.StatusCode).ShouldBe(403, Text(output));
             }
         }
         finally
@@ -887,7 +887,7 @@ public sealed class ConfigurationTests : IDisposable
             await stderr;
             if (token is not null)
             {
-                output.ToString().ShouldNotContain(token);
+                Text(output).ShouldNotContain(token);
             }
         }
     }
@@ -904,6 +904,16 @@ public sealed class ConfigurationTests : IDisposable
         catch (OperationCanceledException)
         {
             // The test is already leaving; the process is stopped in the caller.
+        }
+    }
+
+    // The readers append from their own threads while an assertion reads, so
+    // every read takes the same lock as the append.
+    private static string Text(StringBuilder output)
+    {
+        lock (output)
+        {
+            return output.ToString();
         }
     }
 
