@@ -39,9 +39,11 @@ Status: a tagged release exists.
   Refresh is pressed, or the rate-limit stop hook fires, at most once a minute per account, never
   on a timer. It reads GitHub only through `gh api`, with gh's own User-Agent and sign-in, and
   only when you click Check roles, Generate CI token or Push API key: those read secret names,
-  dates and visibility, never a value. The first rate-limit answer stops what was clicked, and
-  nothing retries it. Writes go one at a time, at least a second apart. It changes a lane kill
-  switch's value only when you confirm its toggle, and never creates one.
+  dates and visibility, never a value. Start sign-in, when it moves a role off another account,
+  also reads up to 30 failed lane runs of the last 7 days, their jobs and annotations. The first
+  rate-limit answer stops what was clicked, and nothing retries it. Writes go one at a time, at
+  least a second apart. It changes a lane kill switch's value only when you confirm its toggle,
+  and never creates one.
 - The parked-pair refresh presents Claude Code's public OAuth `client_id`.
 - An optional Admin key, stored per account like the Console key, lets Check API key read the
   organization's key list from the Admin API (`GET /v1/organizations/api_keys`) and say whether
@@ -152,7 +154,7 @@ its terms at any time.
 | OAuth `client_id` for parked refreshes | Claude Code's public one | [Posture](#posture); [`AnthropicEndpoints.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Http/AnthropicEndpoints.cs) |
 | CI tokens | Only on a click: the unmodified `claude setup-token` makes the token, you sign in on Anthropic's page and paste the code, and the token goes from the CLI's output to `gh secret set` in memory, never to disk, a log, or the page | [Assigning accounts to CI roles](#assigning-accounts-to-ci-roles); [`ClaudeCliSetupTokenRunner.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Process/ClaudeCliSetupTokenRunner.cs) |
 | Console API keys | Kept only in the OS store, per machine; read only to hand to `gh secret set` on its standard input | [Posture](#posture); [`ApiKeyEndpoints.cs`](src/ClaudeCodeAccountRotation.App/Endpoints/ApiKeyEndpoints.cs) |
-| GitHub reads | Only on a click, through `gh api`: secret names, dates and visibility, never a value | [Posture](#posture); [`GhApiReader.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Process/GhApiReader.cs) |
+| GitHub reads | Only on a click, through `gh api`: secret names, dates and visibility, never a value; before a role moves, up to 30 failed lane runs and their annotations | [Posture](#posture); [`GhApiReader.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Process/GhApiReader.cs) |
 
 Two points are gray:
 
@@ -507,6 +509,21 @@ reported as not set or not visible to this sign-in, and never created. The repos
 variable is ever written. The route is `POST /api/kill-switches` with `{"org", "name", "value"}`;
 any other name, or a value other than `true` or `false`, is refused before `gh` runs.
 
+Before Start sign-in moves roles off other accounts, the page checks those accounts for limit
+stops with one request, only on that click. For each repository in `laneRepositories` it lists
+the failed runs created in the last 7 days, reads at most 30 runs in all, newest first, then reads
+the annotations of each failed job. A run counts against an account when an annotation's message
+holds `class=rate-limit` and `credential=<secret>`, where the secret is a half that account backed
+when the run started (by `lane-history.jsonl`, else the roster), in the run's organization or
+repository: a token half reads "subscription limit" and a key half "credit stop". The panel then
+says "This account hit a limit in the last 7 days." under each such account and lists its runs,
+with Move anyway and Cancel; it never blocks the move. With no `laneRepositories` it says "limit
+stops not checked: no lane repositories configured", and a check that failed or ran into GitHub's
+rate limit says it checked only in part; both still offer Move anyway. The first rate-limit answer
+ends the check, with no retry. A clean check starts the sign-in at once. The review lanes print
+no credential, so their stops are not seen. The route is `POST /api/roles/limit-stops` with
+`{"from": ["<email>", ...]}` (one address alone also works); each hit names its `account`.
+
 To mark an account by hand instead (for a token made outside the tool, or when the tool set the
 secret but could not update the roster), open Edit and set "CI token generated on". Optionally
 also set "CI secret name" and "CI secret in" (`owner/repository`, or an organization), then
@@ -569,7 +586,8 @@ schema bump. Do not edit `config.json`, `roster.json`, or `state/live-owner.json
 copy a template over an existing config.
 
 The app calls the GitHub API only through `gh`, for Check roles, CI secret writes, kill-switch
-toggles and the secret metadata it reads on those clicks, and never
+toggles, the limit-stop check before a role moves, and the secret metadata it reads on those
+clicks, and never
 to look for releases; the dashboard has no "update available" line. Compare
 `claude-code-account-rotation --version` with
 <https://github.com/melodic-software/claude-code-account-rotation/releases/latest>.

@@ -378,4 +378,136 @@ internal static class GhApiReads
             "the repository list for " + path + " ran past " + MaxPages.ToString(CultureInfo.InvariantCulture) + " pages, so nothing was written",
             RateLimited: false));
     }
+
+    /// <summary>
+    /// The failed runs of <paramref name="repository"/> (<c>owner/name</c>,
+    /// already held to GitHub's rules) created on or after the UTC date of
+    /// <paramref name="since"/>, newest first, one page of
+    /// <see cref="LimitStopScan.MaxRuns"/>: no scan reads more runs than that
+    /// in total. <c>created</c> takes the search syntax's <c>&gt;=YYYY-MM-DD</c>,
+    /// percent-encoded; the date is a day wider than the window, which
+    /// <see cref="LimitStopScan.Newest"/> then trims. A run with no readable id
+    /// or <c>created_at</c> is skipped.
+    /// Basis: https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-repository and
+    /// https://docs.github.com/en/search-github/getting-started-with-searching-on-github/understanding-the-search-syntax#query-for-dates.
+    /// </summary>
+    public static async Task<Result<IReadOnlyList<LaneRun>, GhApiFailure>> ListFailedRunsAsync(
+        this IGhApiReader reader,
+        string repository,
+        DateTimeOffset since,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(reader);
+        string path = "repos/" + repository + "/actions/runs?status=failure&created=%3E%3D"
+            + since.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+            // One page of 30, GitHub's documented default (max 100): the scan
+            // reads at most 30 runs in all, so the newest 30 of each repository
+            // hold the newest 30 overall. Basis:
+            // https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-repository.
+            + "&per_page=" + LimitStopScan.MaxRuns.ToString(CultureInfo.InvariantCulture);
+        Result<JsonNode, GhApiFailure> read = await reader.GetAsync(path, cancellationToken);
+        if (read.IsFailure)
+        {
+            return Result<IReadOnlyList<LaneRun>, GhApiFailure>.Failure(read.Error);
+        }
+
+        if (read.Value["workflow_runs"] is not JsonArray listed)
+        {
+            return Result<IReadOnlyList<LaneRun>, GhApiFailure>.Failure(new GhApiFailure("GitHub's run list for " + repository + " was not in the shape its documentation gives", RateLimited: false));
+        }
+
+        List<LaneRun> runs = [];
+        foreach (JsonNode? item in listed)
+        {
+            if (Id(item?["id"]) is long id
+                && item!["created_at"] is JsonValue created && created.TryGetValue(out string? stamp)
+                && DateTimeOffset.TryParse(stamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTimeOffset createdAt))
+            {
+                // The link the page shows is built here, never taken from the answer.
+                runs.Add(new LaneRun(repository, id, createdAt, new Uri("https://github.com/" + repository + "/actions/runs/" + id.ToString(CultureInfo.InvariantCulture))));
+            }
+        }
+
+        return Result<IReadOnlyList<LaneRun>, GhApiFailure>.Success(runs);
+    }
+
+    /// <summary>
+    /// The check run of each failed job of <paramref name="run"/>, every
+    /// attempt's, from one page of up to 100 jobs. The id comes from the job's
+    /// <c>check_run_url</c>, since the docs do not promise it equals the job
+    /// id, and only from one that points at a check run of the same
+    /// repository: the URL is GitHub's answer, never passed to gh as given.
+    /// Basis: https://docs.github.com/en/rest/actions/workflow-jobs#list-jobs-for-a-workflow-run.
+    /// </summary>
+    public static async Task<Result<IReadOnlyList<long>, GhApiFailure>> ListFailedJobCheckRunsAsync(
+        this IGhApiReader reader,
+        LaneRun run,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(reader);
+        ArgumentNullException.ThrowIfNull(run);
+        string path = "repos/" + run.Repository + "/actions/runs/" + run.Id.ToString(CultureInfo.InvariantCulture) + "/jobs?filter=all&per_page=" + PageSize.ToString(CultureInfo.InvariantCulture);
+        Result<JsonNode, GhApiFailure> read = await reader.GetAsync(path, cancellationToken);
+        if (read.IsFailure)
+        {
+            return Result<IReadOnlyList<long>, GhApiFailure>.Failure(read.Error);
+        }
+
+        if (read.Value["jobs"] is not JsonArray jobs)
+        {
+            return Result<IReadOnlyList<long>, GhApiFailure>.Failure(new GhApiFailure("GitHub's job list for run " + run.Id.ToString(CultureInfo.InvariantCulture) + " in " + run.Repository + " was not in the shape its documentation gives", RateLimited: false));
+        }
+
+        string expected = "/repos/" + run.Repository + "/check-runs/";
+        List<long> checkRuns = [];
+        foreach (JsonNode? job in jobs)
+        {
+            if (job?["conclusion"] is JsonValue conclusion && conclusion.TryGetValue(out string? outcome) && outcome == "failure"
+                && job["check_run_url"] is JsonValue url && url.TryGetValue(out string? link)
+                && Uri.TryCreate(link, UriKind.Absolute, out Uri? parsed)
+                && parsed.Scheme == Uri.UriSchemeHttps
+                && parsed.AbsolutePath.LastIndexOf(expected, StringComparison.OrdinalIgnoreCase) is int at and >= 0
+                && parsed.AbsolutePath[(at + expected.Length)..] is { Length: > 0 } digits
+                && digits.All(char.IsAsciiDigit)
+                && long.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out long id))
+            {
+                checkRuns.Add(id);
+            }
+        }
+
+        return Result<IReadOnlyList<long>, GhApiFailure>.Success(checkRuns);
+    }
+
+    /// <summary>
+    /// The messages of a check run's annotations, one page of up to 100. The
+    /// answer is a bare array; an annotation with no message is skipped.
+    /// Basis: https://docs.github.com/en/rest/checks/runs#list-check-run-annotations.
+    /// </summary>
+    public static async Task<Result<IReadOnlyList<string>, GhApiFailure>> ListAnnotationMessagesAsync(
+        this IGhApiReader reader,
+        string repository,
+        long checkRun,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(reader);
+        string path = "repos/" + repository + "/check-runs/" + checkRun.ToString(CultureInfo.InvariantCulture) + "/annotations?per_page=" + PageSize.ToString(CultureInfo.InvariantCulture);
+        Result<JsonNode, GhApiFailure> read = await reader.GetAsync(path, cancellationToken);
+        if (read.IsFailure)
+        {
+            return Result<IReadOnlyList<string>, GhApiFailure>.Failure(read.Error);
+        }
+
+        return read.Value is JsonArray annotations
+            ? Result<IReadOnlyList<string>, GhApiFailure>.Success([.. annotations
+                .Select(static annotation => annotation?["message"] is JsonValue message && message.TryGetValue(out string? text) ? text : null)
+                .OfType<string>()])
+            : Result<IReadOnlyList<string>, GhApiFailure>.Failure(new GhApiFailure("GitHub's annotations for check run " + checkRun.ToString(CultureInfo.InvariantCulture) + " in " + repository + " were not in the shape its documentation gives", RateLimited: false));
+    }
+
+    /// <summary>A JSON number read from its text, so an id held as any integer type reads the same; else null.</summary>
+    private static long? Id(JsonNode? node) =>
+        node is JsonValue id && id.GetValueKind() == JsonValueKind.Number
+            && long.TryParse(id.ToJsonString(), NumberStyles.None, CultureInfo.InvariantCulture, out long number)
+                ? number
+                : null;
 }
