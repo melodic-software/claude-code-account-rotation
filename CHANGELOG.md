@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [2.3.2] - 2026-10-21
+
 ### Fixed
 
 - **A switch no longer leaves the old Remote Control server running beside the new one.** When
