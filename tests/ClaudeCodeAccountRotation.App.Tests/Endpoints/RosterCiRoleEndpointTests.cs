@@ -50,6 +50,12 @@ public sealed class RosterCiRoleEndpointTests
         await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
         using HttpClient client = factory.CreateMutatingClient();
         await client.PostAsJsonAsync(_accounts, new { email = NewEmail }, TestContext.Current.CancellationToken);
+        // Laid out by hand, so any rewrite of the file would show in its bytes.
+        string rosterPath = Path.Combine(factory.AppData, RosterFile.FileName);
+        string handWritten = "{\n    \"accounts\": [ { \"email\": \"" + NewEmail + "\", \"kept\": \"by hand\" } ]\n}\n";
+        await File.WriteAllTextAsync(rosterPath, handWritten, TestContext.Current.CancellationToken);
+        string historyPath = Path.Combine(factory.AppData, LaneHistoryFile.FileName);
+        string? historyBefore = File.Exists(historyPath) ? await File.ReadAllTextAsync(historyPath, TestContext.Current.CancellationToken) : null;
 
         using HttpResponseMessage response = await PatchAsync(
             client,
@@ -57,7 +63,68 @@ public sealed class RosterCiRoleEndpointTests
 
         response.StatusCode.ShouldBe(HttpStatusCode.Conflict);
         (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["refusal"]!.GetValue<string>().ShouldBe("RoleHalfNotHeld");
-        (await StoredAsync(factory, TestContext.Current.CancellationToken)).CiRoles.ShouldBeEmpty();
+        (await File.ReadAllTextAsync(rosterPath, TestContext.Current.CancellationToken)).ShouldBe(handWritten);
+        (File.Exists(historyPath) ? await File.ReadAllTextAsync(historyPath, TestContext.Current.CancellationToken) : null).ShouldBe(historyBefore);
+    }
+
+    [Fact]
+    public async Task AnEditOfAnAccountNotOnARosterThatDoesNotParseLeavesTheFileAsItWas()
+    {
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        string rosterPath = Path.Combine(factory.AppData, RosterFile.FileName);
+        const string broken = "{ \"accounts\": [ { \"email\": \"new@example.com\", ";
+        await File.WriteAllTextAsync(rosterPath, broken, TestContext.Current.CancellationToken);
+
+        using HttpResponseMessage response = await PatchAsync(client, """{ "notes": "edited" }""");
+
+        response.StatusCode.ShouldBe(HttpStatusCode.NotFound);
+        (await File.ReadAllTextAsync(rosterPath, TestContext.Current.CancellationToken)).ShouldBe(broken);
+    }
+
+    [Fact]
+    public async Task AStaleRepairDoesNotTakeATokenHalfAnotherAccountWasAssignedSince()
+    {
+        // A's form names the AUTOMATIONS secret by hand; B is then assigned AUTOMATIONS; A saves.
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        AccountEmail a = AccountEmail.Parse(NewEmail).Value;
+        AccountEmail b = AccountEmail.Parse("other@example.com").Value;
+        DateTimeOffset assignedAt = new(2026, 10, 6, 9, 0, 0, TimeSpan.Zero);
+        await SeedAsync(factory, roster => roster.With(new RosterEntry(a)));
+        await SeedAsync(factory, roster => roster.With(new RosterEntry(b).ClaimingToken(_automations, new DateOnly(2026, 10, 6), assignedAt)), LaneVia.Assign);
+
+        using HttpResponseMessage response = await PatchAsync(
+            client,
+            """{ "ciTokenGeneratedOn": "2026-10-01", "ciTokenSecret": { "name": "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", "organization": "octo" } }""");
+
+        response.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["refusal"]!.GetValue<string>().ShouldBe("TokenHalfHeldElsewhere");
+        Roster roster = await factory.Services.GetRequiredService<RosterFile>().ReadAsync(TestContext.Current.CancellationToken);
+        roster.Find(a)!.CiRoles.ShouldBeEmpty();
+        roster.Find(b)!.CiRoles.ShouldBe([new CiRoleAssignment(_automations, new DateOnly(2026, 10, 6), assignedAt)]);
+        JsonArray history = (await client.GetFromJsonAsync<JsonArray>(new Uri("/api/lane-history", UriKind.Relative), TestContext.Current.CancellationToken))!;
+        List<(string?, string?)> moves = [.. history.Select(static line => ((string?)line!["previous"], (string?)line["account"]))];
+        moves.ShouldNotContain((b.Value, a.Value));
+    }
+
+    [Fact]
+    public async Task TheRepairStillTakesATokenHalfSetByHandOnAnEarlierDay()
+    {
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        AccountEmail a = AccountEmail.Parse(NewEmail).Value;
+        AccountEmail b = AccountEmail.Parse("other@example.com").Value;
+        await SeedAsync(factory, roster => roster.With(new RosterEntry(a)).With(new RosterEntry(b).ClaimingToken(_automations, new DateOnly(2026, 1, 15), null)));
+
+        using HttpResponseMessage response = await PatchAsync(
+            client,
+            """{ "ciTokenGeneratedOn": "2026-10-06", "ciTokenSecret": { "name": "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", "organization": "octo" } }""");
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        Roster roster = await factory.Services.GetRequiredService<RosterFile>().ReadAsync(TestContext.Current.CancellationToken);
+        roster.Find(a)!.CiRoles.ShouldBe([new CiRoleAssignment(_automations, new DateOnly(2026, 10, 6))]);
+        roster.Find(b)!.CiRoles.ShouldBeEmpty();
     }
 
     [Fact]

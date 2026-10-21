@@ -25,7 +25,7 @@ All notable changes to this project are documented in this file. The format foll
   the day the account's Console API key was stored (see the next entry).
   `PATCH /api/accounts/{email}` takes `removeCiRoles`, the roles to take off that account only.
   It also accepts `ciRoles`, the whole list, but only to leave out roles or halves: a half the
-  account does not hold with the same dates is refused with 409 (#259).
+  account does not hold with the same dates and instants is refused with 409 (#259).
 - **Console API key in the OS store.** Set API key on a card keeps the account's Console API key in
   Windows Credential Manager (this computer only) or, on Linux, the Secret Service through
   libsecret. `PUT /api/accounts/{email}/api-key` takes the key in the body and
@@ -65,7 +65,8 @@ All notable changes to this project are documented in this file. The format foll
   (the 2.1.0 body, or the Edit repair) leaves another account that role's other half. Edit only
   takes roles off: it names just the roles you untick, and sends the CI token date only when you
   change it, so a form opened before another account took a role cannot take it back. The Edit
-  repair, a CI secret named by hand, is the one way Edit claims a role.
+  repair, a CI secret named by hand, is the one way Edit claims a role, and it is refused (409)
+  when another account holds that token half set through the tool or on a later day.
   `POST /api/accounts/{email}/ci-token` takes `roles`; the 2.1.0 single-secret body still works
   and writes the token half only (#259).
 - **Push API key.** `POST /api/accounts/{email}/api-key/push`, on the card's ··· menu, re-sends

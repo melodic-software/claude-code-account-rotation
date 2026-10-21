@@ -100,7 +100,7 @@ public sealed class RosterFileCiRoleTests : IDisposable
 
         await file.UpdateAsync(roster => roster.With(entry), TestContext.Current.CancellationToken);
         string written = await File.ReadAllTextAsync(RosterPath, TestContext.Current.CancellationToken);
-        await file.UpdateAsync(static roster => roster, TestContext.Current.CancellationToken);
+        await file.UpdateAsync(static roster => new Roster(roster.Entries), TestContext.Current.CancellationToken);
 
         RosterEntry stored = (await file.ReadAsync(TestContext.Current.CancellationToken)).Find(Email("a@example.com"))!;
         stored.ShouldBe(entry);

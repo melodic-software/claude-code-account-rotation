@@ -67,6 +67,9 @@ internal static partial class RosterEndpoints
             }
 
             AccountEmail email = parsed.Value;
+
+            // Read early so a duplicate spawns no CLI and touches no folder; the
+            // write below checks again on the roster it is handed.
             if ((await rosterFile.ReadAsync(cancellationToken)).Find(email) is not null)
             {
                 return Refused("AlreadyOnRoster", email.Value + " is already on the roster.");
@@ -98,7 +101,19 @@ internal static partial class RosterEndpoints
                 directory.Value,
                 Paused: false,
                 Text(body, "notes"));
-            await rosterFile.UpdateAsync(roster => roster.With(entry), cancellationToken);
+            bool added = false;
+            await rosterFile.UpdateAsync(
+                roster =>
+                {
+                    added = roster.Find(email) is null;
+                    return added ? roster.With(entry) : roster;
+                },
+                cancellationToken);
+            if (!added)
+            {
+                return Refused("AlreadyOnRoster", email.Value + " is already on the roster.");
+            }
+
             return Results.Ok(new AccountCardView(
                 email.Value,
                 IsLive: false,
@@ -197,7 +212,7 @@ internal static partial class RosterEndpoints
                         return roster;
                     }
 
-                    (updated, refusal) = Edited(existing, body, browser.Value, directory.Value, ciTokenGeneratedOn.Value, ciTokenSecret.Value, ciRoles.Value, removeCiRoles.Value);
+                    (updated, refusal) = Edited(roster, existing, body, browser.Value, directory.Value, ciTokenGeneratedOn.Value, ciTokenSecret.Value, ciRoles.Value, removeCiRoles.Value);
                     return updated is null ? roster : roster.With(updated);
                 },
                 cancellationToken,
@@ -496,9 +511,13 @@ internal static partial class RosterEndpoints
     /// for a CI token whose secret was set but whose roster write failed. It is
     /// dated by the request's <c>ciTokenGeneratedOn</c> or, when the request
     /// sends none, by the date the entry already holds; with neither it is refused.
+    /// It is refused too when another account holds that token half set through
+    /// the tool (with an instant) or on a later day: that half was not lost to a
+    /// failed write, and a form drawn before it was set must not take it.
     /// </para>
     /// </summary>
     private static (RosterEntry? Updated, IResult? Refusal) Edited(
+        Roster roster,
         RosterEntry existing,
         JsonObject body,
         BrowserFamily? browser,
@@ -547,13 +566,23 @@ internal static partial class RosterEndpoints
                 return (null, Results.BadRequest(new { error = "a CI secret needs the date its token was generated (ciTokenGeneratedOn)" }));
             }
 
-            updated = updated.ClaimingToken(CiRole.FromTokenSecret(secret), setOn, setAt: null);
+            var role = CiRole.FromTokenSecret(secret);
+            if (roster.Entries.FirstOrDefault(other => other.Email != existing.Email && other.CiRoles.Any(held =>
+                    held.Role.Equals(role) && held.HasToken && (held.TokenSetAt is not null || held.TokenSetOn > setOn))) is RosterEntry holder)
+            {
+                return (null, Refused(
+                    "TokenHalfHeldElsewhere",
+                    holder.Email.Value + " holds the token of " + role + ", set through the tool or after " + setOn.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+                    + ", so naming that secret here is not the repair for a failed roster write and would take it from them. To move the role, run Generate CI token for it again."));
+            }
+
+            updated = updated.ClaimingToken(role, setOn, setAt: null);
         }
 
         return (updated, null);
     }
 
-    /// <summary>Whether <paramref name="entry"/> holds every half <paramref name="named"/> names, with the same dates.</summary>
+    /// <summary>Whether <paramref name="entry"/> holds every half <paramref name="named"/> names, with the same dates and instants.</summary>
     private static bool Holds(RosterEntry entry, CiRoleAssignment named) =>
         entry.CiRoles.FirstOrDefault(held => held.Role.Equals(named.Role)) is CiRoleAssignment held
         && (!named.HasToken || (named.TokenSetOn, named.TokenSetAt) == (held.TokenSetOn, held.TokenSetAt))
