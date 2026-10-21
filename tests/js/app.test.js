@@ -695,16 +695,34 @@ test("a toggle sends nothing until the page's confirmation is accepted", async (
 
 const { limitStopSources, limitStopNotice, limitStopGate } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
 
-test("a start moves roles off each other account that backs a picked role, once, and none when no picked role has another holder", () => {
-  const picked = [
-    { holder: "a@example.com" },
-    { holder: "b@example.com" },
-    { holder: "a@example.com" },
-    { holder: "me@example.com" },
-    { holder: null }
+function holding(email, roles) {
+  return { email: email, roster: { ciRoles: roles } };
+}
+
+const AUTOMATIONS_TOKEN = { prefix: "AUTOMATIONS", organization: "octo", tokenSecret: "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", keySecret: "AUTOMATIONS_CLAUDE_API_KEY", tokenSetOn: "2026-10-01", keySetOn: null };
+const AUTOMATIONS_KEY = Object.assign({}, AUTOMATIONS_TOKEN, { tokenSetOn: null, keySetOn: "2026-10-01" });
+
+test("a ticked role scans each other account that holds it, once, and never this account", () => {
+  const accounts = [
+    holding("a@example.com", [AUTOMATIONS_TOKEN]),
+    holding("me@example.com", [AUTOMATIONS_KEY]),
+    holding("c@example.com", [Object.assign({}, AUTOMATIONS_TOKEN, { organization: "elsewhere" })])
   ];
-  assert.deepStrictEqual(limitStopSources(picked, "me@example.com"), ["a@example.com", "b@example.com"]);
-  assert.deepStrictEqual(limitStopSources([{ holder: "me@example.com" }, { holder: null }], "me@example.com"), []);
+  const ticked = [{ tokenSecret: "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", organization: "octo" }];
+  assert.deepStrictEqual(limitStopSources(ticked, accounts, "me@example.com"), ["a@example.com"]);
+  assert.deepStrictEqual(limitStopSources([{ tokenSecret: "OTHER_CLAUDE_CODE_OAUTH_TOKEN", organization: "octo" }], accounts, "me@example.com"), []);
+});
+
+test("a typed row naming a held role, in any case, scans its holder", () => {
+  const accounts = [holding("a@example.com", [AUTOMATIONS_TOKEN])];
+  const typed = newRoleItem("automations", "OCTO").item;
+  assert.deepStrictEqual(limitStopSources([typed], accounts, "me@example.com"), ["a@example.com"]);
+});
+
+test("a split role scans the holder of each half", () => {
+  const accounts = [holding("a@example.com", [AUTOMATIONS_TOKEN]), holding("b@example.com", [AUTOMATIONS_KEY])];
+  const ticked = [{ tokenSecret: "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", organization: "octo" }];
+  assert.deepStrictEqual(limitStopSources(ticked, accounts, "me@example.com"), ["a@example.com", "b@example.com"]);
 });
 
 function answering(body) {
@@ -776,4 +794,13 @@ test("a partial scan says so beside its hits, and no line mentions Anthropic sup
   ]);
   assert.strictEqual(lines[1].url, "https://github.com/octo/lanes/actions/runs/101");
   assert.ok(lines.every((line) => line.text.indexOf("Anthropic support") < 0));
+});
+
+test("a split role and a typed held role are scanned with one request naming every holder", async () => {
+  const reviews = Object.assign({}, AUTOMATIONS_TOKEN, { prefix: "REVIEWS", tokenSecret: "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", keySecret: "REVIEWS_CLAUDE_API_KEY" });
+  const accounts = [holding("a@example.com", [AUTOMATIONS_TOKEN]), holding("b@example.com", [AUTOMATIONS_KEY]), holding("c@example.com", [reviews])];
+  const picked = [{ tokenSecret: "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", organization: "octo" }, newRoleItem("reviews", "octo").item];
+  const server = answering({ outcome: "checked", hits: [], problems: [] });
+  assert.strictEqual(await limitStopGate(limitStopSources(picked, accounts, "me@example.com"), server.post, () => { throw new Error("asked"); }), true);
+  assert.deepStrictEqual(server.sent, [["/api/roles/limit-stops", "POST", { from: ["a@example.com", "b@example.com", "c@example.com"] }]]);
 });

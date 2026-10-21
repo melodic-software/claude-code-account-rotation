@@ -991,7 +991,7 @@
       }
       if (!picked.length) { status.textContent = "Pick at least one role."; return; }
       var go = function () { startCiToken(account.email, { roles: picked }, form, status, panel); };
-      var froms = limitStopSources(roles.filter(function (_, index) { return boxes[index].checked; }), account.email);
+      var froms = limitStopSources(picked, lastAccounts, account.email);
       if (!froms.length) { go(); return; }
       checkLimitStops(froms, panel, status, go);
     });
@@ -1704,12 +1704,24 @@
     return { item: item, confirm: "In org " + place + " this " + parts.join(", and ") + ". Go ahead?" };
   }
 
-  // The accounts a start moves roles off: each other account that backs a
-  // picked role, once. Empty when none does, and then no scan runs.
-  function limitStopSources(picked, email) {
+  // The accounts a start moves roles off: every other account on the last
+  // dashboard whose roster holds either half of a picked role, ticked or
+  // typed, once each. A role matches by its token secret and organization or
+  // repository, without case, as assignableRoles keys it. Empty when no other
+  // account holds one, and then no scan runs.
+  function limitStopSources(picked, accounts, email) {
+    function key(role) {
+      var secret = role.tokenSecret || (role.prefix + "_CLAUDE_CODE_OAUTH_TOKEN");
+      return (secret + "@" + (role.repository || role.organization || "")).toLowerCase();
+    }
+    var wanted = (picked || []).map(key);
     var froms = [];
-    (picked || []).forEach(function (role) {
-      if (role.holder && role.holder !== email && froms.indexOf(role.holder) < 0) { froms.push(role.holder); }
+    (accounts || []).forEach(function (other) {
+      if (other.email === email || froms.indexOf(other.email) >= 0) { return; }
+      var holds = ((other.roster && other.roster.ciRoles) || []).some(function (role) {
+        return (role.tokenSetOn || role.keySetOn) && wanted.indexOf(key(role)) >= 0;
+      });
+      if (holds) { froms.push(other.email); }
     });
     return froms;
   }
