@@ -837,6 +837,8 @@ test("a split role scans the holder of each half", () => {
   assert.deepStrictEqual(limitStopSources(ticked, accounts, "me@example.com"), ["a@example.com", "b@example.com"]);
 });
 
+const FAILED_RUNS_ONLY = "Failed runs only: a stop a fallback or a re-run recovered from is not read.";
+
 function answering(body) {
   const sent = [];
   return { sent: sent, post: (path, method, request) => { sent.push([path, method, request]); return Promise.resolve({ ok: true, body: body }); } };
@@ -860,7 +862,8 @@ test("two previous holders are scanned with one request naming both, and each ac
     "a@example.com: This account hit a limit in the last 7 days.",
     "subscription limit · AUTOMATIONS (AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN) · octo/lanes · 2026-10-18",
     "b@example.com: This account hit a limit in the last 7 days.",
-    "credit stop · AUTOMATIONS (AUTOMATIONS_CLAUDE_API_KEY) · octo/lanes · 2026-10-18"
+    "credit stop · AUTOMATIONS (AUTOMATIONS_CLAUDE_API_KEY) · octo/lanes · 2026-10-18",
+    FAILED_RUNS_ONLY
   ]]);
 });
 
@@ -902,7 +905,8 @@ test("a partial scan says so beside its hits, and no line mentions Anthropic sup
   assert.deepStrictEqual(lines.map((line) => line.text), [
     "a@example.com: This account hit a limit in the last 7 days.",
     "credit stop · AUTOMATIONS (AUTOMATIONS_CLAUDE_API_KEY) · octo/lanes · 2026-10-18",
-    "limit stops checked only in part: GitHub's API rate limit was reached"
+    "limit stops checked only in part: GitHub's API rate limit was reached",
+    FAILED_RUNS_ONLY
   ]);
   assert.strictEqual(lines[1].url, "https://github.com/octo/lanes/actions/runs/101");
   assert.ok(lines.every((line) => line.text.indexOf("Anthropic support") < 0));
@@ -915,4 +919,30 @@ test("a split role and a typed held role are scanned with one request naming eve
   const server = answering({ outcome: "checked", hits: [], problems: [] });
   assert.strictEqual(await limitStopGate(limitStopSources(picked, accounts, "me@example.com"), server.post, () => { throw new Error("asked"); }), true);
   assert.deepStrictEqual(server.sent, [["/api/roles/limit-stops", "POST", { from: ["a@example.com", "b@example.com", "c@example.com"] }]]);
+});
+
+test("a partial scan names how far back each repository it did not finish was read, and each it never reached", () => {
+  const coveredBack = "2026-10-16T08:30:00+00:00";
+  const lines = limitStopNotice(["a@example.com"], { ok: true, body: {
+    outcome: "partial",
+    hits: [],
+    problems: ["the check used its 30 GitHub calls and stopped there", "octo/other: not reached, as the check stopped before it"],
+    coverage: [
+      { repository: "octo/done", complete: true, coveredBack: "2026-10-14T12:00:00+00:00" },
+      { repository: "octo/lanes", complete: false, coveredBack: coveredBack },
+      { repository: "octo/other", complete: false, coveredBack: null }
+    ]
+  } });
+  const texts = lines.map((line) => line.text);
+  assert.deepStrictEqual(texts, [
+    "limit stops checked only in part: the check used its 30 GitHub calls and stopped there; octo/other: not reached, as the check stopped before it",
+    "octo/lanes: checked in part, covered back to " + new Date(Date.UTC(2026, 9, 16, 8, 30)).toLocaleString(),
+    "octo/other: not reached",
+    FAILED_RUNS_ONLY
+  ]);
+  assert.ok(texts.every((text) => text.indexOf("octo/done") < 0));
+});
+
+test("a checked scan with every repository complete and no hit still moves without asking", () => {
+  assert.strictEqual(limitStopNotice(["a@example.com"], { ok: true, body: { outcome: "checked", hits: [], problems: [], coverage: [{ repository: "octo/lanes", complete: true, coveredBack: null }] } }), null);
 });

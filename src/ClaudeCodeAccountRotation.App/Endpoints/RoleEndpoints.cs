@@ -110,16 +110,14 @@ internal static partial class RoleEndpoints
         });
 
         // The limit-stop warning, asked once by the page before it moves roles
-        // off the accounts in "from": the failed runs of the last 7 days in each
-        // lane repository, at most 30 in all, newest first, then the failed
-        // jobs of each and their annotations. GETs only, one at a time; the
-        // first rate-limit answer ends the scan as partial. With no lane
-        // repositories configured nothing is read. Every account is judged
-        // from the same read.
+        // off the accounts in "from": see LimitStopScanRunner. With no lane repositories
+        // configured nothing is read. Every account is judged from the same
+        // read.
         mutations.MapPost("/roles/limit-stops", static async (
             JsonObject? body,
             RosterFile rosterFile,
             IGhApiReader reader,
+            IGhGraphQlReader graphQl,
             ClaudeCodeAccountRotationConfiguration configuration,
             TimeProvider clock,
             CancellationToken cancellationToken) =>
@@ -159,64 +157,7 @@ internal static partial class RoleEndpoints
                 return Results.Ok(new LimitStopView(LimitStopView.NotChecked, accounts, 0, [], []));
             }
 
-            DateTimeOffset now = clock.GetUtcNow();
-            List<string> problems = [];
-            List<LaneRun> listed = [];
-            List<LaneAnnotation> annotations = [];
-            int runsRead = 0;
-            bool rateLimited = false;
-            foreach (string repository in repositories)
-            {
-                Result<IReadOnlyList<LaneRun>, GhApiFailure> runs = await reader.ListFailedRunsAsync(repository, now - LimitStopScan.Window, cancellationToken);
-                if (runs.IsSuccess)
-                {
-                    listed.AddRange(runs.Value);
-                }
-                else if (Stops(runs.Error))
-                {
-                    break;
-                }
-            }
-
-            IReadOnlyList<LaneRun> newest = rateLimited ? [] : LimitStopScan.Newest(listed, now);
-            foreach (LaneRun run in newest)
-            {
-                Result<IReadOnlyList<long>, GhApiFailure> checkRuns = await reader.ListFailedJobCheckRunsAsync(run, cancellationToken);
-                if (checkRuns.IsFailure)
-                {
-                    if (Stops(checkRuns.Error))
-                    {
-                        break;
-                    }
-
-                    continue;
-                }
-
-                bool whole = true;
-                foreach (long checkRun in checkRuns.Value)
-                {
-                    Result<IReadOnlyList<string>, GhApiFailure> messages = await reader.ListAnnotationMessagesAsync(run.Repository, checkRun, cancellationToken);
-                    if (messages.IsSuccess)
-                    {
-                        annotations.AddRange(messages.Value.Select(message => new LaneAnnotation(run, message)));
-                        continue;
-                    }
-
-                    whole = false;
-                    if (Stops(messages.Error))
-                    {
-                        break;
-                    }
-                }
-
-                if (rateLimited)
-                {
-                    break;
-                }
-
-                runsRead += whole ? 1 : 0;
-            }
-
+            LimitStopScanRunner scan = await LimitStopScanRunner.RunAsync(repositories, reader, graphQl, clock.GetUtcNow(), cancellationToken);
             IReadOnlyList<RoleHalfChange> history = [.. (await rosterFile.History.ReadAsync(null, cancellationToken)).Select(static entry => new RoleHalfChange(
                 entry.At,
                 entry.Role,
@@ -227,24 +168,19 @@ internal static partial class RoleEndpoints
             List<LimitStopHitView> hits = [];
             foreach (AccountEmail account in froms)
             {
-                hits.AddRange(LimitStopScan.Hits(account, annotations, history, roster).Select(hit => new LimitStopHitView(
+                hits.AddRange(LimitStopScan.Hits(account, scan.Records, history, roster).Select(hit => new LimitStopHitView(
                     account.Value, hit.Run.Repository, hit.Run.Id, hit.Run.Url, hit.Run.CreatedAt, hit.Role.Name, hit.Half == RoleHalf.Token ? "token" : "key", hit.Credential, hit.Label)));
             }
 
             return Results.Ok(new LimitStopView(
-                problems.Count == 0 ? LimitStopView.Checked : LimitStopView.Partial,
+                LimitStopScan.Whole(scan.Problems.Count, scan.Coverage.Select(static coverage => coverage.Complete)) ? LimitStopView.Checked : LimitStopView.Partial,
                 accounts,
-                runsRead,
+                scan.RunsRead,
                 hits,
-                problems));
-
-            // Notes a failed read; true when it was the rate limit, which ends the scan.
-            bool Stops(GhApiFailure failure)
-            {
-                problems.Add(failure.Message);
-                rateLimited = failure.RateLimited;
-                return rateLimited;
-            }
+                scan.Problems,
+                scan.Coverage,
+                scan.Calls,
+                scan.Skipped));
         });
 
         // Flips one organization kill switch that already exists, sending back
@@ -487,16 +423,23 @@ internal sealed record RoleCheckRowView(
 /// <summary>
 /// What one limit-stop scan for <paramref name="Accounts"/> found:
 /// <see cref="NotChecked"/> when no lane repository is configured,
-/// <see cref="Partial"/> when a read failed or GitHub's rate limit ended it
-/// (<paramref name="Problems"/> says which), else <see cref="Checked"/>.
-/// <paramref name="RunsRead"/> counts the runs whose jobs were all read.
+/// <see cref="Partial"/> when a read failed or a limit ended it before every
+/// repository was read back <see cref="LimitStopScan.Window"/> (<paramref name="Problems"/> says which,
+/// <paramref name="Coverage"/> how far each got), else <see cref="Checked"/>.
+/// <paramref name="RunsRead"/> counts the runs whose check runs and
+/// annotations were all read, and those deleted since they were listed;
+/// <paramref name="Skipped"/> the runs of forks' pull requests, not read;
+/// <paramref name="Calls"/> the GitHub calls made.
 /// </summary>
 internal sealed record LimitStopView(
     string Outcome,
     IReadOnlyList<string> Accounts,
     int RunsRead,
     IReadOnlyList<LimitStopHitView> Hits,
-    IReadOnlyList<string> Problems)
+    IReadOnlyList<string> Problems,
+    IReadOnlyList<RepositoryCoverageView>? Coverage = null,
+    int Calls = 0,
+    int Skipped = 0)
 {
     public const string NotChecked = "notChecked";
 
@@ -516,6 +459,14 @@ internal sealed record LimitStopHitView(
     string Half,
     string Credential,
     string Label);
+
+/// <summary>
+/// How far back one lane repository was read: <paramref name="Complete"/> when
+/// every failed run of the window was; else <paramref name="CoveredBack"/> is
+/// the start time down to which every run, newest first, was read in full,
+/// null when none was.
+/// </summary>
+internal sealed record RepositoryCoverageView(string Repository, bool Complete, DateTimeOffset? CoveredBack);
 
 /// <summary>An organization whose secrets could not be read, and why.</summary>
 internal sealed record RoleCheckFailureView(string Organization, string Error);
