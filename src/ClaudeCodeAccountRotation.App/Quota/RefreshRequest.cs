@@ -20,6 +20,9 @@ internal sealed record RefreshRequest(AccountEmail? Account)
     /// <summary>Every eligible account, in <c>RefreshOrder</c>'s order.</summary>
     public static RefreshRequest All { get; } = new(Account: null);
 
+    /// <summary>Whether this is the full pass rather than one account's.</summary>
+    public bool IsAll => Account is null;
+
     /// <summary>One account, still through the whole per-account sequence: a stranded folder is restored, the budget still refuses, the lockouts still hold.</summary>
     public static RefreshRequest One(AccountEmail account) => new(account);
 }

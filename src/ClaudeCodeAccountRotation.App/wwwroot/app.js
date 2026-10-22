@@ -38,6 +38,10 @@
       historyLines: historyLines,
       historyReadLines: historyReadLines
     };
+    module.exports.reissueButton = reissueButton;
+    module.exports.ciPanelChecked = ciPanelChecked;
+    module.exports.meterTicks = meterTicks;
+    module.exports.alertLines = alertLines;
     module.exports.apiKeyBody = apiKeyBody;
     module.exports.apiKeyBadge = apiKeyBadge;
     module.exports.keptKeyToast = keptKeyToast;
@@ -69,6 +73,11 @@
   var banner = document.getElementById("banner");
   var setup = document.getElementById("setup");
   var warnings = document.getElementById("warnings");
+  // The usage alerts the last full refresh computed, above the warnings. Built
+  // here rather than in the page's markup, and only ever written by render().
+  var alertStrip = element("ul", "alerts");
+  alertStrip.hidden = true;
+  warnings.parentNode.insertBefore(alertStrip, warnings);
   var captured = document.getElementById("captured");
   var refreshAllButton = document.getElementById("refresh-all");
   var refreshStateLine = document.getElementById("refresh-state");
@@ -722,7 +731,9 @@
       if (account.cliLoggedOut) { strip.appendChild(element("p", "cli-logout", account.cliLoggedOut)); }
       var meters = element("div", "mt");
       account.usage.limits.forEach(function (limit) {
-        if (limit.known || limit.kind === "session" || limit.kind === "weekly_all") { meters.appendChild(meter(limit, at)); }
+        if (limit.known || limit.kind === "session" || limit.kind === "weekly_all") {
+          meters.appendChild(meter(limit, at, limit.kind === "weekly_all" ? meterTicks(account, lastDashboard && lastDashboard.alertThresholds) : []));
+        }
       });
       strip.appendChild(meters);
     }
@@ -957,10 +968,11 @@
 
     var form = element("form", "roster-form");
     var roles = assignableRoles(lastAccounts, lastRoleCheck);
-    var boxes = roles.map(function (role) {
+    var checked = ciPanelChecked(roles, account.email);
+    var boxes = roles.map(function (role, index) {
       var box = element("input");
       box.type = "checkbox";
-      box.checked = role.holder === account.email;
+      box.checked = checked[index];
       labeled(form, role.label, box);
       return box;
     });
@@ -1426,7 +1438,7 @@
   function reading(limit) {
     if (!limit.known) { return "unknown"; }
     if (limit.windowReset) { return "window reset since last read"; }
-    return limit.percent === null ? "unknown" : Math.round(limit.percent) + "%";
+    return limit.percent === null ? "unknown" : percentText(limit.percent);
   }
 
   function barWidth(limit) {
@@ -1467,11 +1479,18 @@
     return percent >= 90 ? "crit" : percent >= 75 ? "high" : percent >= 50 ? "warn" : "ok";
   }
 
-  function bar(limit) {
+  // The bar, with a tick at each percentage in ticks (none when absent).
+  function bar(limit, ticks) {
     var track = element("div", "bar");
     var fill = element("i", meterTone(limit));
     fill.style.width = barWidth(limit) + "%";
     track.appendChild(fill);
+    (ticks || []).forEach(function (percent) {
+      var tick = element("b", "tick");
+      tick.style.left = percent + "%";
+      tick.title = "alert at " + percentText(percent);
+      track.appendChild(tick);
+    });
     return track;
   }
 
@@ -1483,13 +1502,13 @@
 
   // One window: its label and reading, the bar, when it resets, and, only for a
   // row taken from another source than the account's own, where it came from.
-  function meter(limit, at) {
+  function meter(limit, at, ticks) {
     var box = element("div", "meter");
     var line = element("div", "l");
     line.appendChild(element("span", "label", limit.label));
     line.appendChild(element("span", "pct " + meterTone(limit), reading(limit)));
     box.appendChild(line);
-    box.appendChild(bar(limit));
+    box.appendChild(bar(limit, ticks));
     var reset = resetLine(limit, at);
     if (reset) { box.appendChild(element("small", null, reset)); }
     if (limit.source) { box.appendChild(element("small", stale(limit.capturedAt, at) ? "stale" : null, asOf(limit.capturedAt, limit.source, at))); }
@@ -1677,6 +1696,48 @@
     });
     ((check && check.roles) || []).forEach(function (role) { add(role, role.holder || null); });
     return roles;
+  }
+
+  // Which of the panel's roles start ticked: the ones this account backs, so
+  // Generate CI token and Re-issue token both re-issue its own roles by default.
+  function ciPanelChecked(roles, email) {
+    return roles.map(function (role) { return role.holder === email; });
+  }
+
+  // The Re-issue token button on the card of an account that backs a CI role
+  // (the server's roster.backsCiRole), or null: its label, and its click,
+  // which hands the account to open (the CI token panel).
+  function reissueButton(account, open) {
+    if (!backsCiRole(account)) { return null; }
+    return { label: "Re-issue token", click: function () { open(account); } };
+  }
+
+  function backsCiRole(account) {
+    return !!(account && account.roster && account.roster.backsCiRole);
+  }
+
+  // Where a 7-day meter marks the server's alert thresholds: only on an
+  // account that backs a CI role, the only kind an alert is raised for.
+  function meterTicks(account, thresholds) {
+    return backsCiRole(account) ? (thresholds || []) : [];
+  }
+
+  // A percentage as every figure on the page is written.
+  function percentText(percent) {
+    return Math.round(percent) + "%";
+  }
+
+  // The alert strip's lines, worst first as the server sent them. An alert
+  // only says how close an account is; nothing on the page acts on it.
+  function alertLines(alerts, accounts) {
+    return (alerts || []).map(function (alert) {
+      var account = (accounts || []).filter(function (candidate) { return candidate.email === alert.account; })[0];
+      var name = account ? uniqueName(account, accounts) : alert.account;
+      return {
+        kind: alert.level === "critical" ? "crit" : "warn",
+        text: name + ": 7-day usage at " + percentText(alert.percent) + ", past " + percentText(alert.threshold)
+      };
+    });
   }
 
   // A role named in the panel's free-text row, or null when the prefix is
@@ -2000,13 +2061,13 @@
   }
 
   // One window in a row: the bar, the reading, and when it resets.
-  function cell(limit, at) {
+  function cell(limit, at, ticks) {
     var box = element("div", "u");
     if (!limit) { return box; }
     // The column header is hidden on narrow screens and from screen readers,
     // so each cell names its own window.
     box.appendChild(element("span", "cell-label", limit.label));
-    box.appendChild(bar(limit));
+    box.appendChild(bar(limit, ticks));
     box.appendChild(element("span", "pct " + meterTone(limit), reading(limit)));
     var reset = resetLine(limit, at);
     if (reset) { box.appendChild(element("small", null, reset)); }
@@ -2290,9 +2351,14 @@
 
     function limitOf(kind) { return account.usage.limits.filter(function (limit) { return limit.kind === kind; })[0]; }
     line.appendChild(cell(limitOf("session"), at));
-    line.appendChild(cell(limitOf("weekly_all"), at));
+    line.appendChild(cell(limitOf("weekly_all"), at, meterTicks(account, dashboard.alertThresholds)));
 
     var act = element("div", "act");
+    // Beside the meters, so an account near its 7-day limit can have its
+    // roles' token re-issued without opening the menu. It opens the same
+    // panel as Generate CI token, with this account's roles ticked.
+    var reissue = reissueButton(account, openCiTokenPanel);
+    if (reissue) { act.appendChild(actionButton(reissue.label, "secondary sm", reissue.click)); }
     // The live account is signed in already; logging it into its parked folder
     // would leave one account holding two logins. A card with a login good for
     // longer than the warning window does not need the button on its face; an
@@ -2391,6 +2457,13 @@
     warnings.innerHTML = "";
     warnings.hidden = dashboard.warnings.length === 0;
     dashboard.warnings.forEach(function (warning) { warnings.appendChild(element("li", null, warning)); });
+    var alerts = alertLines(dashboard.alerts, dashboard.accounts);
+    alertStrip.replaceChildren();
+    alertStrip.hidden = alerts.length === 0;
+    alerts.forEach(function (alert) { alertStrip.appendChild(element("li", alert.kind, alert.text)); });
+    if (alerts.length && dashboard.alertsComputedAt) {
+      alertStrip.appendChild(element("li", "asof", "as of the last refresh, " + new Date(dashboard.alertsComputedAt).toLocaleTimeString()));
+    }
     renderNow();
     // Rendering rebuilds every row, so the ten-second poll would otherwise wipe an
     // Edit panel, a half-typed login code, a display name being typed, or an open

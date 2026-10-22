@@ -2,8 +2,10 @@ using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json.Nodes;
+using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.App.Tests.Adapters;
+using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Configuration;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Quota;
@@ -350,6 +352,137 @@ public sealed class RefreshEndpointTests
         factory.Outbound.Requests.ShouldBeEmpty();
     }
 
+    [Fact]
+    public async Task AFullPassReadsTheParkedAccount()
+    {
+        // The live pair is expired, so the session owns it and the pass sends
+        // nothing for it: the one read is the parked account's.
+        await using AppFactory factory = await LiveAndParkedAsync(TestContext.Current.CancellationToken);
+        Script(factory, UsageResponse);
+        using HttpClient client = factory.CreateMutatingClient();
+
+        (await client.PostAsync(AllUri, content: null, TestContext.Current.CancellationToken)).Dispose();
+        await factory.Services.GetRequiredService<QuotaState>().CurrentRun;
+
+        factory.Outbound.Requests.Select(static request => request.Method).ShouldBe([HttpMethod.Get]);
+        JsonNode card = await CardAsync(client, ParkedEmail);
+        card["refresh"]!["state"]!.GetValue<string>().ShouldBe("read");
+        card["usage"]!["source"]!.GetValue<string>().ShouldBe("refresh");
+    }
+
+    [Fact]
+    public async Task ACardRefreshOfAParkedAccountWithAnExpiredTokenRefreshesItThenReadsIt()
+    {
+        await using AppFactory factory = await LiveAndParkedAsync(TestContext.Current.CancellationToken, parkedExpired: true);
+        Script(factory, TokenResponse);
+        Script(factory, UsageResponse);
+        using HttpClient client = factory.CreateMutatingClient();
+
+        (await client.PostAsync(OneUri(ParkedEmail), content: null, TestContext.Current.CancellationToken)).Dispose();
+        await factory.Services.GetRequiredService<QuotaState>().CurrentRun;
+
+        factory.Outbound.Requests.Select(static request => request.Method).ShouldBe([HttpMethod.Post, HttpMethod.Get]);
+        (await CardAsync(client, ParkedEmail))["refresh"]!["state"]!.GetValue<string>().ShouldBe("read");
+    }
+
+    [Fact]
+    public async Task AFullPassSetsTheAlertsForAParkedAccountBackingACiRole()
+    {
+        await using AppFactory factory = await LiveAndParkedAsync(TestContext.Current.CancellationToken);
+        await BackACiRoleAsync(factory);
+        Script(factory, Usage(weekly: 75));
+        using HttpClient client = factory.CreateMutatingClient();
+
+        (await client.PostAsync(AllUri, content: null, TestContext.Current.CancellationToken)).Dispose();
+        await factory.Services.GetRequiredService<QuotaState>().CurrentRun;
+
+        JsonNode dashboard = await DashboardAsync(client);
+        JsonNode alert = dashboard["alerts"]!.AsArray().Single()!;
+        alert["account"]!.GetValue<string>().ShouldBe(ParkedEmail);
+        alert["level"]!.GetValue<string>().ShouldBe("warning");
+        alert["percent"]!.GetValue<decimal>().ShouldBe(75m);
+        alert["threshold"]!.GetValue<decimal>().ShouldBe(70m);
+        dashboard["alertThresholds"]!.AsArray().Select(static value => value!.GetValue<decimal>()).ShouldBe([70m, 90m]);
+        (await CardAsync(client, ParkedEmail))["roster"]!["backsCiRole"]!.GetValue<bool>().ShouldBeTrue();
+        dashboard["alertsComputedAt"]!.GetValue<DateTimeOffset>().ShouldBe(factory.Clock.GetUtcNow());
+    }
+
+    [Fact]
+    public async Task ASevenDayWindowThatHasResetRaisesNoAlert()
+    {
+        // The answer's 7-day window resets 2026-09-08T23:59:59Z; the pass runs
+        // after it, so the card blanks the figure and no alert may count it.
+        await using AppFactory factory = await LiveAndParkedAsync(TestContext.Current.CancellationToken);
+        await BackACiRoleAsync(factory);
+        factory.Clock.Advance(TimeSpan.FromDays(2));
+        Script(factory, TokenResponse);
+        Script(factory, Usage(weekly: 95));
+        using HttpClient client = factory.CreateMutatingClient();
+
+        (await client.PostAsync(AllUri, content: null, TestContext.Current.CancellationToken)).Dispose();
+        await factory.Services.GetRequiredService<QuotaState>().CurrentRun;
+
+        factory.Outbound.Requests.Count.ShouldBe(2);
+        JsonNode dashboard = await DashboardAsync(client);
+        dashboard["alerts"]!.AsArray().ShouldBeEmpty();
+        dashboard["alertsComputedAt"]!.GetValue<DateTimeOffset>().ShouldBe(factory.Clock.GetUtcNow());
+    }
+
+    [Fact]
+    public async Task ACardRefreshLeavesTheAlertsTheLastFullPassComputed()
+    {
+        await using AppFactory factory = await LiveAndParkedAsync(TestContext.Current.CancellationToken);
+        await BackACiRoleAsync(factory);
+        Script(factory, Usage(weekly: 75));
+        Script(factory, Usage(weekly: 95));
+        using HttpClient client = factory.CreateMutatingClient();
+        QuotaState state = factory.Services.GetRequiredService<QuotaState>();
+        DateTimeOffset passAt = factory.Clock.GetUtcNow();
+
+        (await client.PostAsync(AllUri, content: null, TestContext.Current.CancellationToken)).Dispose();
+        await state.CurrentRun;
+        factory.Clock.Advance(TimeSpan.FromMinutes(2));
+        (await client.PostAsync(OneUri(ParkedEmail), content: null, TestContext.Current.CancellationToken)).Dispose();
+        await state.CurrentRun;
+
+        // The card read 95%, which a recompute would have made critical.
+        factory.Outbound.Requests.Count.ShouldBe(2);
+        JsonNode dashboard = await DashboardAsync(client);
+        dashboard["alerts"]!.AsArray().Single()!["level"]!.GetValue<string>().ShouldBe("warning");
+        dashboard["alertsComputedAt"]!.GetValue<DateTimeOffset>().ShouldBe(passAt);
+    }
+
+    [Fact]
+    public async Task TheDashboardComputesNoAlertsOfItsOwn()
+    {
+        // A figure past 90% is in place through a card's refresh, and the page
+        // polls for hours: no full pass has run, so there is nothing to show.
+        await using AppFactory factory = await LiveAndParkedAsync(TestContext.Current.CancellationToken);
+        await BackACiRoleAsync(factory);
+        Script(factory, Usage(weekly: 95));
+        using HttpClient client = factory.CreateMutatingClient();
+
+        (await client.PostAsync(OneUri(ParkedEmail), content: null, TestContext.Current.CancellationToken)).Dispose();
+        await factory.Services.GetRequiredService<QuotaState>().CurrentRun;
+        for (int poll = 0; poll < 3; poll++)
+        {
+            factory.Clock.Advance(TimeSpan.FromHours(1));
+            JsonNode dashboard = await DashboardAsync(client);
+            dashboard["alerts"]!.AsArray().ShouldBeEmpty();
+            dashboard["alertsComputedAt"].ShouldBeNull();
+        }
+    }
+
+    private static Task<Roster> BackACiRoleAsync(AppFactory factory) =>
+        factory.Services.GetRequiredService<RosterFile>().UpdateAsync(
+            roster => roster.With(new RosterEntry(new AccountEmail(ParkedEmail))
+                .ClaimingToken(new CiRole("AUTOMATIONS", CiSecretScope.Organization, "octo"), new DateOnly(2026, 9, 1), setAt: null)),
+            TestContext.Current.CancellationToken);
+
+    /// <summary>The usage answer below with its 7-day figure replaced.</summary>
+    private static string Usage(int weekly) =>
+        UsageResponse.Replace("\"percent\": 20,", "\"percent\": " + weekly.ToString(CultureInfo.InvariantCulture) + ",", StringComparison.Ordinal);
+
     /// <summary>
     /// One live account whose pair is expired unless asked otherwise (so a pass
     /// over it sends nothing) and one parked account. Both credential files are written here rather than
@@ -395,11 +528,11 @@ public sealed class RefreshEndpointTests
             CredentialFiles.Shape(refreshToken, accessTokenExpiresAt, factory.Clock.GetUtcNow().AddDays(28)).ToJsonString(),
             cancellationToken);
 
-    private static async Task<JsonNode> CardAsync(HttpClient client, string email)
-    {
-        JsonNode dashboard = (await client.GetFromJsonAsync<JsonNode>(new Uri("/api/dashboard", UriKind.Relative), TestContext.Current.CancellationToken))!;
-        return dashboard["accounts"]!.AsArray().Single(card => card!["email"]!.GetValue<string>() == email)!;
-    }
+    private static async Task<JsonNode> CardAsync(HttpClient client, string email) =>
+        (await DashboardAsync(client))["accounts"]!.AsArray().Single(card => card!["email"]!.GetValue<string>() == email)!;
+
+    private static async Task<JsonNode> DashboardAsync(HttpClient client) =>
+        (await client.GetFromJsonAsync<JsonNode>(new Uri("/api/dashboard", UriKind.Relative), TestContext.Current.CancellationToken))!;
 
     /// <summary>
     /// The rotation the token host answers with. The tokens carry the

@@ -6,7 +6,7 @@ namespace ClaudeCodeAccountRotation.App.Quota;
 /// <summary>
 /// Everything a refresh pass leaves behind, in memory: the newest snapshot per
 /// account, how each account's last turn went, the two host lockouts, whether a
-/// pass is running, what the last one came to, and the warnings a restore could
+/// pass is running, what the last one came to, the usage alerts, and the warnings a restore could
 /// not clear. The dashboard reads it on every poll and the routes consult it
 /// before starting anything, so the two together never see half a pass's work.
 /// <para>
@@ -36,6 +36,7 @@ internal sealed class QuotaState
     private DateTimeOffset? _tokenLockedUntil;
     private bool _inProgress;
     private IReadOnlyDictionary<RefreshOutcomeKind, int>? _lastPassSummary;
+    private UsageAlertSnapshot? _alerts;
     private TaskCompletionSource? _run;
 
     /// <summary>Whether a pass or a single-account read is in flight.</summary>
@@ -213,6 +214,35 @@ internal sealed class QuotaState
     }
 
     /// <summary>
+    /// Every figure known for one account, merged per bucket: its newest
+    /// observation, <paramref name="observed"/> when the caller holds a fresher
+    /// one, and its newest read. The one merge both a card and the usage alerts
+    /// are built from, so the two cannot disagree. A row whose window has reset
+    /// stays in, because a card says so; a reader that judges the figure skips
+    /// it by <see cref="UsageLimit.HasResetBy"/>.
+    /// </summary>
+    public MergedUsage? MergedFor(AccountEmail account, UsageSnapshot? observed = null)
+    {
+        List<UsageSnapshot> sources = [];
+        if (observed is not null)
+        {
+            sources.Add(observed);
+        }
+
+        if (ObservedFor(account) is UsageSnapshot seen && !ReferenceEquals(seen, observed))
+        {
+            sources.Add(seen);
+        }
+
+        if (LatestFor(account) is UsageSnapshot read)
+        {
+            sources.Add(read);
+        }
+
+        return UsageMerge.Merge(sources);
+    }
+
+    /// <summary>
     /// Keeps <paramref name="snapshot"/> unless an observation captured later is
     /// already held. A tee is last-writer-wins and stops naming an account the
     /// moment a session on another account writes it, so this is what keeps a
@@ -254,6 +284,26 @@ internal sealed class QuotaState
         }
     }
 
+    /// <summary>The usage alerts last recorded, and when, or null before any.</summary>
+    public UsageAlertSnapshot? Alerts
+    {
+        get
+        {
+            lock (_mutex)
+            {
+                return _alerts;
+            }
+        }
+    }
+
+    public void RecordAlerts(IReadOnlyList<UsageAlert> alerts, DateTimeOffset computedAt)
+    {
+        lock (_mutex)
+        {
+            _alerts = new UsageAlertSnapshot(alerts, computedAt);
+        }
+    }
+
     /// <summary>
     /// Records that a folder's recovery file could not be applied. Keyed by
     /// folder rather than queued, so a restore that keeps failing at every start
@@ -277,3 +327,6 @@ internal sealed class QuotaState
         }
     }
 }
+
+/// <summary>One pass's usage alerts and the instant they were computed.</summary>
+internal sealed record UsageAlertSnapshot(IReadOnlyList<UsageAlert> Alerts, DateTimeOffset ComputedAt);

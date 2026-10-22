@@ -665,6 +665,57 @@ test("newRoleItem says creates only for the secrets the last Check roles did not
   assert.strictEqual(newRoleItem("  ", "octo"), null);
 });
 
+const { reissueButton, ciPanelChecked, meterTicks, alertLines } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+
+// Three accounts as the dashboard sends them: two back a role, one does not.
+const BACKER = { email: "a@example.com", roster: { backsCiRole: true, ciRoles: [AUTOMATIONS] } };
+const OTHER_BACKER = { email: "b@example.com", roster: { backsCiRole: true, ciRoles: [LEGACY_LANE_ONE] } };
+const NO_ROLE = { email: "c@example.com", roster: { backsCiRole: false, ciRoles: [], ciTokenGeneratedOn: "2026-10-01" } };
+const UNCLAIMED = { roles: [
+  { name: "ISSUE_LANE", prefix: "ISSUE_LANE", organization: "octo", tokenSecret: "ISSUE_LANE_CLAUDE_CODE_OAUTH_TOKEN", keySecret: "ISSUE_LANE_CLAUDE_API_KEY", holder: null }
+] };
+
+test("reissue opens the CI token panel with the account's roles preselected", () => {
+  let opened = null;
+  const button = reissueButton(BACKER, (account) => { opened = account; });
+  assert.strictEqual(button.label, "Re-issue token");
+  button.click();
+  assert.strictEqual(opened, BACKER);
+  // The panel ticks the opened account's AUTOMATIONS role, not another account's role or an unclaimed one.
+  const roles = assignableRoles([BACKER, OTHER_BACKER, NO_ROLE], UNCLAIMED);
+  assert.deepStrictEqual(ciPanelChecked(roles, opened.email), [true, false, false]);
+});
+
+test("reissueButton is offered only on an account the server says backs a CI role", () => {
+  assert.strictEqual(reissueButton(NO_ROLE, () => {}), null);
+  assert.strictEqual(reissueButton({ email: "d@example.com", roster: null }, () => {}), null);
+});
+
+test("ciPanelChecked ticks exactly the roles the given account backs", () => {
+  const roles = assignableRoles([BACKER, OTHER_BACKER, NO_ROLE], UNCLAIMED);
+  assert.deepStrictEqual(ciPanelChecked(roles, OTHER_BACKER.email), [false, true, false]);
+  assert.deepStrictEqual(ciPanelChecked(roles, NO_ROLE.email), [false, false, false]);
+});
+
+test("meterTicks marks the server's thresholds only on an account that backs a CI role", () => {
+  // Not the shipped thresholds, so a value copied into the page would show here.
+  assert.deepStrictEqual(meterTicks(BACKER, [60, 85]), [60, 85]);
+  assert.deepStrictEqual(meterTicks(NO_ROLE, [60, 85]), []);
+  assert.deepStrictEqual(meterTicks(BACKER, undefined), []);
+});
+
+test("alertLines writes the server's percent and threshold the way a card writes a figure", () => {
+  const accounts = [{ email: "a@example.com", roster: { alias: "Work" } }];
+  assert.deepStrictEqual(alertLines([
+    { account: "a@example.com", level: "critical", percent: 92.4, threshold: 85 },
+    { account: "z@example.com", level: "warning", percent: 89.6, threshold: 60 }
+  ], accounts), [
+    { kind: "crit", text: "Work: 7-day usage at 92%, past 85%" },
+    { kind: "warn", text: "z@example.com: 7-day usage at 90%, past 60%" }
+  ]);
+  assert.deepStrictEqual(alertLines(undefined, accounts), []);
+});
+
 const { killSwitchRows, toggleKillSwitch } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
 
 // Kill switches in the shape POST /api/roles/check returns them.

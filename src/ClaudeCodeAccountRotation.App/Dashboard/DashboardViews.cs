@@ -22,7 +22,19 @@ internal sealed record DashboardView(
     string? Setup,
     IReadOnlyList<string> Warnings,
     DateTimeOffset CapturedAt,
-    RefreshView Refresh);
+    RefreshView Refresh,
+    IReadOnlyList<AlertView> Alerts,
+    DateTimeOffset? AlertsComputedAt,
+    IReadOnlyList<decimal> AlertThresholds);
+
+/// <summary>
+/// One account's 7-day figure past a threshold: <c>Level</c> is <c>warning</c>
+/// or <c>critical</c>, and <c>Threshold</c> the percentage that level stands
+/// for. <c>AlertsComputedAt</c> on the dashboard says when the list was
+/// computed, null before it ever was; <c>AlertThresholds</c> are where a CI-role
+/// account's 7-day meter marks them.
+/// </summary>
+internal sealed record AlertView(string Account, string Level, decimal Percent, decimal Threshold);
 
 internal sealed record LiveAccountView(string? Email, bool HasCredentials, string? Fingerprint);
 
@@ -129,7 +141,8 @@ internal sealed record RosterEntryView(
     CiTokenSecretView? CiTokenSecret = null,
     IReadOnlyList<CiRoleView>? CiRoles = null,
     DateOnly? ConsoleApiKeySetOn = null,
-    DateOnly? AdminKeySetOn = null);
+    DateOnly? AdminKeySetOn = null,
+    bool BacksCiRole = false);
 
 /// <summary>A CI secret as the page reads it: its name, and exactly one of a repository or an organization.</summary>
 internal sealed record CiTokenSecretView(string Name, string? Repository, string? Organization);
