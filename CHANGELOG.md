@@ -15,6 +15,21 @@ All notable changes to this project are documented in this file. The format foll
 - **Alert-threshold ticks on a CI-role account's 7-day meter.**
 - **A Re-issue token button beside a CI-role account's meters.** It opens the Generate CI token
   panel with that account's roles ticked.
+- **Open Console in the Set API key and Set Admin key panels.** It opens the Console's API keys
+  or Admin keys page in the account's mapped browser profile, through
+  `POST /api/accounts/{email}/console-page` with `{"page":"keys"}` or `{"page":"admin-keys"}`.
+- **Check roles inside the Generate CI token panel** when no role is known yet; the panel redraws
+  its role list from what it finds.
+
+### Changed
+
+- **The Generate CI token panel's Start button names the browser profile it opens**, or says you
+  will get a link when no browser is mapped.
+- **After a key is stored, its panel stays open and says where the key is kept** (Credential
+  Manager or the Secret Service) and what sends it to GitHub: Push API key with the key secrets it
+  sends to, or Generate CI token with a role that has a key half.
+- **Edit's "CI secret name" and "CI secret in" are folded under "Repair a role record"**, with a
+  sentence on when to use them.
 
 ## [2.3.2] - 2026-10-21
 
