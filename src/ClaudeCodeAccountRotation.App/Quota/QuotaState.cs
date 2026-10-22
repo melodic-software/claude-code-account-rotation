@@ -6,7 +6,7 @@ namespace ClaudeCodeAccountRotation.App.Quota;
 /// <summary>
 /// Everything a refresh pass leaves behind, in memory: the newest snapshot per
 /// account, how each account's last turn went, the two host lockouts, whether a
-/// pass is running, what the last one came to, and the warnings a restore could
+/// pass is running, what the last one came to and the usage alerts it left, and the warnings a restore could
 /// not clear. The dashboard reads it on every poll and the routes consult it
 /// before starting anything, so the two together never see half a pass's work.
 /// <para>
@@ -36,6 +36,7 @@ internal sealed class QuotaState
     private DateTimeOffset? _tokenLockedUntil;
     private bool _inProgress;
     private IReadOnlyDictionary<RefreshOutcomeKind, int>? _lastPassSummary;
+    private UsageAlertSnapshot? _alerts;
     private TaskCompletionSource? _run;
 
     /// <summary>Whether a pass or a single-account read is in flight.</summary>
@@ -255,6 +256,29 @@ internal sealed class QuotaState
     }
 
     /// <summary>
+    /// The usage alerts the last full pass computed, and when, or null before
+    /// the first one. The dashboard poll renders this and never computes it.
+    /// </summary>
+    public UsageAlertSnapshot? Alerts
+    {
+        get
+        {
+            lock (_mutex)
+            {
+                return _alerts;
+            }
+        }
+    }
+
+    public void RecordAlerts(IReadOnlyList<UsageAlert> alerts, DateTimeOffset computedAt)
+    {
+        lock (_mutex)
+        {
+            _alerts = new UsageAlertSnapshot(alerts, computedAt);
+        }
+    }
+
+    /// <summary>
     /// Records that a folder's recovery file could not be applied. Keyed by
     /// folder rather than queued, so a restore that keeps failing at every start
     /// says the same thing once instead of growing the page's warning list
@@ -277,3 +301,6 @@ internal sealed class QuotaState
         }
     }
 }
+
+/// <summary>One pass's usage alerts and the instant they were computed.</summary>
+internal sealed record UsageAlertSnapshot(IReadOnlyList<UsageAlert> Alerts, DateTimeOffset ComputedAt);

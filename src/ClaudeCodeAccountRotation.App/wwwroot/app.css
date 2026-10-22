@@ -87,6 +87,11 @@ summary::-webkit-details-marker { display: none; }
 .banner { display: flex; gap: 12px; align-items: baseline; background: color-mix(in srgb, var(--warn-fill) 12%, var(--bg)); }
 .banner b { color: var(--warn); font: 500 13px var(--sans); white-space: nowrap; }
 .warnings { list-style: none; color: var(--warn); background: color-mix(in srgb, var(--warn-fill) 8%, var(--bg)); }
+/* The usage alerts: information only, worst first, with the pass's time last. */
+.alerts { list-style: none; margin: 16px 0 0; padding: 12px 16px; border-radius: 12px; font-family: var(--serif); font-size: 14px; line-height: 1.55; background: color-mix(in srgb, var(--warn-fill) 8%, var(--bg)); }
+.alerts .warn { color: var(--warn); }
+.alerts .crit { color: var(--crit); }
+.alerts .asof { color: var(--muted); font-size: 12px; }
 /* The first-run sentence. Not a warning: the banner is what blocks Switch. */
 .setup { background: var(--surface-2); }
 [hidden] { display: none !important; }
@@ -122,7 +127,9 @@ summary::-webkit-details-marker { display: none; }
 .say.high, .n.high, .meter .l .pct.high, .u .pct.high { color: var(--high); }
 .say.crit, .n.crit, .meter .l .pct.crit, .u .pct.crit { color: var(--crit); }
 .say.paused { color: var(--muted); }
-.bar { height: 6px; border-radius: 999px; background: var(--track); overflow: hidden; }
+.bar { position: relative; height: 6px; border-radius: 999px; background: var(--track); overflow: hidden; }
+/* A CI-role account's 70% and 90% alert marks on its 7-day bar. */
+.bar .tick { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--text); opacity: .45; }
 .bar i { display: block; height: 100%; border-radius: inherit; background: var(--faint); }
 .bar i.ok { background: var(--ok-fill); } .bar i.high { background: var(--high-fill); } .bar i.warn { background: var(--warn-fill); } .bar i.crit { background: var(--crit-fill); }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; display: inline-block; }

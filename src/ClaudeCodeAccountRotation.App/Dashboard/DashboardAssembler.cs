@@ -272,6 +272,9 @@ internal sealed partial class DashboardAssembler(
         // by the first page that saw it would be a warning nobody sees.
         warnings.AddRange(quota.RecoveryWarnings);
 
+        // Stored by the last full pass; the poll renders it and computes nothing.
+        UsageAlertSnapshot? alerts = quota.Alerts;
+
         return new DashboardView(
             new LiveAccountView(liveEmail?.Value, livePair is not null, livePair?.Fingerprint.Sha256Hex[..12]),
             cards,
@@ -279,8 +282,18 @@ internal sealed partial class DashboardAssembler(
             await SetupSentenceAsync(cards, liveAccount, cancellationToken),
             warnings,
             capturedAt,
-            Pass(capturedAt));
+            Pass(capturedAt),
+            [.. (alerts?.Alerts ?? []).Select(static alert => new AlertView(alert.Account.Value, alert.Figure, Wire(alert.Level), alert.Percent))],
+            alerts?.ComputedAt);
     }
+
+    /// <summary>An alert's level as the page spells it.</summary>
+    private static string Wire(AlertLevel level) => level switch
+    {
+        AlertLevel.Warning70 => "warning",
+        AlertLevel.Critical90 => "critical",
+        _ => throw new ArgumentOutOfRangeException(nameof(level)),
+    };
 
     /// <summary>
     /// The first-run sentence, or null once the roster holds an account the

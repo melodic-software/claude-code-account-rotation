@@ -22,7 +22,18 @@ internal sealed record DashboardView(
     string? Setup,
     IReadOnlyList<string> Warnings,
     DateTimeOffset CapturedAt,
-    RefreshView Refresh);
+    RefreshView Refresh,
+    IReadOnlyList<AlertView> Alerts,
+    DateTimeOffset? AlertsComputedAt);
+
+/// <summary>
+/// One usage alert as the page renders it: <c>Figure</c> is <c>sevenDay</c> or
+/// <c>orgCredit</c>, <c>Level</c> is <c>warning</c> (70%) or <c>critical</c>
+/// (90%). The list is the one the last full refresh pass computed;
+/// <c>AlertsComputedAt</c> on the dashboard says when, and is null before the
+/// first pass.
+/// </summary>
+internal sealed record AlertView(string Account, string Figure, string Level, decimal Percent);
 
 internal sealed record LiveAccountView(string? Email, bool HasCredentials, string? Fingerprint);
 
