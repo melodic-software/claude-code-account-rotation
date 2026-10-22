@@ -6,7 +6,7 @@ using ClaudeCodeAccountRotation.Core.Accounts;
 namespace ClaudeCodeAccountRotation.App.Tests.Endpoints;
 
 /// <summary>
-/// <c>POST /api/accounts/{email}/console-page</c>: which Console page the
+/// <c>POST /api/accounts/{email}/console-page</c>: which fixed page the
 /// mapped browser profile is started on, and every way it refuses before or
 /// instead of starting one.
 /// </summary>
@@ -33,12 +33,13 @@ public sealed class ConsolePageEndpointTests
         return factory;
     }
 
-    // The expected URLs are the pages the Console serves, confirmed live before
-    // this route existed, not the constants the route reads.
+    // The expected URLs are the pages Anthropic serves, not the constants the
+    // route reads.
     [Theory]
+    [InlineData("claude-ai", "https://claude.ai/")]
     [InlineData("keys", "https://platform.claude.com/settings/keys")]
     [InlineData("admin-keys", "https://platform.claude.com/settings/admin-keys")]
-    public async Task TheMappedProfileIsStartedOnTheFixedConsolePage(string page, string expected)
+    public async Task TheMappedProfileIsStartedOnTheFixedPage(string page, string expected)
     {
         await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
         using HttpClient client = factory.CreateMutatingClient();

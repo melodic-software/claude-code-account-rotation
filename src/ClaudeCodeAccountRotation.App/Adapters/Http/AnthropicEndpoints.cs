@@ -31,12 +31,14 @@ internal static class AnthropicEndpoints
     public const string HomeUrl = "https://github.com/melodic-software/claude-code-account-rotation";
 
     /// <summary>
-    /// The only Claude Console pages the page may ask the tool to open, by the
-    /// name the request carries: where an organization's API keys and its Admin
-    /// keys are created. A name not in here opens nothing.
+    /// The only Anthropic pages the page may ask the tool to open, by the name
+    /// the request carries: claude.ai, and the Console pages where an
+    /// organization's API keys and its Admin keys are created. A name not in
+    /// here opens nothing.
     /// </summary>
-    public static readonly IReadOnlyDictionary<string, Uri> ConsolePages = new Dictionary<string, Uri>(StringComparer.Ordinal)
+    public static readonly IReadOnlyDictionary<string, Uri> AccountPages = new Dictionary<string, Uri>(StringComparer.Ordinal)
     {
+        ["claude-ai"] = new("https://claude.ai/"),
         ["keys"] = new("https://platform.claude.com/settings/keys"),
         ["admin-keys"] = new("https://platform.claude.com/settings/admin-keys"),
     };

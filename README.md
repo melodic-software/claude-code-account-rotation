@@ -58,9 +58,10 @@ Status: a tagged release exists.
   rate-limit answer ends it. It finds the key by the list's partial hint and says "cannot tell"
   when the hint is missing or fits more than one key. Individual accounts have no Admin API.
 - Open Console, in the Set API key and Set Admin key panels, opens the Console page where that
-  kind of key is created in the account's mapped browser profile. It only starts the browser: it
-  reads nothing from GitHub or Anthropic, and it opens only the two fixed pages the tool holds
-  (`AnthropicEndpoints.ConsolePages`). An account not on the roster, no mapped browser, or a failed
+  kind of key is created in the account's mapped browser profile. Open claude.ai and Open Console,
+  in a card's ··· menu, open claude.ai and the Console's API keys page there. Each only starts the
+  browser: it reads nothing from GitHub or Anthropic, and it opens only the three fixed pages the
+  tool holds (`AnthropicEndpoints.AccountPages`). An account not on the roster, no mapped browser, or a failed
   launch is a 409 with the reason; a bad page name or email is a 400.
 - Running the loop lanes (`work-loop`, `babysit-loop`, `attend-queue`) while rotating accounts is
   outside V1 because reader-side invalidation of a latched window is still an open problem.
