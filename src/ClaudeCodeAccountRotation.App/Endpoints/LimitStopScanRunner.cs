@@ -52,7 +52,7 @@ internal sealed class LimitStopScanRunner
         {
             if (scan._stopped)
             {
-                scan.Problems.Add(repository + ": not reached, as the check stopped before it");
+                scan.Problems.Add(NotReached(repository));
                 scan.Coverage.Add(new RepositoryCoverageView(repository, false, null));
                 continue;
             }
@@ -72,6 +72,12 @@ internal sealed class LimitStopScanRunner
         {
             if (!Take())
             {
+                // The budget ran out before this repository's first call: it was never reached.
+                if (seen.Count == 0 && range == ListingRange.First(since))
+                {
+                    Problems.Add(NotReached(repository));
+                }
+
                 return new RepositoryCoverageView(repository, false, coverage.Back);
             }
 
@@ -190,6 +196,8 @@ internal sealed class LimitStopScanRunner
 
         return whole;
     }
+
+    private static string NotReached(string repository) => repository + ": not reached, as the check stopped before it";
 
     /// <summary>Takes one call from the budget; when none is left, ends the scan and says so once.</summary>
     private bool Take()

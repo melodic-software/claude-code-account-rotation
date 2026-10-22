@@ -287,6 +287,50 @@ public sealed class LimitStopEndpointTests
     }
 
     [Fact]
+    public async Task ARunOlderThanSevenDaysIsNotReadAndOneAtExactlySevenDaysIs()
+    {
+        (AppFactory factory, SpyReader reader, SpyGraphQl graphQl) = await StartAsync("octo/lanes");
+        await using AppFactory _ = factory;
+
+        // The window opens at 2026-08-31 12:00:00 UTC, 7 days before the app's clock.
+        Run edge = new(101, new DateTimeOffset(2026, 8, 31, 12, 0, 0, TimeSpan.Zero));
+        Run old = new(100, new DateTimeOffset(2026, 8, 31, 11, 59, 59, TimeSpan.Zero));
+        reader.Answers.Enqueue(Runs("octo/lanes", edge, old));
+
+        JsonObject body = await ScanAsync(factory, A);
+
+        graphQl.Batches.ShouldBe([[edge.Suite]]);
+        body["runsRead"]!.GetValue<int>().ShouldBe(1);
+        body["outcome"]!.GetValue<string>().ShouldBe("checked");
+        CoveredBack(Coverage(body, 0)).ShouldBe(edge.CreatedAt);
+    }
+
+    [Fact]
+    public async Task ABudgetSpentExactlyAsTheNextRepositoryStartsNamesItAsNotReached()
+    {
+        (AppFactory factory, SpyReader reader, SpyGraphQl graphQl) = await StartAsync("octo/lanes", "octo/other");
+        await using AppFactory _ = factory;
+
+        // Fourteen full pages and a short fifteenth, each with its batch: the 30th call ends octo/lanes.
+        reader.Fallback = (call, path) => path.StartsWith("repos/octo/lanes/", StringComparison.Ordinal)
+            ? Stream("octo/lanes", call <= 10 ? (call - 1) * 100 : 999 + ((call - 11) * 100), call == 15 ? 5 : 100)
+            : Runs("octo/other");
+
+        JsonObject body = await ScanAsync(factory, A);
+
+        body["calls"]!.GetValue<int>().ShouldBe(30);
+        reader.Paths.ShouldAllBe(static path => path.StartsWith("repos/octo/lanes/", StringComparison.Ordinal));
+        Coverage(body, 0)["complete"]!.GetValue<bool>().ShouldBeTrue();
+        Coverage(body, 1)["complete"]!.GetValue<bool>().ShouldBeFalse();
+        CoveredBack(Coverage(body, 1)).ShouldBeNull();
+        body["outcome"]!.GetValue<string>().ShouldBe("partial");
+        Problems(body).ShouldBe([
+            "the check used its 30 GitHub calls and stopped there",
+            "octo/other: not reached, as the check stopped before it",
+        ]);
+    }
+
+    [Fact]
     public async Task ABatchLeavingFewerThanAThousandPointsEndsTheScanWithNoSecondBatch()
     {
         (AppFactory factory, SpyReader reader, SpyGraphQl graphQl) = await StartAsync("octo/lanes");
@@ -332,6 +376,7 @@ public sealed class LimitStopEndpointTests
         graphQl.Batches.Count.ShouldBe(1);
         body["outcome"]!.GetValue<string>().ShouldBe("partial");
         Problems(body).ShouldBe([GhApiReader.RateLimitMessage, "octo/other: not reached, as the check stopped before it"]);
+        body["runsRead"]!.GetValue<int>().ShouldBe(0);
     }
 
     [Fact]
