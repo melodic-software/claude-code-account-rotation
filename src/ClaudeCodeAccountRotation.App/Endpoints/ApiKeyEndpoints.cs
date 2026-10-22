@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Logging;
+using static ClaudeCodeAccountRotation.App.Endpoints.EndpointRefusals;
 
 namespace ClaudeCodeAccountRotation.App.Endpoints;
 
@@ -20,7 +21,8 @@ namespace ClaudeCodeAccountRotation.App.Endpoints;
 /// on this machine and kept in the OS store. A key arrives in the request body
 /// only, and nothing returns it: each route answers with the roster entry,
 /// whose <c>consoleApiKeySetOn</c> and <c>adminKeySetOn</c> are all the page
-/// knows, so loading the page never reads the store. With no usable store the
+/// knows, so loading the page never reads the store. A store answers with it
+/// the store's name and where Push API key would send the key. With no usable store the
 /// key is refused with the cause, and nothing is written.
 /// </summary>
 internal static partial class ApiKeyEndpoints
@@ -197,7 +199,7 @@ internal static partial class ApiKeyEndpoints
             return NotOnRoster(target);
         }
 
-        List<CiTokenSecret> secrets = [.. entry.CiRoles.Select(static held => held.Role.KeySecret).OfType<CiTokenSecret>()];
+        IReadOnlyList<CiTokenSecret> secrets = PushTargets(entry);
         if (secrets.Count == 0)
         {
             return Refused("NoKeyHalf", target.Value + " backs no role with a key half; assign one with Generate CI token.");
@@ -361,7 +363,11 @@ internal static partial class ApiKeyEndpoints
         Result<RosterEntry, string> recorded = await TryRecordAsync(rosterFile, kind, target, today);
         if (recorded.IsSuccess)
         {
-            return Results.Ok(DashboardAssembler.View(recorded.Value));
+            // An Admin key never goes to GitHub, so it has no push targets.
+            IReadOnlyList<string> pushesTo = kind == SecretKind.ConsoleApiKey
+                ? [.. PushTargets(recorded.Value).Select(static secret => secret.ToString())]
+                : [];
+            return Results.Ok(new ApiKeyStoredView(DashboardAssembler.View(recorded.Value)!, store.DisplayName, pushesTo));
         }
 
         // A key the roster does not record is one the page cannot show or
@@ -438,6 +444,10 @@ internal static partial class ApiKeyEndpoints
 
         return Results.Ok(new ApiKeyDeletionView(DashboardAssembler.View(recorded.Value)!, removal.Warning));
     }
+
+    /// <summary>The key secrets Push API key sends the stored Console key to: one per role the account backs with a key half.</summary>
+    internal static IReadOnlyList<CiTokenSecret> PushTargets(RosterEntry entry) =>
+        [.. entry.CiRoles.Select(static held => held.Role.KeySecret).OfType<CiTokenSecret>()];
 
     /// <summary>The key's name in a log line.</summary>
     private static string Label(SecretKind kind) => kind == SecretKind.AdminKey ? "Admin key" : "console API key";
@@ -562,9 +572,6 @@ internal static partial class ApiKeyEndpoints
     private static IResult NotOnRoster(AccountEmail email) =>
         Results.NotFound(new { error = email.Value + " is not on the roster." });
 
-    private static IResult Refused(string refusal, string message) =>
-        Results.Json(new SwitchRefusalView(refusal, message), statusCode: StatusCodes.Status409Conflict);
-
     // The account and the outcome only: never the key, and not the store's
     // own diagnostic either, which reaches the page instead.
     [LoggerMessage(Level = LogLevel.Information, Message = "{Key} for {Account} stored")]
@@ -610,6 +617,12 @@ internal sealed record StoredKeyRemoval(string? Refusal, string? Warning, bool A
 
 /// <summary>The roster entry after a push, what was set and what was not, and how many secrets were not.</summary>
 internal sealed record ApiKeyPushView(RosterEntryView? Roster, string Message, int Failed);
+
+/// <summary>
+/// The roster entry after a key is stored, the store's name as the page says
+/// it, and, for a Console key, the key secrets Push API key would send it to.
+/// </summary>
+internal sealed record ApiKeyStoredView(RosterEntryView Roster, string StoredIn, IReadOnlyList<string> PushesTo);
 
 /// <summary>The roster entry after a key delete, and the warning when the key was left in the store.</summary>
 internal sealed record ApiKeyDeletionView(RosterEntryView Roster, string? Warning);

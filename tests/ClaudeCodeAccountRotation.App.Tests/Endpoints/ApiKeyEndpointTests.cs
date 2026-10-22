@@ -73,7 +73,7 @@ public sealed class ApiKeyEndpointTests
         store.Items[(SecretKind.ConsoleApiKey, Parked)].ShouldBe(PlantedKey);
         body.ShouldNotContain(PlantedKey);
         // The host's clock reads 2026-09-07 12:00 UTC, which is that day locally anywhere within 11 hours of UTC.
-        JsonNode.Parse(body)!["consoleApiKeySetOn"]!.GetValue<string>().ShouldBe("2026-09-07");
+        JsonNode.Parse(body)!["roster"]!["consoleApiKeySetOn"]!.GetValue<string>().ShouldBe("2026-09-07");
         (await RosterOfAsync(client, Parked))!["consoleApiKeySetOn"]!.GetValue<string>().ShouldBe("2026-09-07");
     }
 

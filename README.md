@@ -57,6 +57,11 @@ Status: a tagged release exists.
   call: it reads key metadata, only on that click, with the tool's own User-Agent, and the first
   rate-limit answer ends it. It finds the key by the list's partial hint and says "cannot tell"
   when the hint is missing or fits more than one key. Individual accounts have no Admin API.
+- Open Console, in the Set API key and Set Admin key panels, opens the Console page where that
+  kind of key is created in the account's mapped browser profile. It only starts the browser: it
+  reads nothing from GitHub or Anthropic, and it opens only the two fixed pages the tool holds
+  (`AnthropicEndpoints.ConsolePages`). An account not on the roster, no mapped browser, or a failed
+  launch is a 409 with the reason; a bad page name or email is a 400.
 - Running the loop lanes (`work-loop`, `babysit-loop`, `attend-queue`) while rotating accounts is
   outside V1 because reader-side invalidation of a latched window is still an open problem.
 
@@ -466,11 +471,18 @@ Prerequisite: the GitHub CLI (`gh`) on PATH, signed in (`gh auth login`) as some
 those secrets (`admin:org` for organization secrets). The tool checks this before a token is made.
 
 1. Pick the card with the most 7-day headroom. If any role you will pick has a key half, store the
-   account's Console API key first (··· menu, Set API key).
+   account's Console API key first (··· menu, Set API key). Open Console, in that panel, opens the
+   Console's API keys page in the account's mapped browser profile, so you create the key signed in
+   as that account (the Set Admin key panel opens the Admin keys page). After Save the panel says
+   where the key is kept (Credential Manager on Windows, the Secret Service on Linux) and what
+   sends it to GitHub: Push API key, naming the key secrets, when the account already backs a role
+   with a key half; otherwise Generate CI token with such a role.
 2. Open its ··· menu, then Generate CI token. Tick the roles it is to back. The list holds every
-   role an account backs and, after Check roles, every role the organization's secrets name. To
-   create a role, type its prefix and organization; the page asks before it creates the two
-   secrets. Choose Start sign-in.
+   role an account backs and, after Check roles, every role the organization's secrets name. When
+   no role is known yet, the panel offers Check roles itself and redraws the list from what it
+   finds. To create a role, type its prefix and organization; the page asks before it creates the
+   two secrets. Choose Start sign-in: the button names the browser and profile it opens, or says
+   you will get a link when no browser is mapped.
 3. Anthropic's sign-in page opens in the account's mapped browser profile. Sign in as that
    account, then paste the code it shows into the card and choose Submit code.
 4. The tool sets each role's token secret from the new token, then its key secret from the stored
@@ -575,8 +587,8 @@ each hit names its `account`, and the answer carries `coverage` per repository, 
 
 To mark an account by hand instead (for a token made outside the tool, or when the tool set the
 secret but could not update the roster), open Edit and set "CI token generated on". Optionally
-also set "CI secret name" and "CI secret in" (`owner/repository`, or an organization), then
-Save; that adds the secret's role with its token set on that date, taking that token half off the
+also open "Repair a role record", folded under the role list, and set "CI secret name" and "CI
+secret in" (`owner/repository`, or an organization), then Save; that adds the secret's role with its token set on that date, taking that token half off the
 account that backed it before; the other half stays. That is the only role Edit gives an account,
 and it is refused (409) when another account holds that token half set on a later day, or set
 through the tool on the same day: that half is newer than the token you are recording, so run

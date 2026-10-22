@@ -18,6 +18,9 @@ public enum SecretKind
 /// </summary>
 public interface ISecretStore
 {
+    /// <summary>The store's name as the page says it, as in "Stored in Credential Manager".</summary>
+    string DisplayName => "the OS store";
+
     /// <summary>Whether a key could be kept here now, or the cause when it cannot.</summary>
     Task<Result<Unit, string>> ProbeAsync(CancellationToken cancellationToken);
 

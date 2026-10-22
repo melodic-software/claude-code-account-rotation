@@ -95,7 +95,7 @@ public sealed class AdminKeyEndpointTests
         store.Items.ShouldNotContainKey((SecretKind.ConsoleApiKey, Parked));
         body.ShouldNotContain(PlantedAdminKey);
         // The host's clock reads 2026-09-07 12:00 UTC.
-        JsonNode.Parse(body)!["adminKeySetOn"]!.GetValue<string>().ShouldBe("2026-09-07");
+        JsonNode.Parse(body)!["roster"]!["adminKeySetOn"]!.GetValue<string>().ShouldBe("2026-09-07");
         JsonObject roster = (await RosterOfAsync(client))!;
         roster["adminKeySetOn"]!.GetValue<string>().ShouldBe("2026-09-07");
         roster["consoleApiKeySetOn"].ShouldBeNull();

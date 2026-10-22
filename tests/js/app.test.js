@@ -630,7 +630,44 @@ test("a role whose other half another account holds reads split and names both a
 
 test("the CI panel says what Start does before anything starts", () => {
   assert.match(ciPanelWords().intro, /^Pick the roles, then Start sign-in opens Anthropic's sign-in in this account's browser profile; paste the code it shows here\.$/);
-  assert.strictEqual(ciPanelWords().start, "Start sign-in");
+});
+
+test("the CI panel's Start button names the browser profile it opens as the card does, or says a link comes instead", () => {
+  const { browserLine } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+  assert.strictEqual(ciPanelWords({ browser: "brave", browserProfileDirectory: "Profile 3" }, "Work (Profile 3)").start, "Start sign-in (opens brave / Work (Profile 3))");
+  // No profile directory: the launcher passes none, and the card names the browser alone.
+  assert.strictEqual(ciPanelWords({ browser: "edge", browserProfileDirectory: null }, null).start, "Start sign-in (opens edge)");
+  assert.strictEqual(ciPanelWords({ browser: null, browserProfileDirectory: null }, null).start, "Start sign-in (no browser mapped: you will get a link)");
+  assert.strictEqual(ciPanelWords(null, null).start, "Start sign-in (no browser mapped: you will get a link)");
+  assert.strictEqual(browserLine("brave", "Work (Profile 3)"), "brave / Work (Profile 3)");
+  assert.strictEqual(browserLine("edge", null), "edge");
+});
+
+test("with no roles to offer, the CI panel points at Check roles, then says which organizations it could not read", () => {
+  const { ciNoRolesWords } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+  assert.match(ciNoRolesWords(null), /^No roles known yet: Check roles reads/);
+  assert.strictEqual(ciNoRolesWords({ roles: [], failures: [] }), "Check roles found no role secrets: name a new role below.");
+  // A failed read is not "found none".
+  assert.strictEqual(
+    ciNoRolesWords({ roles: [], failures: [{ organization: "octo", error: "HTTP 403" }, { organization: "acme", error: "rate limited" }] }),
+    "Check roles could not read org octo (HTTP 403), org acme (rate limited): check again, or name a new role below.");
+});
+
+test("after a key is stored, the panel names the store and the push targets the server answered with", () => {
+  const { keyStoredWords } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+  assert.strictEqual(keyStoredWords({ storedIn: "Credential Manager", pushesTo: ["AUTOMATIONS_CLAUDE_API_KEY in org octo", "LANE_CLAUDE_API_KEY in octo/lane-one"] }, false),
+    "Stored in Credential Manager on this machine. Push API key sends it to AUTOMATIONS_CLAUDE_API_KEY in org octo, LANE_CLAUDE_API_KEY in octo/lane-one.");
+  assert.strictEqual(keyStoredWords({ storedIn: "the Secret Service", pushesTo: [] }, false),
+    "Stored in the Secret Service on this machine. No GitHub secret yet: use Generate CI token and pick a role with a key half.");
+  // An Admin key never goes to GitHub.
+  assert.strictEqual(keyStoredWords({ storedIn: "Credential Manager", pushesTo: [] }, true),
+    "Stored in Credential Manager on this machine. It is used only when you click Check API key.");
+});
+
+test("a role's place is its repository, else its organization", () => {
+  const { roleWhere } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+  assert.strictEqual(roleWhere({ repository: "octo/lane-one", organization: null }), "octo/lane-one");
+  assert.strictEqual(roleWhere({ repository: null, organization: "octo" }), "org octo");
 });
 
 test("assignableRoles offers each roster role once, then the unclaimed roles Check roles found", () => {
