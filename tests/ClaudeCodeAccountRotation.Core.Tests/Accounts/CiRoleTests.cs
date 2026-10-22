@@ -27,6 +27,26 @@ public sealed class CiRoleTests
         role.KeySecretName.ShouldBe(keySecret);
     }
 
+    // Issue #259's roles table: the review lanes and the issue lane run on
+    // claude-code-action and read a token only; the legacy role has no key secret.
+    // AUTOMATIONS stays keyed while lanes still read AUTOMATIONS_CLAUDE_API_KEY.
+    [Theory]
+    [InlineData("REVIEWS", false)]
+    [InlineData("reviews_security", false)]
+    [InlineData("ISSUE_LANE", false)]
+    [InlineData("Automations", true)]
+    [InlineData("", false)]
+    [InlineData("INTAKE", true)]
+    [InlineData("PR_UNBLOCK", true)]
+    [InlineData("PR_VERIFY", true)]
+    [InlineData("REVIEWS_EXTRA", true)]
+    public void OnlyARoleWhoseLanesReadAKeyIsKeyed(string prefix, bool keyed) =>
+        Org(prefix).Keyed.ShouldBe(keyed);
+
+    [Fact]
+    public void ATokenOnlyRoleUnderItsLiteralNameIsNotKeyed() =>
+        CiRole.FromTokenSecret(CiTokenSecret.Parse("MY_TOKEN", null, "octo").Value).Keyed.ShouldBeFalse();
+
     [Fact]
     public void ATokenOnlyRoleIsNotThePrefixRoleOfTheSameName()
     {

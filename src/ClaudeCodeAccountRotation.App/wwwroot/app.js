@@ -984,12 +984,12 @@
     });
     var prefix = element("input");
     prefix.type = "text";
-    prefix.placeholder = "AUTOMATIONS";
+    prefix.placeholder = "INTAKE";
     labeled(form, "New role (prefix, optional)", prefix);
     var where = element("input");
     where.type = "text";
-    where.placeholder = "octo-org, or owner/repository";
-    labeled(form, "New role's organization or repository", where);
+    where.placeholder = "octo-org";
+    labeled(form, "New role's organization", where);
 
     var start = element("button", null, words.start);
     start.type = "submit";
@@ -999,7 +999,8 @@
     form.addEventListener("submit", function (event) {
       event.preventDefault();
       var picked = roles.filter(function (_, index) { return boxes[index].checked; }).map(function (role) { return role.item; });
-      var created = newRoleItem(prefix.value, where.value, lastRoleCheck);
+      var created = newRoleItem(prefix.value, where.value, lastRoleCheck, lastDashboard && lastDashboard.tokenOnlyRolePrefixes);
+      if (created && created.error) { status.textContent = created.error; return; }
       if (created) {
         // A role typed by hand may create secrets, visible to every
         // repository, so the page asks first and says which.
@@ -1882,19 +1883,21 @@
 
   // A role named in the panel's free-text row, or null when the prefix is
   // blank: the request item and the confirmation naming its two secrets. It
-  // says "creates" for an organization secret the last Check roles did not
-  // list and "sets" for one it did; Check roles reads no repository secrets.
-  function newRoleItem(prefix, where, check) {
+  // says "creates" for a secret the last Check roles did not list and "sets"
+  // for one it did, and no key secret for a prefix in tokenOnly, the
+  // dashboard's list of roles whose lanes read no key. A role in one
+  // repository is refused, as the server refuses it, with the reason in error.
+  function newRoleItem(prefix, where, check, tokenOnly) {
     var name = (prefix || "").trim().toUpperCase();
     var place = (where || "").trim();
     if (!name) { return null; }
-    var repository = place.indexOf("/") >= 0;
-    var item = { prefix: name };
-    item[repository ? "repository" : "organization"] = place;
-    var secrets = [name + "_CLAUDE_CODE_OAUTH_TOKEN", name + "_CLAUDE_API_KEY"];
-    if (repository) {
-      return { item: item, confirm: "This sets " + secrets.join(" and ") + " in repository " + place + ", creating any that do not exist. Go ahead?" };
+    if (place.indexOf("/") >= 0) {
+      return { error: "A role's secrets are set on the organization, never on one repository: name an organization." };
     }
+    var item = { prefix: name, organization: place };
+    var secrets = (tokenOnly || []).indexOf(name) >= 0
+      ? [name + "_CLAUDE_CODE_OAUTH_TOKEN"]
+      : [name + "_CLAUDE_CODE_OAUTH_TOKEN", name + "_CLAUDE_API_KEY"];
     var listed = function (secret) {
       return ((check && check.roles) || []).some(function (role) {
         return (role.organization || "").toLowerCase() === place.toLowerCase()

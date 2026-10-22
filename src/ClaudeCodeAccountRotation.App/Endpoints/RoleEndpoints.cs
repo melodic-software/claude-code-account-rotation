@@ -274,10 +274,11 @@ internal static partial class RoleEndpoints
         Dictionary<CiRole, RoleCheckRowView> rows = [];
         foreach (RoleSecrets found in report.Unclaimed)
         {
-            rows[found.Role] = Row(found.Role, null, catalog, found.HasToken ? "unclaimed" : null, found.HasKey ? "unclaimed" : null);
+            rows[found.Role] = Row(found.Role, null, catalog, found.HasToken ? "unclaimed" : null, found.HasKey && found.Role.Keyed ? "unclaimed" : null);
         }
 
-        foreach (ClaimedHalf half in report.Claimed)
+        // A token-only role's lanes read no key, so its key half is not judged.
+        foreach (ClaimedHalf half in report.Claimed.Where(static half => half.Half == RoleHalf.Token || half.Role.Keyed))
         {
             RoleCheckRowView row = rows.GetValueOrDefault(half.Role) ?? Row(half.Role, half.Holder.Value, catalog, null, null);
             rows[half.Role] = half.Half == RoleHalf.Token
@@ -304,9 +305,9 @@ internal static partial class RoleEndpoints
         role.Prefix,
         role.Owner,
         role.TokenSecretName,
-        role.KeySecretName,
+        role.Keyed ? role.KeySecretName : null,
         catalog.Find(role.Owner, role.TokenSecretName) is not null,
-        role.KeySecretName is string keySecret && catalog.Find(role.Owner, keySecret) is not null,
+        role.Keyed && role.KeySecretName is string keySecret && catalog.Find(role.Owner, keySecret) is not null,
         holder,
         token,
         key);

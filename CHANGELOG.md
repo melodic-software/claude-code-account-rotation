@@ -6,6 +6,17 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Changed
+
+- **A Claude role secret is never written to one repository.** `gh secret set` is refused, before
+  gh starts, for `CLAUDE_CODE_OAUTH_TOKEN` or a name ending in `_CLAUDE_CODE_OAUTH_TOKEN` or
+  `_CLAUDE_API_KEY` in a repository, and so is a Generate CI token request naming one (a role, or
+  the 2.1.0 `secretName` body). No option skips it. Push API key skips a repository role an
+  earlier roster recorded, and the panel's free-text row takes an organization only.
+- **Token-only roles get no key.** `REVIEWS`, `REVIEWS_SECURITY` and `ISSUE_LANE` run on
+  claude-code-action and read a token only, so Generate CI token no longer asks for a
+  Console key for them or writes their `_CLAUDE_API_KEY`, and Push API key sends them nothing.
+
 ## [2.5.0] - 2026-10-22
 
 ### Added

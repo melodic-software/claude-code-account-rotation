@@ -28,11 +28,11 @@ public sealed class CiTokenRoleEndpointTests
     // Built from pieces, so the source holds nothing a secret scanner would take for a real key.
     private const string PlantedKey = "sk-ant-" + "api03-planted-role-key-9d1f";
 
-    private static readonly CiRole _automations = new("AUTOMATIONS", CiSecretScope.Organization, "octo");
-    private static readonly CiRole _issueLane = new("ISSUE_LANE", CiSecretScope.Organization, "octo");
+    private static readonly CiRole _prUnblock = new("PR_UNBLOCK", CiSecretScope.Organization, "octo");
+    private static readonly CiRole _prVerify = new("PR_VERIFY", CiSecretScope.Organization, "octo");
     private static readonly object _bothRoles = new
     {
-        roles = new[] { new { prefix = "AUTOMATIONS", organization = "octo" }, new { prefix = "ISSUE_LANE", organization = "octo" } },
+        roles = new[] { new { prefix = "PR_UNBLOCK", organization = "octo" }, new { prefix = "PR_VERIFY", organization = "octo" } },
     };
 
     private static Uri Account(string email, string path) => new("/api/accounts/" + Uri.EscapeDataString(email) + path, UriKind.Relative);
@@ -99,7 +99,7 @@ public sealed class CiTokenRoleEndpointTests
     {
         (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken);
         await using AppFactory host = factory;
-        AnswerAll(reader, "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", "AUTOMATIONS_CLAUDE_API_KEY", "ISSUE_LANE_CLAUDE_CODE_OAUTH_TOKEN", "ISSUE_LANE_CLAUDE_API_KEY");
+        AnswerAll(reader, "PR_UNBLOCK_CLAUDE_CODE_OAUTH_TOKEN", "PR_UNBLOCK_CLAUDE_API_KEY", "PR_VERIFY_CLAUDE_CODE_OAUTH_TOKEN", "PR_VERIFY_CLAUDE_API_KEY");
         using HttpClient client = factory.CreateMutatingClient();
 
         List<string> bodies = await AssignAsync(client, _bothRoles, TestContext.Current.CancellationToken);
@@ -108,13 +108,13 @@ public sealed class CiTokenRoleEndpointTests
         factory.SetupToken.Children.Count.ShouldBe(1);
         factory.Secrets.Sets.Select(static set => (set.Secret.Name, set.Value)).ShouldBe(
         [
-            ("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", SetupTokenScript.Token),
-            ("AUTOMATIONS_CLAUDE_API_KEY", PlantedKey),
-            ("ISSUE_LANE_CLAUDE_CODE_OAUTH_TOKEN", SetupTokenScript.Token),
-            ("ISSUE_LANE_CLAUDE_API_KEY", PlantedKey),
+            ("PR_UNBLOCK_CLAUDE_CODE_OAUTH_TOKEN", SetupTokenScript.Token),
+            ("PR_UNBLOCK_CLAUDE_API_KEY", PlantedKey),
+            ("PR_VERIFY_CLAUDE_CODE_OAUTH_TOKEN", SetupTokenScript.Token),
+            ("PR_VERIFY_CLAUDE_API_KEY", PlantedKey),
         ]);
         RosterEntry entry = (await RosterAsync(factory)).Find(Parse(Email))!;
-        entry.CiRoles.Select(static held => (held.Role, held.HasToken, held.HasKey)).ShouldBe([(_automations, true, true), (_issueLane, true, true)]);
+        entry.CiRoles.Select(static held => (held.Role, held.HasToken, held.HasKey)).ShouldBe([(_prUnblock, true, true), (_prVerify, true, true)]);
     }
 
     [Fact]
@@ -122,11 +122,11 @@ public sealed class CiTokenRoleEndpointTests
     {
         (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken);
         await using AppFactory host = factory;
-        reader.Answers["orgs/octo/actions/secrets/AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN"] = PathReader.Secret("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", "selected");
-        reader.Answers["orgs/octo/actions/secrets/AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN/repositories?per_page=100&page=1"] = PathReader.Repositories("a", "b");
-        reader.Answers["orgs/octo/actions/secrets/AUTOMATIONS_CLAUDE_API_KEY"] = PathReader.Secret("AUTOMATIONS_CLAUDE_API_KEY", "private");
-        reader.Answers["orgs/octo/actions/secrets/ISSUE_LANE_CLAUDE_CODE_OAUTH_TOKEN"] = PathReader.Secret("ISSUE_LANE_CLAUDE_CODE_OAUTH_TOKEN", "all");
-        reader.Answers["orgs/octo/actions/secrets/ISSUE_LANE_CLAUDE_API_KEY"] = PathReader.NotFound();
+        reader.Answers["orgs/octo/actions/secrets/PR_UNBLOCK_CLAUDE_CODE_OAUTH_TOKEN"] = PathReader.Secret("PR_UNBLOCK_CLAUDE_CODE_OAUTH_TOKEN", "selected");
+        reader.Answers["orgs/octo/actions/secrets/PR_UNBLOCK_CLAUDE_CODE_OAUTH_TOKEN/repositories?per_page=100&page=1"] = PathReader.Repositories("a", "b");
+        reader.Answers["orgs/octo/actions/secrets/PR_UNBLOCK_CLAUDE_API_KEY"] = PathReader.Secret("PR_UNBLOCK_CLAUDE_API_KEY", "private");
+        reader.Answers["orgs/octo/actions/secrets/PR_VERIFY_CLAUDE_CODE_OAUTH_TOKEN"] = PathReader.Secret("PR_VERIFY_CLAUDE_CODE_OAUTH_TOKEN", "all");
+        reader.Answers["orgs/octo/actions/secrets/PR_VERIFY_CLAUDE_API_KEY"] = PathReader.NotFound();
         using HttpClient client = factory.CreateMutatingClient();
 
         await AssignAsync(client, _bothRoles, TestContext.Current.CancellationToken);
@@ -147,14 +147,14 @@ public sealed class CiTokenRoleEndpointTests
     {
         (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken);
         await using AppFactory host = factory;
-        AnswerAll(reader, "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN");
-        reader.Answers["orgs/octo/actions/secrets/AUTOMATIONS_CLAUDE_API_KEY"] =
+        AnswerAll(reader, "PR_UNBLOCK_CLAUDE_CODE_OAUTH_TOKEN");
+        reader.Answers["orgs/octo/actions/secrets/PR_UNBLOCK_CLAUDE_API_KEY"] =
             Result<JsonNode, GhApiFailure>.Failure(new GhApiFailure("GitHub answered HTTP 403 for that path", RateLimited: false));
         using HttpClient client = factory.CreateMutatingClient();
 
         using HttpResponseMessage started = await client.PostAsJsonAsync(
             Account(Email, "/ci-token"),
-            new { roles = new[] { new { prefix = "AUTOMATIONS", organization = "octo" } } },
+            new { roles = new[] { new { prefix = "PR_UNBLOCK", organization = "octo" } } },
             TestContext.Current.CancellationToken);
 
         started.StatusCode.ShouldBe(HttpStatusCode.Conflict);
@@ -212,7 +212,7 @@ public sealed class CiTokenRoleEndpointTests
 
     [Theory]
     [InlineData("MY_TOKEN", "--visibility private")]
-    [InlineData("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", "--visibility all")]
+    [InlineData("PR_UNBLOCK_CLAUDE_CODE_OAUTH_TOKEN", "--visibility all")]
     public async Task ANewSecretNamedByTheOldBodyIsPrivateUnlessItIsARoles(string name, string flags)
     {
         (AppFactory factory, PathReader reader) = await StartAsync(withKey: false, TestContext.Current.CancellationToken);
@@ -242,6 +242,107 @@ public sealed class CiTokenRoleEndpointTests
         value.ShouldBe(SetupTokenScript.Token);
     }
 
+    // No role, prefix, case or extra field lets a Claude role secret into one repository.
+    [Theory]
+    [InlineData("""{"roles":[{"prefix":"INTAKE","repository":"octo/repo"}]}""")]
+    [InlineData("""{"roles":[{"prefix":"","repository":"octo/repo"}]}""")]
+    [InlineData("""{"roles":[{"tokenSecret":"reviews_claude_code_oauth_token","repository":"octo/repo"}],"force":true}""")]
+    [InlineData("""{"roles":[{"prefix":"PR_VERIFY","organization":"octo"},{"prefix":"PR_UNBLOCK","repository":"octo/repo","allowRepoScope":true}]}""")]
+    public async Task ARoleInOneRepositoryIsRefusedBeforeAnythingStarts(string json)
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken);
+        await using AppFactory host = factory;
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using StringContent content = new(json, System.Text.Encoding.UTF8, "application/json");
+        using HttpResponseMessage started = await client.PostAsync(Account(Email, "/ci-token"), content, TestContext.Current.CancellationToken);
+
+        started.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
+        (await started.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["error"]!.GetValue<string>()
+            .ShouldBe("roles: " + CiTokenSecret.RepositoryRoleSecretRefusal);
+        factory.SetupToken.Children.ShouldBeEmpty();
+        reader.Paths.ShouldBeEmpty();
+        factory.Secrets.Sets.ShouldBeEmpty();
+    }
+
+    // Issue #259: the roles whose lanes run on claude-code-action read a token
+    // only, so no Console key is asked for, read, or written for them.
+    [Theory]
+    [InlineData("REVIEWS", false)]
+    [InlineData("REVIEWS_SECURITY", false)]
+    [InlineData("ISSUE_LANE", true)]
+    [InlineData("REVIEWS", true)]
+    public async Task ATokenOnlyRoleNeedsNoKeyAndGetsOnlyItsToken(string prefix, bool withKey)
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey, TestContext.Current.CancellationToken);
+        await using AppFactory host = factory;
+        AnswerAll(reader, prefix + "_CLAUDE_CODE_OAUTH_TOKEN");
+        using HttpClient client = factory.CreateMutatingClient();
+
+        List<string> bodies = await AssignAsync(client, new { roles = new[] { new { prefix, organization = "octo" } } }, TestContext.Current.CancellationToken);
+
+        JsonNode.Parse(bodies[^1])!["state"]!.GetValue<string>().ShouldBe("Completed");
+        factory.Secrets.Sets.Select(static set => (set.Secret.Name, set.Value)).ShouldBe([(prefix + "_CLAUDE_CODE_OAUTH_TOKEN", SetupTokenScript.Token)]);
+        reader.Paths.ShouldBe(["orgs/octo/actions/secrets/" + prefix + "_CLAUDE_CODE_OAUTH_TOKEN"]);
+        (await RosterAsync(factory)).Find(Parse(Email))!.CiRoles.Select(static held => (held.Role.Prefix, held.HasToken, held.HasKey)).ShouldBe([(prefix, true, false)]);
+    }
+
+    [Fact]
+    public async Task PushSkipsATokenOnlyRoleTheAccountRecordsAKeyFor()
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken);
+        await using AppFactory host = factory;
+        DateOnly before = new(2026, 6, 1);
+        CiRole reviews = new("REVIEWS", CiSecretScope.Organization, "octo");
+        RosterEntry held = (await RosterAsync(factory)).Find(Parse(Email))!;
+        await SeedAsync(factory, held.ClaimingToken(reviews, before, null).ClaimingKey(reviews, before, null).ClaimingToken(_prUnblock, before, null));
+        AnswerAll(reader, "REVIEWS_CLAUDE_API_KEY", "PR_UNBLOCK_CLAUDE_API_KEY");
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage pushed = await client.PostAsync(Account(Email, "/api-key/push"), content: null, TestContext.Current.CancellationToken);
+
+        pushed.StatusCode.ShouldBe(HttpStatusCode.OK);
+        factory.Secrets.Sets.Select(static set => set.Secret.Name).ShouldBe(["PR_UNBLOCK_CLAUDE_API_KEY"]);
+    }
+
+    [Fact]
+    public async Task PushIsRefusedForAnAccountThatBacksOnlyTokenOnlyRoles()
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken);
+        await using AppFactory host = factory;
+        RosterEntry held = (await RosterAsync(factory)).Find(Parse(Email))!;
+        await SeedAsync(factory, held.ClaimingToken(new CiRole("REVIEWS", CiSecretScope.Organization, "octo"), new DateOnly(2026, 6, 1), null));
+        AnswerAll(reader, "REVIEWS_CLAUDE_API_KEY");
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage pushed = await client.PostAsync(Account(Email, "/api-key/push"), content: null, TestContext.Current.CancellationToken);
+
+        pushed.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        (await pushed.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).ShouldContain("backs no role with a key half");
+        factory.Secrets.Sets.ShouldBeEmpty();
+    }
+
+    // A roster an earlier release wrote may hold a role in one repository; Push
+    // reads it but sends that role nothing.
+    [Fact]
+    public async Task PushSendsNothingToARoleInOneRepositoryAnEarlierRosterHolds()
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken);
+        await using AppFactory host = factory;
+        DateOnly before = new(2026, 6, 1);
+        CiRole inRepository = new("PR_UNBLOCK", CiSecretScope.Repository, "octo/one");
+        RosterEntry held = (await RosterAsync(factory)).Find(Parse(Email))!;
+        await SeedAsync(factory, held.ClaimingToken(inRepository, before, null).ClaimingKey(inRepository, before, null).ClaimingToken(_prVerify, before, null));
+        AnswerAll(reader, "PR_VERIFY_CLAUDE_API_KEY");
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage pushed = await client.PostAsync(Account(Email, "/api-key/push"), content: null, TestContext.Current.CancellationToken);
+
+        pushed.StatusCode.ShouldBe(HttpStatusCode.OK);
+        factory.Secrets.Sets.Select(static set => set.Secret.ToString()).ShouldBe(["PR_VERIFY_CLAUDE_API_KEY in org octo"]);
+        (await RosterAsync(factory)).Find(Parse(Email))!.CiRoles.Single(role => role.Role.Equals(inRepository)).KeySetOn.ShouldBe(before);
+    }
+
     [Fact]
     public async Task WhenTheSecondOfFourSetsFailsTheRosterHoldsTheThreeThatWereSetAndNamesTheSplit()
     {
@@ -249,21 +350,21 @@ public sealed class CiTokenRoleEndpointTests
         await using AppFactory host = factory;
         DateOnly before = new(2026, 6, 1);
         await SeedAsync(factory, new RosterEntry(Parse(Previous))
-            .ClaimingToken(_automations, before, null).ClaimingKey(_automations, before, null)
-            .ClaimingToken(_issueLane, before, null).ClaimingKey(_issueLane, before, null));
-        AnswerAll(reader, "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", "AUTOMATIONS_CLAUDE_API_KEY", "ISSUE_LANE_CLAUDE_CODE_OAUTH_TOKEN", "ISSUE_LANE_CLAUDE_API_KEY");
-        factory.Secrets.SetErrorFor = static secret => secret.Name == "AUTOMATIONS_CLAUDE_API_KEY" ? "gh secret set exited with code 1" : null;
+            .ClaimingToken(_prUnblock, before, null).ClaimingKey(_prUnblock, before, null)
+            .ClaimingToken(_prVerify, before, null).ClaimingKey(_prVerify, before, null));
+        AnswerAll(reader, "PR_UNBLOCK_CLAUDE_CODE_OAUTH_TOKEN", "PR_UNBLOCK_CLAUDE_API_KEY", "PR_VERIFY_CLAUDE_CODE_OAUTH_TOKEN", "PR_VERIFY_CLAUDE_API_KEY");
+        factory.Secrets.SetErrorFor = static secret => secret.Name == "PR_UNBLOCK_CLAUDE_API_KEY" ? "gh secret set exited with code 1" : null;
         using HttpClient client = factory.CreateMutatingClient();
 
         List<string> bodies = await AssignAsync(client, _bothRoles, TestContext.Current.CancellationToken);
 
         factory.Secrets.Sets.Count.ShouldBe(4);
         Roster roster = await RosterAsync(factory);
-        roster.Find(Parse(Email))!.CiRoles.Select(static held => (held.Role, held.HasToken, held.HasKey)).ShouldBe([(_automations, true, false), (_issueLane, true, true)]);
+        roster.Find(Parse(Email))!.CiRoles.Select(static held => (held.Role, held.HasToken, held.HasKey)).ShouldBe([(_prUnblock, true, false), (_prVerify, true, true)]);
         // The key secret still holds the previous holder's key, so that half stays theirs.
-        roster.Find(Parse(Previous))!.CiRoles.ShouldBe([new CiRoleAssignment(_automations, KeySetOn: before)]);
+        roster.Find(Parse(Previous))!.CiRoles.ShouldBe([new CiRoleAssignment(_prUnblock, KeySetOn: before)]);
         string message = JsonNode.Parse(bodies[^1])!["message"]!.GetValue<string>();
-        message.ShouldContain("AUTOMATIONS key (AUTOMATIONS_CLAUDE_API_KEY in org octo): gh secret set exited with code 1");
+        message.ShouldContain("PR_UNBLOCK key (PR_UNBLOCK_CLAUDE_API_KEY in org octo): gh secret set exited with code 1");
         message.ShouldContain("split: token from " + Email + ", key from " + Previous);
     }
 
@@ -273,15 +374,15 @@ public sealed class CiTokenRoleEndpointTests
         (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken);
         await using AppFactory host = factory;
         DateOnly before = new(2026, 6, 1);
-        await SeedAsync(factory, new RosterEntry(Parse(Previous)).ClaimingToken(_automations, before, null).ClaimingKey(_automations, before, null));
-        AnswerAll(reader, "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", "AUTOMATIONS_CLAUDE_API_KEY");
+        await SeedAsync(factory, new RosterEntry(Parse(Previous)).ClaimingToken(_prUnblock, before, null).ClaimingKey(_prUnblock, before, null));
+        AnswerAll(reader, "PR_UNBLOCK_CLAUDE_CODE_OAUTH_TOKEN", "PR_UNBLOCK_CLAUDE_API_KEY");
         using HttpClient client = factory.CreateMutatingClient();
 
-        await AssignAsync(client, new { roles = new[] { new { prefix = "AUTOMATIONS", organization = "octo" } } }, TestContext.Current.CancellationToken);
+        await AssignAsync(client, new { roles = new[] { new { prefix = "PR_UNBLOCK", organization = "octo" } } }, TestContext.Current.CancellationToken);
 
         Roster roster = await RosterAsync(factory);
         roster.Find(Parse(Previous))!.CiRoles.ShouldBeEmpty();
-        roster.Find(Parse(Email))!.CiRoles.Select(static held => (held.Role, held.HasToken, held.HasKey)).ShouldBe([(_automations, true, true)]);
+        roster.Find(Parse(Email))!.CiRoles.Select(static held => (held.Role, held.HasToken, held.HasKey)).ShouldBe([(_prUnblock, true, true)]);
     }
 
     [Fact]
@@ -290,20 +391,20 @@ public sealed class CiTokenRoleEndpointTests
         (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken);
         await using AppFactory host = factory;
         DateOnly before = new(2026, 6, 1);
-        RosterEntry keyHolder = (await RosterAsync(factory)).Find(Parse(Email))! with { CiRoles = [new CiRoleAssignment(_automations, KeySetOn: before)] };
-        RosterEntry tokenHolder = new RosterEntry(Parse(Previous)).ClaimingToken(_automations, before, null);
+        RosterEntry keyHolder = (await RosterAsync(factory)).Find(Parse(Email))! with { CiRoles = [new CiRoleAssignment(_prUnblock, KeySetOn: before)] };
+        RosterEntry tokenHolder = new RosterEntry(Parse(Previous)).ClaimingToken(_prUnblock, before, null);
         await factory.Services.GetRequiredService<RosterFile>().UpdateAsync(_ => new Roster([keyHolder, tokenHolder]), TestContext.Current.CancellationToken);
         string history = Path.Combine(factory.AppData, LaneHistoryFile.FileName);
         File.Delete(history);
-        reader.Answers["orgs/octo/actions/secrets/AUTOMATIONS_CLAUDE_API_KEY"] = PathReader.Secret("AUTOMATIONS_CLAUDE_API_KEY", "all");
+        reader.Answers["orgs/octo/actions/secrets/PR_UNBLOCK_CLAUDE_API_KEY"] = PathReader.Secret("PR_UNBLOCK_CLAUDE_API_KEY", "all");
         using HttpClient client = factory.CreateMutatingClient();
 
         using HttpResponseMessage pushed = await client.PostAsync(Account(Email, "/api-key/push"), content: null, TestContext.Current.CancellationToken);
 
         pushed.StatusCode.ShouldBe(HttpStatusCode.OK);
-        factory.Secrets.Sets.Single().Secret.Name.ShouldBe("AUTOMATIONS_CLAUDE_API_KEY");
+        factory.Secrets.Sets.Single().Secret.Name.ShouldBe("PR_UNBLOCK_CLAUDE_API_KEY");
         Roster roster = await RosterAsync(factory);
-        roster.Find(Parse(Previous))!.CiRoles.ShouldBe([new CiRoleAssignment(_automations, before)]);
+        roster.Find(Parse(Previous))!.CiRoles.ShouldBe([new CiRoleAssignment(_prUnblock, before)]);
         roster.Find(Parse(Email))!.CiRoles.Single().HasKey.ShouldBeTrue();
         // The key stayed with the same account and the token never moved, so no half changed hands.
         (File.Exists(history) ? await File.ReadAllTextAsync(history, TestContext.Current.CancellationToken) : string.Empty).ShouldNotContain("\"half\":\"token\"");
@@ -315,14 +416,14 @@ public sealed class CiTokenRoleEndpointTests
         (AppFactory factory, PathReader reader) = await StartAsync(withKey: false, TestContext.Current.CancellationToken);
         await using AppFactory host = factory;
         DateOnly before = new(2026, 6, 1);
-        await SeedAsync(factory, new RosterEntry(Parse(Previous)).ClaimingToken(_automations, before, null).ClaimingKey(_automations, before, null));
+        await SeedAsync(factory, new RosterEntry(Parse(Previous)).ClaimingToken(_prUnblock, before, null).ClaimingKey(_prUnblock, before, null));
         using HttpClient client = factory.CreateMutatingClient();
 
-        await AssignAsync(client, new { secretName = "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", organization = "octo", visibility = "all" }, TestContext.Current.CancellationToken);
+        await AssignAsync(client, new { secretName = "PR_UNBLOCK_CLAUDE_CODE_OAUTH_TOKEN", organization = "octo", visibility = "all" }, TestContext.Current.CancellationToken);
 
         Roster roster = await RosterAsync(factory);
-        roster.Find(Parse(Previous))!.CiRoles.ShouldBe([new CiRoleAssignment(_automations, KeySetOn: before)]);
-        roster.Find(Parse(Email))!.CiRoles.Select(static held => (held.Role, held.HasToken, held.HasKey)).ShouldBe([(_automations, true, false)]);
+        roster.Find(Parse(Previous))!.CiRoles.ShouldBe([new CiRoleAssignment(_prUnblock, KeySetOn: before)]);
+        roster.Find(Parse(Email))!.CiRoles.Select(static held => (held.Role, held.HasToken, held.HasKey)).ShouldBe([(_prUnblock, true, false)]);
     }
 
     [Fact]
@@ -331,17 +432,17 @@ public sealed class CiTokenRoleEndpointTests
         (AppFactory factory, _) = await StartAsync(withKey: false, TestContext.Current.CancellationToken);
         await using AppFactory host = factory;
         DateOnly before = new(2026, 6, 1);
-        await SeedAsync(factory, new RosterEntry(Parse(Previous)).ClaimingToken(_automations, before, null).ClaimingKey(_automations, before, null));
+        await SeedAsync(factory, new RosterEntry(Parse(Previous)).ClaimingToken(_prUnblock, before, null).ClaimingKey(_prUnblock, before, null));
         using HttpClient client = factory.CreateMutatingClient();
 
         using HttpResponseMessage patched = await client.PatchAsJsonAsync(
             Account(Email, string.Empty),
-            new { ciTokenGeneratedOn = "2026-09-01", ciTokenSecret = new { name = "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", organization = "octo" } },
+            new { ciTokenGeneratedOn = "2026-09-01", ciTokenSecret = new { name = "PR_UNBLOCK_CLAUDE_CODE_OAUTH_TOKEN", organization = "octo" } },
             TestContext.Current.CancellationToken);
 
         patched.StatusCode.ShouldBe(HttpStatusCode.OK);
         Roster roster = await RosterAsync(factory);
-        roster.Find(Parse(Previous))!.CiRoles.ShouldBe([new CiRoleAssignment(_automations, KeySetOn: before)]);
+        roster.Find(Parse(Previous))!.CiRoles.ShouldBe([new CiRoleAssignment(_prUnblock, KeySetOn: before)]);
         roster.Find(Parse(Email))!.CiRoles.Single().HasToken.ShouldBeTrue();
     }
 
@@ -352,7 +453,7 @@ public sealed class CiTokenRoleEndpointTests
         await using AppFactory host = factory;
         DateOnly before = new(2026, 6, 1);
         RosterEntry entry = (await RosterAsync(factory)).Find(Parse(Email))!;
-        await SeedAsync(factory, entry.ClaimingToken(_automations, before, null));
+        await SeedAsync(factory, entry.ClaimingToken(_prUnblock, before, null));
         using HttpClient client = factory.CreateMutatingClient();
 
         using HttpResponseMessage patched = await client.PatchAsJsonAsync(Account(Email, string.Empty), new { alias = "renamed" }, TestContext.Current.CancellationToken);
@@ -360,7 +461,7 @@ public sealed class CiTokenRoleEndpointTests
         patched.StatusCode.ShouldBe(HttpStatusCode.OK);
         RosterEntry after = (await RosterAsync(factory)).Find(Parse(Email))!;
         after.Alias.ShouldBe("renamed");
-        after.CiRoles.ShouldBe([new CiRoleAssignment(_automations, before)]);
+        after.CiRoles.ShouldBe([new CiRoleAssignment(_prUnblock, before)]);
     }
 
     [Fact]
@@ -368,7 +469,7 @@ public sealed class CiTokenRoleEndpointTests
     {
         (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken);
         await using AppFactory host = factory;
-        AnswerAll(reader, "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", "AUTOMATIONS_CLAUDE_API_KEY", "ISSUE_LANE_CLAUDE_CODE_OAUTH_TOKEN", "ISSUE_LANE_CLAUDE_API_KEY");
+        AnswerAll(reader, "PR_UNBLOCK_CLAUDE_CODE_OAUTH_TOKEN", "PR_UNBLOCK_CLAUDE_API_KEY", "PR_VERIFY_CLAUDE_CODE_OAUTH_TOKEN", "PR_VERIFY_CLAUDE_API_KEY");
         factory.Secrets.SetError = GhSecretWriter.RateLimitMessage;
         using HttpClient client = factory.CreateMutatingClient();
 
@@ -386,8 +487,8 @@ public sealed class CiTokenRoleEndpointTests
         await using AppFactory host = factory;
         RosterEntry held = (await RosterAsync(factory)).Find(Parse(Email))!;
         CiRole legacy = new(string.Empty, CiSecretScope.Organization, "octo");
-        await SeedAsync(factory, held.ClaimingToken(_automations, new DateOnly(2026, 6, 1), null).ClaimingToken(legacy, new DateOnly(2026, 6, 1), null));
-        reader.Answers["orgs/octo/actions/secrets/AUTOMATIONS_CLAUDE_API_KEY"] = PathReader.Secret("AUTOMATIONS_CLAUDE_API_KEY", "all");
+        await SeedAsync(factory, held.ClaimingToken(_prUnblock, new DateOnly(2026, 6, 1), null).ClaimingToken(legacy, new DateOnly(2026, 6, 1), null));
+        reader.Answers["orgs/octo/actions/secrets/PR_UNBLOCK_CLAUDE_API_KEY"] = PathReader.Secret("PR_UNBLOCK_CLAUDE_API_KEY", "all");
         using HttpClient client = factory.CreateMutatingClient();
 
         using HttpResponseMessage pushed = await client.PostAsync(Account(Email, "/api-key/push"), content: null, TestContext.Current.CancellationToken);
@@ -396,11 +497,11 @@ public sealed class CiTokenRoleEndpointTests
         pushed.StatusCode.ShouldBe(HttpStatusCode.OK, body);
         factory.SetupToken.Children.ShouldBeEmpty();
         (CiTokenSecret secret, OrgSecretVisibility? visibility, _, string value) = factory.Secrets.Sets.Single();
-        secret.Name.ShouldBe("AUTOMATIONS_CLAUDE_API_KEY");
+        secret.Name.ShouldBe("PR_UNBLOCK_CLAUDE_API_KEY");
         visibility.ShouldBe(OrgSecretVisibility.All);
         value.ShouldBe(PlantedKey);
         body.ShouldNotContain(PlantedKey);
-        (await RosterAsync(factory)).Find(Parse(Email))!.CiRoles.Single(role => role.Role.Equals(_automations)).HasKey.ShouldBeTrue();
+        (await RosterAsync(factory)).Find(Parse(Email))!.CiRoles.Single(role => role.Role.Equals(_prUnblock)).HasKey.ShouldBeTrue();
         string history = await File.ReadAllTextAsync(Path.Combine(factory.AppData, LaneHistoryFile.FileName), TestContext.Current.CancellationToken);
         history.ShouldContain("\"half\":\"key\"");
         history.ShouldContain("\"via\":\"push\"");
@@ -424,7 +525,7 @@ public sealed class CiTokenRoleEndpointTests
     {
         (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken);
         await using AppFactory host = factory;
-        AnswerAll(reader, "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", "AUTOMATIONS_CLAUDE_API_KEY", "ISSUE_LANE_CLAUDE_CODE_OAUTH_TOKEN", "ISSUE_LANE_CLAUDE_API_KEY");
+        AnswerAll(reader, "PR_UNBLOCK_CLAUDE_CODE_OAUTH_TOKEN", "PR_UNBLOCK_CLAUDE_API_KEY", "PR_VERIFY_CLAUDE_CODE_OAUTH_TOKEN", "PR_VERIFY_CLAUDE_API_KEY");
         using HttpClient client = factory.CreateMutatingClient();
 
         List<string> bodies = await AssignAsync(client, _bothRoles, TestContext.Current.CancellationToken);

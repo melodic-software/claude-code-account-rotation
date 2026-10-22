@@ -24,7 +24,7 @@ public sealed class ApiKeyStoredViewTests
 
     private static Uri Account(string email, string path) => new("/api/accounts/" + Uri.EscapeDataString(email) + path, UriKind.Relative);
 
-    /// <summary>A rostered account backing a role with a key half and one with a token only.</summary>
+    /// <summary>A rostered account backing a keyed role and two token-only roles.</summary>
     private static async Task<AppFactory> StartAsync(bool withRoles, CancellationToken cancellationToken)
     {
         AppFactory factory = new()
@@ -39,7 +39,8 @@ public sealed class ApiKeyStoredViewTests
             RosterFile rosterFile = factory.Services.GetRequiredService<RosterFile>();
             RosterEntry entry = (await rosterFile.ReadAsync(cancellationToken)).Find(AccountEmail.Parse(Email).Value)!;
             RosterEntry backing = entry
-                .ClaimingToken(new CiRole("AUTOMATIONS", CiSecretScope.Organization, "octo"), new DateOnly(2026, 6, 1), null)
+                .ClaimingToken(new CiRole("PR_UNBLOCK", CiSecretScope.Organization, "octo"), new DateOnly(2026, 6, 1), null)
+                .ClaimingToken(new CiRole("REVIEWS", CiSecretScope.Organization, "octo"), new DateOnly(2026, 6, 1), null)
                 .ClaimingToken(new CiRole(string.Empty, CiSecretScope.Repository, "octo/lane-one"), new DateOnly(2026, 6, 1), null);
             await rosterFile.UpdateAsync(roster => roster.With(backing), cancellationToken);
         }
@@ -63,8 +64,8 @@ public sealed class ApiKeyStoredViewTests
         JsonObject body = await PutAsync(factory, "/api-key");
 
         body["storedIn"]!.GetValue<string>().ShouldBe("the test vault");
-        // The token-only legacy role has no key half, so Push never sends it a key.
-        body["pushesTo"]!.AsArray().Select(static node => node!.GetValue<string>()).ShouldBe(["AUTOMATIONS_CLAUDE_API_KEY in org octo"]);
+        // The legacy role has no key half and REVIEWS reads a token only, so Push never sends either a key.
+        body["pushesTo"]!.AsArray().Select(static node => node!.GetValue<string>()).ShouldBe(["PR_UNBLOCK_CLAUDE_API_KEY in org octo"]);
         body["roster"]!["consoleApiKeySetOn"].ShouldNotBeNull();
         body.ToJsonString().ShouldNotContain(PlantedKey);
     }

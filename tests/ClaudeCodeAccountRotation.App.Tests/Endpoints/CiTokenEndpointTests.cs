@@ -96,7 +96,7 @@ public sealed class CiTokenEndpointTests
 
         foreach ((string email, string repository) in new[] { (Email, "octo/lane-one"), ("other@example.com", "octo/lane-two") })
         {
-            using HttpResponseMessage started = await client.PostAsJsonAsync(Start(email), new { secretName = "CLAUDE_CODE_OAUTH_TOKEN", repository }, TestContext.Current.CancellationToken);
+            using HttpResponseMessage started = await client.PostAsJsonAsync(Start(email), new { secretName = "LANE_TOKEN", repository }, TestContext.Current.CancellationToken);
             JsonObject session = (await started.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
             using HttpResponseMessage answered = await client.PostAsJsonAsync(CodePath(session["id"]!.GetValue<string>()), new { code = Code }, TestContext.Current.CancellationToken);
             answered.StatusCode.ShouldBe(HttpStatusCode.OK);
@@ -131,6 +131,26 @@ public sealed class CiTokenEndpointTests
         factory.SetupToken.Children.ShouldBeEmpty();
     }
 
+    // No field the body carries lets a Claude role secret into one repository.
+    [Theory]
+    [InlineData("{\"secretName\":\"CLAUDE_CODE_OAUTH_TOKEN\",\"repository\":\"octo/repo\"}")]
+    [InlineData("{\"secretName\":\"reviews_claude_code_oauth_token\",\"repository\":\"octo/repo\"}")]
+    [InlineData("{\"secretName\":\"INTAKE_CLAUDE_API_KEY\",\"repository\":\"octo/repo\",\"force\":true,\"allowRepoScope\":true}")]
+    public async Task AClaudeRoleSecretInOneRepositoryIsRefusedBeforeAnythingStarts(string json)
+    {
+        await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using StringContent content = new(json, System.Text.Encoding.UTF8, "application/json");
+        using HttpResponseMessage response = await client.PostAsync(Start(), content, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
+        (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["error"]!.GetValue<string>()
+            .ShouldBe(CiTokenSecret.RepositoryRoleSecretRefusal);
+        factory.SetupToken.Children.ShouldBeEmpty();
+        factory.Secrets.Sets.ShouldBeEmpty();
+    }
+
     [Fact]
     public async Task AnAccountOffTheRosterIsRefused()
     {
@@ -139,7 +159,7 @@ public sealed class CiTokenEndpointTests
 
         using HttpResponseMessage response = await client.PostAsJsonAsync(
             Start("stranger@example.com"),
-            new { secretName = "CLAUDE_CODE_OAUTH_TOKEN", repository = "octo/repo" },
+            new { secretName = "CLAUDE_CODE_OAUTH_TOKEN", organization = "octo", visibility = "all" },
             TestContext.Current.CancellationToken);
 
         response.StatusCode.ShouldBe(HttpStatusCode.Conflict);
@@ -154,7 +174,7 @@ public sealed class CiTokenEndpointTests
 
         using HttpResponseMessage response = await client.PostAsJsonAsync(
             Start(),
-            new { secretName = "CLAUDE_CODE_OAUTH_TOKEN", repository = "octo/repo" },
+            new { secretName = "CLAUDE_CODE_OAUTH_TOKEN", organization = "octo", visibility = "all" },
             TestContext.Current.CancellationToken);
 
         response.IsSuccessStatusCode.ShouldBeFalse();
