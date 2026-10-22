@@ -453,10 +453,9 @@ GitHub Actions lanes run Claude Code on a funding role's secrets. A role is a pr
 organization: its token secret is `<PREFIX>_CLAUDE_CODE_OAUTH_TOKEN` and its key secret
 `<PREFIX>_CLAUDE_API_KEY`. The bare `CLAUDE_CODE_OAUTH_TOKEN` is the `legacy (review lanes)` role,
 with a token secret only, and any other name the roster kept from an earlier release is a role
-with a token secret only. `REVIEWS`, `REVIEWS_SECURITY`, `ISSUE_LANE` and `AUTOMATIONS` are
-token-only too: their lanes run on claude-code-action and read no key, so the tool neither asks
-for nor writes a key for them. The lane launcher spends a role's API key first and falls back to
-its token. An organization role's new secrets are created visible to all repositories, on
+with a token secret only. `REVIEWS`, `REVIEWS_SECURITY` and `ISSUE_LANE` are token-only too:
+their lanes run on claude-code-action and read no key, so the tool neither asks for nor writes a
+key for them. The lane launcher spends a role's API key first and falls back to its token. An organization role's new secrets are created visible to all repositories, on
 purpose; existing ones keep their visibility.
 
 The tool never writes a Claude role secret (`CLAUDE_CODE_OAUTH_TOKEN`, or a name ending in

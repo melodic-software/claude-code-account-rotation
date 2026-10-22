@@ -269,9 +269,9 @@ public sealed class CiTokenRoleEndpointTests
     // only, so no Console key is asked for, read, or written for them.
     [Theory]
     [InlineData("REVIEWS", false)]
-    [InlineData("AUTOMATIONS", false)]
+    [InlineData("REVIEWS_SECURITY", false)]
     [InlineData("ISSUE_LANE", true)]
-    [InlineData("REVIEWS_SECURITY", true)]
+    [InlineData("REVIEWS", true)]
     public async Task ATokenOnlyRoleNeedsNoKeyAndGetsOnlyItsToken(string prefix, bool withKey)
     {
         (AppFactory factory, PathReader reader) = await StartAsync(withKey, TestContext.Current.CancellationToken);
@@ -293,10 +293,10 @@ public sealed class CiTokenRoleEndpointTests
         (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken);
         await using AppFactory host = factory;
         DateOnly before = new(2026, 6, 1);
-        CiRole automations = new("AUTOMATIONS", CiSecretScope.Organization, "octo");
+        CiRole reviews = new("REVIEWS", CiSecretScope.Organization, "octo");
         RosterEntry held = (await RosterAsync(factory)).Find(Parse(Email))!;
-        await SeedAsync(factory, held.ClaimingToken(automations, before, null).ClaimingKey(automations, before, null).ClaimingToken(_prUnblock, before, null));
-        AnswerAll(reader, "AUTOMATIONS_CLAUDE_API_KEY", "PR_UNBLOCK_CLAUDE_API_KEY");
+        await SeedAsync(factory, held.ClaimingToken(reviews, before, null).ClaimingKey(reviews, before, null).ClaimingToken(_prUnblock, before, null));
+        AnswerAll(reader, "REVIEWS_CLAUDE_API_KEY", "PR_UNBLOCK_CLAUDE_API_KEY");
         using HttpClient client = factory.CreateMutatingClient();
 
         using HttpResponseMessage pushed = await client.PostAsync(Account(Email, "/api-key/push"), content: null, TestContext.Current.CancellationToken);

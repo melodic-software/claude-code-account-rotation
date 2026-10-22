@@ -21,7 +21,7 @@ public sealed record CiRole(string Prefix, CiSecretScope Scope, string Owner, st
     public const string LegacyName = "legacy (review lanes)";
 
     private static readonly HashSet<string> _tokenOnlyPrefixes =
-        new(["REVIEWS", "REVIEWS_SECURITY", "ISSUE_LANE", "AUTOMATIONS"], StringComparer.OrdinalIgnoreCase);
+        new(["REVIEWS", "REVIEWS_SECURITY", "ISSUE_LANE"], StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Whether the role has a key secret beside its token secret.</summary>
     public bool HasKeyHalf => TokenSecretOverride is null && Prefix.Length > 0;

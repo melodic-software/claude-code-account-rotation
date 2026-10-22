@@ -13,8 +13,8 @@ All notable changes to this project are documented in this file. The format foll
   `_CLAUDE_API_KEY` in a repository, and so is a Generate CI token request naming one (a role, or
   the 2.1.0 `secretName` body). No option skips it. Push API key skips a repository role an
   earlier roster recorded, and the panel's free-text row takes an organization only.
-- **Token-only roles get no key.** `REVIEWS`, `REVIEWS_SECURITY`, `ISSUE_LANE` and `AUTOMATIONS`
-  run on claude-code-action and read a token only, so Generate CI token no longer asks for a
+- **Token-only roles get no key.** `REVIEWS`, `REVIEWS_SECURITY` and `ISSUE_LANE` run on
+  claude-code-action and read a token only, so Generate CI token no longer asks for a
   Console key for them or writes their `_CLAUDE_API_KEY`, and Push API key sends them nothing.
 
 ## [2.4.0] - 2026-10-22

@@ -27,13 +27,14 @@ public sealed class CiRoleTests
         role.KeySecretName.ShouldBe(keySecret);
     }
 
-    // Issue #259's roles table: the review lanes, the issue lane and AUTOMATIONS
-    // run on claude-code-action and read a token only; the legacy role has no key secret.
+    // Issue #259's roles table: the review lanes and the issue lane run on
+    // claude-code-action and read a token only; the legacy role has no key secret.
+    // AUTOMATIONS stays keyed while lanes still read AUTOMATIONS_CLAUDE_API_KEY.
     [Theory]
     [InlineData("REVIEWS", false)]
     [InlineData("reviews_security", false)]
     [InlineData("ISSUE_LANE", false)]
-    [InlineData("Automations", false)]
+    [InlineData("Automations", true)]
     [InlineData("", false)]
     [InlineData("INTAKE", true)]
     [InlineData("PR_UNBLOCK", true)]
