@@ -6,6 +6,10 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-10-22
+
+Org usage from an Admin key's Cost Report is not in this release; it is deferred to a later one.
+
 ### Added
 
 - **The limit-stop check says how far back it read.** Its answer carries `coverage` per lane
