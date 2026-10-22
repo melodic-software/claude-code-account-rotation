@@ -324,4 +324,27 @@ public sealed class RosterCiRoleEndpointTests
         roles[1]!["repository"]!.GetValue<string>().ShouldBe("octo/lane-one");
         roles[1]!["keySecret"].ShouldBeNull();
     }
+
+    // A token-only role's lanes read no key, so a key half an earlier release
+    // recorded for it is kept on disk but not shown: no split, no key fallback.
+    [Fact]
+    public async Task TheDashboardShowsNoKeyHalfForATokenOnlyRole()
+    {
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        await client.PostAsJsonAsync(_accounts, new { email = NewEmail }, TestContext.Current.CancellationToken);
+        await SeedAsync(factory, roster => roster.With(roster.Find(AccountEmail.Parse(NewEmail).Value)!
+            .ClaimingToken(_reviews, new DateOnly(2026, 10, 6), null)
+            .ClaimingKey(_reviews, new DateOnly(2026, 10, 2), null)));
+
+        JsonObject dashboard = (await client.GetFromJsonAsync<JsonObject>(new Uri("/api/dashboard", UriKind.Relative), TestContext.Current.CancellationToken))!;
+        JsonNode role = dashboard["accounts"]!.AsArray().Single(card => card!["email"]!.GetValue<string>() == NewEmail)!["roster"]!["ciRoles"]!.AsArray().Single()!;
+
+        role["tokenSecret"]!.GetValue<string>().ShouldBe("REVIEWS_CLAUDE_CODE_OAUTH_TOKEN");
+        role["tokenSetOn"]!.GetValue<string>().ShouldBe("2026-10-06");
+        role["keySecret"].ShouldBeNull();
+        role["keySetOn"].ShouldBeNull();
+        dashboard["tokenOnlyRolePrefixes"]!.AsArray().Select(static prefix => prefix!.GetValue<string>()).ShouldBe(["ISSUE_LANE", "REVIEWS", "REVIEWS_SECURITY"]);
+        (await StoredAsync(factory, TestContext.Current.CancellationToken)).CiRoles.Single().KeySetOn.ShouldBe(new DateOnly(2026, 10, 2));
+    }
 }

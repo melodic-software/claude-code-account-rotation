@@ -25,7 +25,8 @@ internal sealed record DashboardView(
     RefreshView Refresh,
     IReadOnlyList<AlertView> Alerts,
     DateTimeOffset? AlertsComputedAt,
-    IReadOnlyList<decimal> AlertThresholds);
+    IReadOnlyList<decimal> AlertThresholds,
+    IReadOnlyList<string> TokenOnlyRolePrefixes);
 
 /// <summary>
 /// One account's 7-day figure past a threshold: <c>Level</c> is <c>warning</c>

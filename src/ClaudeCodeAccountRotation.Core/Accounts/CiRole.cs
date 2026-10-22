@@ -23,6 +23,9 @@ public sealed record CiRole(string Prefix, CiSecretScope Scope, string Owner, st
     private static readonly HashSet<string> _tokenOnlyPrefixes =
         new(["REVIEWS", "REVIEWS_SECURITY", "ISSUE_LANE"], StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>The prefixes of the roles that are not <see cref="Keyed"/> though they have a key half, in order.</summary>
+    public static IReadOnlyList<string> TokenOnlyPrefixes { get; } = [.. _tokenOnlyPrefixes.Order(StringComparer.Ordinal)];
+
     /// <summary>Whether the role has a key secret beside its token secret.</summary>
     public bool HasKeyHalf => TokenSecretOverride is null && Prefix.Length > 0;
 

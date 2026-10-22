@@ -701,6 +701,13 @@ test("newRoleItem says creates only for the secrets the last Check roles did not
   assert.strictEqual(newRoleItem("  ", "octo"), null);
 });
 
+test("newRoleItem names no key secret for a role the server calls token-only", () => {
+  assert.strictEqual(newRoleItem("reviews", "octo", null, ["ISSUE_LANE", "REVIEWS", "REVIEWS_SECURITY"]).confirm,
+    "In org octo this creates REVIEWS_CLAUDE_CODE_OAUTH_TOKEN, visible to all repositories. Go ahead?");
+  assert.strictEqual(newRoleItem("intake", "octo", null, ["ISSUE_LANE", "REVIEWS", "REVIEWS_SECURITY"]).confirm,
+    "In org octo this creates INTAKE_CLAUDE_CODE_OAUTH_TOKEN and INTAKE_CLAUDE_API_KEY, visible to all repositories. Go ahead?");
+});
+
 test("newRoleItem refuses a role in one repository and asks nothing", () => {
   const refused = { error: "A role's secrets are set on the organization, never on one repository: name an organization." };
   assert.deepStrictEqual(newRoleItem("intake", "octo/repo", null), refused);

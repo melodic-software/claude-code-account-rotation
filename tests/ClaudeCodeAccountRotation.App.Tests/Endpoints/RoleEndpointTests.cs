@@ -121,8 +121,8 @@ public sealed class RoleEndpointTests
         reader.Answers.Enqueue(Result<JsonNode, GhApiFailure>.Success(Page(
             3,
             ("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", "2026-10-01T09:10:00Z"),
-            ("ISSUE_LANE_CLAUDE_CODE_OAUTH_TOKEN", "2026-09-01T00:00:00Z"),
-            ("ISSUE_LANE_CLAUDE_API_KEY", "2026-09-01T00:00:00Z"))));
+            ("INTAKE_CLAUDE_CODE_OAUTH_TOKEN", "2026-09-01T00:00:00Z"),
+            ("INTAKE_CLAUDE_API_KEY", "2026-09-01T00:00:00Z"))));
 
         using HttpResponseMessage response = await client.PostAsJsonAsync(_check, new { }, TestContext.Current.CancellationToken);
 
@@ -135,9 +135,39 @@ public sealed class RoleEndpointTests
             role["token"]?.GetValue<string>(),
             role["key"]?.GetValue<string>())).ShouldBe([
                 ("AUTOMATIONS", HolderEmail, "changed", null),
-                ("ISSUE_LANE", null, "unclaimed", "unclaimed"),
+                ("INTAKE", null, "unclaimed", "unclaimed"),
             ]);
         reader.Paths.ShouldBe(["orgs/octo/actions/secrets?per_page=100&page=1", "orgs/octo/actions/variables/CLAUDE_LANES_DISABLED", "orgs/octo/actions/variables/CLAUDE_REVIEW_DISABLED", "orgs/octo/actions/variables/CLAUDE_SECURITY_REVIEW_DISABLED"]);
+    }
+
+    // A token-only role's lanes read no key: Check roles names no key secret
+    // for it and judges no key half, claimed or not.
+    [Fact]
+    public async Task ATokenOnlyRoleHasNoKeyHalfToJudge()
+    {
+        (AppFactory factory, SpyReader reader) = await StartAsync(TestContext.Current.CancellationToken);
+        await using AppFactory _ = factory;
+        using HttpClient client = factory.CreateMutatingClient();
+        CiRole reviews = new("REVIEWS", CiSecretScope.Organization, "octo");
+        await HoldAsync(factory, new CiRoleAssignment(reviews, new DateOnly(2026, 10, 1), new DateTimeOffset(2026, 10, 1, 9, 0, 0, TimeSpan.Zero), new DateOnly(2026, 10, 1), null));
+        reader.Answers.Enqueue(Result<JsonNode, GhApiFailure>.Success(Page(
+            3,
+            ("REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", "2026-10-01T09:00:30Z"),
+            ("ISSUE_LANE_CLAUDE_CODE_OAUTH_TOKEN", "2026-09-01T00:00:00Z"),
+            ("ISSUE_LANE_CLAUDE_API_KEY", "2026-09-01T00:00:00Z"))));
+
+        using HttpResponseMessage response = await client.PostAsJsonAsync(_check, new { }, TestContext.Current.CancellationToken);
+
+        JsonArray roles = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["roles"]!.AsArray();
+        roles.Select(static role => (
+            role!["name"]!.GetValue<string>(),
+            role["token"]?.GetValue<string>(),
+            role["keySecret"]?.GetValue<string>(),
+            role["hasKey"]!.GetValue<bool>(),
+            role["key"]?.GetValue<string>())).ShouldBe([
+                ("ISSUE_LANE", "unclaimed", null, false, null),
+                ("REVIEWS", "ok", null, false, null),
+            ]);
     }
 
     [Fact]
