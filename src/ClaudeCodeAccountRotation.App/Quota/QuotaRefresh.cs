@@ -147,7 +147,7 @@ internal sealed partial class QuotaRefresh
         Dictionary<RefreshOutcomeKind, int> summary = [];
         try
         {
-            IReadOnlyList<Candidate> candidates = await CandidatesAsync(request, summary, stopping);
+            (IReadOnlyList<Candidate> candidates, Roster roster) = await CandidatesAsync(request, summary, stopping);
             bool ended = false;
             bool sentRead = false;
             foreach (Candidate candidate in candidates)
@@ -161,6 +161,14 @@ internal sealed partial class QuotaRefresh
                 Record(candidate.Email, turn.Outcome, summary);
                 ended |= turn.EndsPass;
                 sentRead |= turn.SentRead;
+            }
+
+            // Only a full pass, which is what page open and Refresh all start,
+            // computes the alerts: a card's own refresh or the stop hook reads
+            // one account, and the dashboard poll only renders what is stored.
+            if (request.IsAll && !stopping.IsCancellationRequested)
+            {
+                RecordAlerts(roster);
             }
         }
         catch (OperationCanceledException) when (stopping.IsCancellationRequested)
@@ -184,7 +192,7 @@ internal sealed partial class QuotaRefresh
             // Only a full pass leaves a summary. A single card's refresh counts
             // one account, and a header reading "last pass: 1 read" after it would
             // say the other nine were never tried.
-            if (request.Account is null)
+            if (request.IsAll)
             {
                 _state.RecordPassSummary(summary);
             }
@@ -198,7 +206,7 @@ internal sealed partial class QuotaRefresh
     /// live identity unverified, and reading a pair whose owner is in doubt would
     /// put another account's numbers on the card.
     /// </summary>
-    private async Task<IReadOnlyList<Candidate>> CandidatesAsync(
+    private async Task<(IReadOnlyList<Candidate> Candidates, Roster Roster)> CandidatesAsync(
         RefreshRequest request,
         Dictionary<RefreshOutcomeKind, int> summary,
         CancellationToken stopping)
@@ -313,8 +321,25 @@ internal sealed partial class QuotaRefresh
 
         IReadOnlyList<RefreshCandidate> order = RefreshOrder.Order(
             [.. candidates.Select(candidate => new RefreshCandidate(candidate.Email, LastReadAt(candidate.Email)))]);
-        return [.. order.Select(ordered => candidates.First(candidate => candidate.Email == ordered.Email))];
+        return ([.. order.Select(ordered => candidates.First(candidate => candidate.Email == ordered.Email))], roster);
     }
+
+    /// <summary>
+    /// The alerts for every account on <paramref name="roster"/>, from the
+    /// merge its card is built from (<see cref="QuotaState.MergedFor"/>). A
+    /// 7-day window that has reset counts as no figure, because the card blanks it.
+    /// </summary>
+    private void RecordAlerts(Roster roster)
+    {
+        DateTimeOffset now = _timeProvider.GetUtcNow();
+        _state.RecordAlerts(UsageAlerts.Evaluate(roster, email => SevenDayPercent(email, now)), now);
+    }
+
+    private decimal? SevenDayPercent(AccountEmail email, DateTimeOffset now) =>
+        _state.MergedFor(email)?.Rows.Select(static row => row.Limit)
+            .FirstOrDefault(static limit => limit.Kind == LimitKind.WeeklyAll) is UsageLimit weekly && !weekly.HasResetBy(now)
+            ? (decimal)weekly.Percent
+            : null;
 
     /// <summary>The live pair's fingerprint, or null when there is no pair to name: absent, logged out, or torn.</summary>
     private async Task<RefreshTokenFingerprint?> LiveFingerprintAsync(CancellationToken stopping)

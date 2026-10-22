@@ -32,7 +32,8 @@ Status: a tagged release exists.
   (`cmdkey /delete:<target>` on Windows; on Linux, unlock the keyring first, since `secret-tool
   clear` removes only unlocked items).
 - The tool identifies itself honestly on every request it makes.
-- Every switch is a human click; nothing rotates on its own.
+- Every switch is a human click; nothing rotates on its own. [Usage alerts](#usage-alerts) never
+  act: they only say that an account backing a CI role is near the end of its 7-day window.
 - The tool never calls the model API.
 - It reads the undocumented usage endpoint with its own User-Agent, which the research rates GRAY
   (no Anthropic statement either way), not ALLOWED. It reads only when the dashboard is opened,
@@ -151,6 +152,7 @@ its terms at any time.
 | Background timer for reads, refreshes or switches | No | [Posture](#posture), switch and read bullets; [`QuotaRefresh.cs`](src/ClaudeCodeAccountRotation.App/Quota/QuotaRefresh.cs) |
 | Refreshes a parked token | Only during a requested read: when its recorded expiry has passed, or once when the usage endpoint answers 401, followed by one retried read. Done under the tool's own write gate; a switch holds Claude Code's own refresh lock | [`QuotaRefresh.cs`](src/ClaudeCodeAccountRotation.App/Quota/QuotaRefresh.cs), [`OAuthRefreshLock.cs`](src/ClaudeCodeAccountRotation.App/Adapters/FileSystem/OAuthRefreshLock.cs) |
 | Usage reads | Bounded: at most once a minute per account, only on request | [Posture](#posture), read bullet; [`RefreshBudget.cs`](src/ClaudeCodeAccountRotation.Core/Quota/RefreshBudget.cs) |
+| Usage alerts | Information only, never an action | [Usage alerts](#usage-alerts) |
 | User-Agent | Its own on every Anthropic request; GitHub reads and writes go through `gh`, with gh's own | [`AnthropicEndpoints.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Http/AnthropicEndpoints.cs), [`GhProcess.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Process/GhProcess.cs) |
 | Admin API reads | Only on Check API key, with a stored Admin key: the organization's key list, metadata only, never a model call | [Posture](#posture); [`AnthropicAdminKeysClient.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Http/AnthropicAdminKeysClient.cs) |
 | OAuth `client_id` for parked refreshes | Claude Code's public one | [Posture](#posture); [`AnthropicEndpoints.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Http/AnthropicEndpoints.cs) |
@@ -343,6 +345,23 @@ takes. It answers 202 when a read started, or 409 with one of these `refusal` va
 `NoLiveAccount` (no account is logged in on this side), `RateLimited` (the account was read inside
 the last minute, or the usage endpoint's lockout is still running), or `RefreshInProgress` (a
 refresh is already running).
+
+## Usage alerts
+
+An account that backs a CI role spends its 7-day window on CI runs as well as on your sessions,
+often while nobody is watching its card. When such an account's 7-day figure reaches the warning
+threshold, a line above the cards says so; from the critical threshold the line is red. Both
+thresholds are set in [`UsageAlerts.cs`](src/ClaudeCodeAccountRotation.Core/Quota/UsageAlerts.cs).
+Each CI-role account's 7-day meter carries a tick at each threshold, and its card has a Re-issue
+token button beside the meters. The button opens the Generate CI token panel with that account's
+roles already ticked. To move a role off the account instead, open Generate CI token on the
+account that is to take it.
+
+The alerts are computed at the end of a full refresh pass, which the page starts when it opens and
+when you click Refresh all. The 10-second poll only shows the last result and its time, and a
+card's own Refresh usage leaves the alerts as they were. They use the figures the cards show, so a
+window that has reset since it was read raises nothing. No alert switches an account, moves a
+role, or sends anything.
 
 ## Remote Control after a switch
 
