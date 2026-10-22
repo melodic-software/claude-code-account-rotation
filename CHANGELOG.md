@@ -6,6 +6,13 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Added
+
+- **Open claude.ai and Open Console in a card's ··· menu.** Each opens that page, claude.ai or the
+  Console's API keys page, in the account's mapped browser profile, so you need not recall which
+  profile is signed in as it. `POST /api/accounts/{email}/console-page` takes `"page": "claude-ai"`
+  beside `keys` and `admin-keys`.
+
 ## [2.4.0] - 2026-10-22
 
 Org usage from an Admin key's Cost Report is not in this release; it is deferred to a later one.

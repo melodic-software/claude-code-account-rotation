@@ -14,9 +14,9 @@ using static ClaudeCodeAccountRotation.App.Endpoints.EndpointRefusals;
 namespace ClaudeCodeAccountRotation.App.Endpoints;
 
 /// <summary>
-/// Open Console: one of the fixed Claude Console key pages in the browser
-/// profile the roster maps to the account, so the key is created while signed
-/// in as that account. The click starts a browser and nothing else: no
+/// Open claude.ai and Open Console: one of the fixed Anthropic pages in the
+/// browser profile the roster maps to the account, so the page opens signed in
+/// as that account, and a key is created there as it. The click starts a browser and nothing else: no
 /// GitHub or Anthropic read, and the page name picks a URL the tool holds
 /// rather than carrying one.
 /// </summary>
@@ -43,9 +43,9 @@ internal static class ConsolePageEndpoints
             }
 
             string? page = body["page"] is JsonValue value && value.TryGetValue(out string? text) ? text : null;
-            if (page is null || !AnthropicEndpoints.ConsolePages.TryGetValue(page, out Uri? url))
+            if (page is null || !AnthropicEndpoints.AccountPages.TryGetValue(page, out Uri? url))
             {
-                return Results.BadRequest(new { error = "page must be one of: " + string.Join(", ", AnthropicEndpoints.ConsolePages.Keys) });
+                return Results.BadRequest(new { error = "page must be one of: " + string.Join(", ", AnthropicEndpoints.AccountPages.Keys) });
             }
 
             RosterEntry? entry = (await rosterFile.ReadAsync(cancellationToken)).Find(parsed.Value);
