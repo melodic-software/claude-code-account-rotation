@@ -30,6 +30,22 @@ internal static class AnthropicEndpoints
 
     public const string HomeUrl = "https://github.com/melodic-software/claude-code-account-rotation";
 
+    /// <summary>The Claude Console page where an organization's API keys are created.</summary>
+    public const string ConsoleKeysUrl = "https://platform.claude.com/settings/keys";
+
+    /// <summary>The Claude Console page where an organization's Admin keys are created.</summary>
+    public const string ConsoleAdminKeysUrl = "https://platform.claude.com/settings/admin-keys";
+
+    /// <summary>
+    /// The only Console pages the page may ask the tool to open, by the name
+    /// the request carries. A name not in here opens nothing.
+    /// </summary>
+    public static readonly IReadOnlyDictionary<string, Uri> ConsolePages = new Dictionary<string, Uri>(StringComparer.Ordinal)
+    {
+        ["keys"] = new(ConsoleKeysUrl),
+        ["admin-keys"] = new(ConsoleAdminKeysUrl),
+    };
+
     /// <summary>Timeout-first: no outbound call waits on the default 100 seconds.</summary>
     public static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(20);
 
