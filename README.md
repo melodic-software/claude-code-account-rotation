@@ -54,12 +54,11 @@ Status: a tagged release exists.
   call: it reads key metadata, only on that click, with the tool's own User-Agent, and the first
   rate-limit answer ends it. It finds the key by the list's partial hint and says "cannot tell"
   when the hint is missing or fits more than one key. Individual accounts have no Admin API.
-- Open Console, in the Set API key and Set Admin key panels, starts the account's mapped browser
-  profile on one of two fixed Console pages, `https://platform.claude.com/settings/keys` or
-  `https://platform.claude.com/settings/admin-keys`. It is a click only: it reads nothing from
-  GitHub or Anthropic, and any other page name opens nothing. The route is
-  `POST /api/accounts/{email}/console-page` with `{"page":"keys"}` or `{"page":"admin-keys"}`; no
-  mapped browser, or a launch that fails, is a 409 with the reason.
+- Open Console, in the Set API key and Set Admin key panels, opens the Console page where that
+  kind of key is created in the account's mapped browser profile. It only starts the browser: it
+  reads nothing from GitHub or Anthropic, and it opens only the two fixed pages the tool holds
+  (`AnthropicEndpoints.ConsolePages`). An account not on the roster, no mapped browser, or a failed
+  launch is a 409 with the reason; a bad page name or email is a 400.
 - Running the loop lanes (`work-loop`, `babysit-loop`, `attend-queue`) while rotating accounts is
   outside V1 because reader-side invalidation of a latched window is still an open problem.
 

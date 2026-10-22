@@ -1,7 +1,6 @@
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Adapters.Http;
-using ClaudeCodeAccountRotation.App.Dashboard;
 using ClaudeCodeAccountRotation.App.Security;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Accounts;
@@ -10,6 +9,7 @@ using ClaudeCodeAccountRotation.Core.Ports;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using static ClaudeCodeAccountRotation.App.Endpoints.EndpointRefusals;
 
 namespace ClaudeCodeAccountRotation.App.Endpoints;
 
@@ -51,7 +51,7 @@ internal static class ConsolePageEndpoints
             RosterEntry? entry = (await rosterFile.ReadAsync(cancellationToken)).Find(parsed.Value);
             if (entry is null)
             {
-                return Refused("NotOnRoster", parsed.Value.Value + " is not on the roster; add it first so its browser mapping is known.");
+                return NotOnRosterForBrowser(parsed.Value);
             }
 
             if (entry.Browser is not BrowserFamily browser)
@@ -60,11 +60,8 @@ internal static class ConsolePageEndpoints
             }
 
             return browsers.Launch(browser, entry.BrowserProfileDirectory, url).Match(
-                _ => Results.Ok(new { opened = url.AbsoluteUri }),
-                error => Refused("BrowserDidNotOpen", error));
+                static _ => Results.Ok(new { }),
+                static error => Refused("BrowserDidNotOpen", error));
         });
     }
-
-    private static IResult Refused(string refusal, string message) =>
-        Results.Json(new SwitchRefusalView(refusal, message), statusCode: StatusCodes.Status409Conflict);
 }

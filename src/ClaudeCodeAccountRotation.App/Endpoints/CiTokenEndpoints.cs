@@ -11,6 +11,7 @@ using ClaudeCodeAccountRotation.Core.Ports;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using static ClaudeCodeAccountRotation.App.Endpoints.EndpointRefusals;
 
 namespace ClaudeCodeAccountRotation.App.Endpoints;
 
@@ -87,7 +88,7 @@ internal static partial class CiTokenEndpoints
             RosterEntry? entry = (await rosterFile.ReadAsync(cancellationToken)).Find(parsed.Value);
             if (entry is null)
             {
-                return Refused("NotOnRoster", parsed.Value.Value + " is not on the roster; add it first so its browser mapping is known.");
+                return NotOnRosterForBrowser(parsed.Value);
             }
 
             if (unnamed is not null)
@@ -334,9 +335,6 @@ internal static partial class CiTokenEndpoints
         session.SignInUrl?.AbsoluteUri,
         browserError,
         session.ExpiresAt);
-
-    private static IResult Refused(string refusal, string message) =>
-        Results.Json(new SwitchRefusalView(refusal, message), statusCode: StatusCodes.Status409Conflict);
 
     [GeneratedRegex("^[A-Za-z0-9._-]{1,100}$", RegexOptions.None, matchTimeoutMilliseconds: 1000)]
     private static partial Regex RepositoryNamePattern();

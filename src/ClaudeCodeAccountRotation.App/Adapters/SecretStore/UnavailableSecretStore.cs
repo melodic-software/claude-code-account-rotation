@@ -10,6 +10,8 @@ namespace ClaudeCodeAccountRotation.App.Adapters.SecretStore;
 /// </summary>
 internal sealed class UnavailableSecretStore(string reason) : ISecretStore
 {
+    public string DisplayName => "no usable OS store";
+
     public Task<Result<Unit, string>> ProbeAsync(CancellationToken cancellationToken) =>
         Task.FromResult(Result<Unit, string>.Failure(reason));
 

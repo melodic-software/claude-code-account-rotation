@@ -15,9 +15,9 @@ All notable changes to this project are documented in this file. The format foll
 - **Alert-threshold ticks on a CI-role account's 7-day meter.**
 - **A Re-issue token button beside a CI-role account's meters.** It opens the Generate CI token
   panel with that account's roles ticked.
-- **Open Console in the Set API key and Set Admin key panels.** It opens the Console's API keys
-  or Admin keys page in the account's mapped browser profile, through
-  `POST /api/accounts/{email}/console-page` with `{"page":"keys"}` or `{"page":"admin-keys"}`.
+- **Open Console in the Set API key and Set Admin key panels.** It opens the Console page where
+  that kind of key is created, in the account's mapped browser profile, so the key is made while
+  signed in as that account.
 - **Check roles inside the Generate CI token panel** when no role is known yet; the panel redraws
   its role list from what it finds.
 
@@ -30,6 +30,10 @@ All notable changes to this project are documented in this file. The format foll
   sends to, or Generate CI token with a role that has a key half.
 - **Edit's "CI secret name" and "CI secret in" are folded under "Repair a role record"**, with a
   sentence on when to use them.
+- **Storing a Console or Admin key answers with more than the roster entry.** The answer to
+  `PUT /api/accounts/{email}/api-key` and `/admin-key` is now `{"roster", "storedIn", "pushesTo"}`:
+  the entry moves under `roster`, `storedIn` names the OS store, and `pushesTo` lists the key
+  secrets Push API key would send a Console key to (empty for an Admin key).
 
 ## [2.3.2] - 2026-10-21
 

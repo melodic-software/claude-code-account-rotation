@@ -51,6 +51,8 @@
     module.exports.ciPanelWords = ciPanelWords;
     module.exports.ciNoRolesWords = ciNoRolesWords;
     module.exports.keyStoredWords = keyStoredWords;
+    module.exports.browserLine = browserLine;
+    module.exports.roleWhere = roleWhere;
     module.exports.apiKeyCheckToast = apiKeyCheckToast;
     module.exports.killSwitchRows = killSwitchRows;
     module.exports.toggleKillSwitch = toggleKillSwitch;
@@ -284,7 +286,7 @@
     return (entries || []).slice().reverse().map(function (entry) {
       var role = entry.role || {};
       var name = (role.tokenSecret || role.prefix || "legacy (review lanes)")
-        + " in " + (role.repository || "org " + role.organization);
+        + " in " + roleWhere(role);
       var moved = (entry.previous || "no account") + " \u2192 " + (entry.account || "no account");
       return String(entry.at).slice(0, 16).replace("T", " ") + " \u00b7 " + name + " " + entry.half + ": " + moved + " (" + entry.via + ")";
     });
@@ -965,8 +967,7 @@
     panel.open = true;
     panel.appendChild(element("summary", null, "CI token for " + account.email));
     var roster = account.roster;
-    var words = ciPanelWords(roster, roster && roster.browser && roster.browserProfileDirectory
-      ? profileCardLabel(roster.browser, roster.browserProfileDirectory) : null);
+    var words = ciPanelWords(roster, cardProfileLabel(roster));
     panel.appendChild(element("p", null, words.intro));
     panel.appendChild(element("p", "muted", words.detail));
 
@@ -1038,10 +1039,9 @@
       busy = true;
       setButtonsDisabled(true);
       status.textContent = "Reading GitHub secrets...";
-      send("/api/roles/check", "POST", { organization: organization.value.trim() })
+      checkRoles(organization.value, send)
         .then(function (result) {
           if (!result.ok) { status.textContent = refused(result.body); return false; }
-          lastRoleCheck = result.body;
           return true;
         })
         .catch(function (error) { status.textContent = "Request failed: " + error; return false; })
@@ -1144,10 +1144,10 @@
       busy = true;
       setButtonsDisabled(true);
       status.textContent = "Opening the Console...";
-      send(accountPath(account.email, "/console-page"), "POST", { page: key.page })
+      send(accountPath(account.email, "/console-page"), "POST", { page: key.page.name })
         .then(function (result) {
           status.textContent = result.ok
-            ? "Opened the Console's " + (admin ? "Admin keys" : "API keys") + " page in this account's browser profile. Create a key there, then paste it here."
+            ? "Opened the Console's " + key.page.title + " page in this account's browser profile. Create a key there, then paste it here."
             : refused(result.body);
         })
         .catch(function (error) { status.textContent = "Request failed: " + error; })
@@ -1168,7 +1168,7 @@
           // The panel stays, now saying where the key is and what sends it
           // on, until Close. The card is redrawn under it at once, so its
           // badge and Push API key are there while the panel is open.
-          var said = keyStoredWords(result.body, onWindows(), admin);
+          var said = keyStoredWords(result.body, admin);
           form.parentNode.removeChild(form);
           status.textContent = said;
           panel.appendChild(actionButton("Close", "secondary", function () {
@@ -1210,16 +1210,8 @@
 
   function keyKind(admin) {
     return admin
-      ? { path: "/admin-key", title: "Admin key", label: "Admin key", page: "admin-keys" }
-      : { path: "/api-key", title: "Console API key", label: "API key", page: "keys" };
-  }
-
-  // Which OS store the server keeps a key in. The page is served on loopback
-  // by the leader, the only side with key routes, so the browser showing it
-  // runs on the same operating system as the server.
-  function onWindows() {
-    var platform = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
-    return /^win/i.test(platform);
+      ? { path: "/admin-key", title: "Admin key", label: "Admin key", page: { name: "admin-keys", title: "Admin keys" } }
+      : { path: "/api-key", title: "Console API key", label: "API key", page: { name: "keys", title: "API keys" } };
   }
 
   // Check API key: one listing of the organization's keys through the Admin
@@ -1345,7 +1337,7 @@
       var box = element("input");
       box.type = "checkbox";
       box.checked = true;
-      labeled(form, "Backs " + role.name + " in " + (role.repository || "org " + role.organization), box);
+      labeled(form, "Backs " + role.name + " in " + roleWhere(role), box);
       return box;
     });
     // A role to add by its token secret's name, set on the date above. By hand
@@ -1614,7 +1606,7 @@
     return roles.map(function (role) {
       // The badge sits in a narrow column, so it names the role (and the
       // repository, for a repository's role) and the hover says the rest.
-      var where = role.repository || "org " + role.organization;
+      var where = roleWhere(role);
       var halves = [role.tokenSetOn ? "token" : null, role.keySetOn ? "key" : null].filter(Boolean).join("+");
       // Split: another account holds the role's other half, because the half
       // set from here was set alone.
@@ -1742,8 +1734,8 @@
   // The CI panel's words: what happens after Start, before anything does. A
   // function, since the Node export runs before any var below is assigned.
   // The Start button names the browser profile it opens, from the account's
-  // roster mapping; profile is that profile's card label, or null for the
-  // browser's own default profile.
+  // roster mapping, in the words the card uses; profile is that profile's card
+  // label, or null when the mapping names no profile directory.
   function ciPanelWords(roster, profile) {
     var browser = roster && roster.browser;
     return {
@@ -1751,32 +1743,62 @@
       detail: "The tool runs `claude setup-token` once and sets each role's token secret from it, and each role's key secret from this account's stored Console key. "
         + "Neither is shown here or written to disk. A role with a key half needs the Console key stored first (Set API key).",
       start: browser
-        ? "Start sign-in (opens " + browser + " " + (profile || "default profile") + ")"
+        ? "Start sign-in (opens " + browserLine(browser, profile) + ")"
         : "Start sign-in (no browser mapped: you will get a link)"
     };
   }
 
-  // What the CI panel says when it has no role to offer: before any Check
-  // roles, that one reads the organization's role secrets; after one that
-  // found none, that a new role can still be named.
-  function ciNoRolesWords(check) {
-    return check
-      ? "Check roles found no role secrets: name a new role below."
-      : "No roles known yet: Check roles reads your organization's role secrets from GitHub, or name a new role below.";
+  // The browser a roster entry opens, as the card and the Start button both
+  // say it: the browser, then the profile's card label when the mapping names
+  // a profile directory. With none the launcher passes no profile, so the
+  // line names the browser alone.
+  function browserLine(browser, profile) {
+    return browser + (profile ? " / " + profile : "");
   }
 
-  // The sentence after a key is stored: where it is kept, then what sends it
-  // to GitHub. roster is the account's record as the save answered it;
-  // onWindows picks the OS store's name. An Admin key never goes to GitHub.
-  function keyStoredWords(roster, onWindows, admin) {
-    var stored = "Stored in " + (onWindows ? "Credential Manager" : "the Secret Service") + " on this machine.";
+  function cardProfileLabel(roster) {
+    return roster && roster.browser && roster.browserProfileDirectory
+      ? profileCardLabel(roster.browser, roster.browserProfileDirectory) : null;
+  }
+
+  // Where a role's secrets are: its repository, or its organization.
+  function roleWhere(role) {
+    return role.repository || "org " + role.organization;
+  }
+
+  // What the CI panel says when it has no role to offer: before any Check
+  // roles, that one reads the organization's role secrets; after one, which
+  // organizations could not be read, else that it found none. A new role can
+  // be named either way.
+  function ciNoRolesWords(check) {
+    if (!check) {
+      return "No roles known yet: Check roles reads your organization's role secrets from GitHub, or name a new role below.";
+    }
+    var failed = (check.failures || []).map(function (failure) { return "org " + failure.organization + " (" + failure.error + ")"; });
+    return failed.length
+      ? "Check roles could not read " + failed.join(", ") + ": check again, or name a new role below."
+      : "Check roles found no role secrets: name a new role below.";
+  }
+
+  // The sentence after a key is stored, from the save's answer: the store the
+  // server kept it in, then what sends it to GitHub. An Admin key never goes
+  // to GitHub.
+  function keyStoredWords(view, admin) {
+    var stored = "Stored in " + view.storedIn + " on this machine.";
     if (admin) { return stored + " It is used only when you click Check API key."; }
-    var secrets = ((roster && roster.ciRoles) || []).filter(function (role) { return role.keySecret; }).map(function (role) {
-      return role.keySecret + " in " + (role.repository || "org " + role.organization);
-    });
-    return stored + " " + (secrets.length
-      ? "Push API key sends it to " + secrets.join(", ") + "."
+    return stored + " " + ((view.pushesTo || []).length
+      ? "Push API key sends it to " + view.pushesTo.join(", ") + "."
       : "No GitHub secret yet: use Generate CI token and pick a role with a key half.");
+  }
+
+  // Check roles: one read of the role secrets of every organization a role on
+  // the roster names, and of the one typed, through `gh api`. A check that
+  // answered is kept for the CI panel's role list, failures included.
+  function checkRoles(organization, post) {
+    return post("/api/roles/check", "POST", { organization: organization.trim() }).then(function (result) {
+      if (result.ok) { lastRoleCheck = result.body; }
+      return result;
+    });
   }
 
   // The roles the CI panel offers: every role an account on the roster backs,
@@ -1795,7 +1817,7 @@
       roles.push({
         item: item,
         holder: holder,
-        label: ciRoleLabel(role) + " in " + (role.repository ? where : "org " + where)
+        label: ciRoleLabel(role) + " in " + roleWhere(role)
           + (role.keySecret ? " · token+key" : " · token only") + " · " + (holder ? "backed by " + holder : "no holder")
       });
     }
@@ -2146,7 +2168,7 @@
     }
     var roster = account.roster;
     if (roster && roster.browser) {
-      var browser = roster.browser + (roster.browserProfileDirectory ? " / " + profileCardLabel(roster.browser, roster.browserProfileDirectory) : "");
+      var browser = browserLine(roster.browser, cardProfileLabel(roster));
       // One line, cut short with the whole of it on hover.
       lines.appendChild(element("p", "muted browser", browser)).title = browser;
     }
@@ -2720,10 +2742,9 @@
       setButtonsDisabled(true);
       status.textContent = "Reading GitHub secrets...";
       found.replaceChildren();
-      send("/api/roles/check", "POST", { organization: organization.value.trim() })
+      checkRoles(organization.value, send)
         .then(function (result) {
           if (!result.ok) { status.textContent = refused(result.body); return; }
-          lastRoleCheck = result.body;
           var lines = roleCheckLines(result.body);
           status.textContent = lines.length ? "Checked " + new Date(result.body.checkedAt).toLocaleString() : "No role secrets found.";
           lines.forEach(function (line) {

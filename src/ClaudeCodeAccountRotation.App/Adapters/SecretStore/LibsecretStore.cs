@@ -38,6 +38,8 @@ internal sealed class LibsecretStore(string libraryName, Func<string, string?> e
 
     private readonly Lazy<Result<Api, string>> _api = new(() => Api.Load(libraryName), LazyThreadSafetyMode.ExecutionAndPublication);
 
+    public string DisplayName => "the Secret Service";
+
     public static LibsecretStore ForCurrentProcess() =>
         new(DefaultLibrary, Environment.GetEnvironmentVariable, Path.Exists, TimeSpan.FromSeconds(15));
 

@@ -34,6 +34,8 @@ internal sealed partial class WindowsCredentialStore : ISecretStore
     internal static CredentialArguments ArgumentsFor(SecretKind kind, AccountEmail email) =>
         new(SecretNames.Target(kind, email), CredTypeGeneric, CredPersistLocalMachine, email.Value);
 
+    public string DisplayName => "Credential Manager";
+
     // Credential Manager exists on every Windows this runs on. A session with
     // no credential set (SSH, a service) is found by the write, which says so.
     public Task<Result<Unit, string>> ProbeAsync(CancellationToken cancellationToken) =>
