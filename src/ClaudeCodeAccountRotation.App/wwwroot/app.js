@@ -1166,15 +1166,19 @@
         .then(function (result) {
           if (!result.ok) { status.textContent = refused(result.body); return; }
           // The panel stays, now saying where the key is and what sends it
-          // on, until Close, which redraws the card with its new badge.
+          // on, until Close. The card is redrawn under it at once, so its
+          // badge and Push API key are there while the panel is open.
           var said = keyStoredWords(result.body, onWindows(), admin);
           form.parentNode.removeChild(form);
           status.textContent = said;
           panel.appendChild(actionButton("Close", "secondary", function () {
-            panel.parentNode.removeChild(panel);
-            refresh(true);
+            if (panel.parentNode) { panel.parentNode.removeChild(panel); }
           }));
-          showToast(key.label + " stored for " + account.email + ". " + said, "ok");
+          showToast(said, "ok");
+          return refresh(true).then(function () {
+            var redrawn = cardNodes[account.email];
+            if (redrawn && panel.parentNode !== redrawn) { redrawn.appendChild(panel); }
+          });
         })
         .catch(function (error) { status.textContent = "Request failed: " + error; })
         .then(function () { busy = false; setButtonsDisabled(false); });
