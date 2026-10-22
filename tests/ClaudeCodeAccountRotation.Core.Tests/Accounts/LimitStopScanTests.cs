@@ -4,30 +4,32 @@ using ClaudeCodeAccountRotation.Core.Identity;
 namespace ClaudeCodeAccountRotation.Core.Tests.Accounts;
 
 /// <summary>
-/// The limit-stop warning's matching, held to the plan: a rate-limit
-/// annotation naming a half the account backed when the run started is a hit,
-/// labelled by half, and the scan reads at most 30 runs of the last 7 days.
+/// The limit-stop warning's matching, held to the plan: a record of a limit
+/// class (rate-limit or credit-stop) naming a half the account backed when the
+/// run started is a hit, labelled by half.
 /// </summary>
 public sealed class LimitStopScanTests
 {
     private const string A = "a@example.com";
     private const string B = "b@example.com";
 
-    private static readonly DateTimeOffset _now = new(2026, 10, 20, 12, 0, 0, TimeSpan.Zero);
     private static readonly CiRole _automations = new("AUTOMATIONS", CiSecretScope.Organization, "octo");
     private static readonly LaneRun _run = new("octo/lanes", 101, new DateTimeOffset(2026, 10, 18, 9, 0, 0, TimeSpan.Zero), null);
 
     private static AccountEmail Email(string value) => AccountEmail.Parse(value).Value;
 
-    /// <summary>The lane record's shape from ci-workflows report-lane-outcome: key=value tokens in the message.</summary>
-    private static LaneAnnotation RateLimit(string credential, LaneRun? run = null) =>
-        new(run ?? _run, "lane=intake class=rate-limit credential=" + credential + " resets=2026-10-18T14:00:00Z");
+    /// <summary>The legacy lane record from ci-workflows report-lane-outcome: key=value tokens in the message.</summary>
+    private static LaneRecord RateLimit(string credential, LaneRun? run = null) =>
+        Record("lane=intake class=rate-limit credential=" + credential + " resets=2026-10-18T14:00:00Z", run);
+
+    private static LaneRecord Record(string message, LaneRun? run = null) =>
+        new(run ?? _run, LaneOutcomes.Parse(message) ?? throw new ArgumentException("no record in " + message, nameof(message)));
 
     private static RoleHalfChange Change(DateTimeOffset at, RoleHalf half, string? account, string? previous, CiRole? role = null) =>
         new(at, role ?? _automations, half, account, previous);
 
-    private static IReadOnlyList<LimitStopHit> HitsFor(string account, LaneAnnotation annotation, IReadOnlyList<RoleHalfChange> history, Roster? roster = null) =>
-        LimitStopScan.Hits(Email(account), [annotation], history, roster ?? Roster.Empty);
+    private static IReadOnlyList<LimitStopHit> HitsFor(string account, LaneRecord record, IReadOnlyList<RoleHalfChange> history, Roster? roster = null) =>
+        LimitStopScan.Hits(Email(account), [record], history, roster ?? Roster.Empty);
 
     private static readonly IReadOnlyList<RoleHalfChange> _aBackedBothHalves =
     [
@@ -117,32 +119,31 @@ public sealed class LimitStopScanTests
     [InlineData("class=rate-limited credential=AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN")]
     [InlineData("class=failure credential=AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN")]
     [InlineData("class=rate-limit credential=AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN2")]
-    [InlineData("class=rate-limit")]
-    public void OnlyWholeTokensMatch(string message)
+    [InlineData("credential=AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN")]
+    [InlineData("lane-outcome {\"v\":1,\"outcome\":\"success\",\"credential\":{\"secret\":\"AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN\"}}")]
+    public void ARecordOfNoLimitClassOrAnotherSecretIsNoHit(string message)
     {
-        HitsFor(A, new LaneAnnotation(_run, message), _aBackedBothHalves).ShouldBeEmpty();
+        HitsFor(A, Record(message), _aBackedBothHalves).ShouldBeEmpty();
     }
 
     [Fact]
-    public void AtMostThirtyRunsOfTheLastSevenDaysAreReadNewestFirst()
+    public void AJsonCreditStopOnTheKeyHalfIsACreditStop()
     {
-        // 40 runs an hour apart, newest first from an hour before now; plus one from 8 days back.
-        List<LaneRun> runs = [.. Enumerable.Range(1, 40).Select(static hour => new LaneRun("octo/lanes", hour, _now.AddHours(-hour), null))];
-        runs.Add(new LaneRun("octo/other", 999, _now.AddDays(-8), null));
+        LaneRecord record = Record("lane-outcome {\"v\":1,\"outcome\":\"failure\",\"class\":\"credit-stop\",\"credential\":{\"secret\":\"AUTOMATIONS_CLAUDE_API_KEY\",\"kind\":\"api-key\"}}");
 
-        IReadOnlyList<LaneRun> newest = LimitStopScan.Newest(runs, _now);
-
-        newest.Count.ShouldBe(30);
-        newest[0].Id.ShouldBe(1);
-        newest[29].Id.ShouldBe(30);
+        HitsFor(A, record, _aBackedBothHalves).ShouldHaveSingleItem().Label.ShouldBe("credit stop");
     }
 
     [Fact]
-    public void ARunOlderThanSevenDaysIsNotRead()
+    public void ACreditStopOnTheTokenHalfIsASubscriptionLimit()
     {
-        LaneRun old = new("octo/lanes", 7, _now.AddDays(-7).AddSeconds(-1), null);
-        LaneRun edge = new("octo/lanes", 8, _now.AddDays(-7), null);
+        HitsFor(A, Record("class=credit-stop credential=AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN"), _aBackedBothHalves).ShouldHaveSingleItem().Label.ShouldBe("subscription limit");
+    }
 
-        LimitStopScan.Newest([old, edge], _now).ShouldBe([edge]);
+    [Fact]
+    public void TwoRecordsOfOneRunAndHalfAreOneHit()
+    {
+        LimitStopScan.Hits(Email(A), [RateLimit("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN"), RateLimit("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN")], _aBackedBothHalves, Roster.Empty)
+            .ShouldHaveSingleItem();
     }
 }

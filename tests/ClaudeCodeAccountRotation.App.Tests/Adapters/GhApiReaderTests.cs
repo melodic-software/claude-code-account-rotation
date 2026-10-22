@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.Process;
 using ClaudeCodeAccountRotation.Core;
+using ClaudeCodeAccountRotation.Core.Accounts;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Adapters;
 
@@ -77,6 +78,62 @@ public sealed class GhApiReaderTests : IDisposable
             new GhExit(0, "HTTP/2.0 200 OK\r\nContent-Type: application/json\r\n\r\n{\"total_count\":0,\"secrets\":[]}", string.Empty));
 
         read.Value["total_count"]!.GetValue<int>().ShouldBe(0);
+    }
+
+    // The created filter takes the search syntax's >= or a .. range of UTC times
+    // (https://docs.github.com/en/search-github/getting-started-with-searching-on-github/understanding-the-search-syntax#query-for-dates),
+    // and a page holds at most 100 runs (https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-repository).
+    [Fact]
+    public async Task AFailedRunsPageAsksForItsDateRangeAndPageAndCarriesEachRunsCheckSuite()
+    {
+        DateTimeOffset since = new(2026, 8, 31, 12, 0, 0, TimeSpan.Zero);
+        OneAnswer reader = new(new JsonObject
+        {
+            ["total_count"] = 1,
+            ["workflow_runs"] = new JsonArray(new JsonObject
+            {
+                ["id"] = 101,
+                ["created_at"] = "2026-09-05T09:00:00Z",
+                ["check_suite_node_id"] = "CS_kwDOTCGFQM8AAAAZDrCXnA",
+            }),
+        });
+
+        Result<RunPage, GhApiFailure> open = await reader.ListFailedRunsPageAsync("octo/lanes", since, null, 3, TestContext.Current.CancellationToken);
+        await reader.ListFailedRunsPageAsync("octo/lanes", since, new DateTimeOffset(2026, 9, 2, 8, 30, 15, TimeSpan.FromHours(2)), 1, TestContext.Current.CancellationToken);
+
+        reader.Paths.ShouldBe([
+            "repos/octo/lanes/actions/runs?status=failure&created=%3E%3D2026-08-31T12:00:00Z&per_page=100&page=3",
+            "repos/octo/lanes/actions/runs?status=failure&created=2026-08-31T12:00:00Z..2026-09-02T06:30:15Z&per_page=100&page=1",
+        ]);
+        open.Value.Full.ShouldBeFalse();
+        LaneRun run = open.Value.Runs.ShouldHaveSingleItem();
+        run.CheckSuiteNodeId.ShouldBe("CS_kwDOTCGFQM8AAAAZDrCXnA");
+        run.Url.ShouldBe(new Uri("https://github.com/octo/lanes/actions/runs/101"));
+    }
+
+    [Fact]
+    public async Task AHundredRunsIsAFullPage()
+    {
+        OneAnswer reader = new(new JsonObject
+        {
+            ["workflow_runs"] = new JsonArray([.. Enumerable.Range(1, 100).Select(static id => (JsonNode)new JsonObject { ["id"] = id, ["created_at"] = "2026-09-05T09:00:00Z" })]),
+        });
+
+        Result<RunPage, GhApiFailure> page = await reader.ListFailedRunsPageAsync("octo/lanes", DateTimeOffset.UnixEpoch, null, 1, TestContext.Current.CancellationToken);
+
+        page.Value.Full.ShouldBeTrue();
+        page.Value.Runs.Count.ShouldBe(100);
+    }
+
+    private sealed class OneAnswer(JsonNode answer) : IGhApiReader
+    {
+        public List<string> Paths { get; } = [];
+
+        public Task<Result<JsonNode, GhApiFailure>> GetAsync(string path, CancellationToken cancellationToken)
+        {
+            Paths.Add(path);
+            return Task.FromResult(Result<JsonNode, GhApiFailure>.Success(answer.DeepClone()));
+        }
     }
 
     [Fact(SkipUnless = nameof(OnUnix), Skip = "The stand-in gh is a shell script")]

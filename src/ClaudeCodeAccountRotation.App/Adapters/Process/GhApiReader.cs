@@ -61,15 +61,7 @@ internal sealed class GhApiReader(string executable, TimeSpan timeout) : IGhApiR
     public static Result<JsonNode, GhApiFailure> Read(string path, GhExit exit)
     {
         ArgumentNullException.ThrowIfNull(exit);
-        string text = exit.StandardOutput.Replace("\r\n", "\n", StringComparison.Ordinal);
-        int split = text.IndexOf("\n\n", StringComparison.Ordinal);
-        string[] head = (split < 0 ? text : text[..split]).Split('\n');
-        string body = split < 0 ? string.Empty : text[(split + 2)..];
-        string[] statusLine = head[0].Split(' ', 3);
-        int status = statusLine.Length >= 2 && statusLine[0].StartsWith("HTTP/", StringComparison.Ordinal)
-            && int.TryParse(statusLine[1], NumberStyles.None, CultureInfo.InvariantCulture, out int parsed)
-                ? parsed
-                : 0;
+        (int status, string[] head, string body) = Split(exit.StandardOutput);
 
         if (status is 403 or 429 && RateLimited(status, head, body))
         {
@@ -95,6 +87,25 @@ internal sealed class GhApiReader(string executable, TimeSpan timeout) : IGhApiR
         {
             return Result<JsonNode, GhApiFailure>.Failure(new GhApiFailure("gh api returned something other than JSON for " + path, RateLimited: false));
         }
+    }
+
+    /// <summary>
+    /// The status (0 when no status line was seen), the status line and
+    /// headers, and the body of <c>--include</c> output.
+    /// </summary>
+    internal static (int Status, string[] Head, string Body) Split(string output)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        string text = output.Replace("\r\n", "\n", StringComparison.Ordinal);
+        int split = text.IndexOf("\n\n", StringComparison.Ordinal);
+        string[] head = (split < 0 ? text : text[..split]).Split('\n');
+        string body = split < 0 ? string.Empty : text[(split + 2)..];
+        string[] statusLine = head[0].Split(' ', 3);
+        int status = statusLine.Length >= 2 && statusLine[0].StartsWith("HTTP/", StringComparison.Ordinal)
+            && int.TryParse(statusLine[1], NumberStyles.None, CultureInfo.InvariantCulture, out int parsed)
+                ? parsed
+                : 0;
+        return (status, head, body);
     }
 
     /// <summary>Whether a 403 or 429 answer is a rate limit, by its headers (the status line first) and its body's message.</summary>
@@ -380,106 +391,72 @@ internal static class GhApiReads
     }
 
     /// <summary>
-    /// The failed runs of <paramref name="repository"/> (<c>owner/name</c>,
-    /// already held to GitHub's rules) created on or after the UTC date of
-    /// <paramref name="since"/>, newest first, one page of
-    /// <see cref="LimitStopScan.MaxRuns"/>: no scan reads more runs than that
-    /// in total. <c>created</c> takes the search syntax's <c>&gt;=YYYY-MM-DD</c>,
-    /// percent-encoded; the date is a day wider than the window, which
-    /// <see cref="LimitStopScan.Newest"/> then trims. A run with no readable id
-    /// or <c>created_at</c> is skipped.
+    /// The most results one search of the run listing returns, whatever the
+    /// page. Basis: https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-repository
+    /// ("will return up to 1,000 results for each search" when using created, status and other filters).
+    /// </summary>
+    public const int MaxListingResults = 1000;
+
+    /// <summary>
+    /// Page <paramref name="page"/> of the failed runs of
+    /// <paramref name="repository"/> (<c>owner/name</c>, already held to
+    /// GitHub's rules), newest first, <see cref="PageSize"/> to a page, created
+    /// at or after <paramref name="since"/> and, when <paramref name="before"/>
+    /// is given, at or before it. <c>created</c> takes the search syntax's
+    /// <c>&gt;=</c> or <c>..</c> range with UTC times, percent-encoded. Each
+    /// run carries its check suite's node id. A run with no readable id or
+    /// <c>created_at</c> is skipped.
     /// Basis: https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-repository and
     /// https://docs.github.com/en/search-github/getting-started-with-searching-on-github/understanding-the-search-syntax#query-for-dates.
     /// </summary>
-    public static async Task<Result<IReadOnlyList<LaneRun>, GhApiFailure>> ListFailedRunsAsync(
+    public static async Task<Result<RunPage, GhApiFailure>> ListFailedRunsPageAsync(
         this IGhApiReader reader,
         string repository,
         DateTimeOffset since,
+        DateTimeOffset? before,
+        int page,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(reader);
-        string path = "repos/" + repository + "/actions/runs?status=failure&created=%3E%3D"
-            + since.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
-            // One page of 30, GitHub's documented default (max 100): the scan
-            // reads at most 30 runs in all, so the newest 30 of each repository
-            // hold the newest 30 overall. Basis:
-            // https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-repository.
-            + "&per_page=" + LimitStopScan.MaxRuns.ToString(CultureInfo.InvariantCulture);
+        string created = before is DateTimeOffset upTo
+            ? Stamp(since) + ".." + Stamp(upTo)
+            : "%3E%3D" + Stamp(since);
+        string path = "repos/" + repository + "/actions/runs?status=failure&created=" + created
+            + "&per_page=" + PageSize.ToString(CultureInfo.InvariantCulture)
+            + "&page=" + page.ToString(CultureInfo.InvariantCulture);
         Result<JsonNode, GhApiFailure> read = await reader.GetAsync(path, cancellationToken);
         if (read.IsFailure)
         {
-            return Result<IReadOnlyList<LaneRun>, GhApiFailure>.Failure(read.Error);
+            return Result<RunPage, GhApiFailure>.Failure(read.Error);
         }
 
         if (read.Value["workflow_runs"] is not JsonArray listed)
         {
-            return Result<IReadOnlyList<LaneRun>, GhApiFailure>.Failure(new GhApiFailure("GitHub's run list for " + repository + " was not in the shape its documentation gives", RateLimited: false));
+            return Result<RunPage, GhApiFailure>.Failure(new GhApiFailure("GitHub's run list for " + repository + " was not in the shape its documentation gives", RateLimited: false));
         }
 
         List<LaneRun> runs = [];
         foreach (JsonNode? item in listed)
         {
             if (Id(item?["id"]) is long id
-                && item!["created_at"] is JsonValue created && created.TryGetValue(out string? stamp)
-                && DateTimeOffset.TryParse(stamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTimeOffset createdAt))
+                && item!["created_at"] is JsonValue createdAt && createdAt.TryGetValue(out string? stamp)
+                && DateTimeOffset.TryParse(stamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTimeOffset at))
             {
+                string? suite = item["check_suite_node_id"] is JsonValue node && node.TryGetValue(out string? nodeId) ? nodeId : null;
+
                 // The link the page shows is built here, never taken from the answer.
-                runs.Add(new LaneRun(repository, id, createdAt, new Uri("https://github.com/" + repository + "/actions/runs/" + id.ToString(CultureInfo.InvariantCulture))));
+                runs.Add(new LaneRun(repository, id, at, new Uri("https://github.com/" + repository + "/actions/runs/" + id.ToString(CultureInfo.InvariantCulture)), suite));
             }
         }
 
-        return Result<IReadOnlyList<LaneRun>, GhApiFailure>.Success(runs);
+        return Result<RunPage, GhApiFailure>.Success(new RunPage(runs, listed.Count >= PageSize));
+
+        static string Stamp(DateTimeOffset at) => at.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
     }
 
     /// <summary>
-    /// The check run of each failed job of <paramref name="run"/>, every
-    /// attempt's, from one page of up to 100 jobs. The id comes from the job's
-    /// <c>check_run_url</c>, since the docs do not promise it equals the job
-    /// id, and only from one that points at a check run of the same
-    /// repository: the URL is GitHub's answer, never passed to gh as given.
-    /// Basis: https://docs.github.com/en/rest/actions/workflow-jobs#list-jobs-for-a-workflow-run.
-    /// </summary>
-    public static async Task<Result<IReadOnlyList<long>, GhApiFailure>> ListFailedJobCheckRunsAsync(
-        this IGhApiReader reader,
-        LaneRun run,
-        CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(reader);
-        ArgumentNullException.ThrowIfNull(run);
-        string path = "repos/" + run.Repository + "/actions/runs/" + run.Id.ToString(CultureInfo.InvariantCulture) + "/jobs?filter=all&per_page=" + PageSize.ToString(CultureInfo.InvariantCulture);
-        Result<JsonNode, GhApiFailure> read = await reader.GetAsync(path, cancellationToken);
-        if (read.IsFailure)
-        {
-            return Result<IReadOnlyList<long>, GhApiFailure>.Failure(read.Error);
-        }
-
-        if (read.Value["jobs"] is not JsonArray jobs)
-        {
-            return Result<IReadOnlyList<long>, GhApiFailure>.Failure(new GhApiFailure("GitHub's job list for run " + run.Id.ToString(CultureInfo.InvariantCulture) + " in " + run.Repository + " was not in the shape its documentation gives", RateLimited: false));
-        }
-
-        string expected = "/repos/" + run.Repository + "/check-runs/";
-        List<long> checkRuns = [];
-        foreach (JsonNode? job in jobs)
-        {
-            if (job?["conclusion"] is JsonValue conclusion && conclusion.TryGetValue(out string? outcome) && outcome == "failure"
-                && job["check_run_url"] is JsonValue url && url.TryGetValue(out string? link)
-                && Uri.TryCreate(link, UriKind.Absolute, out Uri? parsed)
-                && parsed.Scheme == Uri.UriSchemeHttps
-                && parsed.AbsolutePath.LastIndexOf(expected, StringComparison.OrdinalIgnoreCase) is int at and >= 0
-                && parsed.AbsolutePath[(at + expected.Length)..] is { Length: > 0 } digits
-                && digits.All(char.IsAsciiDigit)
-                && long.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out long id))
-            {
-                checkRuns.Add(id);
-            }
-        }
-
-        return Result<IReadOnlyList<long>, GhApiFailure>.Success(checkRuns);
-    }
-
-    /// <summary>
-    /// The messages of a check run's annotations, one page of up to 100. The
+    /// The messages of a check run's annotations, one page of up to 100: the
+    /// scan's follow-up for a check run whose annotations GraphQL cut off. The
     /// answer is a bare array; an annotation with no message is skipped.
     /// Basis: https://docs.github.com/en/rest/checks/runs#list-check-run-annotations.
     /// </summary>
@@ -511,3 +488,6 @@ internal static class GhApiReads
                 ? number
                 : null;
 }
+
+/// <summary>One page of a run listing: <paramref name="Full"/> when it held a whole page, so a next page may exist.</summary>
+internal sealed record RunPage(IReadOnlyList<LaneRun> Runs, bool Full);
