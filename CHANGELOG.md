@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-10-22
+
 ### Added
 
 - **Open claude.ai and Open Console in a card's ··· menu.** Each opens that page, claude.ai or the
