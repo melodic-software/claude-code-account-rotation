@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Adapters.Process;
+using ClaudeCodeAccountRotation.App.Hosting;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.App.Tests.Adapters;
 using ClaudeCodeAccountRotation.App.Tests.Hosting;
@@ -15,6 +16,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace ClaudeCodeAccountRotation.App.Tests;
@@ -26,6 +28,8 @@ namespace ClaudeCodeAccountRotation.App.Tests;
 /// </summary>
 internal sealed class AppFactory : WebApplicationFactory<Program>
 {
+    private readonly bool _stateFileWatcher;
+
     /// <param name="sharedStore">
     /// <c>store.shared</c>, off by default exactly as production is, so every
     /// test written before this key existed still exercises the behavior the
@@ -40,8 +44,14 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
     /// <c>peers[].storePathFromPeer</c> for a <c>wsl</c> entry, or null for no
     /// peers at all, which is the ordinary state.
     /// </param>
-    public AppFactory(bool sharedStore = false, string? profilesRoot = null, string? peerStorePath = null)
+    /// <param name="stateFileWatcher">
+    /// Runs <see cref="StateFileWatcher"/>, off by default: its startup pass
+    /// takes the mutation gate about a second after the host starts, and a
+    /// test that needs the gate free then is refused under load.
+    /// </param>
+    public AppFactory(bool sharedStore = false, string? profilesRoot = null, string? peerStorePath = null, bool stateFileWatcher = false)
     {
+        _stateFileWatcher = stateFileWatcher;
         Root = Path.Combine(Path.GetTempPath(), "claude-code-account-rotation-tests", Guid.NewGuid().ToString("N"));
         LiveDirectory = Path.Combine(Root, "live");
         StateFilePath = Path.Combine(Root, ".claude.json");
@@ -212,12 +222,25 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
             Services.GetRequiredService<InstanceLock>().Token);
     }
 
+    internal static void RemoveStateFileWatcher(IServiceCollection services)
+    {
+        foreach (ServiceDescriptor watcher in services.Where(static descriptor => descriptor.ServiceType == typeof(IHostedService) && descriptor.ImplementationType == typeof(StateFileWatcher)).ToList())
+        {
+            services.Remove(watcher);
+        }
+    }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseSetting("ClaudeCodeAccountRotation:ConfigPath", ConfigPath);
         builder.ConfigureLogging(logging => logging.AddProvider(Logs));
         builder.ConfigureTestServices(services =>
         {
+            if (!_stateFileWatcher)
+            {
+                RemoveStateFileWatcher(services);
+            }
+
             // Nothing reaches the network: the factory's own handler chain stays
             // and only the socket underneath it is replaced. The composition root
             // installs that socket itself, after any ConfigureHttpClientDefaults,
