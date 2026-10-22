@@ -17,6 +17,15 @@ All notable changes to this project are documented in this file. The format foll
   claude-code-action and read a token only, so Generate CI token no longer asks for a
   Console key for them or writes their `_CLAUDE_API_KEY`, and Push API key sends them nothing.
 
+## [2.5.0] - 2026-10-22
+
+### Added
+
+- **Open claude.ai and Open Console in a card's ··· menu.** Each opens that page, claude.ai or the
+  Console's API keys page, in the account's mapped browser profile, so you need not recall which
+  profile is signed in as it. `POST /api/accounts/{email}/console-page` takes `"page": "claude-ai"`
+  beside `keys` and `admin-keys`.
+
 ## [2.4.0] - 2026-10-22
 
 Org usage from an Admin key's Cost Report is not in this release; it is deferred to a later one.

@@ -1,9 +1,12 @@
 using System.Net;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
+using ClaudeCodeAccountRotation.App.Hosting;
 using ClaudeCodeAccountRotation.App.Tests.Endpoints;
 using ClaudeCodeAccountRotation.App.Tests.Switching;
 using ClaudeCodeAccountRotation.Core.Identity;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Hosting;
 
@@ -21,7 +24,7 @@ public sealed class StateFileWatcherTests
     [Fact]
     public async Task AStaleBlockWrittenBackAfterASwitchIsRepairedWithoutAnyRequest()
     {
-        using AppFactory factory = new();
+        using AppFactory factory = new(stateFileWatcher: true);
         await CredentialFiles.WriteAsync(factory.LiveDirectory, "refresh-a", TestContext.Current.CancellationToken);
         await factory.WriteStateFileAsync("a@example.com", TestContext.Current.CancellationToken);
         await factory.ParkedProfileAsync("b@example.com", "refresh-b", TestContext.Current.CancellationToken);
@@ -47,7 +50,7 @@ public sealed class StateFileWatcherTests
     [Fact]
     public async Task AStateFileReadWhileItIsBeingRewrittenLeavesTheWatcherRunning()
     {
-        using AppFactory factory = new();
+        using AppFactory factory = new(stateFileWatcher: true);
         await CredentialFiles.WriteAsync(factory.LiveDirectory, "refresh-a", TestContext.Current.CancellationToken);
         await factory.WriteStateFileAsync("a@example.com", TestContext.Current.CancellationToken);
         await factory.ParkedProfileAsync("b@example.com", "refresh-b", TestContext.Current.CancellationToken);
@@ -83,7 +86,7 @@ public sealed class StateFileWatcherTests
     {
         // The follower's composition registered no watcher, so a block a WSL session
         // wrote back stood for hours and every WSL switch was refused.
-        await using FollowerAppFactory factory = new();
+        await using FollowerAppFactory factory = new(stateFileWatcher: true);
         FollowerRoots roots = factory.Roots;
         RefreshTokenFingerprint live = await roots.WriteLiveAsync("a@example.com", "refresh-b", TestContext.Current.CancellationToken);
         Directory.CreateDirectory(Path.Combine(roots.AppData, "state"));
@@ -105,6 +108,20 @@ public sealed class StateFileWatcherTests
         }
 
         email.ShouldBe("b@example.com", "the follower's own watcher repairs the block at start");
+    }
+
+    // Its startup pass holds the mutation gate about a second after the host
+    // starts; a test that needs the gate free then was refused under load (#305).
+    [Fact]
+    public async Task TheTestHostsRunNoWatcherUnlessATestAsksForOne()
+    {
+        using AppFactory leader = new();
+        await using FollowerAppFactory follower = new();
+        using AppFactory watched = new(stateFileWatcher: true);
+
+        leader.Services.GetServices<IHostedService>().OfType<StateFileWatcher>().ShouldBeEmpty();
+        follower.Services.GetServices<IHostedService>().OfType<StateFileWatcher>().ShouldBeEmpty();
+        watched.Services.GetServices<IHostedService>().OfType<StateFileWatcher>().ShouldHaveSingleItem();
     }
 
     private static bool Warned(string line) => line.Contains("stale identity repair failed", StringComparison.Ordinal);

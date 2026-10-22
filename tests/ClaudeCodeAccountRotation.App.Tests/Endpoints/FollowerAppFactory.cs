@@ -20,8 +20,12 @@ namespace ClaudeCodeAccountRotation.App.Tests.Endpoints;
 /// </summary>
 internal sealed class FollowerAppFactory : WebApplicationFactory<Program>
 {
-    public FollowerAppFactory()
+    private readonly bool _stateFileWatcher;
+
+    /// <param name="stateFileWatcher">As <see cref="AppFactory"/>'s: off unless a test exercises it.</param>
+    public FollowerAppFactory(bool stateFileWatcher = false)
     {
+        _stateFileWatcher = stateFileWatcher;
         ConfigPath = ImportCrashInjectionTests.WriteFollowerConfig(Roots);
     }
 
@@ -64,6 +68,11 @@ internal sealed class FollowerAppFactory : WebApplicationFactory<Program>
         builder.ConfigureLogging(logging => logging.AddProvider(Logs));
         builder.ConfigureTestServices(services =>
         {
+            if (!_stateFileWatcher)
+            {
+                AppFactory.RemoveStateFileWatcher(services);
+            }
+
             services.Replace(ServiceDescriptor.Singleton<TimeProvider>(Roots.Clock));
             services.Replace(ServiceDescriptor.Singleton<IUsageEndpointClient>(Usage));
         });

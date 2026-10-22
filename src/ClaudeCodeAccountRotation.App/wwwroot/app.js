@@ -1209,6 +1209,16 @@
     });
   }
 
+  // Open claude.ai and Open Console in the ··· menu: one of the fixed pages,
+  // in the account's mapped browser profile, so nobody has to recall which
+  // profile is signed in as it.
+  function openAccountPage(email, page, title) {
+    return mutate(accountPath(email, "/console-page"), "POST", { page: page }, function (result) {
+      showToast(result.ok ? "Opened " + title + " in " + email + "'s browser profile." : refused(result.body), result.ok ? "ok" : "error");
+      return null;
+    });
+  }
+
   function keyKind(admin) {
     return admin
       ? { path: "/admin-key", title: "Admin key", label: "Admin key", page: { name: "admin-keys", title: "Admin keys" } }
@@ -2523,6 +2533,8 @@
     }
     menu.appendChild(blockable(menuItem(more, "Refresh usage", "quiet sm", function () { refreshAccount(account.email); }), false));
     if (roster) {
+      menu.appendChild(menuItem(more, "Open claude.ai", "quiet sm", function () { openAccountPage(account.email, "claude-ai", "claude.ai"); }));
+      menu.appendChild(menuItem(more, "Open Console", "quiet sm", function () { openAccountPage(account.email, "keys", "the Console's API keys page"); }));
       menu.appendChild(menuItem(more, "Generate CI token", "quiet sm", function () { openCiTokenPanel(account); }));
     }
     if (roster) {
