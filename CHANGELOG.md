@@ -6,6 +6,29 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Added
+
+- **The limit-stop check says how far back it read.** Its answer carries `coverage` per lane
+  repository and the `calls` it made, and a check that stopped early names, for each repository
+  it did not finish, "checked in part, covered back to <time>" or "not reached".
+- **The limit-stop check reads the lane-outcome JSON record.** It reads the record after
+  `lane-outcome ` in an annotation, and the legacy `class=` and `credential=` tokens from older
+  ci-workflows. `credit-stop` counts as a limit stop beside `rate-limit`.
+
+### Changed
+
+- **The limit-stop check covers the last 7 days within 30 calls.** It lists failed runs 100 to a
+  page, narrowing the date range when GitHub's 1,000-result cap is reached, and reads every
+  attempt's check runs and every job's annotations, not only failed jobs', in one GraphQL batch
+  per page through `gh api graphql`. It used to read the newest 30 failed runs, about 2 days. It
+  stops at 30 calls, at a rate limit, or when a batch leaves fewer than 1,000 GraphQL points; a
+  GraphQL error or a cut-off read reads as partial, never clean.
+
+### Fixed
+
+- **A legacy credential token ending in punctuation is read.** `credential=NAME)` or
+  `credential=NAME.` now yields `NAME`, and a credential that is no secret name is ignored.
+
 ## [2.3.2] - 2026-10-21
 
 ### Fixed

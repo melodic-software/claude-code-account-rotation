@@ -1758,7 +1758,8 @@
 
   // The warning's lines, or null when the scan was whole and found nothing.
   // Hits are grouped by account, each naming its run; a scan that could not
-  // run, or ran only in part, says so.
+  // run, or ran only in part, says so, and names how far back each
+  // repository it did not finish was read.
   function limitStopNotice(froms, result) {
     var view = (result && result.body) || {};
     if (!result || !result.ok || !view.outcome) {
@@ -1778,6 +1779,19 @@
     });
     if (view.outcome === "partial") {
       lines.push({ kind: "warn", text: "limit stops checked only in part: " + (view.problems || []).join("; "), url: null });
+    }
+    (view.coverage || []).forEach(function (repository) {
+      if (repository.complete) { return; }
+      lines.push({
+        kind: "warn",
+        text: repository.repository + (repository.coveredBack
+          ? ": checked in part, covered back to " + new Date(repository.coveredBack).toLocaleString()
+          : ": not reached"),
+        url: null
+      });
+    });
+    if (lines.length) {
+      lines.push({ kind: "warn", text: "Failed runs only: a stop a fallback or a re-run recovered from is not read.", url: null });
     }
     return lines.length ? lines : null;
   }

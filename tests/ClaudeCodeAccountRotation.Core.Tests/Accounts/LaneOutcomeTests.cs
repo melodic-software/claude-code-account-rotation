@@ -42,7 +42,7 @@ public sealed class LaneOutcomeTests
     [Fact]
     public void TheMarkerIsFoundMidLineWithNoNewline() =>
         LaneOutcomes.Parse("Claude lane stopped. lane-outcome " + ReviewLaneRateLimit + " Last turn ran long.")
-            ?.Credential.ShouldBe("CLAUDE_CODE_OAUTH_TOKEN");
+            .ShouldNotBeNull().Credential.ShouldBe("CLAUDE_CODE_OAUTH_TOKEN");
 
     [Fact]
     public void ARecordFollowedByFiveThousandCharactersOfFreeTextIsRead() =>
@@ -75,7 +75,7 @@ public sealed class LaneOutcomeTests
     [InlineData("class=rate-limit credential=AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN,")]
     [InlineData("class=rate-limit credential=AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN;")]
     public void ALegacyCredentialWithTrailingPunctuationYieldsTheName(string message) =>
-        LaneOutcomes.Parse(message)?.Credential.ShouldBe("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN");
+        LaneOutcomes.Parse(message).ShouldNotBeNull().Credential.ShouldBe("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN");
 
     [Theory]
     [InlineData("class=rate-limit credential=lower")]
@@ -116,5 +116,5 @@ public sealed class LaneOutcomeTests
     [Fact]
     public void TheFirstRecordBeforeLastSdkResultIsReadNotASecondAfterIt() =>
         LaneOutcomes.Parse(Annotation(KeyLegCreditStop) + "\nLast SDK result: lane-outcome " + ReviewLaneRateLimit)
-            ?.Credential.ShouldBe("AUTOMATIONS_CLAUDE_API_KEY");
+            .ShouldNotBeNull().Credential.ShouldBe("AUTOMATIONS_CLAUDE_API_KEY");
 }
