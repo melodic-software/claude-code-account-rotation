@@ -6,11 +6,10 @@ namespace ClaudeCodeAccountRotation.Core.Accounts;
 
 /// <summary>
 /// What the tool reads from one lane-outcome record: its <paramref name="Class"/>
-/// (null on a success or a legacy line with none), the secret name the lane
-/// ran on, and that secret's <paramref name="Kind"/> (<c>oauth-token</c> or
-/// <c>api-key</c>; null from legacy tokens).
+/// (null on a success or a legacy line with none) and the secret name the lane
+/// ran on.
 /// </summary>
-public sealed record LaneOutcome(string? Class, string Credential, string? Kind);
+public sealed record LaneOutcome(string? Class, string Credential);
 
 /// <summary>
 /// The one place a lane-outcome record is parsed. ci-workflows owns the
@@ -37,7 +36,7 @@ public static partial class LaneOutcomes
     /// <summary>
     /// The record in <paramref name="message"/>, or null when it holds none:
     /// no readable JSON and no legacy <c>credential=</c> token, or a credential
-    /// that is no secret name GitHub allows (<c>^[A-Z][A-Z0-9_]{0,99}$</c>).
+    /// that does not match the emitter's credential pattern.
     /// </summary>
     public static LaneOutcome? Parse(string? message)
     {
@@ -72,7 +71,7 @@ public static partial class LaneOutcomes
                 return null;
             }
 
-            return new LaneOutcome(Text(root, "class"), secret, Text(credential, "kind"));
+            return new LaneOutcome(Text(root, "class"), secret);
         }
         catch (JsonException)
         {
@@ -104,10 +103,14 @@ public static partial class LaneOutcomes
             }
         }
 
-        return credential is not null && SecretName().IsMatch(credential) ? new LaneOutcome(kind, credential, null) : null;
+        return credential is not null && SecretName().IsMatch(credential) ? new LaneOutcome(kind, credential) : null;
     }
 
-    /// <summary>A secret name as the record's contract and GitHub allow it.</summary>
+    /// <summary>
+    /// The credential pattern of the record's emitter, ci-workflows
+    /// <c>report-lane-outcome</c> (<c>CREDENTIAL_PATTERN</c> in its
+    /// <c>classify.cjs</c>), which its JSON Schema also gives <c>credential.secret</c>.
+    /// </summary>
     [GeneratedRegex("^[A-Z][A-Z0-9_]{0,99}$", RegexOptions.CultureInvariant)]
     private static partial Regex SecretName();
 }

@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Adapters.Process;
@@ -111,7 +110,7 @@ internal static partial class RoleEndpoints
         });
 
         // The limit-stop warning, asked once by the page before it moves roles
-        // off the accounts in "from": see LaneScan. With no lane repositories
+        // off the accounts in "from": see LimitStopScanRunner. With no lane repositories
         // configured nothing is read. Every account is judged from the same
         // read.
         mutations.MapPost("/roles/limit-stops", static async (
@@ -158,7 +157,7 @@ internal static partial class RoleEndpoints
                 return Results.Ok(new LimitStopView(LimitStopView.NotChecked, accounts, 0, [], []));
             }
 
-            LaneScan scan = await LaneScan.RunAsync(repositories, reader, graphQl, clock.GetUtcNow(), cancellationToken);
+            LimitStopScanRunner scan = await LimitStopScanRunner.RunAsync(repositories, reader, graphQl, clock.GetUtcNow(), cancellationToken);
             IReadOnlyList<RoleHalfChange> history = [.. (await rosterFile.History.ReadAsync(null, cancellationToken)).Select(static entry => new RoleHalfChange(
                 entry.At,
                 entry.Role,
@@ -174,13 +173,14 @@ internal static partial class RoleEndpoints
             }
 
             return Results.Ok(new LimitStopView(
-                scan.Problems.Count == 0 && scan.Coverage.TrueForAll(static coverage => coverage.Complete) ? LimitStopView.Checked : LimitStopView.Partial,
+                LimitStopScan.Whole(scan.Problems.Count, scan.Coverage.Select(static coverage => coverage.Complete)) ? LimitStopView.Checked : LimitStopView.Partial,
                 accounts,
                 scan.RunsRead,
                 hits,
                 scan.Problems,
                 scan.Coverage,
-                scan.Calls));
+                scan.Calls,
+                scan.Skipped));
         });
 
         // Flips one organization kill switch that already exists, sending back
@@ -424,10 +424,11 @@ internal sealed record RoleCheckRowView(
 /// What one limit-stop scan for <paramref name="Accounts"/> found:
 /// <see cref="NotChecked"/> when no lane repository is configured,
 /// <see cref="Partial"/> when a read failed or a limit ended it before every
-/// repository was read back 7 days (<paramref name="Problems"/> says which,
+/// repository was read back <see cref="LimitStopScan.Window"/> (<paramref name="Problems"/> says which,
 /// <paramref name="Coverage"/> how far each got), else <see cref="Checked"/>.
 /// <paramref name="RunsRead"/> counts the runs whose check runs and
 /// annotations were all read, and those deleted since they were listed;
+/// <paramref name="Skipped"/> the runs of forks' pull requests, not read;
 /// <paramref name="Calls"/> the GitHub calls made.
 /// </summary>
 internal sealed record LimitStopView(
@@ -437,7 +438,8 @@ internal sealed record LimitStopView(
     IReadOnlyList<LimitStopHitView> Hits,
     IReadOnlyList<string> Problems,
     IReadOnlyList<RepositoryCoverageView>? Coverage = null,
-    int Calls = 0)
+    int Calls = 0,
+    int Skipped = 0)
 {
     public const string NotChecked = "notChecked";
 
@@ -465,258 +467,6 @@ internal sealed record LimitStopHitView(
 /// null when none was.
 /// </summary>
 internal sealed record RepositoryCoverageView(string Repository, bool Complete, DateTimeOffset? CoveredBack);
-
-/// <summary>
-/// One limit-stop scan: per lane repository, newest first, a page of up to 100
-/// failed runs of the last 7 days, then one GraphQL batch reading the check
-/// runs of every attempt of those runs and their annotations, every job's,
-/// failed or not. A check run whose annotations GraphQL cut off gets one REST
-/// read of up to 100. Every call comes from one budget of
-/// <see cref="LimitStopScan.MaxCalls"/>. When a date range's last page is
-/// full, the listing narrows to runs no newer than the oldest read and starts
-/// again at page 1, dropping runs already seen. A repository ends at a short
-/// page; a failed read ends it in part. The budget, GitHub's rate limit, or a
-/// batch leaving fewer than <see cref="LimitStopScan.GraphQlPointFloor"/>
-/// points ends the scan, and each repository not reached is named. Nothing
-/// retries.
-/// </summary>
-internal sealed class LaneScan
-{
-    private readonly IGhApiReader _reader;
-    private readonly IGhGraphQlReader _graphQl;
-    private readonly ScanCallBudget _budget = new(LimitStopScan.MaxCalls);
-    private bool _stopped;
-
-    private LaneScan(IGhApiReader reader, IGhGraphQlReader graphQl)
-    {
-        _reader = reader;
-        _graphQl = graphQl;
-    }
-
-    public List<LaneRecord> Records { get; } = [];
-
-    public List<string> Problems { get; } = [];
-
-    public List<RepositoryCoverageView> Coverage { get; } = [];
-
-    public int RunsRead { get; private set; }
-
-    public int Calls => _budget.Taken;
-
-    public static async Task<LaneScan> RunAsync(IReadOnlyList<string> repositories, IGhApiReader reader, IGhGraphQlReader graphQl, DateTimeOffset now, CancellationToken cancellationToken)
-    {
-        LaneScan scan = new(reader, graphQl);
-        foreach (string repository in repositories)
-        {
-            if (scan._stopped)
-            {
-                scan.Problems.Add(repository + ": not reached, as the check stopped before it");
-                scan.Coverage.Add(new RepositoryCoverageView(repository, false, null));
-                continue;
-            }
-
-            scan.Coverage.Add(await scan.ReadRepositoryAsync(repository, now - LimitStopScan.Window, cancellationToken));
-        }
-
-        return scan;
-    }
-
-    private async Task<RepositoryCoverageView> ReadRepositoryAsync(string repository, DateTimeOffset since, CancellationToken cancellationToken)
-    {
-        const int PagesPerRange = GhApiReads.MaxListingResults / GhApiReads.PageSize;
-        ReadWindow coverage = new();
-        HashSet<long> seen = [];
-        DateTimeOffset? before = null;
-        int page = 1;
-        while (Take())
-        {
-            Result<RunPage, GhApiFailure> listed = await _reader.ListFailedRunsPageAsync(repository, since, before, page, cancellationToken);
-            if (listed.IsFailure)
-            {
-                Fail(repository, listed.Error);
-                return new RepositoryCoverageView(repository, false, coverage.Back);
-            }
-
-            List<LaneRun> runs = [.. listed.Value.Runs.Where(run => run.CreatedAt >= since && seen.Add(run.Id))];
-            if (runs.Count > 0 && !await ReadBatchAsync(repository, runs, coverage, cancellationToken))
-            {
-                return new RepositoryCoverageView(repository, false, coverage.Back);
-            }
-
-            if (!listed.Value.Full || listed.Value.Runs.Any(run => run.CreatedAt < since))
-            {
-                return new RepositoryCoverageView(repository, true, coverage.Back);
-            }
-
-            if (page == PagesPerRange)
-            {
-                before = listed.Value.Runs.Min(static run => run.CreatedAt);
-                page = 1;
-            }
-            else
-            {
-                page++;
-            }
-        }
-
-        return new RepositoryCoverageView(repository, false, coverage.Back);
-    }
-
-    /// <summary>
-    /// Reads the check runs and annotations of <paramref name="runs"/>, newest
-    /// first, in one GraphQL call: true when every one so far was read in full.
-    /// </summary>
-    private async Task<bool> ReadBatchAsync(string repository, List<LaneRun> runs, ReadWindow coverage, CancellationToken cancellationToken)
-    {
-        List<string> ids = [.. runs.Select(static run => run.CheckSuiteNodeId).OfType<string>()];
-        JsonArray nodes = [];
-        int remaining = int.MaxValue;
-        if (ids.Count > 0)
-        {
-            if (!Take())
-            {
-                return false;
-            }
-
-            Result<JsonNode, GhApiFailure> read = await _graphQl.QueryAsync(
-                GhReadQueries.CheckSuiteAnnotations,
-                new Dictionary<string, JsonNode?>(StringComparer.Ordinal) { ["ids"] = new JsonArray([.. ids.Select(static id => (JsonNode)id)]) },
-                cancellationToken);
-            if (read.IsFailure)
-            {
-                Fail(repository, read.Error);
-                return false;
-            }
-
-            nodes = read.Value["nodes"] as JsonArray ?? [];
-            remaining = read.Value["rateLimit"]?["remaining"] is JsonValue left && left.TryGetValue(out int points) ? points : int.MaxValue;
-        }
-
-        foreach (LaneRun run in runs)
-        {
-            int at = run.CheckSuiteNodeId is string id ? ids.IndexOf(id) : -1;
-            bool whole = at < 0
-                ? Problem(repository + ": run " + run.Id.ToString(CultureInfo.InvariantCulture) + " named no check suite, so its annotations were not read")
-                : at >= nodes.Count ? Problem(repository + ": run " + run.Id.ToString(CultureInfo.InvariantCulture) + " was missing from GitHub's answer")
-                // A null node is a run deleted since it was listed: nothing left to read.
-                : nodes[at] is not JsonObject suite || await ReadSuiteAsync(repository, run, suite, cancellationToken);
-            coverage.Read(run, whole);
-            RunsRead += whole ? 1 : 0;
-        }
-
-        if (remaining < LimitStopScan.GraphQlPointFloor)
-        {
-            Stop("GitHub's GraphQL points fell to " + remaining.ToString(CultureInfo.InvariantCulture) + ", under the 1,000 the check leaves for other work, so it stopped there");
-        }
-
-        // The floor ends the scan, not this repository: a short page just read still completes it.
-        return coverage.Contiguous;
-    }
-
-    /// <summary>The records of one check suite's check runs: true when none was cut off.</summary>
-    private async Task<bool> ReadSuiteAsync(string repository, LaneRun run, JsonObject suite, CancellationToken cancellationToken)
-    {
-        string named = repository + ": run " + run.Id.ToString(CultureInfo.InvariantCulture);
-        bool whole = !HasNextPage(suite["checkRuns"]) || Problem(named + " has more than 50 check runs, so only 50 were read");
-        foreach (JsonObject checkRun in (suite["checkRuns"]?["nodes"] as JsonArray ?? []).OfType<JsonObject>())
-        {
-            IEnumerable<string> messages = (checkRun["annotations"]?["nodes"] as JsonArray ?? [])
-                .Select(static annotation => annotation?["message"] is JsonValue message && message.TryGetValue(out string? text) ? text : null)
-                .OfType<string>();
-            if (HasNextPage(checkRun["annotations"]))
-            {
-                if (!Take() || checkRun["databaseId"] is not JsonValue number || !number.TryGetValue(out long checkRunId))
-                {
-                    whole = false;
-                }
-                else
-                {
-                    Result<IReadOnlyList<string>, GhApiFailure> rest = await _reader.ListAnnotationMessagesAsync(repository, checkRunId, cancellationToken);
-                    if (rest.IsFailure)
-                    {
-                        Fail(repository, rest.Error);
-                        whole = false;
-                    }
-                    else
-                    {
-                        messages = rest.Value;
-                        whole &= rest.Value.Count < GhApiReads.PageSize || Problem(named + " has a check run with more than 100 annotations, so only 100 were read");
-                    }
-                }
-            }
-
-            Records.AddRange(messages.Select(LaneOutcomes.Parse).OfType<LaneOutcome>().Select(outcome => new LaneRecord(run, outcome)));
-        }
-
-        return whole;
-    }
-
-    private static bool HasNextPage(JsonNode? connection) =>
-        connection?["pageInfo"]?["hasNextPage"] is JsonValue more && more.TryGetValue(out bool next) && next;
-
-    /// <summary>Takes one call from the budget; when none is left, ends the scan and says so once.</summary>
-    private bool Take()
-    {
-        if (_stopped)
-        {
-            return false;
-        }
-
-        if (_budget.TryTake())
-        {
-            return true;
-        }
-
-        Stop("the check used its " + LimitStopScan.MaxCalls.ToString(CultureInfo.InvariantCulture) + " GitHub calls and stopped there");
-        return false;
-    }
-
-    /// <summary>Notes a failed read: a rate limit ends the scan; anything else ends only its repository.</summary>
-    private void Fail(string repository, GhApiFailure failure)
-    {
-        if (failure.RateLimited)
-        {
-            Stop(failure.Message);
-        }
-        else
-        {
-            Problems.Add(repository + ": " + failure.Message);
-        }
-    }
-
-    private void Stop(string problem)
-    {
-        if (!_stopped)
-        {
-            Problems.Add(problem);
-            _stopped = true;
-        }
-    }
-
-    /// <summary>Notes a problem; always false, so a read it ends reads as cut off.</summary>
-    private bool Problem(string problem)
-    {
-        Problems.Add(problem);
-        return false;
-    }
-
-    /// <summary>The contiguous window read so far: newest first, until a run is read only in part.</summary>
-    private sealed class ReadWindow
-    {
-        public DateTimeOffset? Back { get; private set; }
-
-        public bool Contiguous { get; private set; } = true;
-
-        public void Read(LaneRun run, bool whole)
-        {
-            Contiguous &= whole;
-            if (Contiguous)
-            {
-                Back = run.CreatedAt;
-            }
-        }
-    }
-}
 
 /// <summary>An organization whose secrets could not be read, and why.</summary>
 internal sealed record RoleCheckFailureView(string Organization, string Error);

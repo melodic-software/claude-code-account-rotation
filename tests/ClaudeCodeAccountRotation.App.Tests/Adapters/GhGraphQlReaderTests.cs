@@ -108,11 +108,13 @@ public sealed class GhGraphQlReaderTests : IDisposable
     public void NoUsableAnswerIsAFailure(int exitCode, string output) =>
         Read(exitCode, output).IsFailure.ShouldBeTrue();
 
-    [Fact]
-    public async Task AMutationIsRefusedBeforeGhRuns()
+    [Theory]
+    [InlineData("mutation { addStar(input: {starrableId: \"x\"}) { clientMutationId } }")]
+    [InlineData("query { viewer { login } }")]
+    public async Task ADocumentNotAmongTheFixedQueriesIsRefusedBeforeGhRuns(string document)
     {
         string gh = Path.Combine(_root, "never-run");
-        GhReadQuery mutation = new("write", "mutation { addStar(input: {starrableId: \"x\"}) { clientMutationId } }");
+        GhReadQuery mutation = new("ad hoc", document);
 
         Result<JsonNode, GhApiFailure> read = await new GhGraphQlReader(gh, TimeSpan.FromSeconds(30))
             .QueryAsync(mutation, new Dictionary<string, JsonNode?>(), TestContext.Current.CancellationToken);
@@ -158,7 +160,58 @@ public sealed class GhGraphQlReaderTests : IDisposable
     public void TheBatchQueryReadsEveryAttemptsCheckRunsAndNoMutation()
     {
         GhReadQueries.CheckSuiteAnnotations.Document.ShouldContain("filterBy: {checkType: ALL}");
-        GhReadQueries.CheckSuiteAnnotations.Document.ShouldContain("rateLimit { remaining cost resetAt }");
+        GhReadQueries.CheckSuiteAnnotations.Document.ShouldContain("rateLimit { remaining }");
         GhReadQueries.CheckSuiteAnnotations.Document.ShouldNotContain("mutation", Case.Insensitive);
     }
+
+    /// <summary>A batch answer's data in the query's shape, one suite with one check run.</summary>
+    private static JsonObject Data() => JsonNode.Parse("""
+        {"rateLimit":{"remaining":4000},"nodes":[
+          {"checkRuns":{"pageInfo":{"hasNextPage":false},"nodes":[
+            {"databaseId":555,"annotations":{"pageInfo":{"hasNextPage":true},"nodes":[{"message":"one"},{"message":"two"}]}}]}},
+          null]}
+        """)!.AsObject();
+
+    [Fact]
+    public void ABatchAnswerParsesInTheOrderOfTheIdsWithADeletedSuiteAsNull()
+    {
+        SuiteBatch batch = GhGraphQlReads.ParseCheckSuites(Data(), 2).Value;
+
+        batch.Remaining.ShouldBe(4000);
+        batch.Suites.Count.ShouldBe(2);
+        SuiteRead suite = batch.Suites[0].ShouldNotBeNull();
+        suite.MoreCheckRuns.ShouldBeFalse();
+        CheckRunRead checkRun = suite.CheckRuns.ShouldHaveSingleItem();
+        checkRun.Id.ShouldBe(555);
+        checkRun.MoreAnnotations.ShouldBeTrue();
+        checkRun.Messages.ShouldBe(["one", "two"]);
+        batch.Suites[1].ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData("rateLimit", "remaining")]
+    [InlineData("suite", "hasNextPage")]
+    [InlineData("checkRun", "hasNextPage")]
+    [InlineData("checkRun", "databaseId")]
+    public void ABatchAnswerMissingAFieldTheQueryAsksForIsAFailure(string where, string field)
+    {
+        JsonObject data = Data();
+        JsonObject suite = data["nodes"]![0]!.AsObject();
+        JsonObject owner = where switch
+        {
+            "rateLimit" => data["rateLimit"]!.AsObject(),
+            "suite" => suite["checkRuns"]!["pageInfo"]!.AsObject(),
+            _ => field == "databaseId" ? suite["checkRuns"]!["nodes"]![0]!.AsObject() : suite["checkRuns"]!["nodes"]![0]!["annotations"]!["pageInfo"]!.AsObject(),
+        };
+        owner.Remove(field).ShouldBeTrue();
+
+        Result<SuiteBatch, GhApiFailure> read = GhGraphQlReads.ParseCheckSuites(data, 2);
+
+        read.IsFailure.ShouldBeTrue();
+        read.Error.RateLimited.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void ABatchAnswerWithAnotherCountOfSuitesThanIdsIsAFailure() =>
+        GhGraphQlReads.ParseCheckSuites(Data(), 3).IsFailure.ShouldBeTrue();
 }

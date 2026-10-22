@@ -1731,7 +1731,8 @@
   }
 
   // One POST /api/roles/limit-stops for every account at once: the server
-  // reads the runs once, at most 30, and judges each account from that read.
+  // reads the runs once, within its call budget, and judges each account
+  // from that read.
   // A request that fails is kept as a refusal, so the move can still go ahead.
   function scanLimitStops(froms, post) {
     return Promise.resolve()

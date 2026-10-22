@@ -82,8 +82,8 @@ public sealed class LimitStopEndpointTests
         + (before is DateTimeOffset upTo ? Since + ".." + Stamp(upTo) : "%3E%3D" + Since)
         + "&per_page=100&page=" + page.ToString(CultureInfo.InvariantCulture);
 
-    /// <summary>One failed run; its check suite's node id is made from its id.</summary>
-    private sealed record Run(long Id, DateTimeOffset CreatedAt)
+    /// <summary>One failed run; its check suite's node id is made from its id. A fork's run names the fork as <paramref name="HeadRepository"/>.</summary>
+    private sealed record Run(long Id, DateTimeOffset CreatedAt, string? HeadRepository = null)
     {
         public string Suite => "CS_" + Id.ToString(CultureInfo.InvariantCulture);
     }
@@ -105,6 +105,7 @@ public sealed class LimitStopEndpointTests
             ["html_url"] = "https://github.com/" + repository + "/actions/runs/" + run.Id,
             ["run_attempt"] = 1,
             ["check_suite_node_id"] = run.Suite,
+            ["head_repository"] = new JsonObject { ["full_name"] = run.HeadRepository ?? repository },
         })]),
     });
 
@@ -112,7 +113,11 @@ public sealed class LimitStopEndpointTests
     private static Result<JsonNode, GhApiFailure> Stream(string repository, int first, int count = 100) =>
         Runs(repository, [.. Enumerable.Range(first, count).Select(Nth)]);
 
-    /// <summary>One check run as the batch query reads it.</summary>
+    /// <summary>
+    /// One check run as the batch query reads it. <paramref name="Name"/> and
+    /// <paramref name="Conclusion"/> say which job it stands for; the query
+    /// asks for neither, so they are not in the answer.
+    /// </summary>
     private sealed record CheckRun(string Name, string Conclusion, string[] Messages, bool MoreAnnotations = false, long DatabaseId = 555);
 
     /// <summary>A check suite node in the shape of the batch query (GitHub GraphQL CheckSuite.checkRuns, CheckRun.annotations).</summary>
@@ -120,15 +125,12 @@ public sealed class LimitStopEndpointTests
 
     private static JsonObject Suite(Run run, bool moreCheckRuns, params CheckRun[] checkRuns) => new()
     {
-        ["id"] = run.Suite,
         ["checkRuns"] = new JsonObject
         {
             ["pageInfo"] = new JsonObject { ["hasNextPage"] = moreCheckRuns },
             ["nodes"] = new JsonArray([.. checkRuns.Select(static checkRun => (JsonNode)new JsonObject
             {
                 ["databaseId"] = checkRun.DatabaseId,
-                ["name"] = checkRun.Name,
-                ["conclusion"] = checkRun.Conclusion,
                 ["annotations"] = new JsonObject
                 {
                     ["pageInfo"] = new JsonObject { ["hasNextPage"] = checkRun.MoreAnnotations },
@@ -140,7 +142,7 @@ public sealed class LimitStopEndpointTests
 
     private static Result<JsonNode, GhApiFailure> Batch(int remaining, params JsonNode?[] suites) => Result<JsonNode, GhApiFailure>.Success(new JsonObject
     {
-        ["rateLimit"] = new JsonObject { ["remaining"] = remaining, ["cost"] = 51, ["resetAt"] = "2026-09-07T13:00:00Z" },
+        ["rateLimit"] = new JsonObject { ["remaining"] = remaining },
         ["nodes"] = new JsonArray([.. suites]),
     });
 
@@ -297,7 +299,7 @@ public sealed class LimitStopEndpointTests
         reader.Paths.Count.ShouldBe(1);
         graphQl.Batches.Count.ShouldBe(1);
         body["outcome"]!.GetValue<string>().ShouldBe("partial");
-        Problems(body).ShouldHaveSingleItem().ShouldContain("1,000");
+        Problems(body).ShouldHaveSingleItem().ShouldContain(LimitStopScan.GraphQlPointFloor.ToString("N0", CultureInfo.InvariantCulture));
         CoveredBack(Coverage(body, 0)).ShouldBe(Nth(99).CreatedAt);
     }
 
@@ -488,6 +490,27 @@ public sealed class LimitStopEndpointTests
     }
 
     [Fact]
+    public async Task AForksRunIsSkippedSoItsRecordNamingARosterSecretIsNoHit()
+    {
+        (AppFactory factory, SpyReader reader, SpyGraphQl graphQl) = await StartAsync("octo/lanes");
+        await using AppFactory _ = factory;
+        await HistoryAsync(factory);
+        Run fork = new(102, new DateTimeOffset(2026, 9, 6, 9, 0, 0, TimeSpan.Zero), HeadRepository: "someone/lanes");
+        Run own = new(101, new DateTimeOffset(2026, 9, 5, 9, 0, 0, TimeSpan.Zero));
+        reader.Answers.Enqueue(Runs("octo/lanes", fork, own));
+        graphQl.Answers.Enqueue(Batch(4000, Suite(own, new CheckRun("claude", "SUCCESS", ["ok"]))));
+        graphQl.Answers.Enqueue(Batch(4000, Suite(fork, new CheckRun("claude", "FAILURE", [TokenRecord]))));
+
+        JsonObject body = await ScanAsync(factory, A);
+
+        graphQl.Batches.ShouldBe([[own.Suite]]);
+        body["hits"]!.AsArray().ShouldBeEmpty();
+        body["skipped"]!.GetValue<int>().ShouldBe(1);
+        body["outcome"]!.GetValue<string>().ShouldBe("checked");
+        CoveredBack(Coverage(body, 0)).ShouldBe(own.CreatedAt);
+    }
+
+    [Fact]
     public async Task ARepositoryAnsweringNotFoundIsANamedProblemAndTheNextIsStillRead()
     {
         (AppFactory factory, SpyReader reader, SpyGraphQl graphQl) = await StartAsync("octo/gone", "octo/lanes");
@@ -593,9 +616,8 @@ public sealed class LimitStopEndpointTests
             Batches.Add(ids);
             return Task.FromResult(Answers.TryDequeue(out Result<JsonNode, GhApiFailure> answer)
                 ? answer
-                : Batch(Remaining, [.. ids.Select(static id => (JsonNode)new JsonObject
+                : Batch(Remaining, [.. ids.Select(static _ => (JsonNode)new JsonObject
                 {
-                    ["id"] = id,
                     ["checkRuns"] = new JsonObject { ["pageInfo"] = new JsonObject { ["hasNextPage"] = false }, ["nodes"] = new JsonArray() },
                 })]));
         }

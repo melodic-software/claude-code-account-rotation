@@ -1,14 +1,16 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.Core;
+using ClaudeCodeAccountRotation.Core.Accounts;
 
 namespace ClaudeCodeAccountRotation.App.Adapters.Process;
 
 /// <summary>
 /// Reads the GitHub GraphQL API through <c>gh api graphql</c>, so the request
-/// carries gh's own User-Agent and sign-in. Queries only: a document holding
-/// <c>mutation</c> is refused before gh runs. Not a writer, so it never goes
-/// through the write gate.
+/// carries gh's own User-Agent and sign-in. It sends only the documents in
+/// <see cref="GhReadQueries.All"/>; any other is refused before gh runs. Not a
+/// writer, so it never goes through the write gate.
 /// </summary>
 internal interface IGhGraphQlReader
 {
@@ -23,20 +25,124 @@ internal sealed record GhReadQuery(string Name, string Document);
 internal static class GhReadQueries
 {
     /// <summary>
-    /// The check runs of up to 100 check suites and the messages of their
-    /// annotations, with the points left. <c>checkType: ALL</c> reads the
-    /// check runs of every attempt of a re-run run, which share one suite; the
-    /// default gives only the latest check run of each name. Basis: one live
-    /// read of a re-run run's suite, 2026-10-22: 11 check runs by default, 22
-    /// with ALL. 100 ids, 50 check runs and 50 annotations each, is 5,101
-    /// connection requests, about 51 points, and 255,100 nodes, under the
-    /// 500,000 a call may ask for. Basis: https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api.
+    /// The check suites one batch reads: one page of the run listing, each
+    /// run's suite. Basis: the release plan's live probe and third-party
+    /// reports that <c>nodes(ids:)</c> takes 100 ids; GitHub documents no cap.
+    /// </summary>
+    public const int SuitesPerBatch = LimitStopScan.RunsPerPage;
+
+    /// <summary>The check runs read of one suite; more is a cut-off read.</summary>
+    public const int CheckRunsPerSuite = 50;
+
+    /// <summary>The annotations read of one check run; more gets a REST follow-up.</summary>
+    public const int AnnotationsPerCheckRun = 50;
+
+    /// <summary>
+    /// The check runs of up to <see cref="SuitesPerBatch"/> check suites and
+    /// the messages of their annotations, with the points left.
+    /// <c>checkType: ALL</c> reads the check runs of every attempt of a re-run
+    /// run, which share one suite; the default gives only the latest check run
+    /// of each name. Basis: one live read of a re-run run's suite, 2026-10-22.
+    /// The page sizes keep a batch's points and nodes well inside GitHub's
+    /// limits. Basis: https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api.
     /// </summary>
     public static readonly GhReadQuery CheckSuiteAnnotations = new(
         "check suite annotations",
-        "query($ids: [ID!]!) { rateLimit { remaining cost resetAt } "
-        + "nodes(ids: $ids) { ... on CheckSuite { id checkRuns(first: 50, filterBy: {checkType: ALL}) { pageInfo { hasNextPage } "
-        + "nodes { databaseId name conclusion annotations(first: 50) { pageInfo { hasNextPage } nodes { message } } } } } } }");
+        "query($ids: [ID!]!) { rateLimit { remaining } "
+        + "nodes(ids: $ids) { ... on CheckSuite { checkRuns(first: " + CheckRunsPerSuite.ToString(CultureInfo.InvariantCulture)
+        + ", filterBy: {checkType: ALL}) { pageInfo { hasNextPage } "
+        + "nodes { databaseId annotations(first: " + AnnotationsPerCheckRun.ToString(CultureInfo.InvariantCulture)
+        + ") { pageInfo { hasNextPage } nodes { message } } } } } } }");
+
+    /// <summary>Every document <see cref="GhGraphQlReader"/> sends.</summary>
+    public static readonly IReadOnlyList<GhReadQuery> All = [CheckSuiteAnnotations];
+}
+
+/// <summary>One check run as the batch read it: <paramref name="MoreAnnotations"/> when its annotations ran past the page.</summary>
+internal sealed record CheckRunRead(long Id, bool MoreAnnotations, IReadOnlyList<string> Messages);
+
+/// <summary>One check suite as the batch read it: <paramref name="MoreCheckRuns"/> when its check runs ran past the page.</summary>
+internal sealed record SuiteRead(bool MoreCheckRuns, IReadOnlyList<CheckRunRead> CheckRuns);
+
+/// <summary>
+/// One batch's answer: the GraphQL points left and, in the order of the ids
+/// asked for, each suite, null for one deleted since it was listed.
+/// </summary>
+internal sealed record SuiteBatch(int Remaining, IReadOnlyList<SuiteRead?> Suites);
+
+/// <summary>The reads the limit-stop check makes through <see cref="IGhGraphQlReader"/>, and the parsing of their answers.</summary>
+internal static class GhGraphQlReads
+{
+    /// <summary>
+    /// The suites of <paramref name="ids"/> (at most <see cref="GhReadQueries.SuitesPerBatch"/>)
+    /// in one call. An answer missing a field the query asks for is a failure,
+    /// never read as whole.
+    /// </summary>
+    public static async Task<Result<SuiteBatch, GhApiFailure>> ReadCheckSuitesAsync(this IGhGraphQlReader reader, IReadOnlyList<string> ids, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(reader);
+        ArgumentNullException.ThrowIfNull(ids);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(ids.Count, GhReadQueries.SuitesPerBatch);
+        Result<JsonNode, GhApiFailure> read = await reader.QueryAsync(
+            GhReadQueries.CheckSuiteAnnotations,
+            new Dictionary<string, JsonNode?>(StringComparer.Ordinal) { ["ids"] = new JsonArray([.. ids.Select(static id => (JsonNode)id)]) },
+            cancellationToken);
+        return read.IsFailure ? Result<SuiteBatch, GhApiFailure>.Failure(read.Error) : ParseCheckSuites(read.Value, ids.Count);
+    }
+
+    /// <summary>The <c>data</c> of a <see cref="GhReadQueries.CheckSuiteAnnotations"/> answer for <paramref name="count"/> ids.</summary>
+    public static Result<SuiteBatch, GhApiFailure> ParseCheckSuites(JsonNode data, int count)
+    {
+        ArgumentNullException.ThrowIfNull(data);
+        if (data["rateLimit"]?["remaining"] is not JsonValue left || !left.TryGetValue(out int remaining)
+            || data["nodes"] is not JsonArray nodes || nodes.Count != count)
+        {
+            return Unexpected();
+        }
+
+        List<SuiteRead?> suites = [];
+        foreach (JsonNode? node in nodes)
+        {
+            if (node is null)
+            {
+                suites.Add(null);
+                continue;
+            }
+
+            if (Page(node["checkRuns"]) is not (bool moreCheckRuns, JsonArray checkRuns))
+            {
+                return Unexpected();
+            }
+
+            List<CheckRunRead> read = [];
+            foreach (JsonNode? checkRun in checkRuns)
+            {
+                if (checkRun?["databaseId"] is not JsonValue number || !number.TryGetValue(out long id)
+                    || Page(checkRun["annotations"]) is not (bool moreAnnotations, JsonArray annotations))
+                {
+                    return Unexpected();
+                }
+
+                read.Add(new CheckRunRead(id, moreAnnotations, [.. annotations
+                    .Select(static annotation => annotation?["message"] is JsonValue message && message.TryGetValue(out string? text) ? text : null)
+                    .OfType<string>()]));
+            }
+
+            suites.Add(new SuiteRead(moreCheckRuns, read));
+        }
+
+        return Result<SuiteBatch, GhApiFailure>.Success(new SuiteBatch(remaining, suites));
+
+        static Result<SuiteBatch, GhApiFailure> Unexpected() => Result<SuiteBatch, GhApiFailure>.Failure(new GhApiFailure(
+            "GitHub's answer to the " + GhReadQueries.CheckSuiteAnnotations.Name + " query was not in the shape the query asks for",
+            RateLimited: false));
+    }
+
+    /// <summary>A connection's <c>pageInfo.hasNextPage</c> and <c>nodes</c>, or null when either is missing.</summary>
+    private static (bool More, JsonArray Nodes)? Page(JsonNode? connection) =>
+        connection?["pageInfo"]?["hasNextPage"] is JsonValue more && more.TryGetValue(out bool next) && connection["nodes"] is JsonArray nodes
+            ? (next, nodes)
+            : null;
 }
 
 /// <summary>The reader when no <c>gh</c> could be found: every read fails with the reason.</summary>
@@ -60,9 +166,9 @@ internal sealed class GhGraphQlReader(string executable, TimeSpan timeout) : IGh
     {
         ArgumentNullException.ThrowIfNull(query);
         ArgumentNullException.ThrowIfNull(variables);
-        if (query.Document.Contains("mutation", StringComparison.OrdinalIgnoreCase))
+        if (!GhReadQueries.All.Contains(query))
         {
-            return Result<JsonNode, GhApiFailure>.Failure(new GhApiFailure("the " + query.Name + " query was refused: this reader sends no mutation", RateLimited: false));
+            return Result<JsonNode, GhApiFailure>.Failure(new GhApiFailure("the " + query.Name + " query was refused: this reader sends only its own fixed queries", RateLimited: false));
         }
 
         JsonObject body = new()

@@ -9,12 +9,64 @@ namespace ClaudeCodeAccountRotation.Core.Accounts;
 /// </summary>
 public sealed record RoleHalfChange(DateTimeOffset At, CiRole Role, RoleHalf Half, string? Account, string? Previous);
 
+/// <summary>A failed workflow run in a lane repository (<c>owner/name</c>), and its page on GitHub.</summary>
+public sealed record LaneRun(string Repository, long Id, DateTimeOffset CreatedAt, Uri? Url);
+
 /// <summary>
-/// A failed workflow run in a lane repository (<c>owner/name</c>), its page on
-/// GitHub, and the node id of its check suite, which holds the check runs of
-/// every attempt.
+/// Which page of a repository's run listing to read: runs created at or after
+/// <paramref name="Since"/> and, once narrowed, at or before
+/// <paramref name="Before"/>.
 /// </summary>
-public sealed record LaneRun(string Repository, long Id, DateTimeOffset CreatedAt, Uri? Url, string? CheckSuiteNodeId = null);
+public sealed record ListingRange(DateTimeOffset Since, DateTimeOffset? Before, int Page)
+{
+    /// <summary>The first page of the whole window.</summary>
+    public static ListingRange First(DateTimeOffset since) => new(since, null, 1);
+
+    /// <summary>
+    /// The page after this one, or null when the repository is read to the end:
+    /// a page short of <see cref="LimitStopScan.RunsPerPage"/>, or one reaching
+    /// back past <see cref="Since"/>. After the last page GitHub returns for one
+    /// date range, the range narrows to runs no newer than the oldest on it,
+    /// inclusive, and starts again at page 1; the caller drops runs it has seen.
+    /// </summary>
+    /// <param name="runs">The runs the page listed, newest first.</param>
+    public ListingRange? After(IReadOnlyList<LaneRun> runs)
+    {
+        ArgumentNullException.ThrowIfNull(runs);
+        if (runs.Count < LimitStopScan.RunsPerPage || runs.Any(run => run.CreatedAt < Since))
+        {
+            return null;
+        }
+
+        return Page == LimitStopScan.PagesPerRange
+            ? new ListingRange(Since, runs.Min(static run => run.CreatedAt), 1)
+            : this with { Page = Page + 1 };
+    }
+}
+
+/// <summary>
+/// How far back one repository has been read: newest first, the window ends at
+/// the first run read only in part, and <see cref="Back"/> is the start time of
+/// the oldest run before it (null until one is read).
+/// </summary>
+public sealed class RunCoverage
+{
+    public DateTimeOffset? Back { get; private set; }
+
+    /// <summary>False once a run was read only in part.</summary>
+    public bool Contiguous { get; private set; } = true;
+
+    /// <summary>Notes <paramref name="run"/>, the next older one, as read in full when <paramref name="whole"/>.</summary>
+    public void Read(LaneRun run, bool whole)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        Contiguous &= whole;
+        if (Contiguous)
+        {
+            Back = run.CreatedAt;
+        }
+    }
+}
 
 /// <summary>One lane-outcome record read from an annotation of <paramref name="Run"/>.</summary>
 public sealed record LaneRecord(LaneRun Run, LaneOutcome Outcome);
@@ -54,6 +106,26 @@ public static class LimitStopScan
     /// hourly budget of a user.
     /// </summary>
     public const int GraphQlPointFloor = 1000;
+
+    /// <summary>The runs one page of the listing holds, GitHub's most. Basis: https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-repository.</summary>
+    public const int RunsPerPage = 100;
+
+    /// <summary>
+    /// The most runs the listing returns for one date range. Basis:
+    /// https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-repository
+    /// ("will return up to 1,000 results for each search" when using created, status and other filters).
+    /// </summary>
+    public const int ListingCap = 1000;
+
+    /// <summary>The pages one date range of the listing yields.</summary>
+    public const int PagesPerRange = ListingCap / RunsPerPage;
+
+    /// <summary>
+    /// Whether a scan read everything: no problem, and every repository read to
+    /// the end of the window.
+    /// </summary>
+    public static bool Whole(int problems, IEnumerable<bool> complete) =>
+        problems == 0 && complete.All(static done => done);
 
     /// <summary>
     /// How far back a scan looks. Basis: the owner's goal, every lane limit

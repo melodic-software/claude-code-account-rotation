@@ -146,4 +146,72 @@ public sealed class LimitStopScanTests
         LimitStopScan.Hits(Email(A), [RateLimit("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN"), RateLimit("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN")], _aBackedBothHalves, Roster.Empty)
             .ShouldHaveSingleItem();
     }
+
+    private static readonly DateTimeOffset _since = new(2026, 10, 13, 12, 0, 0, TimeSpan.Zero);
+
+    /// <summary>A page of <paramref name="count"/> runs a minute apart, newest first, the newest an hour after <see cref="_since"/> plus <paramref name="offset"/> minutes.</summary>
+    private static List<LaneRun> Page(int count, int offset = 0) =>
+        [.. Enumerable.Range(0, count).Select(index => new LaneRun("octo/lanes", index, _since.AddMinutes(offset + 3000 - index), null))];
+
+    [Fact]
+    public void AFullPageLeadsToTheNextPageOfTheSameRange() =>
+        ListingRange.First(_since).After(Page(100)).ShouldBe(new ListingRange(_since, null, 2));
+
+    [Fact]
+    public void AShortPageEndsTheListing() =>
+        ListingRange.First(_since).After(Page(99)).ShouldBeNull();
+
+    [Fact]
+    public void APageReachingPastTheWindowEndsTheListing() =>
+        ListingRange.First(_since).After(Page(100, offset: -2950)).ShouldBeNull();
+
+    [Fact]
+    public void AFullTenthPageNarrowsTheRangeToItsOldestRunInclusiveAndStartsAgainAtPageOne()
+    {
+        // GitHub returns at most 1,000 runs, ten pages of 100, for one created range.
+        List<LaneRun> tenth = Page(100);
+
+        new ListingRange(_since, null, 10).After(tenth).ShouldBe(new ListingRange(_since, _since.AddMinutes(3000 - 99), 1));
+    }
+
+    [Fact]
+    public void ANarrowedRangeNarrowsAgainAfterItsOwnTenthPage()
+    {
+        DateTimeOffset before = _since.AddMinutes(4000);
+
+        new ListingRange(_since, before, 9).After(Page(100)).ShouldBe(new ListingRange(_since, before, 10));
+        new ListingRange(_since, before, 10).After(Page(100)).ShouldBe(new ListingRange(_since, _since.AddMinutes(3000 - 99), 1));
+    }
+
+    [Fact]
+    public void CoverageReachesBackToTheOldestRunBeforeTheFirstOneReadInPart()
+    {
+        RunCoverage coverage = new();
+        List<LaneRun> runs = Page(4);
+
+        coverage.Read(runs[0], whole: true);
+        coverage.Read(runs[1], whole: true);
+        coverage.Read(runs[2], whole: false);
+        coverage.Read(runs[3], whole: true);
+
+        coverage.Back.ShouldBe(runs[1].CreatedAt);
+        coverage.Contiguous.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void CoverageOfNothingReadIsNull()
+    {
+        RunCoverage coverage = new();
+        coverage.Read(Page(1)[0], whole: false);
+
+        coverage.Back.ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData(0, new[] { true, true }, true)]
+    [InlineData(1, new[] { true, true }, false)]
+    [InlineData(0, new[] { true, false }, false)]
+    [InlineData(0, new bool[0], true)]
+    public void AScanIsWholeOnlyWithNoProblemAndEveryRepositoryComplete(int problems, bool[] complete, bool whole) =>
+        LimitStopScan.Whole(problems, complete).ShouldBe(whole);
 }

@@ -22,7 +22,9 @@ All notable changes to this project are documented in this file. The format foll
   attempt's check runs and every job's annotations, not only failed jobs', in one GraphQL batch
   per page through `gh api graphql`. It used to read the newest 30 failed runs, about 2 days. It
   stops at 30 calls, at a rate limit, or when a batch leaves fewer than 1,000 GraphQL points; a
-  GraphQL error or a cut-off read reads as partial, never clean.
+  GraphQL error or a cut-off read reads as partial, never clean. Runs from forks are not read,
+  so a fork's pull request cannot mark an account as limit-stopped; the answer counts them in
+  `skipped`.
 
 ### Fixed
 

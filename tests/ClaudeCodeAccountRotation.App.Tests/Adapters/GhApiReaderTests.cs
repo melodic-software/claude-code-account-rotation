@@ -95,34 +95,42 @@ public sealed class GhApiReaderTests : IDisposable
                 ["id"] = 101,
                 ["created_at"] = "2026-09-05T09:00:00Z",
                 ["check_suite_node_id"] = "CS_kwDOTCGFQM8AAAAZDrCXnA",
+                ["head_repository"] = new JsonObject { ["full_name"] = "Octo/Lanes" },
             }),
         });
 
-        Result<RunPage, GhApiFailure> open = await reader.ListFailedRunsPageAsync("octo/lanes", since, null, 3, TestContext.Current.CancellationToken);
-        await reader.ListFailedRunsPageAsync("octo/lanes", since, new DateTimeOffset(2026, 9, 2, 8, 30, 15, TimeSpan.FromHours(2)), 1, TestContext.Current.CancellationToken);
+        Result<RunPage, GhApiFailure> open = await reader.ListFailedRunsPageAsync("octo/lanes", new ListingRange(since, null, 3), TestContext.Current.CancellationToken);
+        await reader.ListFailedRunsPageAsync("octo/lanes", new ListingRange(since, new DateTimeOffset(2026, 9, 2, 8, 30, 15, TimeSpan.FromHours(2)), 1), TestContext.Current.CancellationToken);
 
         reader.Paths.ShouldBe([
             "repos/octo/lanes/actions/runs?status=failure&created=%3E%3D2026-08-31T12:00:00Z&per_page=100&page=3",
             "repos/octo/lanes/actions/runs?status=failure&created=2026-08-31T12:00:00Z..2026-09-02T06:30:15Z&per_page=100&page=1",
         ]);
-        open.Value.Full.ShouldBeFalse();
-        LaneRun run = open.Value.Runs.ShouldHaveSingleItem();
-        run.CheckSuiteNodeId.ShouldBe("CS_kwDOTCGFQM8AAAAZDrCXnA");
-        run.Url.ShouldBe(new Uri("https://github.com/octo/lanes/actions/runs/101"));
+        ListedRun listed = open.Value.Runs.ShouldHaveSingleItem();
+        listed.CheckSuiteNodeId.ShouldBe("CS_kwDOTCGFQM8AAAAZDrCXnA");
+        listed.FromFork.ShouldBeFalse();
+        listed.Run.Url.ShouldBe(new Uri("https://github.com/octo/lanes/actions/runs/101"));
     }
 
-    [Fact]
-    public async Task AHundredRunsIsAFullPage()
+    // A fork's pull-request run names the fork as its head_repository
+    // (https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-repository).
+    [Theory]
+    [InlineData("{\"full_name\":\"someone/lanes\"}")]
+    [InlineData("null")]
+    [InlineData(null)]
+    public async Task ARunWhoseHeadRepositoryIsNotThisOneIsAFork(string? head)
     {
-        OneAnswer reader = new(new JsonObject
+        JsonObject run = new() { ["id"] = 101, ["created_at"] = "2026-09-05T09:00:00Z", ["check_suite_node_id"] = "CS_1" };
+        if (head is not null)
         {
-            ["workflow_runs"] = new JsonArray([.. Enumerable.Range(1, 100).Select(static id => (JsonNode)new JsonObject { ["id"] = id, ["created_at"] = "2026-09-05T09:00:00Z" })]),
-        });
+            run["head_repository"] = JsonNode.Parse(head);
+        }
 
-        Result<RunPage, GhApiFailure> page = await reader.ListFailedRunsPageAsync("octo/lanes", DateTimeOffset.UnixEpoch, null, 1, TestContext.Current.CancellationToken);
+        OneAnswer reader = new(new JsonObject { ["workflow_runs"] = new JsonArray(run) });
 
-        page.Value.Full.ShouldBeTrue();
-        page.Value.Runs.Count.ShouldBe(100);
+        Result<RunPage, GhApiFailure> page = await reader.ListFailedRunsPageAsync("octo/lanes", ListingRange.First(DateTimeOffset.UnixEpoch), TestContext.Current.CancellationToken);
+
+        page.Value.Runs.ShouldHaveSingleItem().FromFork.ShouldBeTrue();
     }
 
     private sealed class OneAnswer(JsonNode answer) : IGhApiReader
