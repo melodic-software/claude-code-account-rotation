@@ -52,6 +52,9 @@ public sealed record RosterEntry(
 
     public bool HasTokenHalf => CiRoles.Any(static assignment => assignment.HasToken);
 
+    /// <summary>Whether this account backs any CI role. A date set by hand with no role is not one.</summary>
+    public bool BacksCiRole => !CiRoles.IsEmpty;
+
     /// <summary>
     /// Records a new token for <paramref name="role"/>, keeping that role's key
     /// half and every other role as they are; see <see cref="WithCiRoles"/> for the date.

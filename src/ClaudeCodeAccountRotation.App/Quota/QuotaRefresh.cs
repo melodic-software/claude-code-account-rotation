@@ -164,9 +164,9 @@ internal sealed partial class QuotaRefresh
             }
 
             // Only a full pass, which is what page open and Refresh all start,
-            // recomputes the alerts: a card's own refresh or the stop hook reads
+            // computes the alerts: a card's own refresh or the stop hook reads
             // one account, and the dashboard poll only renders what is stored.
-            if (request.Account is null && !stopping.IsCancellationRequested)
+            if (request.IsAll && !stopping.IsCancellationRequested)
             {
                 RecordAlerts(roster);
             }
@@ -192,7 +192,7 @@ internal sealed partial class QuotaRefresh
             // Only a full pass leaves a summary. A single card's refresh counts
             // one account, and a header reading "last pass: 1 read" after it would
             // say the other nine were never tried.
-            if (request.Account is null)
+            if (request.IsAll)
             {
                 _state.RecordPassSummary(summary);
             }
@@ -326,25 +326,20 @@ internal sealed partial class QuotaRefresh
 
     /// <summary>
     /// The alerts for every account on <paramref name="roster"/>, from the
-    /// figures its card shows: the endpoint's read and the statusline's
-    /// observation, merged per bucket the way the card merges them. A 7-day
-    /// window that has reset since its capture counts as no figure, because the
-    /// card blanks it. No org figure is read yet.
+    /// merge its card is built from (<see cref="QuotaState.MergedFor"/>). A
+    /// 7-day window that has reset counts as no figure, because the card blanks it.
     /// </summary>
     private void RecordAlerts(Roster roster)
     {
         DateTimeOffset now = _timeProvider.GetUtcNow();
-        _state.RecordAlerts(UsageAlerts.Evaluate(roster, email => SevenDayPercent(email, now), static _ => null), now);
+        _state.RecordAlerts(UsageAlerts.Evaluate(roster, email => SevenDayPercent(email, now)), now);
     }
 
-    private decimal? SevenDayPercent(AccountEmail email, DateTimeOffset now)
-    {
-        UsageSnapshot?[] sources = [_state.ObservedFor(email), _state.LatestFor(email)];
-        UsageLimit? weekly = UsageMerge.Merge([.. sources.OfType<UsageSnapshot>()])?.Rows
-            .Select(static row => row.Limit)
-            .FirstOrDefault(static limit => limit.Kind == LimitKind.WeeklyAll);
-        return weekly is null || weekly.HasResetBy(now) ? null : (decimal)weekly.Percent;
-    }
+    private decimal? SevenDayPercent(AccountEmail email, DateTimeOffset now) =>
+        _state.MergedFor(email)?.Rows.Select(static row => row.Limit)
+            .FirstOrDefault(static limit => limit.Kind == LimitKind.WeeklyAll) is UsageLimit weekly && !weekly.HasResetBy(now)
+            ? (decimal)weekly.Percent
+            : null;
 
     /// <summary>The live pair's fingerprint, or null when there is no pair to name: absent, logged out, or torn.</summary>
     private async Task<RefreshTokenFingerprint?> LiveFingerprintAsync(CancellationToken stopping)

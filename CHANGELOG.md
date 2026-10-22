@@ -9,10 +9,10 @@ All notable changes to this project are documented in this file. The format foll
 ### Added
 
 - **Usage alerts for CI-role accounts.** When an account that backs a CI role reaches 70% of its
-  7-day window, a line above the cards says so, and from 90% the line is red. The alerts are
-  computed at the end of a full refresh (page open or Refresh all), never on the 10-second poll,
-  and never act. `GET /api/dashboard` carries them as `alerts` with `alertsComputedAt`.
-- **70% and 90% ticks on a CI-role account's 7-day meter.**
+  7-day window, a line above the cards says so, and from 90% the line is red. Alerts never act.
+  `GET /api/dashboard` carries them as `alerts`, with `alertsComputedAt` and `alertThresholds`,
+  and each roster entry as `backsCiRole`.
+- **Alert-threshold ticks on a CI-role account's 7-day meter.**
 - **A Re-issue token button beside a CI-role account's meters.** It opens the Generate CI token
   panel with that account's roles ticked.
 

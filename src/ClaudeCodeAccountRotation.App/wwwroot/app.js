@@ -38,7 +38,7 @@
       historyLines: historyLines,
       historyReadLines: historyReadLines
     };
-    module.exports.ciRoleAccount = ciRoleAccount;
+    module.exports.reissueButton = reissueButton;
     module.exports.ciPanelChecked = ciPanelChecked;
     module.exports.meterTicks = meterTicks;
     module.exports.alertLines = alertLines;
@@ -732,7 +732,7 @@
       var meters = element("div", "mt");
       account.usage.limits.forEach(function (limit) {
         if (limit.known || limit.kind === "session" || limit.kind === "weekly_all") {
-          meters.appendChild(meter(limit, at, limit.kind === "weekly_all" ? meterTicks(account) : []));
+          meters.appendChild(meter(limit, at, limit.kind === "weekly_all" ? meterTicks(account, lastDashboard && lastDashboard.alertThresholds) : []));
         }
       });
       strip.appendChild(meters);
@@ -1438,7 +1438,7 @@
   function reading(limit) {
     if (!limit.known) { return "unknown"; }
     if (limit.windowReset) { return "window reset since last read"; }
-    return limit.percent === null ? "unknown" : Math.round(limit.percent) + "%";
+    return limit.percent === null ? "unknown" : percentText(limit.percent);
   }
 
   function barWidth(limit) {
@@ -1488,7 +1488,7 @@
     (ticks || []).forEach(function (percent) {
       var tick = element("b", "tick");
       tick.style.left = percent + "%";
-      tick.title = "alert at " + percent + "%";
+      tick.title = "alert at " + percentText(percent);
       track.appendChild(tick);
     });
     return track;
@@ -1704,16 +1704,27 @@
     return roles.map(function (role) { return role.holder === email; });
   }
 
-  // Whether an account backs a CI role. The one rule for the Re-issue token
-  // button, the 70%/90% ticks and (on the server) the 7-day alert: a date set
-  // by hand with no role is not a role.
-  function ciRoleAccount(account) {
-    return !!(account && account.roster && (account.roster.ciRoles || []).length);
+  // The Re-issue token button on the card of an account that backs a CI role
+  // (the server's roster.backsCiRole), or null: its label, and its click,
+  // which hands the account to open (the CI token panel).
+  function reissueButton(account, open) {
+    if (!backsCiRole(account)) { return null; }
+    return { label: "Re-issue token", click: function () { open(account); } };
   }
 
-  // Where a CI-role account's 7-day meter marks the two alert thresholds.
-  function meterTicks(account) {
-    return ciRoleAccount(account) ? [70, 90] : [];
+  function backsCiRole(account) {
+    return !!(account && account.roster && account.roster.backsCiRole);
+  }
+
+  // Where a 7-day meter marks the server's alert thresholds: only on an
+  // account that backs a CI role, the only kind an alert is raised for.
+  function meterTicks(account, thresholds) {
+    return backsCiRole(account) ? (thresholds || []) : [];
+  }
+
+  // A percentage as every figure on the page is written.
+  function percentText(percent) {
+    return Math.round(percent) + "%";
   }
 
   // The alert strip's lines, worst first as the server sent them. An alert
@@ -1722,11 +1733,9 @@
     return (alerts || []).map(function (alert) {
       var account = (accounts || []).filter(function (candidate) { return candidate.email === alert.account; })[0];
       var name = account ? uniqueName(account, accounts) : alert.account;
-      var figure = alert.figure === "orgCredit" ? "organization usage" : "7-day usage";
-      var critical = alert.level === "critical";
       return {
-        kind: critical ? "crit" : "warn",
-        text: name + ": " + figure + " at " + Math.floor(alert.percent) + "%, past " + (critical ? "90%" : "70%")
+        kind: alert.level === "critical" ? "crit" : "warn",
+        text: name + ": 7-day usage at " + percentText(alert.percent) + ", past " + percentText(alert.threshold)
       };
     });
   }
@@ -2327,15 +2336,14 @@
 
     function limitOf(kind) { return account.usage.limits.filter(function (limit) { return limit.kind === kind; })[0]; }
     line.appendChild(cell(limitOf("session"), at));
-    line.appendChild(cell(limitOf("weekly_all"), at, meterTicks(account)));
+    line.appendChild(cell(limitOf("weekly_all"), at, meterTicks(account, dashboard.alertThresholds)));
 
     var act = element("div", "act");
     // Beside the meters, so an account near its 7-day limit can have its
     // roles' token re-issued without opening the menu. It opens the same
     // panel as Generate CI token, with this account's roles ticked.
-    if (ciRoleAccount(account)) {
-      act.appendChild(actionButton("Re-issue token", "secondary sm", function () { openCiTokenPanel(account); }));
-    }
+    var reissue = reissueButton(account, openCiTokenPanel);
+    if (reissue) { act.appendChild(actionButton(reissue.label, "secondary sm", reissue.click)); }
     // The live account is signed in already; logging it into its parked folder
     // would leave one account holding two logins. A card with a login good for
     // longer than the warning window does not need the button on its face; an

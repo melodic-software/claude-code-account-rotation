@@ -399,9 +399,11 @@ public sealed class RefreshEndpointTests
         JsonNode dashboard = await DashboardAsync(client);
         JsonNode alert = dashboard["alerts"]!.AsArray().Single()!;
         alert["account"]!.GetValue<string>().ShouldBe(ParkedEmail);
-        alert["figure"]!.GetValue<string>().ShouldBe("sevenDay");
         alert["level"]!.GetValue<string>().ShouldBe("warning");
         alert["percent"]!.GetValue<decimal>().ShouldBe(75m);
+        alert["threshold"]!.GetValue<decimal>().ShouldBe(70m);
+        dashboard["alertThresholds"]!.AsArray().Select(static value => value!.GetValue<decimal>()).ShouldBe([70m, 90m]);
+        (await CardAsync(client, ParkedEmail))["roster"]!["backsCiRole"]!.GetValue<bool>().ShouldBeTrue();
         dashboard["alertsComputedAt"]!.GetValue<DateTimeOffset>().ShouldBe(factory.Clock.GetUtcNow());
     }
 

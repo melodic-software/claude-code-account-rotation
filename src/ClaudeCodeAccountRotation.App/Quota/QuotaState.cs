@@ -6,7 +6,7 @@ namespace ClaudeCodeAccountRotation.App.Quota;
 /// <summary>
 /// Everything a refresh pass leaves behind, in memory: the newest snapshot per
 /// account, how each account's last turn went, the two host lockouts, whether a
-/// pass is running, what the last one came to and the usage alerts it left, and the warnings a restore could
+/// pass is running, what the last one came to, the usage alerts, and the warnings a restore could
 /// not clear. The dashboard reads it on every poll and the routes consult it
 /// before starting anything, so the two together never see half a pass's work.
 /// <para>
@@ -214,6 +214,35 @@ internal sealed class QuotaState
     }
 
     /// <summary>
+    /// Every figure known for one account, merged per bucket: its newest
+    /// observation, <paramref name="observed"/> when the caller holds a fresher
+    /// one, and its newest read. The one merge both a card and the usage alerts
+    /// are built from, so the two cannot disagree. A row whose window has reset
+    /// stays in, because a card says so; a reader that judges the figure skips
+    /// it by <see cref="UsageLimit.HasResetBy"/>.
+    /// </summary>
+    public MergedUsage? MergedFor(AccountEmail account, UsageSnapshot? observed = null)
+    {
+        List<UsageSnapshot> sources = [];
+        if (observed is not null)
+        {
+            sources.Add(observed);
+        }
+
+        if (ObservedFor(account) is UsageSnapshot seen && !ReferenceEquals(seen, observed))
+        {
+            sources.Add(seen);
+        }
+
+        if (LatestFor(account) is UsageSnapshot read)
+        {
+            sources.Add(read);
+        }
+
+        return UsageMerge.Merge(sources);
+    }
+
+    /// <summary>
     /// Keeps <paramref name="snapshot"/> unless an observation captured later is
     /// already held. A tee is last-writer-wins and stops naming an account the
     /// moment a session on another account writes it, so this is what keeps a
@@ -255,10 +284,7 @@ internal sealed class QuotaState
         }
     }
 
-    /// <summary>
-    /// The usage alerts the last full pass computed, and when, or null before
-    /// the first one. The dashboard poll renders this and never computes it.
-    /// </summary>
+    /// <summary>The usage alerts last recorded, and when, or null before any.</summary>
     public UsageAlertSnapshot? Alerts
     {
         get

@@ -106,7 +106,8 @@ internal sealed partial class DashboardAssembler(
                 assignment.KeySetOn,
                 assignment.KeySetAt))],
             entry.ConsoleApiKeySetOn,
-            entry.AdminKeySetOn);
+            entry.AdminKeySetOn,
+            entry.BacksCiRole);
 
     public async Task<DashboardView> AssembleAsync(CancellationToken cancellationToken)
     {
@@ -272,7 +273,6 @@ internal sealed partial class DashboardAssembler(
         // by the first page that saw it would be a warning nobody sees.
         warnings.AddRange(quota.RecoveryWarnings);
 
-        // Stored by the last full pass; the poll renders it and computes nothing.
         UsageAlertSnapshot? alerts = quota.Alerts;
 
         return new DashboardView(
@@ -283,15 +283,16 @@ internal sealed partial class DashboardAssembler(
             warnings,
             capturedAt,
             Pass(capturedAt),
-            [.. (alerts?.Alerts ?? []).Select(static alert => new AlertView(alert.Account.Value, alert.Figure, Wire(alert.Level), alert.Percent))],
-            alerts?.ComputedAt);
+            [.. (alerts?.Alerts ?? []).Select(static alert => new AlertView(alert.Account.Value, Wire(alert.Level), alert.Percent, alert.Threshold))],
+            alerts?.ComputedAt,
+            UsageAlerts.Thresholds);
     }
 
     /// <summary>An alert's level as the page spells it.</summary>
     private static string Wire(AlertLevel level) => level switch
     {
-        AlertLevel.Warning70 => "warning",
-        AlertLevel.Critical90 => "critical",
+        AlertLevel.Warning => "warning",
+        AlertLevel.Critical => "critical",
         _ => throw new ArgumentOutOfRangeException(nameof(level)),
     };
 
@@ -409,21 +410,7 @@ internal sealed partial class DashboardAssembler(
         // or a hand-off changes who holds the pair, not what is known about
         // its usage; the card states each figure's source and age, and a
         // window that has reset since loses its percentage (Row).
-        List<UsageSnapshot> sources = [];
-        if (observed is not null)
-        {
-            sources.Add(observed);
-        }
-
-        if (quota.ObservedFor(email) is UsageSnapshot seen && !ReferenceEquals(seen, observed))
-        {
-            sources.Add(seen);
-        }
-
-        if (quota.LatestFor(email) is UsageSnapshot read)
-        {
-            sources.Add(read);
-        }
+        MergedUsage? merged = quota.MergedFor(email, observed);
 
         if (slot?.State == SlotState.HeldElsewhere)
         {
@@ -439,7 +426,6 @@ internal sealed partial class DashboardAssembler(
                 : null;
         }
 
-        MergedUsage? merged = UsageMerge.Merge(sources);
         RosterEntry? entry = roster.Find(email);
         RefreshStateView refresh = Refresh(email, folder);
         // Whether this pair can be made live at all, on either side: the planner

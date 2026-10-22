@@ -23,22 +23,32 @@ public sealed class UsageAlertsTests
     ]);
 
     private static IReadOnlyList<UsageAlert> SevenDay(decimal? ci, decimal? plain) =>
-        UsageAlerts.Evaluate(Roster(), email => email == _ci ? ci : plain, static _ => null);
+        UsageAlerts.Evaluate(Roster(), email => email == _ci ? ci : plain);
 
     [Fact]
     public void JustUnderSeventyRaisesNothing() => SevenDay(69.9m, null).ShouldBeEmpty();
 
     [Fact]
-    public void SeventyIsAWarning() =>
-        SevenDay(70m, null).ShouldBe([new UsageAlert(_ci, UsageAlerts.SevenDay, AlertLevel.Warning70, 70m)]);
+    public void SeventyIsAWarning()
+    {
+        UsageAlert alert = SevenDay(70m, null).Single();
+
+        alert.ShouldBe(new UsageAlert(_ci, AlertLevel.Warning, 70m));
+        alert.Threshold.ShouldBe(70m);
+    }
 
     [Fact]
-    public void NinetyIsOneCriticalAlertNotTwo() =>
-        SevenDay(90m, null).ShouldBe([new UsageAlert(_ci, UsageAlerts.SevenDay, AlertLevel.Critical90, 90m)]);
+    public void NinetyIsOneCriticalAlertNotTwo()
+    {
+        UsageAlert alert = SevenDay(90m, null).Single();
+
+        alert.ShouldBe(new UsageAlert(_ci, AlertLevel.Critical, 90m));
+        alert.Threshold.ShouldBe(90m);
+    }
 
     [Fact]
     public void JustUnderNinetyIsStillAWarning() =>
-        SevenDay(89.9m, null).Single().Level.ShouldBe(AlertLevel.Warning70);
+        SevenDay(89.9m, null).Single().Level.ShouldBe(AlertLevel.Warning);
 
     [Fact]
     public void AnAccountBackingNoCiRoleRaisesNothing() => SevenDay(null, 95m).ShouldBeEmpty();
@@ -47,11 +57,11 @@ public sealed class UsageAlertsTests
     public void AMissingFigureRaisesNothing() => SevenDay(null, null).ShouldBeEmpty();
 
     [Fact]
-    public void AnOrgFigureUsesTheSameThresholds()
+    public void AHandSetTokenDateWithNoRoleIsNotACiRole()
     {
-        IReadOnlyList<UsageAlert> alerts = UsageAlerts.Evaluate(Roster(), static _ => null, email => email == _plain ? 91m : 69m);
+        Roster roster = new([new RosterEntry(_plain, CiTokenGeneratedOn: new DateOnly(2026, 10, 1))]);
 
-        alerts.ShouldBe([new UsageAlert(_plain, UsageAlerts.OrgCredit, AlertLevel.Critical90, 91m)]);
+        UsageAlerts.Evaluate(roster, static _ => 95m).ShouldBeEmpty();
     }
 
     [Fact]
@@ -64,7 +74,7 @@ public sealed class UsageAlertsTests
                 new CiRole("REVIEWS", CiSecretScope.Organization, "octo"), new DateOnly(2026, 10, 1), setAt: null),
         ]);
 
-        IReadOnlyList<UsageAlert> alerts = UsageAlerts.Evaluate(roster, email => email == _ci ? 75m : 95m, static _ => null);
+        IReadOnlyList<UsageAlert> alerts = UsageAlerts.Evaluate(roster, email => email == _ci ? 75m : 95m);
 
         alerts.Select(static alert => alert.Account.Value).ShouldBe(["z@example.com", "ci@example.com"]);
     }
