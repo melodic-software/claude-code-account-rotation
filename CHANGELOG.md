@@ -8,6 +8,12 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- **The limit-stop check says how far back it read.** Its answer carries `coverage` per lane
+  repository and the `calls` it made, and a check that stopped early names, for each repository
+  it did not finish, "checked in part, covered back to <time>" or "not reached".
+- **The limit-stop check reads the lane-outcome JSON record.** It reads the record after
+  `lane-outcome ` in an annotation, and the legacy `class=` and `credential=` tokens from older
+  ci-workflows. `credit-stop` counts as a limit stop beside `rate-limit`.
 - **Usage alerts for CI-role accounts.** When an account that backs a CI role reaches 70% of its
   7-day window, a line above the cards says so, and from 90% the line is red. Alerts never act.
   `GET /api/dashboard` carries them as `alerts`, with `alertsComputedAt` and `alertThresholds`,
@@ -15,6 +21,22 @@ All notable changes to this project are documented in this file. The format foll
 - **Alert-threshold ticks on a CI-role account's 7-day meter.**
 - **A Re-issue token button beside a CI-role account's meters.** It opens the Generate CI token
   panel with that account's roles ticked.
+
+### Changed
+
+- **The limit-stop check covers the last 7 days within 30 calls.** It lists failed runs 100 to a
+  page, narrowing the date range when GitHub's 1,000-result cap is reached, and reads every
+  attempt's check runs and every job's annotations, not only failed jobs', in one GraphQL batch
+  per page through `gh api graphql`. It used to read the newest 30 failed runs, about 2 days. It
+  stops at 30 calls, at a rate limit, or when a batch leaves fewer than 1,000 GraphQL points; a
+  GraphQL error or a cut-off read reads as partial, never clean. Runs from forks are not read,
+  so a fork's pull request cannot mark an account as limit-stopped; the answer counts them in
+  `skipped`.
+
+### Fixed
+
+- **A legacy credential token ending in punctuation is read.** `credential=NAME)` or
+  `credential=NAME.` now yields `NAME`, and a credential that is no secret name is ignored.
 
 ## [2.3.2] - 2026-10-21
 

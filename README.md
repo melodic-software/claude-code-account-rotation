@@ -42,9 +42,12 @@ Status: a tagged release exists.
   only when you click Check roles, Generate CI token, Push API key, or a kill switch's Stop or
   Start: those read secret names, dates and visibility, never a secret's value, and the kill
   switches' values. Stop or Start reads the variable's visibility first and reads the switch back
-  after the write. Start sign-in, when it moves a role off another account, also reads up to 30
-  failed lane runs of the last 7 days, their jobs and annotations. The first rate-limit answer
-  stops what was clicked, and nothing retries it. Writes go one at a time, at least a second
+  after the write. Start sign-in, when it moves a role off another account, also reads the
+  failed lane runs of the last 7 days and the annotations of every job, in at most 30 counted
+  calls per click, some of them GraphQL reads sent as a POST through `gh api graphql`; the check
+  stops with 1,000 points left. The limits are constants in
+  [`LimitStopScan.cs`](src/ClaudeCodeAccountRotation.Core/Accounts/LimitStopScan.cs). The first
+  rate-limit answer stops what was clicked, and nothing retries it. Writes go one at a time, at least a second
   apart. It changes a lane kill switch's value only when you confirm its toggle, and never creates
   one.
 - The parked-pair refresh presents Claude Code's public OAuth `client_id`.
@@ -158,7 +161,7 @@ its terms at any time.
 | OAuth `client_id` for parked refreshes | Claude Code's public one | [Posture](#posture); [`AnthropicEndpoints.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Http/AnthropicEndpoints.cs) |
 | CI tokens | Only on a click: the unmodified `claude setup-token` makes the token, you sign in on Anthropic's page and paste the code, and the token goes from the CLI's output to `gh secret set` in memory, never to disk, a log, or the page | [Assigning accounts to CI roles](#assigning-accounts-to-ci-roles); [`ClaudeCliSetupTokenRunner.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Process/ClaudeCliSetupTokenRunner.cs) |
 | Console API keys | Kept only in the OS store, per machine; read only to hand to `gh secret set` on its standard input | [Posture](#posture); [`ApiKeyEndpoints.cs`](src/ClaudeCodeAccountRotation.App/Endpoints/ApiKeyEndpoints.cs) |
-| GitHub reads | Only on a click, through `gh api`: secret names, dates and visibility, never a secret's value, and the kill switches' values; on a kill switch's Stop or Start, its visibility first and the switch read back after; before a role moves, up to 30 failed lane runs and their annotations | [Posture](#posture); [`GhApiReader.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Process/GhApiReader.cs) |
+| GitHub reads | Only on a click, through `gh api`: secret names, dates and visibility, never a secret's value, and the kill switches' values; on a kill switch's Stop or Start, its visibility first and the switch read back after; before a role moves, the failed lane runs of the last 7 days and every job's annotations, within a counted call budget and a GraphQL point floor | [Posture](#posture); [`GhApiReader.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Process/GhApiReader.cs), [`GhGraphQlReader.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Process/GhGraphQlReader.cs) |
 
 Two points are gray:
 
@@ -539,19 +542,36 @@ switch is read-only, and no repository or environment variable is ever written. 
 `true` or `false`, is refused before `gh` runs.
 
 Before Start sign-in moves roles off other accounts, the page checks those accounts for limit
-stops with one request, only on that click. For each repository in `laneRepositories` it lists
-the failed runs created in the last 7 days, reads at most 30 runs in all, newest first, then reads
-the annotations of each failed job. A run counts against an account when an annotation's message
-holds `class=rate-limit` and `credential=<secret>`, where the secret is a half that account backed
-when the run started (by `lane-history.jsonl`, else the roster), in the run's organization or
-repository: a token half reads "subscription limit" and a key half "credit stop". The panel then
-says "This account hit a limit in the last 7 days." under each such account and lists its runs,
-with Move anyway and Cancel; it never blocks the move. With no `laneRepositories` it says "limit
-stops not checked: no lane repositories configured", and a check that failed or ran into GitHub's
-rate limit says it checked only in part; both still offer Move anyway. The first rate-limit answer
-ends the check, with no retry. A clean check starts the sign-in at once. The review lanes print
-no credential, so their stops are not seen. The route is `POST /api/roles/limit-stops` with
-`{"from": ["<email>", ...]}` (one address alone also works); each hit names its `account`.
+stops with one request, only on that click. For each repository in `laneRepositories`, newest
+first, it lists a page of failed runs created in the last 7 days, then reads, in one GraphQL
+batch, the check runs of those runs and the annotations of every job, green or red, of every
+attempt: a re-run run's attempts share one check suite, and all of them are read. A check run
+whose annotations the batch cut off gets one more REST read. GitHub caps the runs it returns for
+one date range, so after the last page of a range the listing narrows to runs no newer than the
+oldest read and starts again. Runs from forks (a run whose head repository is not the lane
+repository) are not read. Every call counts against the call budget in the
+[Posture](#posture); the check also stops at the GraphQL point floor, or at the first
+rate-limit answer, with no retry. Page sizes and limits are constants in
+[`LimitStopScan.cs`](src/ClaudeCodeAccountRotation.Core/Accounts/LimitStopScan.cs) and
+[`GhGraphQlReader.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Process/GhGraphQlReader.cs).
+
+A lane reports its outcome in an annotation holding a lane-outcome record: the JSON after
+`lane-outcome ` that ci-workflows documents, or, from ci-workflows releases before that record,
+the `class=` and `credential=<secret>` tokens. Text from "Last SDK result:" on is not read. A run
+counts against an account when a record's class is `rate-limit` or `credit-stop` and its
+credential is a half that account backed when the run started (by `lane-history.jsonl`, else the
+roster), in the run's organization or repository: a token half reads "subscription limit" and a
+key half "credit stop". The panel then says "This account hit a limit in the last 7 days." under
+each such account and lists its runs, with Move anyway and Cancel; it never blocks the move. With
+no `laneRepositories` it says "limit stops not checked: no lane repositories configured". A check
+that a limit, a failed read or a cut-off answer ended says it checked only in part, names each
+problem, and, for each repository it did not finish, "checked in part, covered back to <time>"
+or "not reached"; both still offer Move anyway. Failed runs only: a stop a fallback or a re-run
+recovered from is not read. Review lanes on ci-workflows before the contract release name no
+credential, so their stops are not seen. A clean check starts the sign-in at once. The route is
+`POST /api/roles/limit-stops` with `{"from": ["<email>", ...]}` (one address alone also works);
+each hit names its `account`, and the answer carries `coverage` per repository, `calls`, and
+`skipped`, the fork runs not read.
 
 To mark an account by hand instead (for a token made outside the tool, or when the tool set the
 secret but could not update the roster), open Edit and set "CI token generated on". Optionally

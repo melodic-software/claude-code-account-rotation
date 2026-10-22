@@ -259,6 +259,10 @@ internal static class AppComposition
         services.AddSingleton<IGhApiReader>(gh.IsSuccess
             ? new GhApiReader(gh.Value, TimeSpan.FromSeconds(60))
             : new UnavailableGhApiReader(gh.Error));
+        // The limit-stop check's GraphQL reads: queries only, never through the write gate.
+        services.AddSingleton<IGhGraphQlReader>(gh.IsSuccess
+            ? new GhGraphQlReader(gh.Value, TimeSpan.FromSeconds(60))
+            : new UnavailableGhGraphQlReader(gh.Error));
         services.AddSingleton<ICiTokenSessionRunner>(provider => new ClaudeCliSetupTokenRunner(
             setupTokenChild,
             provider.GetRequiredService<ICiSecretWriter>(),
