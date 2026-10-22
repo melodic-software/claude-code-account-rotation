@@ -44,7 +44,11 @@ internal sealed class UnavailableCiSecretWriter(string reason) : ICiSecretWriter
         OrgSecretVisibility? visibility,
         IReadOnlyList<string> repositories,
         string value,
-        CancellationToken cancellationToken) => Task.FromResult(Result<Unit, string>.Failure(reason));
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(secret);
+        return Task.FromResult(Result<Unit, string>.Failure(secret.IsRepositoryRoleSecret ? CiTokenSecret.RepositoryRoleSecretRefusal : reason));
+    }
 }
 
 /// <summary>
@@ -141,6 +145,13 @@ internal sealed class GhSecretWriter(string executable, TimeSpan timeout, GhWrit
         string value,
         CancellationToken cancellationToken)
     {
+        // The one way to gh secret set: a Claude role secret never goes to one repository.
+        ArgumentNullException.ThrowIfNull(secret);
+        if (secret.IsRepositoryRoleSecret)
+        {
+            return Result<Unit, string>.Failure(CiTokenSecret.RepositoryRoleSecretRefusal);
+        }
+
         ArgumentException.ThrowIfNullOrEmpty(value);
         IReadOnlyList<string> arguments = Arguments(secret, visibility, repositories);
         Result<GhExit, string> set = await gate.RunAsync(() => GhProcess.RunAsync(executable, arguments, value, timeout, cancellationToken), cancellationToken);

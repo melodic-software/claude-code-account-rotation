@@ -450,12 +450,19 @@ returns one entry per configured side (an empty list when none is). Supported fi
 ## Assigning accounts to CI roles
 
 GitHub Actions lanes run Claude Code on a funding role's secrets. A role is a prefix plus its
-organization (or repository): its token secret is `<PREFIX>_CLAUDE_CODE_OAUTH_TOKEN` and its key
-secret `<PREFIX>_CLAUDE_API_KEY`. The bare `CLAUDE_CODE_OAUTH_TOKEN` is the
-`legacy (review lanes)` role, with a token secret only, and any other name the roster kept from an
-earlier release is a role with a token secret only. The lane launcher spends a role's API key
-first and falls back to its token. An organization role's new secrets are created visible to all
-repositories, on purpose; existing ones keep their visibility.
+organization: its token secret is `<PREFIX>_CLAUDE_CODE_OAUTH_TOKEN` and its key secret
+`<PREFIX>_CLAUDE_API_KEY`. The bare `CLAUDE_CODE_OAUTH_TOKEN` is the `legacy (review lanes)` role,
+with a token secret only, and any other name the roster kept from an earlier release is a role
+with a token secret only. `REVIEWS`, `REVIEWS_SECURITY`, `ISSUE_LANE` and `AUTOMATIONS` are
+token-only too: their lanes run on claude-code-action and read no key, so the tool neither asks
+for nor writes a key for them. The lane launcher spends a role's API key first and falls back to
+its token. An organization role's new secrets are created visible to all repositories, on
+purpose; existing ones keep their visibility.
+
+The tool never writes a Claude role secret (`CLAUDE_CODE_OAUTH_TOKEN`, or a name ending in
+`_CLAUDE_CODE_OAUTH_TOKEN` or `_CLAUDE_API_KEY`) to one repository, and no option or setting
+changes that. A role in a repository that an earlier release recorded is still read and shown;
+Generate CI token refuses it and Push API key skips it.
 
 One account backs each role half, and an account can back several roles. Both halves normally
 come from the same account: the token from that account's `claude setup-token`, the key from that
@@ -508,10 +515,10 @@ sign-in. Use it after replacing a Console key too. The first rate-limit answer f
 every write after it, and nothing retries it.
 
 The same start is `POST /api/accounts/{email}/ci-token` with `{"roles":[{"prefix":"AUTOMATIONS",
-"organization":"octo"}]}` (`tokenSecret` in place of `prefix` for a token-only role, and
-`repository` in place of `organization`). The 2.1.0 body, one `secretName` with its repository or
-organization, `visibility` and `repositories`, still works: it writes the token half only, to
-that one secret. With an organization and no `visibility`, it keeps the visibility the secret has;
+"organization":"octo"}]}` (`tokenSecret` in place of `prefix` for a token-only role). The 2.1.0
+body, one `secretName` with its repository or organization, `visibility` and `repositories`,
+still works: it writes the token half only, to that one secret, and refuses a Claude role secret
+in a repository. With an organization and no `visibility`, it keeps the visibility the secret has;
 a secret that does not exist yet is created visible to all repositories when its name ends in
 `CLAUDE_CODE_OAUTH_TOKEN` (a role's), and private otherwise, as gh's default made it.
 Push is `POST /api/accounts/{email}/api-key/push`.

@@ -57,6 +57,22 @@ public sealed partial record CiTokenSecret(string Name, CiSecretScope Scope, str
             : Result<CiTokenSecret, string>.Failure("an organization is its GitHub login: letters, digits and single hyphens");
     }
 
+    /// <summary>Why nothing here writes a <see cref="IsRepositoryRoleSecret"/> secret.</summary>
+    public const string RepositoryRoleSecretRefusal =
+        "a Claude role secret (CLAUDE_CODE_OAUTH_TOKEN, or a name ending in _CLAUDE_CODE_OAUTH_TOKEN or _CLAUDE_API_KEY) is set on the organization, never on one repository";
+
+    /// <summary>
+    /// A Claude role secret held by one repository: the bare
+    /// <c>CLAUDE_CODE_OAUTH_TOKEN</c>, or a name ending in
+    /// <c>_CLAUDE_CODE_OAUTH_TOKEN</c> or <c>_CLAUDE_API_KEY</c>. Such a secret
+    /// is read, never written; no option changes that.
+    /// </summary>
+    public bool IsRepositoryRoleSecret =>
+        Scope == CiSecretScope.Repository
+        && (string.Equals(Name, DefaultName, StringComparison.OrdinalIgnoreCase)
+            || Name.EndsWith("_" + DefaultName, StringComparison.OrdinalIgnoreCase)
+            || Name.EndsWith("_" + CiRole.KeySuffix, StringComparison.OrdinalIgnoreCase));
+
     public override string ToString() => Name + (Scope == CiSecretScope.Repository ? " in " : " in org ") + Owner;
 
     [GeneratedRegex("^[A-Za-z_][A-Za-z0-9_]{0,99}$", RegexOptions.None, matchTimeoutMilliseconds: 1000)]

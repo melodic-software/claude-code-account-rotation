@@ -28,8 +28,8 @@ public sealed class GhSecretWriterTests : IDisposable
 
     [Fact]
     public void ARepositorySecretNamesTheRepository() =>
-        GhSecretWriter.Arguments(CiTokenSecret.Parse("CLAUDE_CODE_OAUTH_TOKEN", "octo/repo", null).Value, null, [])
-            .ShouldBe(["secret", "set", "CLAUDE_CODE_OAUTH_TOKEN", "--app", "actions", "--repo", "octo/repo"]);
+        GhSecretWriter.Arguments(CiTokenSecret.Parse("LANE_TOKEN", "octo/repo", null).Value, null, [])
+            .ShouldBe(["secret", "set", "LANE_TOKEN", "--app", "actions", "--repo", "octo/repo"]);
 
     [Theory]
     [InlineData("Private", "private")]
@@ -61,7 +61,7 @@ public sealed class GhSecretWriterTests : IDisposable
 
         GhSecretWriter writer = new(gh, TimeSpan.FromSeconds(30), _gate);
         Result<Unit, string> set = await writer.SetAsync(
-            CiTokenSecret.Parse("CLAUDE_CODE_OAUTH_TOKEN", "octo/repo", null).Value,
+            CiTokenSecret.Parse("LANE_TOKEN", "octo/repo", null).Value,
             null,
             [],
             token,
@@ -70,8 +70,57 @@ public sealed class GhSecretWriterTests : IDisposable
         set.IsSuccess.ShouldBeTrue();
         (await File.ReadAllTextAsync(recorded + ".stdin", TestContext.Current.CancellationToken)).ShouldBe(token);
         string arguments = await File.ReadAllTextAsync(recorded + ".args", TestContext.Current.CancellationToken);
-        arguments.ShouldBe("secret set CLAUDE_CODE_OAUTH_TOKEN --app actions --repo octo/repo\n");
+        arguments.ShouldBe("secret set LANE_TOKEN --app actions --repo octo/repo\n");
         arguments.ShouldNotContain(token);
+    }
+
+    [Theory(SkipUnless = nameof(OnUnix), Skip = "The stand-in gh is a shell script")]
+    [InlineData("CLAUDE_CODE_OAUTH_TOKEN")]
+    [InlineData("REVIEWS_CLAUDE_CODE_OAUTH_TOKEN")]
+    [InlineData("pr_verify_claude_api_key")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public async Task AClaudeRoleSecretInOneRepositoryIsRefusedBeforeGhStarts(string name)
+    {
+        string recorded = Path.Combine(_root, "recorded");
+        GhSecretWriter writer = new(StandIn(recorded, exitCode: 0), TimeSpan.FromSeconds(30), _gate);
+
+        Result<Unit, string> set = await writer.SetAsync(CiTokenSecret.Parse(name, "octo/repo", null).Value, null, [], "value", TestContext.Current.CancellationToken);
+
+        set.Error.ShouldBe(CiTokenSecret.RepositoryRoleSecretRefusal);
+        File.Exists(recorded + ".args").ShouldBeFalse();
+    }
+
+    /// <summary>
+    /// The hunt for a way past the repository refusal: every writer in the app,
+    /// with every visibility and repository list it takes, refuses before
+    /// anything runs, and setting a secret is the only thing a writer does with
+    /// one. A new writer fails here until it is added.
+    /// </summary>
+    [Fact]
+    public async Task NoWriterAndNoArgumentGetsARepositoryRoleSecretWritten()
+    {
+        Dictionary<Type, ICiSecretWriter> writers = new()
+        {
+            [typeof(GhSecretWriter)] = new GhSecretWriter(Path.Combine(_root, "no-such-gh"), TimeSpan.FromSeconds(30), _gate),
+            [typeof(UnavailableCiSecretWriter)] = new UnavailableCiSecretWriter("the GitHub CLI (gh) was not found on PATH"),
+        };
+        Type[] found = [.. typeof(ICiSecretWriter).Assembly.GetTypes().Where(static type => typeof(ICiSecretWriter).IsAssignableFrom(type) && !type.IsInterface && !type.IsAbstract)];
+        found.ShouldBe(writers.Keys, ignoreOrder: true);
+        found.SelectMany(static type => type.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.DeclaredOnly))
+            .Where(static method => method.GetParameters().Any(static parameter => parameter.ParameterType == typeof(CiTokenSecret)))
+            .Select(static method => method.Name)
+            .Distinct()
+            .ShouldBe(["SetAsync"]);
+
+        CiTokenSecret secret = CiTokenSecret.Parse("PR_VERIFY_CLAUDE_API_KEY", "octo/repo", null).Value;
+        foreach (ICiSecretWriter writer in writers.Values)
+        {
+            foreach (OrgSecretVisibility? visibility in new OrgSecretVisibility?[] { null, OrgSecretVisibility.Private, OrgSecretVisibility.All, OrgSecretVisibility.Selected })
+            {
+                (await writer.SetAsync(secret, visibility, ["repo"], "value", TestContext.Current.CancellationToken)).Error
+                    .ShouldBe(CiTokenSecret.RepositoryRoleSecretRefusal, writer.GetType().Name + " with " + visibility);
+            }
+        }
     }
 
     [Fact(SkipUnless = nameof(OnUnix), Skip = "The stand-in gh is a shell script")]

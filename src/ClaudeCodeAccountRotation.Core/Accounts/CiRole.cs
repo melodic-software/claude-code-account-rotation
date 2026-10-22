@@ -20,8 +20,19 @@ public sealed record CiRole(string Prefix, CiSecretScope Scope, string Owner, st
 
     public const string LegacyName = "legacy (review lanes)";
 
+    private static readonly HashSet<string> _tokenOnlyPrefixes =
+        new(["REVIEWS", "REVIEWS_SECURITY", "ISSUE_LANE", "AUTOMATIONS"], StringComparer.OrdinalIgnoreCase);
+
     /// <summary>Whether the role has a key secret beside its token secret.</summary>
     public bool HasKeyHalf => TokenSecretOverride is null && Prefix.Length > 0;
+
+    /// <summary>
+    /// Whether the role's lanes read its key, so a write sets the key half too.
+    /// <see cref="HasKeyHalf"/> says a key secret can exist; the roles whose
+    /// lanes run on claude-code-action read a token only, and are named here
+    /// until a lane catalog says which roles are keyed.
+    /// </summary>
+    public bool Keyed => HasKeyHalf && !_tokenOnlyPrefixes.Contains(Prefix);
 
     public string TokenSecretName => TokenSecretOverride ?? (Prefix.Length == 0 ? TokenSuffix : Prefix + "_" + TokenSuffix);
 

@@ -21,10 +21,11 @@ namespace ClaudeCodeAccountRotation.App.Endpoints;
 /// <c>gh secret set</c> and never to the page.
 /// <para>
 /// The request names either <c>roles</c>, each written whole (the token, and
-/// the account's stored Console key for a role with a key half), with every
+/// the account's stored Console key for a <see cref="CiRole.Keyed"/> role), with every
 /// organization secret's visibility read back first so setting it keeps it;
 /// or, as release 2.1.0 did, one <c>secretName</c> with its owner and
-/// visibility, set as named.
+/// visibility, set as named. Neither puts a Claude role secret in one
+/// repository (<see cref="CiTokenSecret.IsRepositoryRoleSecret"/>).
 /// </para>
 /// <para>
 /// The same shape as a login: start returns the sign-in URL and opens it, and
@@ -73,6 +74,11 @@ internal static partial class CiTokenEndpoints
                     return Results.BadRequest(new { error = secret.Error });
                 }
 
+                if (secret.Value.IsRepositoryRoleSecret)
+                {
+                    return Results.BadRequest(new { error = CiTokenSecret.RepositoryRoleSecretRefusal });
+                }
+
                 Result<(OrgSecretVisibility?, IReadOnlyList<string>), string> access = ParseAccess(body, secret.Value);
                 if (access.IsFailure)
                 {
@@ -111,9 +117,9 @@ internal static partial class CiTokenEndpoints
 
             if (roles.Value is IReadOnlyList<CiRole> named)
             {
-                // Before any token exists: a role written whole needs the key
-                // beside the token, or it would be left half from this account.
-                if (named.FirstOrDefault(static role => role.HasKeyHalf) is CiRole keyed)
+                // Before any token exists: a keyed role written whole needs the
+                // key beside the token, or it would be left half from this account.
+                if (named.FirstOrDefault(static role => role.Keyed) is CiRole keyed)
                 {
                     // The store, not only the roster's record of it: a key the
                     // store has lost would leave every key half unset.
@@ -212,6 +218,11 @@ internal static partial class CiTokenEndpoints
                 return Result<IReadOnlyList<CiRole>?, string>.Failure("roles: " + parsed.Error);
             }
 
+            if (parsed.Value.TokenSecret.IsRepositoryRoleSecret)
+            {
+                return Result<IReadOnlyList<CiRole>?, string>.Failure("roles: " + CiTokenSecret.RepositoryRoleSecretRefusal);
+            }
+
             if (roles.Contains(parsed.Value))
             {
                 return Result<IReadOnlyList<CiRole>?, string>.Failure("roles: " + parsed.Value + " is named twice");
@@ -244,7 +255,7 @@ internal static partial class CiTokenEndpoints
             }
 
             SecretTarget? key = null;
-            if (role.KeySecret is CiTokenSecret keySecret)
+            if (role.Keyed && role.KeySecret is CiTokenSecret keySecret)
             {
                 Result<SecretTarget, GhApiFailure> read = await github.ReadAccessAsync(keySecret, cancellationToken);
                 if (read.IsFailure)

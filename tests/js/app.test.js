@@ -698,8 +698,13 @@ test("newRoleItem says creates only for the secrets the last Check roles did not
   check.roles[0].hasKey = true;
   assert.strictEqual(newRoleItem("reviews", "octo", check).confirm,
     "In org octo this sets REVIEWS_CLAUDE_CODE_OAUTH_TOKEN and REVIEWS_CLAUDE_API_KEY, keeping who may read them. Go ahead?");
-  assert.deepStrictEqual(newRoleItem("X", "octo/repo").item, { prefix: "X", repository: "octo/repo" });
   assert.strictEqual(newRoleItem("  ", "octo"), null);
+});
+
+test("newRoleItem refuses a role in one repository and asks nothing", () => {
+  const refused = { error: "A role's secrets are set on the organization, never on one repository: name an organization." };
+  assert.deepStrictEqual(newRoleItem("intake", "octo/repo", null), refused);
+  assert.deepStrictEqual(newRoleItem("X", " octo/repo ", { roles: [] }), refused);
 });
 
 const { reissueButton, ciPanelChecked, meterTicks, alertLines } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
