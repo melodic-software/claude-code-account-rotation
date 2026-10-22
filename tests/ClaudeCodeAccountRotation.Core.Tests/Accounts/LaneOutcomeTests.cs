@@ -35,7 +35,17 @@ public sealed class LaneOutcomeTests
     private const string WholeMessage =
         """AI review skipped: usage limit reached; re-run after it resets (Claude review exited with: failure class=rate-limit resets=2026-10-22T05:00:00Z resets-window=five_hour credential=CLAUDE_CODE_OAUTH_TOKEN). lane-outcome {"v":1,"lane":"pr-review","outcome":"failure","class":"rate-limit","credential":{"secret":"CLAUDE_CODE_OAUTH_TOKEN","kind":"oauth-token"},"resets":{"at":"2026-10-22T05:00:00Z","window":"five_hour"}} Last SDK result: {...}""";
 
+    // A real annotation, verbatim from claude-code-plugins check run 119996073843 (ci-workflows
+    // v0.61.0), read back through the check-run annotations API.
+    private const string RealReviewLaneAnnotation =
+        """Claude review concluded: success class=skipped-validation credential=CLAUDE_CODE_OAUTH_TOKEN with no execution evidence — the action skipped itself before running (workflow-validation skip: the caller's workflow file must match the default branch's copy). lane-outcome {"v":1,"lane":"pr-review","outcome":"skip","class":"skipped-validation","credential":{"secret":"CLAUDE_CODE_OAUTH_TOKEN","kind":"oauth-token"}} Nothing was reviewed.""";
+
     private static string Annotation(string record) => "Claude lane stopped on a limit.\nlane-outcome " + record;
+
+    [Fact]
+    public void ARealReviewLaneAnnotationIsReadFromItsJsonRecord() =>
+        LaneOutcomes.Parse(RealReviewLaneAnnotation.Replace("class=skipped-validation", "class=legacy-only", StringComparison.Ordinal))
+            .ShouldBe(new LaneOutcome("skipped-validation", "CLAUDE_CODE_OAUTH_TOKEN"));
 
     [Fact]
     public void TheContractsWholeMessageIsARateLimitOnTheLegacySingleToken() =>
