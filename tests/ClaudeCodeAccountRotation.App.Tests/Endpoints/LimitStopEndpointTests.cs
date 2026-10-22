@@ -392,6 +392,24 @@ public sealed class LimitStopEndpointTests
     }
 
     [Fact]
+    public async Task ARateLimitOnTheAnnotationsFollowUpEndsTheScanAsPartialWithNoFurtherListing()
+    {
+        (AppFactory factory, SpyReader reader, SpyGraphQl graphQl) = await StartAsync("octo/lanes", "octo/other");
+        await using AppFactory _ = factory;
+        Run run = new(101, new DateTimeOffset(2026, 9, 5, 9, 0, 0, TimeSpan.Zero));
+        reader.Answers.Enqueue(Runs("octo/lanes", run));
+        reader.Answers.Enqueue(RateLimited());
+        graphQl.Answers.Enqueue(Batch(4000, Suite(run, new CheckRun("claude", "SUCCESS", [.. Enumerable.Repeat("warning", 50)], MoreAnnotations: true, DatabaseId: 779))));
+
+        JsonObject body = await ScanAsync(factory, A);
+
+        reader.Paths.ShouldBe([RunsPath("octo/lanes"), "repos/octo/lanes/check-runs/779/annotations?per_page=100"]);
+        body["outcome"]!.GetValue<string>().ShouldBe("partial");
+        Problems(body).ShouldBe([GhApiReader.RateLimitMessage, "octo/other: not reached, as the check stopped before it"]);
+        CoveredBack(Coverage(body, 0)).ShouldBeNull();
+    }
+
+    [Fact]
     public async Task MoreThanFiftyCheckRunsInASuiteIsANamedProblem()
     {
         (AppFactory factory, SpyReader reader, SpyGraphQl graphQl) = await StartAsync("octo/lanes");

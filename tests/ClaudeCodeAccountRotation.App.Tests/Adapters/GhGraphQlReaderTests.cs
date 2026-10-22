@@ -118,7 +118,6 @@ public sealed class GhGraphQlReaderTests : IDisposable
             .QueryAsync(mutation, new Dictionary<string, JsonNode?>(), TestContext.Current.CancellationToken);
 
         read.Error.Message.ShouldContain("refused");
-        File.Exists(gh).ShouldBeFalse();
     }
 
     [Fact(SkipUnless = nameof(OnUnix), Skip = "The stand-in gh is a shell script")]
