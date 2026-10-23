@@ -76,8 +76,23 @@ public sealed class GhGraphQlReaderTests : IDisposable
 
         read.IsFailure.ShouldBeTrue();
         read.Error.RateLimited.ShouldBeFalse();
+        read.Error.ResourceLimited.ShouldBeFalse();
         read.Error.Message.ShouldNotContain("gh:");
         read.Error.Message.ShouldNotContain("Something went wrong");
+    }
+
+    // GitHub cuts off a query that uses too many resources with partial data
+    // and these errors, one per field it did not resolve (live, #318):
+    // https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api#other-resource-limits.
+    [Fact]
+    public void AQueryCutOffForResourceLimitsIsAFailureASmallerQueryMayPass()
+    {
+        Result<JsonNode, GhApiFailure> read = Read(1, Head + "{\"data\":{\"nodes\":[{\"checkRuns\":null}]},\"errors\":[{\"type\":\"RESOURCE_LIMITS_EXCEEDED\",\"path\":[\"nodes\",0,\"checkRuns\"],\"message\":\"Resource limits for this query exceeded.\"}]}");
+
+        read.IsFailure.ShouldBeTrue();
+        read.Error.RateLimited.ShouldBeFalse();
+        read.Error.ResourceLimited.ShouldBeTrue();
+        read.Error.Message.ShouldContain("RESOURCE_LIMITS_EXCEEDED");
     }
 
     // GitHub answers an exceeded GraphQL primary limit with a 200, an error and
