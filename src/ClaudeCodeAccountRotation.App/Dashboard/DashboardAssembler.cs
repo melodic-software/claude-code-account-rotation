@@ -100,11 +100,13 @@ internal sealed partial class DashboardAssembler(
                 assignment.Role.Scope == CiSecretScope.Repository ? assignment.Role.Owner : null,
                 assignment.Role.Scope == CiSecretScope.Organization ? assignment.Role.Owner : null,
                 assignment.Role.TokenSecretName,
-                assignment.Role.KeySecretName,
+                // A token-only role's lanes read no key, so a key half an
+                // earlier release recorded is not shown.
+                assignment.Role.Keyed ? assignment.Role.KeySecretName : null,
                 assignment.TokenSetOn,
                 assignment.TokenSetAt,
-                assignment.KeySetOn,
-                assignment.KeySetAt))],
+                assignment.Role.Keyed ? assignment.KeySetOn : null,
+                assignment.Role.Keyed ? assignment.KeySetAt : null))],
             entry.ConsoleApiKeySetOn,
             entry.AdminKeySetOn,
             entry.BacksCiRole);
@@ -285,7 +287,8 @@ internal sealed partial class DashboardAssembler(
             Pass(capturedAt),
             [.. (alerts?.Alerts ?? []).Select(static alert => new AlertView(alert.Account.Value, Wire(alert.Level), alert.Percent, alert.Threshold))],
             alerts?.ComputedAt,
-            UsageAlerts.Thresholds);
+            UsageAlerts.Thresholds,
+            CiRole.TokenOnlyPrefixes);
     }
 
     /// <summary>An alert's level as the page spells it.</summary>

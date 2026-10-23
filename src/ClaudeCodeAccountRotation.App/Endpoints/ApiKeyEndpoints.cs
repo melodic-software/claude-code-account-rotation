@@ -445,9 +445,17 @@ internal static partial class ApiKeyEndpoints
         return Results.Ok(new ApiKeyDeletionView(DashboardAssembler.View(recorded.Value)!, removal.Warning));
     }
 
-    /// <summary>The key secrets Push API key sends the stored Console key to: one per role the account backs with a key half.</summary>
+    /// <summary>
+    /// The key secrets Push API key sends the stored Console key to: one per
+    /// keyed role the account backs, never one in a single repository that an
+    /// earlier roster may still record.
+    /// </summary>
     internal static IReadOnlyList<CiTokenSecret> PushTargets(RosterEntry entry) =>
-        [.. entry.CiRoles.Select(static held => held.Role.KeySecret).OfType<CiTokenSecret>()];
+        [.. entry.CiRoles
+            .Where(static held => held.Role.Keyed)
+            .Select(static held => held.Role.KeySecret)
+            .OfType<CiTokenSecret>()
+            .Where(static secret => !secret.IsRepositoryRoleSecret)];
 
     /// <summary>The key's name in a log line.</summary>
     private static string Label(SecretKind kind) => kind == SecretKind.AdminKey ? "Admin key" : "console API key";
