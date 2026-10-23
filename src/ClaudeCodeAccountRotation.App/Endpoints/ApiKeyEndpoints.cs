@@ -1,7 +1,9 @@
 using System.Text.Json.Nodes;
+using ClaudeCodeAccountRotation.App.Accounts;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Adapters.Process;
 using ClaudeCodeAccountRotation.App.Dashboard;
+using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.App.Security;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core;
@@ -41,8 +43,9 @@ internal static partial class ApiKeyEndpoints
             SwitchOptions options,
             TimeProvider clock,
             ILoggerFactory loggers,
+            LaneCatalogStore laneCatalog,
             CancellationToken cancellationToken) =>
-            PutKeyAsync(SecretKind.ConsoleApiKey, email, body, rosterFile, store, gate, options, clock, loggers, cancellationToken));
+            PutKeyAsync(SecretKind.ConsoleApiKey, email, body, rosterFile, store, gate, options, clock, loggers, laneCatalog, cancellationToken));
 
         mutations.MapDelete("/accounts/{email}/api-key", static (
             string email,
@@ -52,8 +55,9 @@ internal static partial class ApiKeyEndpoints
             CredentialMutationGate gate,
             SwitchOptions options,
             ILoggerFactory loggers,
+            LaneCatalogStore laneCatalog,
             CancellationToken cancellationToken) =>
-            DeleteKeyAsync(SecretKind.ConsoleApiKey, email, keepStoredKey, rosterFile, store, gate, options, loggers, cancellationToken));
+            DeleteKeyAsync(SecretKind.ConsoleApiKey, email, keepStoredKey, rosterFile, store, gate, options, loggers, laneCatalog, cancellationToken));
 
         MapAdminKey(mutations);
     }
@@ -76,8 +80,9 @@ internal static partial class ApiKeyEndpoints
             SwitchOptions options,
             TimeProvider clock,
             ILoggerFactory loggers,
+            LaneCatalogStore laneCatalog,
             CancellationToken cancellationToken) =>
-            PutKeyAsync(SecretKind.AdminKey, email, body, rosterFile, store, gate, options, clock, loggers, cancellationToken));
+            PutKeyAsync(SecretKind.AdminKey, email, body, rosterFile, store, gate, options, clock, loggers, laneCatalog, cancellationToken));
 
         mutations.MapDelete("/accounts/{email}/admin-key", static (
             string email,
@@ -87,8 +92,9 @@ internal static partial class ApiKeyEndpoints
             CredentialMutationGate gate,
             SwitchOptions options,
             ILoggerFactory loggers,
+            LaneCatalogStore laneCatalog,
             CancellationToken cancellationToken) =>
-            DeleteKeyAsync(SecretKind.AdminKey, email, keepStoredKey, rosterFile, store, gate, options, loggers, cancellationToken));
+            DeleteKeyAsync(SecretKind.AdminKey, email, keepStoredKey, rosterFile, store, gate, options, loggers, laneCatalog, cancellationToken));
 
         mutations.MapPost("/accounts/{email}/api-key/check", static async (
             string email,
@@ -163,33 +169,56 @@ internal static partial class ApiKeyEndpoints
     }
 
     /// <summary>
-    /// Re-sends the stored Console key to the key secret of every role the
-    /// account backs that has one, with no <c>setup-token</c> run: the step after
-    /// replacing a key, and the repair for a role left split. Every secret's
-    /// visibility is read back first and the first read that fails ends it,
-    /// before any write. The sets run one at a time; a failed one does not stop
-    /// the rest, except a rate limit, which stops every one after it. The
-    /// roster records the halves that were set.
+    /// Sends the stored Console key, with no <c>setup-token</c> run, to the
+    /// key secret of each role in <c>roles</c> when the body names some (the
+    /// Set API key role picker: keyed roles only, and only roles the lane
+    /// catalog lists when one is configured), else to every keyed role the
+    /// account backs: the step after replacing a key, and the repair for a
+    /// role left split. The cost gate runs first (<see cref="CostGate"/>).
+    /// Every secret's visibility is read back next and the first read that
+    /// fails ends it, before any write. The sets run one at a time; a failed
+    /// one does not stop the rest, except a rate limit, which stops every one
+    /// after it. The roster records the halves that were set, taking each off
+    /// the account that held it before.
     /// </summary>
     private static async Task<IResult> PushAsync(
         string email,
+        HttpRequest request,
         RosterFile rosterFile,
         ISecretStore store,
         ICiSecretWriter writer,
         IGhApiReader github,
         TimeProvider clock,
         ILoggerFactory loggers,
+        LaneCatalogStore laneCatalog,
+        QuotaState quota,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(rosterFile);
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(laneCatalog);
         ArgumentNullException.ThrowIfNull(clock);
         ArgumentNullException.ThrowIfNull(loggers);
         Result<AccountEmail, string> parsed = AccountEmail.Parse(email);
         if (parsed.IsFailure)
         {
             return Results.BadRequest(new { error = parsed.Error });
+        }
+
+        Result<JsonObject?, string> body = await OptionalBodyAsync(request, cancellationToken);
+        if (body.IsFailure)
+        {
+            return Results.BadRequest(new { error = body.Error });
+        }
+
+        Result<IReadOnlyList<CiRole>?, string> picked = body.Value is JsonObject named
+            ? CiTokenEndpoints.ParseRoles(named)
+            : Result<IReadOnlyList<CiRole>?, string>.Success(null);
+        if (picked.IsFailure)
+        {
+            return Results.BadRequest(new { error = picked.Error });
         }
 
         AccountEmail target = parsed.Value;
@@ -199,10 +228,40 @@ internal static partial class ApiKeyEndpoints
             return NotOnRoster(target);
         }
 
-        IReadOnlyList<CiTokenSecret> secrets = PushTargets(entry);
-        if (secrets.Count == 0)
+        // Which roles are keyed, from the catalog when one is configured; one
+        // that cannot be read refuses before any key moves.
+        Result<Func<CiRole, bool>, string> keying = await laneCatalog.KeyedForWriteAsync(cancellationToken);
+        if (keying.IsFailure)
         {
-            return Refused("NoKeyHalf", target.Value + " backs no role with a key half; assign one with Generate CI token.");
+            return Refused("CatalogUnreadable", keying.Error);
+        }
+
+        IReadOnlyList<CiRole> roles;
+        if (picked.Value is IReadOnlyList<CiRole> chosen)
+        {
+            // With a catalog, only the roles it lists; then only keyed ones.
+            LaneCatalog? catalog = laneCatalog.Source is null ? null : laneCatalog.Snapshot.Catalog;
+            bool Listed(CiRole role) => catalog is null
+                || (role.Scope == CiSecretScope.Organization
+                    && string.Equals(role.Owner, catalog.Organization, StringComparison.OrdinalIgnoreCase)
+                    && catalog.Roles.Any(named => string.Equals(named.Prefix, role.Prefix, StringComparison.OrdinalIgnoreCase)));
+            if (chosen.FirstOrDefault(role => !Listed(role) || !keying.Value(role)) is CiRole refused)
+            {
+                return Results.BadRequest(new
+                {
+                    error = "roles: " + refused + (Listed(refused) ? " takes no API key: its lanes read a token only" : " is not in the lane catalog"),
+                });
+            }
+
+            roles = chosen;
+        }
+        else
+        {
+            roles = PushTargets(entry, keying.Value);
+            if (roles.Count == 0)
+            {
+                return Refused("NoKeyHalf", target.Value + " backs no role with a key half; pick one in Set API key, or assign one with Generate CI token.");
+            }
         }
 
         if (entry.ConsoleApiKeySetOn is null)
@@ -210,16 +269,21 @@ internal static partial class ApiKeyEndpoints
             return Refused("NoConsoleKey", "paste this account's Console key first (Set API key).");
         }
 
-        List<SecretTarget> targets = [];
-        foreach (CiTokenSecret secret in secrets)
+        if (await CostGateAsync(target, CostAnswer(body.Value), rosterFile, quota, clock, cancellationToken) is IResult gated)
         {
-            Result<SecretTarget, GhApiFailure> access = await github.ReadAccessAsync(secret, cancellationToken);
+            return gated;
+        }
+
+        List<(CiRole Role, SecretTarget Secret)> targets = [];
+        foreach (CiRole role in roles)
+        {
+            Result<SecretTarget, GhApiFailure> access = await github.ReadAccessAsync(role.KeySecret!, cancellationToken);
             if (access.IsFailure)
             {
                 return Refused("SecretUnreadable", CiTokenEndpoints.Describe(access.Error));
             }
 
-            targets.Add(access.Value);
+            targets.Add((role, access.Value));
         }
 
         Result<string?, string> key = await store.ReadAsync(SecretKind.ConsoleApiKey, target, cancellationToken);
@@ -236,10 +300,10 @@ internal static partial class ApiKeyEndpoints
         // From the first write on, the request's token is not consulted: a set
         // that reached GitHub must reach the roster.
         ILogger logger = loggers.CreateLogger(typeof(ApiKeyEndpoints).FullName!);
-        List<(CiTokenSecret Secret, DateTimeOffset SetAt)> sent = [];
+        List<(CiRole Role, DateTimeOffset SetAt)> sent = [];
         List<string> failed = [];
         bool stopped = false;
-        foreach (SecretTarget secret in targets)
+        foreach ((CiRole role, SecretTarget secret) in targets)
         {
             Result<Unit, string> set = stopped
                 ? Result<Unit, string>.Failure("not sent, because an earlier write hit GitHub's rate limit")
@@ -247,7 +311,7 @@ internal static partial class ApiKeyEndpoints
             if (set.IsSuccess)
             {
                 LogKeyPushed(logger, target.Value, secret.Secret.Name);
-                sent.Add((secret.Secret, clock.GetUtcNow()));
+                sent.Add((role, clock.GetUtcNow()));
                 continue;
             }
 
@@ -257,7 +321,7 @@ internal static partial class ApiKeyEndpoints
         }
 
         var today = DateOnly.FromDateTime(clock.GetLocalNow().DateTime);
-        string message = (sent.Count == 0 ? "No key secret was set." : "Set " + string.Join(", ", sent.Select(static half => half.Secret.ToString())) + " from " + target.Value + ".")
+        string message = (sent.Count == 0 ? "No key secret was set." : "Set " + string.Join(", ", sent.Select(static half => half.Role.KeySecret!.ToString())) + " from " + target.Value + ".")
             + (failed.Count == 0 ? string.Empty : " Not set: " + string.Join("; ", failed) + ".");
         RosterEntry? updated = null;
         try
@@ -266,12 +330,9 @@ internal static partial class ApiKeyEndpoints
                 roster =>
                 {
                     updated = roster.Find(target);
-                    foreach ((CiTokenSecret secret, DateTimeOffset setAt) in sent)
+                    foreach ((CiRole role, DateTimeOffset setAt) in sent)
                     {
-                        if (updated?.CiRoles.FirstOrDefault(held => secret.Equals(held.Role.KeySecret)) is CiRoleAssignment held)
-                        {
-                            updated = updated.ClaimingKey(held.Role, today, setAt);
-                        }
+                        updated = updated?.ClaimingKey(role, today, setAt);
                     }
 
                     return updated is null ? roster : roster.With(updated);
@@ -285,7 +346,77 @@ internal static partial class ApiKeyEndpoints
             return Failed(message + " The roster could not record it (" + exception.GetType().Name + "), so the card does not show it yet; push again to record it.");
         }
 
-        return Results.Ok(new ApiKeyPushView(DashboardAssembler.View(updated), message, failed.Count));
+        return Results.Ok(new ApiKeyPushView(DashboardAssembler.View(updated, keying.Value), message, failed.Count));
+    }
+
+    /// <summary>
+    /// The owner's answer to the cost gate from a body's <c>costSettings</c>:
+    /// <c>{"autoReload": "off", "extraUsage": "off"}</c>. Anything missing is unknown.
+    /// </summary>
+    internal static CostSettingsAnswer CostAnswer(JsonObject? body) =>
+        body?["costSettings"] is JsonObject settings
+            ? new CostSettingsAnswer(CostSettingsAnswer.Setting(Text(settings, "autoReload")), CostSettingsAnswer.Setting(Text(settings, "extraUsage")))
+            : CostSettingsAnswer.None;
+
+    private static string? Text(JsonObject node, string name) =>
+        node[name] is JsonValue value && value.TryGetValue(out string? text) ? text : null;
+
+    /// <summary>
+    /// The cost gate every write of a Console key to a key secret passes
+    /// first: null when it lets the key through, else the refusal. The
+    /// account's record follows the answer: the date on a pass, cleared when
+    /// the owner says a setting is on, and left alone when the owner did not
+    /// answer. Nothing has been written to GitHub when this runs.
+    /// </summary>
+    internal static async Task<IResult?> CostGateAsync(
+        AccountEmail email,
+        CostSettingsAnswer answer,
+        RosterFile rosterFile,
+        QuotaState quota,
+        TimeProvider clock,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(answer);
+        ArgumentNullException.ThrowIfNull(rosterFile);
+        ArgumentNullException.ThrowIfNull(quota);
+        ArgumentNullException.ThrowIfNull(clock);
+        CostGateRefusal? refusal = CostGate.Check(email, answer, quota.MergedFor(email)?.Merged.ExtraUsage);
+        if (refusal?.Code != CostGate.Unconfirmed)
+        {
+            DateOnly? record = refusal is null ? DateOnly.FromDateTime(clock.GetLocalNow().DateTime) : null;
+            await rosterFile.UpdateAsync(
+                roster => roster.Find(email) is RosterEntry entry ? roster.With(entry with { CostSettingsConfirmedOn = record }) : roster,
+                cancellationToken);
+        }
+
+        return refusal is null ? null : Refused(refusal.Code, refusal.Message);
+    }
+
+    /// <summary>The request's JSON object, or null when it has no body; anything else is the error.</summary>
+    private static async Task<Result<JsonObject?, string>> OptionalBodyAsync(HttpRequest request, CancellationToken cancellationToken)
+    {
+        if (request.ContentLength is 0 || (request.ContentLength is null && !request.HasJsonContentType()))
+        {
+            return Result<JsonObject?, string>.Success(null);
+        }
+
+        try
+        {
+            return await request.ReadFromJsonAsync<JsonNode>(cancellationToken) switch
+            {
+                null => Result<JsonObject?, string>.Success(null),
+                JsonObject node => Result<JsonObject?, string>.Success(node),
+                _ => Result<JsonObject?, string>.Failure("the body is a JSON object"),
+            };
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return Result<JsonObject?, string>.Failure("the body is not JSON");
+        }
+        catch (InvalidOperationException)
+        {
+            return Result<JsonObject?, string>.Failure("the body is a JSON object");
+        }
     }
 
     private static string? Flag(ApiKeyWarning? flag) => flag switch
@@ -311,9 +442,11 @@ internal static partial class ApiKeyEndpoints
         SwitchOptions options,
         TimeProvider clock,
         ILoggerFactory loggers,
+        LaneCatalogStore laneCatalog,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(body);
+        ArgumentNullException.ThrowIfNull(laneCatalog);
         ArgumentNullException.ThrowIfNull(clock);
         ArgumentNullException.ThrowIfNull(loggers);
         Result<AccountEmail, string> parsed = AccountEmail.Parse(email);
@@ -365,9 +498,9 @@ internal static partial class ApiKeyEndpoints
         {
             // An Admin key never goes to GitHub, so it has no push targets.
             IReadOnlyList<string> pushesTo = kind == SecretKind.ConsoleApiKey
-                ? [.. PushTargets(recorded.Value).Select(static secret => secret.ToString())]
+                ? [.. PushTargets(recorded.Value, laneCatalog.IsKeyedNow).Select(static role => role.KeySecret!.ToString())]
                 : [];
-            return Results.Ok(new ApiKeyStoredView(DashboardAssembler.View(recorded.Value)!, store.DisplayName, pushesTo));
+            return Results.Ok(new ApiKeyStoredView(DashboardAssembler.View(recorded.Value, laneCatalog.IsKeyedNow)!, store.DisplayName, pushesTo));
         }
 
         // A key the roster does not record is one the page cannot show or
@@ -390,9 +523,11 @@ internal static partial class ApiKeyEndpoints
         CredentialMutationGate gate,
         SwitchOptions options,
         ILoggerFactory loggers,
+        LaneCatalogStore laneCatalog,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(loggers);
+        ArgumentNullException.ThrowIfNull(laneCatalog);
         Result<AccountEmail, string> parsed = AccountEmail.Parse(email);
         if (parsed.IsFailure)
         {
@@ -442,7 +577,7 @@ internal static partial class ApiKeyEndpoints
                 + "), so the card still shows a key. Delete it again to clear the badge.");
         }
 
-        return Results.Ok(new ApiKeyDeletionView(DashboardAssembler.View(recorded.Value)!, removal.Warning));
+        return Results.Ok(new ApiKeyDeletionView(DashboardAssembler.View(recorded.Value, laneCatalog.IsKeyedNow)!, removal.Warning));
     }
 
     /// <summary>
@@ -450,12 +585,10 @@ internal static partial class ApiKeyEndpoints
     /// keyed role the account backs, never one in a single repository that an
     /// earlier roster may still record.
     /// </summary>
-    internal static IReadOnlyList<CiTokenSecret> PushTargets(RosterEntry entry) =>
+    internal static IReadOnlyList<CiRole> PushTargets(RosterEntry entry, Func<CiRole, bool> keyed) =>
         [.. entry.CiRoles
-            .Where(static held => held.Role.Keyed)
-            .Select(static held => held.Role.KeySecret)
-            .OfType<CiTokenSecret>()
-            .Where(static secret => !secret.IsRepositoryRoleSecret)];
+            .Select(static held => held.Role)
+            .Where(role => keyed(role) && role.KeySecret is { Scope: CiSecretScope.Organization })];
 
     /// <summary>The key's name in a log line.</summary>
     private static string Label(SecretKind kind) => kind == SecretKind.AdminKey ? "Admin key" : "console API key";

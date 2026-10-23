@@ -35,6 +35,12 @@ namespace ClaudeCodeAccountRotation.Core.Configuration;
 /// <c>CLAUDE_LANES_REPO_DISABLED</c> variable Check roles reads. Null, as in
 /// a file written before the key, means none.
 /// </para>
+/// <para>
+/// <paramref name="LaneCatalog"/> is <c>laneCatalog</c>: where the lane-funding
+/// catalog is read from, or null, as in a file written before the key, for
+/// none: the roles are then typed by hand and keyed by
+/// <see cref="Accounts.CiRole.Keyed"/>.
+/// </para>
 /// </summary>
 public sealed record ClaudeCodeAccountRotationConfiguration(
     string LiveConfigDirectory,
@@ -52,4 +58,12 @@ public sealed record ClaudeCodeAccountRotationConfiguration(
     string? Mailbox = null,
     IReadOnlyList<PeerConfiguration>? Peers = null,
     string? RemoteControlTask = null,
-    IReadOnlyList<string>? LaneRepositories = null);
+    IReadOnlyList<string>? LaneRepositories = null,
+    LaneCatalogSource? LaneCatalog = null);
+
+/// <summary>
+/// A lane-funding catalog's file: its repository (<c>owner/name</c>), its path
+/// in that repository, and the branch, tag or commit to read, or null for the
+/// repository's default branch.
+/// </summary>
+public sealed record LaneCatalogSource(string Repository, string Path, string? Ref);

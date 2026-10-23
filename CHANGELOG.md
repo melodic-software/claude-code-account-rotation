@@ -12,8 +12,33 @@ All notable changes to this project are documented in this file. The format foll
   and the link the panel shows, carry `login_hint` with the account's address, so a signed-out
   browser fills in the email box. The Console's own login page ignores the hint, so Open Console is
   unchanged.
+- **A lane catalog decides which roles are keyed.** `laneCatalog` in `config.json` names a
+  version-1 lane-funding file by repository, path and optional ref. The tool reads it with one
+  `gh api` call on Load lane catalog or the first Generate CI token or Push API key that needs it.
+  A role is keyed when the catalog says so or when a lane still lists its key secret. The Generate
+  CI token panel then lists the catalog's roles and hides the free-text row. A configured catalog
+  that cannot be read refuses Generate CI token and Push API key. `GET /api/lane-catalog` shows
+  what is held and `POST /api/lane-catalog/refresh` reads it again.
+- **Set API key picks the roles a key backs.** The Console key panel lists the keyed roles (the
+  catalog's, when one is read) with who sets each key now. Tick them, paste the key once (or keep
+  the stored one) and Save and send: the key goes to each role's `<PREFIX>_CLAUDE_API_KEY`
+  organization secret and that key half moves off its previous account. A limit stop on that
+  account in the last 7 days is shown first. Push API key opens the same panel. The push body
+  takes an optional `roles` list, keyed roles only, and only roles the catalog lists when one is
+  configured. The panel says to name the Console key `github-actions`.
+- **A key goes live only with auto-reload and extra usage off.** Push API key, and Generate CI
+  token for a keyed role, ask the owner whether the account's auto-reload and extra usage are off,
+  before any secret is read or token made. No API this tool can call reads auto-reload, so the
+  answer is required on every such write (`costSettings: {"autoReload": "off", "extraUsage":
+  "off"}`). An answer that is missing or unknown refuses, either setting on refuses, and a usage
+  read that says extra usage is on refuses whatever the answer. The roster records the day both
+  were last confirmed off (`costSettingsConfirmedOn`) and clears it when either is said to be on.
 
 ### Changed
+
+- **No secret is written to one repository, whatever its name.** Every secret the tool sets is a
+  CI credential, so the refusal goes by scope: a repository secret named `LANE_TOKEN` or
+  `ANTHROPIC_API_KEY` is refused like a role's.
 
 - **A Claude role secret is never written to one repository.** `gh secret set` is refused, before
   gh starts, for `CLAUDE_CODE_OAUTH_TOKEN` or a name ending in `_CLAUDE_CODE_OAUTH_TOKEN` or

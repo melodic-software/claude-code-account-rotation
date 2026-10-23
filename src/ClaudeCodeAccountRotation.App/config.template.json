@@ -15,5 +15,6 @@
   "mailbox": null,
   "peers": null,
   "remoteControlTask": "claude-remote-control",
-  "laneRepositories": null
+  "laneRepositories": null,
+  "laneCatalog": null
 }

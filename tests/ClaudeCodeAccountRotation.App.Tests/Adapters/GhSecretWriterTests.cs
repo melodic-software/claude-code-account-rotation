@@ -27,9 +27,8 @@ public sealed class GhSecretWriterTests : IDisposable
     public static bool OnUnix => !OperatingSystem.IsWindows();
 
     [Fact]
-    public void ARepositorySecretNamesTheRepository() =>
-        GhSecretWriter.Arguments(CiTokenSecret.Parse("LANE_TOKEN", "octo/repo", null).Value, null, [])
-            .ShouldBe(["secret", "set", "LANE_TOKEN", "--app", "actions", "--repo", "octo/repo"]);
+    public void ARepositorySecretHasNoArgumentList() =>
+        Should.Throw<ArgumentException>(() => GhSecretWriter.Arguments(CiTokenSecret.Parse("LANE_TOKEN", "octo/repo", null).Value, null, []));
 
     [Theory]
     [InlineData("Private", "private")]
@@ -61,8 +60,8 @@ public sealed class GhSecretWriterTests : IDisposable
 
         GhSecretWriter writer = new(gh, TimeSpan.FromSeconds(30), _gate);
         Result<Unit, string> set = await writer.SetAsync(
-            CiTokenSecret.Parse("LANE_TOKEN", "octo/repo", null).Value,
-            null,
+            CiTokenSecret.Parse("LANE_TOKEN", null, "octo").Value,
+            OrgSecretVisibility.Private,
             [],
             token,
             TestContext.Current.CancellationToken);
@@ -70,7 +69,7 @@ public sealed class GhSecretWriterTests : IDisposable
         set.IsSuccess.ShouldBeTrue();
         (await File.ReadAllTextAsync(recorded + ".stdin", TestContext.Current.CancellationToken)).ShouldBe(token);
         string arguments = await File.ReadAllTextAsync(recorded + ".args", TestContext.Current.CancellationToken);
-        arguments.ShouldBe("secret set LANE_TOKEN --app actions --repo octo/repo\n");
+        arguments.ShouldBe("secret set LANE_TOKEN --app actions --org octo --visibility private\n");
         arguments.ShouldNotContain(token);
     }
 
@@ -78,15 +77,18 @@ public sealed class GhSecretWriterTests : IDisposable
     [InlineData("CLAUDE_CODE_OAUTH_TOKEN")]
     [InlineData("REVIEWS_CLAUDE_CODE_OAUTH_TOKEN")]
     [InlineData("pr_verify_claude_api_key")]
+    [InlineData("LANE_TOKEN")]
+    [InlineData("ANTHROPIC_API_KEY")]
+    [InlineData("CLAUDE_API_KEY")]
     [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
-    public async Task AClaudeRoleSecretInOneRepositoryIsRefusedBeforeGhStarts(string name)
+    public async Task ASecretInOneRepositoryIsRefusedBeforeGhStartsWhateverItsName(string name)
     {
         string recorded = Path.Combine(_root, "recorded");
         GhSecretWriter writer = new(StandIn(recorded, exitCode: 0), TimeSpan.FromSeconds(30), _gate);
 
         Result<Unit, string> set = await writer.SetAsync(CiTokenSecret.Parse(name, "octo/repo", null).Value, null, [], "value", TestContext.Current.CancellationToken);
 
-        set.Error.ShouldBe(CiTokenSecret.RepositoryRoleSecretRefusal);
+        set.Error.ShouldBe(CiTokenSecret.RepositorySecretRefusal);
         File.Exists(recorded + ".args").ShouldBeFalse();
     }
 
@@ -118,7 +120,7 @@ public sealed class GhSecretWriterTests : IDisposable
             foreach (OrgSecretVisibility? visibility in new OrgSecretVisibility?[] { null, OrgSecretVisibility.Private, OrgSecretVisibility.All, OrgSecretVisibility.Selected })
             {
                 (await writer.SetAsync(secret, visibility, ["repo"], "value", TestContext.Current.CancellationToken)).Error
-                    .ShouldBe(CiTokenSecret.RepositoryRoleSecretRefusal, writer.GetType().Name + " with " + visibility);
+                    .ShouldBe(CiTokenSecret.RepositorySecretRefusal, writer.GetType().Name + " with " + visibility);
             }
         }
     }

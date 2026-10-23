@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const { takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, promptWording, uniqueName, renameLabel, nearestLimit, tier, asOf, usageAge, sentence, ciRoleBadges, removedCiRoles, changedCiTokenDate, ciTag, ciSecretBody, remoteControlQuestion, switchedToast, historyLines, historyReadLines, assignableRoles, newRoleItem, ciPanelWords } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+const { takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, promptWording, uniqueName, renameLabel, nearestLimit, tier, asOf, usageAge, sentence, ciRoleBadges, removedCiRoles, changedCiTokenDate, ciTag, ciSecretBody, remoteControlQuestion, switchedToast, historyLines, historyReadLines, assignableRoles, newRoleItem, ciPanelWords, catalogNotice } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
 
 function limit(kind, percent, fields) {
   return Object.assign({ kind, percent, known: true, windowReset: false }, fields);
@@ -680,11 +680,49 @@ test("assignableRoles offers each roster role once, then the unclaimed roles Che
     { name: "ISSUE_LANE", prefix: "ISSUE_LANE", organization: "octo", tokenSecret: "ISSUE_LANE_CLAUDE_CODE_OAUTH_TOKEN", keySecret: "ISSUE_LANE_CLAUDE_API_KEY", holder: null }
   ] };
   assert.deepStrictEqual(assignableRoles(accounts, check), [
-    { item: { tokenSecret: "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", organization: "octo" }, holder: "a@example.com", label: "automations in org octo · token+key · backed by a@example.com" },
-    { item: { tokenSecret: "CLAUDE_CODE_OAUTH_TOKEN", repository: "octo/lane-one" }, holder: "b@example.com", label: "legacy (review lanes) (lane-one) in octo/lane-one · token only · backed by b@example.com" },
-    { item: { tokenSecret: "ISSUE_LANE_CLAUDE_CODE_OAUTH_TOKEN", organization: "octo" }, holder: null, label: "issue_lane in org octo · token+key · no holder" }
+    { item: { tokenSecret: "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", organization: "octo" }, holder: "a@example.com", keyed: true, label: "automations in org octo · token+key · backed by a@example.com" },
+    { item: { tokenSecret: "CLAUDE_CODE_OAUTH_TOKEN", repository: "octo/lane-one" }, holder: "b@example.com", keyed: false, label: "legacy (review lanes) (lane-one) in octo/lane-one · token only · backed by b@example.com" },
+    { item: { tokenSecret: "ISSUE_LANE_CLAUDE_CODE_OAUTH_TOKEN", organization: "octo" }, holder: null, keyed: true, label: "issue_lane in org octo · token+key · no holder" }
   ]);
   assert.deepStrictEqual(assignableRoles([], null), []);
+});
+
+// The lane catalog as GET /api/lane-catalog sends it once read: no key
+// secret on a role that is not keyed.
+const CATALOG = { configured: true, readAt: "2026-10-23T00:00:00Z", error: null, organization: "octo", roles: [
+  { id: "reviews", prefix: "REVIEWS", organization: "octo", tokenSecret: "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", keySecret: null, keyed: false, category: "review", lanes: ["pr-review"] },
+  { id: "automations", prefix: "AUTOMATIONS", organization: "octo", tokenSecret: "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", keySecret: "AUTOMATIONS_CLAUDE_API_KEY", keyed: true, category: "maintenance", lanes: ["judge"] }
+] };
+
+test("with a catalog read, assignableRoles offers the catalog's roles in its order, then roster roles it does not name, and no Check roles find", () => {
+  const accounts = [
+    { email: "a@example.com", roster: { ciRoles: [AUTOMATIONS] } },
+    { email: "b@example.com", roster: { ciRoles: [LEGACY_LANE_ONE] } }
+  ];
+  const check = { roles: [
+    { name: "ISSUE_LANE", prefix: "ISSUE_LANE", organization: "octo", tokenSecret: "ISSUE_LANE_CLAUDE_CODE_OAUTH_TOKEN", keySecret: null, holder: null }
+  ] };
+  assert.deepStrictEqual(assignableRoles(accounts, check, CATALOG), [
+    { item: { tokenSecret: "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", organization: "octo" }, holder: null, keyed: false, label: "reviews in org octo · token only · no holder" },
+    { item: { tokenSecret: "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", organization: "octo" }, holder: "a@example.com", keyed: true, label: "automations in org octo · token+key · backed by a@example.com" },
+    { item: { tokenSecret: "CLAUDE_CODE_OAUTH_TOKEN", repository: "octo/lane-one" }, holder: "b@example.com", keyed: false, label: "legacy (review lanes) (lane-one) in octo/lane-one · token only · backed by b@example.com" }
+  ]);
+});
+
+test("a catalog configured but not read leaves assignableRoles as it was", () => {
+  const unread = { configured: true, readAt: null, error: null, organization: null, roles: [] };
+  const accounts = [{ email: "a@example.com", roster: { ciRoles: [AUTOMATIONS] } }];
+  assert.deepStrictEqual(assignableRoles(accounts, null, unread), assignableRoles(accounts, null));
+});
+
+test("catalogNotice says when a configured catalog is unread or unreadable, and nothing otherwise", () => {
+  assert.strictEqual(catalogNotice(null), null);
+  assert.strictEqual(catalogNotice({ configured: false, roles: [] }), null);
+  assert.strictEqual(catalogNotice(CATALOG), null);
+  assert.strictEqual(catalogNotice({ configured: true, error: null, roles: [] }),
+    "The lane catalog has not been read yet; load it to see the roles and which of them take a key.");
+  assert.strictEqual(catalogNotice({ configured: true, error: "no lane catalog at lane-funding.json in octo/lanes", roles: [] }),
+    "The lane catalog could not be read (no lane catalog at lane-funding.json in octo/lanes), so Generate CI token and Push API key are refused until it is.");
 });
 
 test("newRoleItem says creates only for the secrets the last Check roles did not list, and is null with no prefix", () => {
@@ -957,4 +995,46 @@ test("a partial scan names how far back each repository it did not finish was re
 
 test("a checked scan with every repository complete and no hit still moves without asking", () => {
   assert.strictEqual(limitStopNotice(["a@example.com"], { ok: true, body: { outcome: "checked", hits: [], problems: [], coverage: [{ repository: "octo/lanes", complete: true, coveredBack: null }] } }), null);
+});
+
+const { keyRoleChoices, costSettingsBody } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+
+// A catalog with one keyed and one token-only role, built by hand: issue #259
+// asks that Set API key offer keyed roles only.
+const KEY_CATALOG = { configured: true, readAt: "2026-10-23T00:00:00Z", error: null, organization: "octo", roles: [
+  { id: "reviews", prefix: "REVIEWS", organization: "octo", tokenSecret: "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", keySecret: null, keyed: false, category: "review", lanes: ["pr-review"] },
+  { id: "pr-verify", prefix: "PR_VERIFY", organization: "octo", tokenSecret: "PR_VERIFY_CLAUDE_CODE_OAUTH_TOKEN", keySecret: "PR_VERIFY_CLAUDE_API_KEY", keyed: true, category: "pr", lanes: ["pr-verify"] },
+  { id: "intake", prefix: "INTAKE", organization: "octo", tokenSecret: "INTAKE_CLAUDE_CODE_OAUTH_TOKEN", keySecret: "INTAKE_CLAUDE_API_KEY", keyed: true, category: "intake", lanes: ["intake-triage"] }
+] };
+
+test("Set API key offers the catalog's keyed roles only, in its order, naming who sets each key now", () => {
+  const accounts = [
+    { email: "a@example.com", roster: { ciRoles: [{ prefix: "INTAKE", organization: "octo", keySecret: "INTAKE_CLAUDE_API_KEY", keySetOn: "2026-10-01" }] } },
+    { email: "me@example.com", roster: { ciRoles: [] } }
+  ];
+  assert.deepStrictEqual(keyRoleChoices(accounts, KEY_CATALOG, "me@example.com"), [
+    { item: { prefix: "PR_VERIFY", organization: "octo" }, holder: null, checked: false, label: "PR_VERIFY in org octo · PR_VERIFY_CLAUDE_API_KEY · no key yet" },
+    { item: { prefix: "INTAKE", organization: "octo" }, holder: "a@example.com", checked: false, label: "INTAKE in org octo · INTAKE_CLAUDE_API_KEY · key from a@example.com" }
+  ]);
+  assert.ok(keyRoleChoices(accounts, KEY_CATALOG, "a@example.com")[1].checked);
+  // The keyed flag decides, even beside a key secret name.
+  const named = { roles: [{ id: "automations", prefix: "AUTOMATIONS", organization: "octo", keySecret: "AUTOMATIONS_CLAUDE_API_KEY", keyed: false }] };
+  assert.deepStrictEqual(keyRoleChoices(accounts, named, "me@example.com"), []);
+});
+
+test("with no catalog, Set API key offers the keyed organization roles accounts back, and no token-only or repository role", () => {
+  const accounts = [{ email: "a@example.com", roster: { ciRoles: [
+    { prefix: "PR_UNBLOCK", organization: "octo", keySecret: "PR_UNBLOCK_CLAUDE_API_KEY", keySetOn: null },
+    { prefix: "REVIEWS", organization: "octo", keySecret: null, keySetOn: null },
+    { prefix: "INTAKE", repository: "octo/one", organization: null, keySecret: "INTAKE_CLAUDE_API_KEY", keySetOn: "2026-06-01" }
+  ] } }];
+  assert.deepStrictEqual(keyRoleChoices(accounts, null, "a@example.com").map((choice) => choice.item), [{ prefix: "PR_UNBLOCK", organization: "octo" }]);
+});
+
+test("the cost answers go to the server only when both say off", () => {
+  assert.ok(costSettingsBody("", "off", "a@example.com").error.startsWith("Answer both"));
+  assert.ok(costSettingsBody("off", "", "a@example.com").error.startsWith("Answer both"));
+  assert.ok(costSettingsBody("on", "off", "a@example.com").error.startsWith("Turn auto-reload and extra usage off"));
+  assert.ok(costSettingsBody("off", "on", "a@example.com").error.startsWith("Turn auto-reload and extra usage off"));
+  assert.deepStrictEqual(costSettingsBody("off", "off", "a@example.com"), { costSettings: { autoReload: "off", extraUsage: "off" } });
 });

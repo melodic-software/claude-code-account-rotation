@@ -84,29 +84,6 @@ public sealed class CiTokenEndpointTests
         factory.Logs.Lines.ShouldAllBe(line => !line.Contains("sk-ant", StringComparison.Ordinal) && !line.Contains(Code, StringComparison.Ordinal));
     }
 
-    [Fact]
-    public async Task EachLaneKeepsItsOwnSecretHolder()
-    {
-        await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
-        using HttpClient client = factory.CreateMutatingClient();
-        using (HttpResponseMessage added = await client.PostAsJsonAsync(_accounts, new { email = "other@example.com" }, TestContext.Current.CancellationToken))
-        {
-            added.StatusCode.ShouldBe(HttpStatusCode.OK);
-        }
-
-        foreach ((string email, string repository) in new[] { (Email, "octo/lane-one"), ("other@example.com", "octo/lane-two") })
-        {
-            using HttpResponseMessage started = await client.PostAsJsonAsync(Start(email), new { secretName = "LANE_TOKEN", repository }, TestContext.Current.CancellationToken);
-            JsonObject session = (await started.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
-            using HttpResponseMessage answered = await client.PostAsJsonAsync(CodePath(session["id"]!.GetValue<string>()), new { code = Code }, TestContext.Current.CancellationToken);
-            answered.StatusCode.ShouldBe(HttpStatusCode.OK);
-        }
-
-        Roster roster = await StoredRosterAsync(factory, TestContext.Current.CancellationToken);
-        roster.Find(AccountEmail.Parse(Email).Value)!.CiTokenSecret!.Owner.ShouldBe("octo/lane-one");
-        roster.Find(AccountEmail.Parse("other@example.com").Value)!.CiTokenSecret!.Owner.ShouldBe("octo/lane-two");
-    }
-
     [Theory]
     [InlineData("{\"secretName\":\"GITHUB_TOKEN\",\"repository\":\"octo/repo\"}")]
     [InlineData("{\"secretName\":\"1BAD\",\"repository\":\"octo/repo\"}")]
@@ -131,12 +108,14 @@ public sealed class CiTokenEndpointTests
         factory.SetupToken.Children.ShouldBeEmpty();
     }
 
-    // No field the body carries lets a Claude role secret into one repository.
+    // No name and no field the body carries lets a secret into one repository.
     [Theory]
+    [InlineData("{\"secretName\":\"LANE_TOKEN\",\"repository\":\"octo/lane-one\"}")]
+    [InlineData("{\"secretName\":\"CLAUDE_TOKEN\",\"repository\":\"octo/repo\"}")]
     [InlineData("{\"secretName\":\"CLAUDE_CODE_OAUTH_TOKEN\",\"repository\":\"octo/repo\"}")]
     [InlineData("{\"secretName\":\"reviews_claude_code_oauth_token\",\"repository\":\"octo/repo\"}")]
     [InlineData("{\"secretName\":\"INTAKE_CLAUDE_API_KEY\",\"repository\":\"octo/repo\",\"force\":true,\"allowRepoScope\":true}")]
-    public async Task AClaudeRoleSecretInOneRepositoryIsRefusedBeforeAnythingStarts(string json)
+    public async Task ASecretInOneRepositoryIsRefusedBeforeAnythingStartsWhateverItsName(string json)
     {
         await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
         using HttpClient client = factory.CreateMutatingClient();
@@ -146,7 +125,7 @@ public sealed class CiTokenEndpointTests
 
         response.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
         (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["error"]!.GetValue<string>()
-            .ShouldBe(CiTokenSecret.RepositoryRoleSecretRefusal);
+            .ShouldBe(CiTokenSecret.RepositorySecretRefusal);
         factory.SetupToken.Children.ShouldBeEmpty();
         factory.Secrets.Sets.ShouldBeEmpty();
     }

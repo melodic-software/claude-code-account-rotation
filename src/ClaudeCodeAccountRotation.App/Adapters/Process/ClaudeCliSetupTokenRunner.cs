@@ -75,7 +75,7 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
     private const int MaximumCodeLength = 256;
 
     internal const string ManualFallback =
-        " To do it by hand: run `claude setup-token`, sign in as the account, then `gh secret set <name> --repo <owner/name>` (or `--org <org>` with the secret's current visibility: `--visibility all`, `--visibility private`, or `--repos a,b` for selected repositories, since gh otherwise makes it private) and paste the token.";
+        " To do it by hand: run `claude setup-token`, sign in as the account, then `gh secret set <name> --org <org>` with the secret's current visibility (`--visibility all`, `--visibility private`, or `--repos a,b` for selected repositories, since gh otherwise makes it private) and paste the token.";
 
     private const string RejectedMessage = "That code was rejected. Start again and paste the whole code from the browser." + ManualFallback;
     private const string ExpiredMessage = "This CI token session expired after ten minutes. Start it again.";
