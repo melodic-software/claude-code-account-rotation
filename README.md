@@ -590,8 +590,8 @@ switch is read-only, and no repository or environment variable is ever written. 
 
 Before Start sign-in or Save and send moves a role off other accounts, the page checks those
 accounts' usage from the last dashboard, with no request: the 5-hour and 7-day figures the claude
-binary reads for each account. When one of them is at 90% or more (the critical mark of the usage
-alerts), the panel names the account, the figure and when it resets, with Move anyway and Cancel;
+binary reads for each account. When one of them is at 90% or more (the meters' red tier), the
+panel names the account, the figure and when it resets, with Move anyway and Cancel;
 it never blocks the move. An account with no usage read yet is named as not checked. A Console
 key's credit stop has no such figure, so the panel says credit stops are not checked. Otherwise
 the move starts at once.

@@ -2111,21 +2111,25 @@
   }
 
   // The warning's lines, or null when no account moved off is near a limit:
-  // a 5-hour or 7-day figure the dashboard marks critical (90% and up) names
-  // the account, the figure and its reset, and an account with no usage
-  // read says so. The figures are the claude binary's own reads, so no
-  // GitHub call is made. A Console key's credit stop has no such figure.
+  // a known 5-hour or 7-day figure at 90% or more, whose window has not
+  // reset, names the account, the figure and its reset (the meters' crit
+  // tier; a source's severity is optional, so the figure decides), and an
+  // account with neither figure known says so. The figures are the claude
+  // binary's own reads, so no GitHub call is made. A Console key's credit
+  // stop has no such figure.
   function limitStopNotice(froms, accounts) {
     var lines = [];
     froms.forEach(function (from) {
       var account = (accounts || []).filter(function (other) { return other.email === from; })[0];
-      var limits = account && account.usage && account.usage.limits;
-      if (!limits) {
+      var known = ((account && account.usage && account.usage.limits) || []).filter(function (limit) {
+        return (limit.kind === "session" || limit.kind === "weekly_all") && limit.known && typeof limit.percent === "number";
+      });
+      if (!known.length) {
         lines.push({ kind: "warn", text: from + ": no usage read yet, so its limits were not checked." });
         return;
       }
-      limits.forEach(function (limit) {
-        if ((limit.kind !== "session" && limit.kind !== "weekly_all") || limit.severity !== "critical" || limit.windowReset) { return; }
+      known.forEach(function (limit) {
+        if (limit.windowReset || limit.percent < 90) { return; }
         lines.push({
           kind: "crit",
           text: from + ": at " + limit.percent + "% of its " + limit.label + " limit"

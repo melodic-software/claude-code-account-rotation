@@ -921,12 +921,29 @@ test("no account moved off near a limit moves at once without asking", async () 
 });
 
 test("a window that already reset and a model-scoped figure do not warn", () => {
-  const accounts = [usageOf("a@example.com", [usageLimit("session", "5-hour", null, "critical", null, true), usageLimit("weekly_scoped", "Fable", 99, "critical")])];
+  const accounts = [usageOf("a@example.com", [
+    usageLimit("session", "5-hour", 96, "critical", null, true),
+    usageLimit("weekly_all", "7-day", 40, "normal"),
+    usageLimit("weekly_scoped", "Fable", 99, "critical")
+  ])];
   assert.strictEqual(limitStopNotice(["a@example.com"], accounts), null);
 });
 
+test("the figure decides, not the source's severity: a statusline 95% with no severity warns", () => {
+  const accounts = [usageOf("a@example.com", [usageLimit("session", "5-hour", 95, null), usageLimit("weekly_all", "7-day", 20, null)])];
+  assert.deepStrictEqual(limitStopNotice(["a@example.com"], accounts).map((line) => line.text), [
+    "a@example.com: at 95% of its 5-hour limit.",
+    CREDIT_NOT_CHECKED
+  ]);
+});
+
 test("an account with no usage read says its limits were not checked", () => {
-  const lines = limitStopNotice(["a@example.com", "b@example.com"], [{ email: "a@example.com", usage: null }]);
+  // The dashboard sends an unread account placeholder rows with known false and no percent.
+  const unread = { email: "a@example.com", usage: { source: null, limits: [
+    { kind: "session", label: "5-hour", percent: null, severity: null, resetsAt: null, known: false, windowReset: false },
+    { kind: "weekly_all", label: "7-day", percent: null, severity: null, resetsAt: null, known: false, windowReset: false }
+  ] } };
+  const lines = limitStopNotice(["a@example.com", "b@example.com"], [unread]);
   assert.deepStrictEqual(lines.map((line) => line.text), [
     "a@example.com: no usage read yet, so its limits were not checked.",
     "b@example.com: no usage read yet, so its limits were not checked.",
