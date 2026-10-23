@@ -98,9 +98,9 @@ public sealed record LimitStopHit(LaneRun Run, CiRole Role, RoleHalf Half, strin
 public static class LimitStopScan
 {
     /// <summary>
-    /// The most GitHub calls one scan makes. Basis: the owner's answer (#318);
-    /// claude-code-plugins' 1,513 failed runs in 7 days take 16 pages and 31
-    /// batches of 50, with room for halved batches.
+    /// The most GitHub calls one scan makes. Basis: the owner's answer of
+    /// 2026-10-22 (#318); claude-code-plugins' 1,513 failed runs in 7 days take
+    /// 16 pages and 31 batches of 50, with room for halved batches.
     /// </summary>
     public const int MaxCalls = 60;
 

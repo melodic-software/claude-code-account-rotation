@@ -10,9 +10,10 @@ All notable changes to this project are documented in this file. The format foll
 
 - **The limit-stop check reads runs again.** One GraphQL batch of 100 check suites went over
   GitHub's resource limits on claude-code-plugins, so the check read no runs and always answered
-  partial (#318). It now reads 50 suites a batch, reads a batch GitHub cuts off again in halves,
-  and keeps the smaller size for the rest of the check. The check stops at 60 calls instead of 30,
-  which covers the 1,500 failed runs a week claude-code-plugins logs.
+  partial (#318). It now reads 50 suites a batch and reads a batch GitHub cuts off again in halves
+  for the rest of its page. The check stops at 60 calls instead of 30. On claude-code-plugins,
+  which logs about 1,500 failed runs a week, one check read all 7 days in 52 calls and took about
+  3.5 minutes, which Start sign-in waits for.
 
 ## [2.5.0] - 2026-10-22
 

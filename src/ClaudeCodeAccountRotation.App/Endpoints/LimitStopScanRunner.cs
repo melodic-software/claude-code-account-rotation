@@ -10,8 +10,8 @@ namespace ClaudeCodeAccountRotation.App.Endpoints;
 /// page of the failed runs of the last <see cref="LimitStopScan.Window"/>,
 /// then GraphQL batches reading the check runs of every attempt of those
 /// runs and every job's annotations, failed or not. A batch GitHub cuts off
-/// for its resource limits is read again in halves, and later batches keep
-/// the smaller size. A check run whose
+/// for its resource limits is read again in halves for the rest of its page.
+/// A check run whose
 /// annotations the batch cut off gets one REST read. Every call comes from
 /// one <see cref="ScanCallBudget"/> of <see cref="LimitStopScan.MaxCalls"/>.
 /// <see cref="ListingRange"/> pages the listing and <see cref="RunCoverage"/>
@@ -26,7 +26,6 @@ internal sealed class LimitStopScanRunner
     private readonly IGhApiReader _reader;
     private readonly IGhGraphQlReader _graphQl;
     private readonly ScanCallBudget _budget = new(LimitStopScan.MaxCalls);
-    private int _suitesPerBatch = GhReadQueries.SuitesPerBatch;
     private bool _stopped;
 
     private LimitStopScanRunner(IGhApiReader reader, IGhGraphQlReader graphQl)
@@ -143,19 +142,22 @@ internal sealed class LimitStopScanRunner
 
     /// <summary>
     /// The suites of <paramref name="ids"/> in their order, read in batches of
-    /// <see cref="_suitesPerBatch"/>. Fewer come back when the budget, a failed
-    /// read or the point floor stops the reading.
+    /// <see cref="GhReadQueries.SuitesPerBatch"/>, halved for the rest of the
+    /// page after each cut-off. GitHub cut off about one batch of 50 in ten
+    /// live, so each page starts at 50 again (#318). Fewer come back when the
+    /// budget, a failed read or the point floor stops the reading.
     /// </summary>
     private async Task<List<SuiteRead?>> ReadSuitesAsync(string repository, List<string> ids, CancellationToken cancellationToken)
     {
         List<SuiteRead?> suites = [];
+        int size = GhReadQueries.SuitesPerBatch;
         while (suites.Count < ids.Count && Take())
         {
-            List<string> batch = ids.GetRange(suites.Count, Math.Min(_suitesPerBatch, ids.Count - suites.Count));
+            List<string> batch = ids.GetRange(suites.Count, Math.Min(size, ids.Count - suites.Count));
             Result<SuiteBatch, GhApiFailure> read = await _graphQl.ReadCheckSuitesAsync(batch, cancellationToken);
             if (read.IsFailure && read.Error.ResourceLimited && batch.Count > 1)
             {
-                _suitesPerBatch = (batch.Count + 1) / 2;
+                size = (batch.Count + 1) / 2;
                 continue;
             }
 

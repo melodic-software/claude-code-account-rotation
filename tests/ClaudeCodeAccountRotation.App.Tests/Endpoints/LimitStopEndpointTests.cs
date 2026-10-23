@@ -354,22 +354,22 @@ public sealed class LimitStopEndpointTests
     }
 
     [Fact]
-    public async Task ABatchCutOffForResourceLimitsIsReadAgainInHalvesAndLaterBatchesKeepTheSmallerSize()
+    public async Task ABatchCutOffForResourceLimitsIsReadAgainInHalvesForTheRestOfItsPage()
     {
         (AppFactory factory, SpyReader reader, SpyGraphQl graphQl) = await StartAsync("octo/lanes");
         await using AppFactory _ = factory;
         reader.Answers.Enqueue(Stream("octo/lanes", 0));
-        reader.Answers.Enqueue(Runs("octo/lanes"));
+        reader.Answers.Enqueue(Stream("octo/lanes", 100, 60));
         graphQl.Answers.Enqueue(ResourceLimited());
 
         JsonObject body = await ScanAsync(factory, A);
 
-        graphQl.Batches.Select(static batch => batch.Count).ShouldBe([50, 25, 25, 25, 25]);
-        graphQl.Batches.Skip(1).SelectMany(static batch => batch).ShouldBe([.. Enumerable.Range(0, 100).Select(static index => Nth(index).Suite)]);
+        graphQl.Batches.Select(static batch => batch.Count).ShouldBe([50, 25, 25, 25, 25, 50, 10]);
+        graphQl.Batches.Skip(1).SelectMany(static batch => batch).ShouldBe([.. Enumerable.Range(0, 160).Select(static index => Nth(index).Suite)]);
         body["outcome"]!.GetValue<string>().ShouldBe("checked");
-        body["runsRead"]!.GetValue<int>().ShouldBe(100);
-        body["calls"]!.GetValue<int>().ShouldBe(7);
-        CoveredBack(Coverage(body, 0)).ShouldBe(Nth(99).CreatedAt);
+        body["runsRead"]!.GetValue<int>().ShouldBe(160);
+        body["calls"]!.GetValue<int>().ShouldBe(9);
+        CoveredBack(Coverage(body, 0)).ShouldBe(Nth(159).CreatedAt);
     }
 
     [Fact]
