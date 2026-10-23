@@ -397,7 +397,7 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
 
             if (session.SignInUrl is null && ExtractAuthorizeUrl(visible) is Uri url)
             {
-                session.SignInUrl = url;
+                session.SignInUrl = SignInUrl.WithLoginHint(url, session.Request.Email);
                 session.Started.TrySetResult();
             }
 

@@ -442,7 +442,7 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
 
             if (session.SignInUrl is null && ExtractAuthorizeUrl(seen) is Uri url)
             {
-                session.SignInUrl = url;
+                session.SignInUrl = SignInUrl.WithLoginHint(url, session.Email);
                 session.Started.TrySetResult();
             }
 

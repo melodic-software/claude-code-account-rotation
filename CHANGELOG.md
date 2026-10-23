@@ -6,6 +6,13 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Added
+
+- **Sign-in links name the account.** The sign-in URL that Start sign-in and Log in again open,
+  and the link the panel shows, carry `login_hint` with the account's address, so a signed-out
+  browser fills in the email box. The Console's own login page ignores the hint, so Open Console is
+  unchanged.
+
 ### Changed
 
 - **A Claude role secret is never written to one repository.** `gh secret set` is refused, before

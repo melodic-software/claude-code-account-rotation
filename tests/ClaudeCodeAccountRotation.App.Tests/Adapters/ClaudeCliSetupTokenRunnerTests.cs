@@ -52,7 +52,7 @@ public sealed class ClaudeCliSetupTokenRunnerTests : IDisposable
 
         Result<LoginSession, string> started = await runner.StartAsync(Request(), TestContext.Current.CancellationToken);
         started.IsSuccess.ShouldBeTrue();
-        started.Value.SignInUrl!.AbsoluteUri.ShouldBe(SetupTokenScript.SignInUrl);
+        started.Value.SignInUrl!.AbsoluteUri.ShouldBe(SetupTokenScript.SignInUrl + "&login_hint=ci%40example.com");
         _script.Last.Arguments.ShouldBe(["setup-token"]);
 
         Result<LoginSession, string> submitted = await runner.SubmitCodeAsync(started.Value.Id, "the-code#state", TestContext.Current.CancellationToken);

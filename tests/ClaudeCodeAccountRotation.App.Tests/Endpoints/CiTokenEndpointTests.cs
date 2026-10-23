@@ -57,7 +57,7 @@ public sealed class CiTokenEndpointTests
         (BrowserFamily browser, string? profile, Uri url) = factory.Browser.Launched.Single();
         browser.ShouldBe(BrowserFamily.Edge);
         profile.ShouldBe("Profile 2");
-        url.AbsoluteUri.ShouldBe(SetupTokenScript.SignInUrl);
+        url.AbsoluteUri.ShouldBe(SetupTokenScript.SignInUrl + "&login_hint=lane%40example.com");
 
         using HttpResponseMessage answered = await client.PostAsJsonAsync(
             CodePath(session["id"]!.GetValue<string>()),
