@@ -47,7 +47,7 @@ internal sealed class UnavailableCiSecretWriter(string reason) : ICiSecretWriter
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(secret);
-        return Task.FromResult(Result<Unit, string>.Failure(secret.IsRepositoryRoleSecret ? CiTokenSecret.RepositoryRoleSecretRefusal : reason));
+        return Task.FromResult(Result<Unit, string>.Failure(secret.Scope == CiSecretScope.Repository ? CiTokenSecret.RepositorySecretRefusal : reason));
     }
 }
 
@@ -91,20 +91,21 @@ internal sealed class GhSecretWriter(string executable, TimeSpan timeout, GhWrit
     }
 
     /// <summary>
-    /// The argument list, never a command line, and never the value. An
-    /// organization secret must name its visibility: gh would make it private.
+    /// The argument list, never a command line, and never the value, for an
+    /// organization secret: a repository secret is never written (see
+    /// <see cref="CiTokenSecret.RepositorySecretRefusal"/>). An organization
+    /// secret must name its visibility: gh would make it private.
     /// </summary>
     public static IReadOnlyList<string> Arguments(CiTokenSecret secret, OrgSecretVisibility? visibility, IReadOnlyList<string> repositories)
     {
         ArgumentNullException.ThrowIfNull(secret);
         ArgumentNullException.ThrowIfNull(repositories);
-        List<string> arguments = ["secret", "set", secret.Name, "--app", "actions"];
         if (secret.Scope == CiSecretScope.Repository)
         {
-            arguments.AddRange(["--repo", secret.Owner]);
-            return arguments;
+            throw new ArgumentException(CiTokenSecret.RepositorySecretRefusal, nameof(secret));
         }
 
+        List<string> arguments = ["secret", "set", secret.Name, "--app", "actions"];
         if (visibility is null)
         {
             throw new ArgumentException("an organization secret needs its visibility, or gh makes it private", nameof(visibility));
@@ -145,11 +146,11 @@ internal sealed class GhSecretWriter(string executable, TimeSpan timeout, GhWrit
         string value,
         CancellationToken cancellationToken)
     {
-        // The one way to gh secret set: a Claude role secret never goes to one repository.
+        // The one way to gh secret set: no secret goes to one repository.
         ArgumentNullException.ThrowIfNull(secret);
-        if (secret.IsRepositoryRoleSecret)
+        if (secret.Scope == CiSecretScope.Repository)
         {
-            return Result<Unit, string>.Failure(CiTokenSecret.RepositoryRoleSecretRefusal);
+            return Result<Unit, string>.Failure(CiTokenSecret.RepositorySecretRefusal);
         }
 
         ArgumentException.ThrowIfNullOrEmpty(value);

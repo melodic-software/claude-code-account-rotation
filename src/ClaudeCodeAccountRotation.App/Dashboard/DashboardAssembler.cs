@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using ClaudeCodeAccountRotation.App.Accounts;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.App.Switching;
@@ -42,6 +43,7 @@ internal sealed partial class DashboardAssembler(
     TimeProvider timeProvider,
     IClaudeCliAuthStatus authStatus,
     CliLogoutMonitor cliLogout,
+    LaneCatalogStore laneCatalog,
     ILogger<DashboardAssembler> logger)
 {
     /// <summary>
@@ -77,8 +79,12 @@ internal sealed partial class DashboardAssembler(
     /// </summary>
     internal static readonly TimeSpan LiveSeatJudgmentLifetime = TimeSpan.FromMinutes(1);
 
-    /// <summary>The roster entry as the page reads it.</summary>
-    public static RosterEntryView? View(RosterEntry? entry) => entry is null
+    /// <summary>
+    /// The roster entry as the page reads it, with each role keyed by
+    /// <paramref name="keyed"/>: <see cref="LaneCatalogStore.IsKeyedNow"/> at
+    /// every caller, so no card view keys a role differently from the dashboard.
+    /// </summary>
+    public static RosterEntryView? View(RosterEntry? entry, Func<CiRole, bool> keyed) => entry is null
         ? null
         : new RosterEntryView(
             entry.Email.Value,
@@ -94,7 +100,7 @@ internal sealed partial class DashboardAssembler(
                     secret.Scope == CiSecretScope.Repository ? secret.Owner : null,
                     secret.Scope == CiSecretScope.Organization ? secret.Owner : null)
                 : null,
-            [.. entry.CiRoles.Select(static assignment => new CiRoleView(
+            [.. entry.CiRoles.Select(assignment => new CiRoleView(
                 assignment.Role.Name,
                 assignment.Role.Prefix,
                 assignment.Role.Scope == CiSecretScope.Repository ? assignment.Role.Owner : null,
@@ -102,11 +108,11 @@ internal sealed partial class DashboardAssembler(
                 assignment.Role.TokenSecretName,
                 // A token-only role's lanes read no key, so a key half an
                 // earlier release recorded is not shown.
-                assignment.Role.Keyed ? assignment.Role.KeySecretName : null,
+                keyed(assignment.Role) ? assignment.Role.KeySecretName : null,
                 assignment.TokenSetOn,
                 assignment.TokenSetAt,
-                assignment.Role.Keyed ? assignment.KeySetOn : null,
-                assignment.Role.Keyed ? assignment.KeySetAt : null))],
+                keyed(assignment.Role) ? assignment.KeySetOn : null,
+                keyed(assignment.Role) ? assignment.KeySetAt : null))],
             entry.ConsoleApiKeySetOn,
             entry.AdminKeySetOn,
             entry.BacksCiRole);
@@ -288,8 +294,16 @@ internal sealed partial class DashboardAssembler(
             [.. (alerts?.Alerts ?? []).Select(static alert => new AlertView(alert.Account.Value, Wire(alert.Level), alert.Percent, alert.Threshold))],
             alerts?.ComputedAt,
             UsageAlerts.Thresholds,
-            CiRole.TokenOnlyPrefixes);
+            TokenOnlyPrefixes(laneCatalog.Snapshot.Catalog),
+            LaneCatalogView.Of(laneCatalog));
     }
+
+    /// <summary>The prefixes the page treats as token-only: the catalog's unkeyed roles once it is read, else the fixed list.</summary>
+    private static IReadOnlyList<string> TokenOnlyPrefixes(LaneCatalog? catalog) => catalog is null
+        ? CiRole.TokenOnlyPrefixes
+        : [.. catalog.Roles
+            .Where(role => catalog.IsKeyed(new CiRole(role.Prefix, CiSecretScope.Organization, catalog.Organization)) == false)
+            .Select(static role => role.Prefix)];
 
     /// <summary>An alert's level as the page spells it.</summary>
     private static string Wire(AlertLevel level) => level switch
@@ -455,7 +469,7 @@ internal sealed partial class DashboardAssembler(
                 Usage(merged, capturedAt),
                 note,
                 refresh,
-                View(entry),
+                View(entry, laneCatalog.IsKeyedNow),
                 LoginExpiresAt: loginExpiresAt,
                 LoggedInAt: loggedInAt,
                 Slot: Word(slot),

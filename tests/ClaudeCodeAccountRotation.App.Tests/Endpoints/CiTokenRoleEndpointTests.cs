@@ -40,9 +40,16 @@ public sealed class CiTokenRoleEndpointTests
     private static AccountEmail Parse(string email) => AccountEmail.Parse(email).Value;
 
     /// <summary>A rostered account with a mapped browser and, when asked, its Console key stored.</summary>
-    private static async Task<(AppFactory Factory, PathReader Reader)> StartAsync(bool withKey, CancellationToken cancellationToken)
+    private static async Task<(AppFactory Factory, PathReader Reader)> StartAsync(bool withKey, CancellationToken cancellationToken, bool withCatalog = false)
     {
         AppFactory factory = new();
+        if (withCatalog)
+        {
+            JsonObject configuration = JsonNode.Parse(await File.ReadAllTextAsync(factory.ConfigPath, cancellationToken))!.AsObject();
+            configuration["laneCatalog"] = new JsonObject { ["repository"] = "octo/lanes", ["path"] = "lane-funding.json" };
+            await File.WriteAllTextAsync(factory.ConfigPath, configuration.ToJsonString(), cancellationToken);
+        }
+
         PathReader reader = new();
         KeyStore store = new();
         factory.Overrides = services =>
@@ -85,6 +92,193 @@ public sealed class CiTokenRoleEndpointTests
 
     private static Task<Roster> SeedAsync(AppFactory factory, RosterEntry entry) =>
         factory.Services.GetRequiredService<RosterFile>().UpdateAsync(roster => roster.With(entry), TestContext.Current.CancellationToken);
+
+    private const string CatalogPath = "repos/octo/lanes/contents/lane-funding.json";
+
+    // AUTOMATIONS says keyed:false and no lane reads its key; REVIEWS says
+    // keyed:true. The fixed list says the opposite of both, so a test that
+    // passes here follows the catalog.
+    private const string CatalogJson = """
+        { "version": 1, "org": "octo", "roles": [
+          { "id": "reviews", "secretPrefix": "REVIEWS", "tokenSecret": "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", "keySecret": "REVIEWS_CLAUDE_API_KEY",
+            "keyed": true, "category": "review", "lanes": [ { "id": "pr-review", "workflow": "pr-review-hosted.yml", "launcher": "run-claude-cli", "currentSecrets": [] } ] },
+          { "id": "automations", "secretPrefix": "AUTOMATIONS", "tokenSecret": "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", "keySecret": "AUTOMATIONS_CLAUDE_API_KEY",
+            "keyed": false, "category": "maintenance", "lanes": [ { "id": "judge", "workflow": "j.yml", "launcher": "claude-code-action", "currentSecrets": ["AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN"] } ] } ] }
+        """;
+
+    /// <summary>The catalog as "Get repository content" answers for a file: https://docs.github.com/en/rest/repos/contents#get-repository-content.</summary>
+    private static void AnswerCatalog(PathReader reader) =>
+        reader.Answers[CatalogPath] = Result<JsonNode, GhApiFailure>.Success(new JsonObject
+        {
+            ["type"] = "file",
+            ["encoding"] = "base64",
+            ["content"] = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(CatalogJson)),
+        });
+
+    private static readonly object _reviewsAndAutomations = new
+    {
+        roles = new[] { new { prefix = "REVIEWS", organization = "octo" }, new { prefix = "AUTOMATIONS", organization = "octo" } },
+    };
+
+    [Fact]
+    public async Task WithACatalogItDecidesWhichRolesGetAKey()
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken, withCatalog: true);
+        await using AppFactory host = factory;
+        AnswerCatalog(reader);
+        AnswerAll(reader, "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", "REVIEWS_CLAUDE_API_KEY", "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN");
+        using HttpClient client = factory.CreateMutatingClient();
+
+        await AssignAsync(client, _reviewsAndAutomations, TestContext.Current.CancellationToken);
+
+        factory.Secrets.Sets.Select(static set => (set.Secret.Name, set.Value)).ShouldBe(
+        [
+            ("REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", SetupTokenScript.Token),
+            ("REVIEWS_CLAUDE_API_KEY", PlantedKey),
+            ("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", SetupTokenScript.Token),
+        ]);
+        reader.Paths.ShouldContain(CatalogPath);
+    }
+
+    [Fact]
+    public async Task PushFollowsTheCatalog()
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken, withCatalog: true);
+        await using AppFactory host = factory;
+        AnswerCatalog(reader);
+        AnswerAll(reader, "REVIEWS_CLAUDE_API_KEY", "AUTOMATIONS_CLAUDE_API_KEY");
+        DateOnly before = new(2026, 6, 1);
+        RosterEntry held = (await RosterAsync(factory)).Find(Parse(Email))!;
+        await SeedAsync(factory, held
+            .ClaimingToken(new CiRole("REVIEWS", CiSecretScope.Organization, "octo"), before, null)
+            .ClaimingToken(new CiRole("AUTOMATIONS", CiSecretScope.Organization, "octo"), before, null));
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage pushed = await client.PostAsync(Account(Email, "/api-key/push"), content: null, TestContext.Current.CancellationToken);
+
+        pushed.StatusCode.ShouldBe(HttpStatusCode.OK);
+        factory.Secrets.Sets.Select(static set => set.Secret.Name).ShouldBe(["REVIEWS_CLAUDE_API_KEY"]);
+    }
+
+    // A configured catalog that cannot be read refuses before any token or key
+    // moves, rather than guessing which roles are keyed.
+    [Fact]
+    public async Task AnUnreadableCatalogRefusesGenerateAndPush()
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken, withCatalog: true);
+        await using AppFactory host = factory;
+        reader.Answers[CatalogPath] = Result<JsonNode, GhApiFailure>.Failure(new GhApiFailure("GitHub answered HTTP 404", RateLimited: false, Status: 404));
+        AnswerAll(reader, "PR_UNBLOCK_CLAUDE_CODE_OAUTH_TOKEN", "PR_UNBLOCK_CLAUDE_API_KEY");
+        RosterEntry held = (await RosterAsync(factory)).Find(Parse(Email))!;
+        await SeedAsync(factory, held.ClaimingToken(_prUnblock, new DateOnly(2026, 6, 1), null));
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage started = await client.PostAsJsonAsync(Account(Email, "/ci-token"), new { roles = new[] { new { prefix = "PR_UNBLOCK", organization = "octo" } } }, TestContext.Current.CancellationToken);
+        using HttpResponseMessage pushed = await client.PostAsync(Account(Email, "/api-key/push"), content: null, TestContext.Current.CancellationToken);
+
+        started.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        (await started.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).ShouldContain("no lane catalog at lane-funding.json in octo/lanes");
+        pushed.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        (await pushed.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).ShouldContain("no lane catalog at lane-funding.json in octo/lanes");
+        factory.SetupToken.Children.ShouldBeEmpty();
+        factory.Secrets.Sets.ShouldBeEmpty();
+    }
+
+    // A catalog held from an earlier read does not outlive a refresh that
+    // failed: writes refuse until a read succeeds.
+    [Fact]
+    public async Task AFailedRefreshRefusesWritesUntilAReadSucceeds()
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken, withCatalog: true);
+        await using AppFactory host = factory;
+        AnswerCatalog(reader);
+        AnswerAll(reader, "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", "REVIEWS_CLAUDE_API_KEY");
+        RosterEntry held = (await RosterAsync(factory)).Find(Parse(Email))!;
+        await SeedAsync(factory, held.ClaimingToken(new CiRole("REVIEWS", CiSecretScope.Organization, "octo"), new DateOnly(2026, 6, 1), null));
+        using HttpClient client = factory.CreateMutatingClient();
+        Uri refresh = new("/api/lane-catalog/refresh", UriKind.Relative);
+        using (HttpResponseMessage loaded = await client.PostAsync(refresh, content: null, TestContext.Current.CancellationToken))
+        {
+            loaded.StatusCode.ShouldBe(HttpStatusCode.OK);
+        }
+
+        reader.Answers[CatalogPath] = Result<JsonNode, GhApiFailure>.Failure(new GhApiFailure("GitHub answered HTTP 502", RateLimited: false, Status: 502));
+        using HttpResponseMessage failed = await client.PostAsync(refresh, content: null, TestContext.Current.CancellationToken);
+        using HttpResponseMessage started = await client.PostAsJsonAsync(Account(Email, "/ci-token"), new { roles = new[] { new { prefix = "REVIEWS", organization = "octo" } } }, TestContext.Current.CancellationToken);
+        using HttpResponseMessage pushed = await client.PostAsync(Account(Email, "/api-key/push"), content: null, TestContext.Current.CancellationToken);
+
+        failed.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        started.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        (await started.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).ShouldContain("HTTP 502");
+        pushed.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        factory.SetupToken.Children.ShouldBeEmpty();
+        factory.Secrets.Sets.ShouldBeEmpty();
+    }
+
+    // Every card view an endpoint answers with keys roles as the dashboard does.
+    [Fact]
+    public async Task AnEditAnswersWithTheCatalogsKeyedRoles()
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: false, TestContext.Current.CancellationToken, withCatalog: true);
+        await using AppFactory host = factory;
+        AnswerCatalog(reader);
+        RosterEntry held = (await RosterAsync(factory)).Find(Parse(Email))!;
+        await SeedAsync(factory, held
+            .ClaimingToken(new CiRole("REVIEWS", CiSecretScope.Organization, "octo"), new DateOnly(2026, 6, 1), null)
+            .ClaimingToken(new CiRole("AUTOMATIONS", CiSecretScope.Organization, "octo"), new DateOnly(2026, 6, 1), null));
+        using HttpClient client = factory.CreateMutatingClient();
+        using (HttpResponseMessage loaded = await client.PostAsync(new Uri("/api/lane-catalog/refresh", UriKind.Relative), content: null, TestContext.Current.CancellationToken))
+        {
+            loaded.StatusCode.ShouldBe(HttpStatusCode.OK);
+        }
+
+        using HttpResponseMessage patched = await client.PatchAsJsonAsync(Account(Email, string.Empty), new { alias = "renamed" }, TestContext.Current.CancellationToken);
+
+        patched.StatusCode.ShouldBe(HttpStatusCode.OK);
+        JsonObject view = (await patched.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+        view["ciRoles"]!.AsArray().Select(static role => (role!["prefix"]!.GetValue<string>(), role["keySecret"]?.GetValue<string>()))
+            .ShouldBe([("REVIEWS", "REVIEWS_CLAUDE_API_KEY"), ("AUTOMATIONS", null)]);
+    }
+
+    [Fact]
+    public async Task TheCatalogIsReadOnlyOnRefreshAndThenServedAsRead()
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: false, TestContext.Current.CancellationToken, withCatalog: true);
+        await using AppFactory host = factory;
+        AnswerCatalog(reader);
+        using HttpClient client = factory.CreateMutatingClient();
+        Uri catalog = new("/api/lane-catalog", UriKind.Relative);
+
+        JsonObject before = (await client.GetFromJsonAsync<JsonObject>(catalog, TestContext.Current.CancellationToken))!;
+        using HttpResponseMessage refreshed = await client.PostAsync(new Uri("/api/lane-catalog/refresh", UriKind.Relative), content: null, TestContext.Current.CancellationToken);
+        JsonObject after = (await client.GetFromJsonAsync<JsonObject>(catalog, TestContext.Current.CancellationToken))!;
+        JsonObject dashboard = (await client.GetFromJsonAsync<JsonObject>(new Uri("/api/dashboard", UriKind.Relative), TestContext.Current.CancellationToken))!;
+
+        before["configured"]!.GetValue<bool>().ShouldBeTrue();
+        before["roles"]!.AsArray().ShouldBeEmpty();
+        refreshed.StatusCode.ShouldBe(HttpStatusCode.OK);
+        after["organization"]!.GetValue<string>().ShouldBe("octo");
+        after["roles"]!.AsArray().Select(static role => (role!["prefix"]!.GetValue<string>(), role["keyed"]!.GetValue<bool>(), role["keySecret"]?.GetValue<string>()))
+            .ShouldBe([("REVIEWS", true, "REVIEWS_CLAUDE_API_KEY"), ("AUTOMATIONS", false, null)]);
+        reader.Paths.Count(static path => path == CatalogPath).ShouldBe(1);
+        dashboard["tokenOnlyRolePrefixes"]!.AsArray().Select(static prefix => prefix!.GetValue<string>()).ShouldBe(["AUTOMATIONS"]);
+        dashboard["laneCatalog"]!["roles"]!.AsArray().Count.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task WithNoCatalogConfiguredTheViewSaysSoAndNothingIsRead()
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: false, TestContext.Current.CancellationToken);
+        await using AppFactory host = factory;
+        using HttpClient client = factory.CreateMutatingClient();
+
+        JsonObject view = (await client.GetFromJsonAsync<JsonObject>(new Uri("/api/lane-catalog", UriKind.Relative), TestContext.Current.CancellationToken))!;
+        using HttpResponseMessage refreshed = await client.PostAsync(new Uri("/api/lane-catalog/refresh", UriKind.Relative), content: null, TestContext.Current.CancellationToken);
+
+        view["configured"]!.GetValue<bool>().ShouldBeFalse();
+        refreshed.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        reader.Paths.ShouldBeEmpty();
+    }
 
     private static void AnswerAll(PathReader reader, params string[] names)
     {
@@ -248,6 +442,7 @@ public sealed class CiTokenRoleEndpointTests
     [InlineData("""{"roles":[{"prefix":"","repository":"octo/repo"}]}""")]
     [InlineData("""{"roles":[{"tokenSecret":"reviews_claude_code_oauth_token","repository":"octo/repo"}],"force":true}""")]
     [InlineData("""{"roles":[{"prefix":"PR_VERIFY","organization":"octo"},{"prefix":"PR_UNBLOCK","repository":"octo/repo","allowRepoScope":true}]}""")]
+    [InlineData("""{"roles":[{"tokenSecret":"LANE_TOKEN","repository":"octo/repo"}]}""")]
     public async Task ARoleInOneRepositoryIsRefusedBeforeAnythingStarts(string json)
     {
         (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken);
@@ -259,7 +454,7 @@ public sealed class CiTokenRoleEndpointTests
 
         started.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
         (await started.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["error"]!.GetValue<string>()
-            .ShouldBe("roles: " + CiTokenSecret.RepositoryRoleSecretRefusal);
+            .ShouldBe("roles: " + CiTokenSecret.RepositorySecretRefusal);
         factory.SetupToken.Children.ShouldBeEmpty();
         reader.Paths.ShouldBeEmpty();
         factory.Secrets.Sets.ShouldBeEmpty();

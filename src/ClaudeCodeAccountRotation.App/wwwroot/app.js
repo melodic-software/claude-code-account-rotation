@@ -47,6 +47,7 @@
     module.exports.keptKeyToast = keptKeyToast;
     module.exports.roleCheckLines = roleCheckLines;
     module.exports.assignableRoles = assignableRoles;
+    module.exports.catalogNotice = catalogNotice;
     module.exports.newRoleItem = newRoleItem;
     module.exports.ciPanelWords = ciPanelWords;
     module.exports.ciNoRolesWords = ciNoRolesWords;
@@ -971,8 +972,11 @@
     panel.appendChild(element("p", null, words.intro));
     panel.appendChild(element("p", "muted", words.detail));
 
-    var roles = assignableRoles(lastAccounts, lastRoleCheck);
-    if (!roles.length) { panel.appendChild(inlineRoleCheck(account)); }
+    var catalog = lastDashboard && lastDashboard.laneCatalog;
+    var cataloged = !!(catalog && (catalog.roles || []).length);
+    var roles = assignableRoles(lastAccounts, lastRoleCheck, catalog);
+    if (catalogNotice(catalog)) { panel.appendChild(catalogLoader(account, catalogNotice(catalog))); }
+    else if (!roles.length) { panel.appendChild(inlineRoleCheck(account)); }
     var form = element("form", "roster-form");
     var checked = ciPanelChecked(roles, account.email);
     var boxes = roles.map(function (role, index) {
@@ -982,14 +986,18 @@
       labeled(form, role.label, box);
       return box;
     });
+    // A catalog read names every role, so the free-text row is only for
+    // working without one.
     var prefix = element("input");
     prefix.type = "text";
     prefix.placeholder = "INTAKE";
-    labeled(form, "New role (prefix, optional)", prefix);
     var where = element("input");
     where.type = "text";
     where.placeholder = "octo-org";
-    labeled(form, "New role's organization", where);
+    if (!cataloged) {
+      labeled(form, "New role (prefix, optional)", prefix);
+      labeled(form, "New role's organization", where);
+    }
 
     var start = element("button", null, words.start);
     start.type = "submit";
@@ -1017,6 +1025,37 @@
     panel.appendChild(status);
     card.appendChild(panel);
     start.focus();
+  }
+
+  // Load the configured lane catalog from inside the CI panel: one read on the
+  // click, then the panel drawn again from the dashboard that follows.
+  function catalogLoader(account, notice) {
+    var box = element("form", "roster-form role-check");
+    box.appendChild(element("p", "muted", notice));
+    var load = element("button", "secondary", "Load lane catalog");
+    load.type = "submit";
+    box.appendChild(load);
+    var status = element("p", "muted");
+    box.appendChild(status);
+    box.addEventListener("submit", function (event) {
+      event.preventDefault();
+      busy = true;
+      setButtonsDisabled(true);
+      status.textContent = "Reading the lane catalog...";
+      send("/api/lane-catalog/refresh", "POST")
+        .then(function (result) {
+          if (!result.ok) { status.textContent = refused(result.body); return false; }
+          if (lastDashboard) { lastDashboard.laneCatalog = result.body; }
+          return true;
+        })
+        .catch(function (error) { status.textContent = "Request failed: " + error; return false; })
+        .then(function (loaded) {
+          busy = false;
+          setButtonsDisabled(false);
+          if (loaded) { openCiTokenPanel(account); }
+        });
+    });
+    return box;
   }
 
   // Check roles from inside the CI panel, for when it has no role to offer:
@@ -1812,10 +1851,13 @@
     });
   }
 
-  // The roles the CI panel offers: every role an account on the roster backs,
-  // then every role the last Check roles found that none does, once each. An
-  // item names its token secret, which the server reads back into the role.
-  function assignableRoles(accounts, check) {
+  // The roles the CI panel offers. With a lane catalog read: its roles in its
+  // order, then any role an account backs that it does not name. Without one:
+  // every role an account on the roster backs, then every role the last Check
+  // roles found that none does. Once each; an item names its token secret,
+  // which the server reads back into the role.
+  function assignableRoles(accounts, check, catalog) {
+    var cataloged = catalog && (catalog.roles || []).length ? catalog.roles : null;
     var seen = {};
     var roles = [];
     function add(role, holder) {
@@ -1832,11 +1874,35 @@
           + (role.keySecret ? " · token+key" : " · token only") + " · " + (holder ? "backed by " + holder : "no holder")
       });
     }
+    function holderOf(role) {
+      var key = (role.tokenSecret + "@" + role.organization).toLowerCase();
+      var backer = (accounts || []).filter(function (account) {
+        return ((account.roster && account.roster.ciRoles) || []).some(function (held) {
+          return (held.tokenSecret + "@" + (held.repository || held.organization)).toLowerCase() === key;
+        });
+      })[0];
+      return backer ? backer.email : null;
+    }
+    (cataloged || []).forEach(function (role) {
+      add({ name: role.prefix, prefix: role.prefix, repository: null, organization: role.organization, tokenSecret: role.tokenSecret, keySecret: role.keySecret }, holderOf(role));
+    });
     (accounts || []).forEach(function (account) {
       ((account.roster && account.roster.ciRoles) || []).forEach(function (role) { add(role, account.email); });
     });
-    ((check && check.roles) || []).forEach(function (role) { add(role, role.holder || null); });
+    if (!cataloged) {
+      ((check && check.roles) || []).forEach(function (role) { add(role, role.holder || null); });
+    }
     return roles;
+  }
+
+  // What the CI panel says about a configured lane catalog it cannot use yet:
+  // not read, or not readable, when the server refuses every write it keys.
+  // Null when none is configured or it has been read.
+  function catalogNotice(catalog) {
+    if (!catalog || !catalog.configured || (catalog.roles || []).length) { return null; }
+    return catalog.error
+      ? "The lane catalog could not be read (" + catalog.error + "), so Generate CI token and Push API key are refused until it is."
+      : "The lane catalog has not been read yet; load it to see the roles and which of them take a key.";
   }
 
   // Which of the panel's roles start ticked: the ones this account backs, so

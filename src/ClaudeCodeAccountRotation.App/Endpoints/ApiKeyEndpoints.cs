@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using ClaudeCodeAccountRotation.App.Accounts;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Adapters.Process;
 using ClaudeCodeAccountRotation.App.Dashboard;
@@ -41,8 +42,9 @@ internal static partial class ApiKeyEndpoints
             SwitchOptions options,
             TimeProvider clock,
             ILoggerFactory loggers,
+            LaneCatalogStore laneCatalog,
             CancellationToken cancellationToken) =>
-            PutKeyAsync(SecretKind.ConsoleApiKey, email, body, rosterFile, store, gate, options, clock, loggers, cancellationToken));
+            PutKeyAsync(SecretKind.ConsoleApiKey, email, body, rosterFile, store, gate, options, clock, loggers, laneCatalog, cancellationToken));
 
         mutations.MapDelete("/accounts/{email}/api-key", static (
             string email,
@@ -52,8 +54,9 @@ internal static partial class ApiKeyEndpoints
             CredentialMutationGate gate,
             SwitchOptions options,
             ILoggerFactory loggers,
+            LaneCatalogStore laneCatalog,
             CancellationToken cancellationToken) =>
-            DeleteKeyAsync(SecretKind.ConsoleApiKey, email, keepStoredKey, rosterFile, store, gate, options, loggers, cancellationToken));
+            DeleteKeyAsync(SecretKind.ConsoleApiKey, email, keepStoredKey, rosterFile, store, gate, options, loggers, laneCatalog, cancellationToken));
 
         MapAdminKey(mutations);
     }
@@ -76,8 +79,9 @@ internal static partial class ApiKeyEndpoints
             SwitchOptions options,
             TimeProvider clock,
             ILoggerFactory loggers,
+            LaneCatalogStore laneCatalog,
             CancellationToken cancellationToken) =>
-            PutKeyAsync(SecretKind.AdminKey, email, body, rosterFile, store, gate, options, clock, loggers, cancellationToken));
+            PutKeyAsync(SecretKind.AdminKey, email, body, rosterFile, store, gate, options, clock, loggers, laneCatalog, cancellationToken));
 
         mutations.MapDelete("/accounts/{email}/admin-key", static (
             string email,
@@ -87,8 +91,9 @@ internal static partial class ApiKeyEndpoints
             CredentialMutationGate gate,
             SwitchOptions options,
             ILoggerFactory loggers,
+            LaneCatalogStore laneCatalog,
             CancellationToken cancellationToken) =>
-            DeleteKeyAsync(SecretKind.AdminKey, email, keepStoredKey, rosterFile, store, gate, options, loggers, cancellationToken));
+            DeleteKeyAsync(SecretKind.AdminKey, email, keepStoredKey, rosterFile, store, gate, options, loggers, laneCatalog, cancellationToken));
 
         mutations.MapPost("/accounts/{email}/api-key/check", static async (
             string email,
@@ -179,11 +184,13 @@ internal static partial class ApiKeyEndpoints
         IGhApiReader github,
         TimeProvider clock,
         ILoggerFactory loggers,
+        LaneCatalogStore laneCatalog,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(rosterFile);
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(laneCatalog);
         ArgumentNullException.ThrowIfNull(clock);
         ArgumentNullException.ThrowIfNull(loggers);
         Result<AccountEmail, string> parsed = AccountEmail.Parse(email);
@@ -199,7 +206,15 @@ internal static partial class ApiKeyEndpoints
             return NotOnRoster(target);
         }
 
-        IReadOnlyList<CiTokenSecret> secrets = PushTargets(entry);
+        // Which roles are keyed, from the catalog when one is configured; one
+        // that cannot be read refuses before any key moves.
+        Result<Func<CiRole, bool>, string> keying = await laneCatalog.KeyedForWriteAsync(cancellationToken);
+        if (keying.IsFailure)
+        {
+            return Refused("CatalogUnreadable", keying.Error);
+        }
+
+        IReadOnlyList<CiTokenSecret> secrets = PushTargets(entry, keying.Value);
         if (secrets.Count == 0)
         {
             return Refused("NoKeyHalf", target.Value + " backs no role with a key half; assign one with Generate CI token.");
@@ -285,7 +300,7 @@ internal static partial class ApiKeyEndpoints
             return Failed(message + " The roster could not record it (" + exception.GetType().Name + "), so the card does not show it yet; push again to record it.");
         }
 
-        return Results.Ok(new ApiKeyPushView(DashboardAssembler.View(updated), message, failed.Count));
+        return Results.Ok(new ApiKeyPushView(DashboardAssembler.View(updated, keying.Value), message, failed.Count));
     }
 
     private static string? Flag(ApiKeyWarning? flag) => flag switch
@@ -311,9 +326,11 @@ internal static partial class ApiKeyEndpoints
         SwitchOptions options,
         TimeProvider clock,
         ILoggerFactory loggers,
+        LaneCatalogStore laneCatalog,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(body);
+        ArgumentNullException.ThrowIfNull(laneCatalog);
         ArgumentNullException.ThrowIfNull(clock);
         ArgumentNullException.ThrowIfNull(loggers);
         Result<AccountEmail, string> parsed = AccountEmail.Parse(email);
@@ -365,9 +382,9 @@ internal static partial class ApiKeyEndpoints
         {
             // An Admin key never goes to GitHub, so it has no push targets.
             IReadOnlyList<string> pushesTo = kind == SecretKind.ConsoleApiKey
-                ? [.. PushTargets(recorded.Value).Select(static secret => secret.ToString())]
+                ? [.. PushTargets(recorded.Value, laneCatalog.IsKeyedNow).Select(static secret => secret.ToString())]
                 : [];
-            return Results.Ok(new ApiKeyStoredView(DashboardAssembler.View(recorded.Value)!, store.DisplayName, pushesTo));
+            return Results.Ok(new ApiKeyStoredView(DashboardAssembler.View(recorded.Value, laneCatalog.IsKeyedNow)!, store.DisplayName, pushesTo));
         }
 
         // A key the roster does not record is one the page cannot show or
@@ -390,9 +407,11 @@ internal static partial class ApiKeyEndpoints
         CredentialMutationGate gate,
         SwitchOptions options,
         ILoggerFactory loggers,
+        LaneCatalogStore laneCatalog,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(loggers);
+        ArgumentNullException.ThrowIfNull(laneCatalog);
         Result<AccountEmail, string> parsed = AccountEmail.Parse(email);
         if (parsed.IsFailure)
         {
@@ -442,7 +461,7 @@ internal static partial class ApiKeyEndpoints
                 + "), so the card still shows a key. Delete it again to clear the badge.");
         }
 
-        return Results.Ok(new ApiKeyDeletionView(DashboardAssembler.View(recorded.Value)!, removal.Warning));
+        return Results.Ok(new ApiKeyDeletionView(DashboardAssembler.View(recorded.Value, laneCatalog.IsKeyedNow)!, removal.Warning));
     }
 
     /// <summary>
@@ -450,12 +469,12 @@ internal static partial class ApiKeyEndpoints
     /// keyed role the account backs, never one in a single repository that an
     /// earlier roster may still record.
     /// </summary>
-    internal static IReadOnlyList<CiTokenSecret> PushTargets(RosterEntry entry) =>
+    internal static IReadOnlyList<CiTokenSecret> PushTargets(RosterEntry entry, Func<CiRole, bool> keyed) =>
         [.. entry.CiRoles
-            .Where(static held => held.Role.Keyed)
+            .Where(held => keyed(held.Role))
             .Select(static held => held.Role.KeySecret)
             .OfType<CiTokenSecret>()
-            .Where(static secret => !secret.IsRepositoryRoleSecret)];
+            .Where(static secret => secret.Scope == CiSecretScope.Organization)];
 
     /// <summary>The key's name in a log line.</summary>
     private static string Label(SecretKind kind) => kind == SecretKind.AdminKey ? "Admin key" : "console API key";

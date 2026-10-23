@@ -6,7 +6,21 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Added
+
+- **A lane catalog decides which roles are keyed.** `laneCatalog` in `config.json` names a
+  version-1 lane-funding file by repository, path and optional ref. The tool reads it with one
+  `gh api` call on Load lane catalog or the first Generate CI token or Push API key that needs it.
+  A role is keyed when the catalog says so or when a lane still lists its key secret. The Generate
+  CI token panel then lists the catalog's roles and hides the free-text row. A configured catalog
+  that cannot be read refuses Generate CI token and Push API key. `GET /api/lane-catalog` shows
+  what is held and `POST /api/lane-catalog/refresh` reads it again.
+
 ### Changed
+
+- **No secret is written to one repository, whatever its name.** Every secret the tool sets is a
+  CI credential, so the refusal goes by scope: a repository secret named `LANE_TOKEN` or
+  `ANTHROPIC_API_KEY` is refused like a role's.
 
 - **A Claude role secret is never written to one repository.** `gh secret set` is refused, before
   gh starts, for `CLAUDE_CODE_OAUTH_TOKEN` or a name ending in `_CLAUDE_CODE_OAUTH_TOKEN` or

@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using ClaudeCodeAccountRotation.App.Accounts;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Adapters.Process;
 using ClaudeCodeAccountRotation.App.Dashboard;
@@ -34,14 +35,29 @@ internal static partial class RoleEndpoints
         ArgumentNullException.ThrowIfNull(routes);
         RouteGroupBuilder mutations = routes.MapGroup("/api").AddEndpointFilter<SameOriginMutationFilter>();
 
+        // The lane catalog as held, never read for this: the read is the
+        // refresh's, a POST behind the mutation filter since it spends a call.
+        routes.MapGet("/api/lane-catalog", static (LaneCatalogStore laneCatalog) => Results.Ok(LaneCatalogView.Of(laneCatalog)));
+
+        mutations.MapPost("/lane-catalog/refresh", static async (LaneCatalogStore laneCatalog, CancellationToken cancellationToken) =>
+        {
+            ArgumentNullException.ThrowIfNull(laneCatalog);
+            Result<LaneCatalog, string> read = await laneCatalog.RefreshAsync(cancellationToken);
+            return read.IsSuccess
+                ? Results.Ok(LaneCatalogView.Of(laneCatalog))
+                : Results.Json(new { refusal = "CatalogUnreadable", error = read.Error }, statusCode: StatusCodes.Status409Conflict);
+        });
+
         mutations.MapPost("/roles/check", static async (
             JsonObject? body,
             RosterFile rosterFile,
             IGhApiReader reader,
             ClaudeCodeAccountRotationConfiguration configuration,
             TimeProvider clock,
+            LaneCatalogStore laneCatalog,
             CancellationToken cancellationToken) =>
         {
+            ArgumentNullException.ThrowIfNull(laneCatalog);
             Roster roster = await rosterFile.ReadAsync(cancellationToken);
             List<string> organizations = [.. roster.Entries
                 .SelectMany(static entry => entry.CiRoles)
@@ -106,7 +122,7 @@ internal static partial class RoleEndpoints
             }
 
             var catalog = RoleCatalog.From(read);
-            return Results.Ok(View(roster, catalog, RoleSecretCheck.Evaluate(roster, catalog, clock.GetUtcNow(), clock.LocalTimeZone), failures, switches));
+            return Results.Ok(View(roster, catalog, RoleSecretCheck.Evaluate(roster, catalog, clock.GetUtcNow(), clock.LocalTimeZone), failures, switches, laneCatalog.IsKeyedNow));
         });
 
         // The limit-stop warning, asked once by the page before it moves roles
@@ -269,18 +285,18 @@ internal static partial class RoleEndpoints
     /// an organization that was read, found or not. A claimed half carries its
     /// verdict; a role nobody claims carries "unclaimed" on each half it has.
     /// </summary>
-    private static RoleCheckView View(Roster roster, RoleCatalog catalog, RoleSecretReport report, List<RoleCheckFailureView> failures, List<KillSwitchView> switches)
+    private static RoleCheckView View(Roster roster, RoleCatalog catalog, RoleSecretReport report, List<RoleCheckFailureView> failures, List<KillSwitchView> switches, Func<CiRole, bool> keyed)
     {
         Dictionary<CiRole, RoleCheckRowView> rows = [];
         foreach (RoleSecrets found in report.Unclaimed)
         {
-            rows[found.Role] = Row(found.Role, null, catalog, found.HasToken ? "unclaimed" : null, found.HasKey && found.Role.Keyed ? "unclaimed" : null);
+            rows[found.Role] = Row(found.Role, null, catalog, keyed, found.HasToken ? "unclaimed" : null, found.HasKey && keyed(found.Role) ? "unclaimed" : null);
         }
 
         // A token-only role's lanes read no key, so its key half is not judged.
-        foreach (ClaimedHalf half in report.Claimed.Where(static half => half.Half == RoleHalf.Token || half.Role.Keyed))
+        foreach (ClaimedHalf half in report.Claimed.Where(half => half.Half == RoleHalf.Token || keyed(half.Role)))
         {
-            RoleCheckRowView row = rows.GetValueOrDefault(half.Role) ?? Row(half.Role, half.Holder.Value, catalog, null, null);
+            RoleCheckRowView row = rows.GetValueOrDefault(half.Role) ?? Row(half.Role, half.Holder.Value, catalog, keyed, null, null);
             rows[half.Role] = half.Half == RoleHalf.Token
                 ? row with { Token = Verdict(half.Verdict), TokenReason = Reason(half.Reason) }
                 : row with { Key = Verdict(half.Verdict), KeyReason = Reason(half.Reason) };
@@ -290,7 +306,7 @@ internal static partial class RoleEndpoints
         foreach (KeyValuePair<CiRole, RoleSecrets> found in catalog.Roles.Where(found => !rows.ContainsKey(found.Key)))
         {
             string? holder = roster.Entries.FirstOrDefault(entry => entry.CiRoles.Any(held => held.Role.Equals(found.Key)))?.Email.Value;
-            rows[found.Key] = Row(found.Key, holder, catalog, null, null);
+            rows[found.Key] = Row(found.Key, holder, catalog, keyed, null, null);
         }
 
         return new RoleCheckView(
@@ -300,14 +316,14 @@ internal static partial class RoleEndpoints
             switches);
     }
 
-    private static RoleCheckRowView Row(CiRole role, string? holder, RoleCatalog catalog, string? token, string? key) => new(
+    private static RoleCheckRowView Row(CiRole role, string? holder, RoleCatalog catalog, Func<CiRole, bool> keyed, string? token, string? key) => new(
         role.Name,
         role.Prefix,
         role.Owner,
         role.TokenSecretName,
-        role.Keyed ? role.KeySecretName : null,
+        keyed(role) ? role.KeySecretName : null,
         catalog.Find(role.Owner, role.TokenSecretName) is not null,
-        role.Keyed && role.KeySecretName is string keySecret && catalog.Find(role.Owner, keySecret) is not null,
+        keyed(role) && role.KeySecretName is string keySecret && catalog.Find(role.Owner, keySecret) is not null,
         holder,
         token,
         key);

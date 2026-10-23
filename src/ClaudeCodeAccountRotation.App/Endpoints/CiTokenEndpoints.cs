@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using ClaudeCodeAccountRotation.App.Accounts;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Adapters.Process;
 using ClaudeCodeAccountRotation.App.Dashboard;
@@ -24,8 +25,8 @@ namespace ClaudeCodeAccountRotation.App.Endpoints;
 /// the account's stored Console key for a <see cref="CiRole.Keyed"/> role), with every
 /// organization secret's visibility read back first so setting it keeps it;
 /// or, as release 2.1.0 did, one <c>secretName</c> with its owner and
-/// visibility, set as named. Neither puts a Claude role secret in one
-/// repository (<see cref="CiTokenSecret.IsRepositoryRoleSecret"/>).
+/// visibility, set as named. Neither writes a secret in one repository
+/// (<see cref="CiTokenSecret.RepositorySecretRefusal"/>).
 /// </para>
 /// <para>
 /// The same shape as a login: start returns the sign-in URL and opens it, and
@@ -49,10 +50,12 @@ internal static partial class CiTokenEndpoints
             IGhApiReader github,
             ISecretStore store,
             IBrowserLauncher browsers,
+            LaneCatalogStore laneCatalog,
             CancellationToken cancellationToken) =>
         {
             ArgumentNullException.ThrowIfNull(body);
             ArgumentNullException.ThrowIfNull(github);
+            ArgumentNullException.ThrowIfNull(laneCatalog);
             Result<AccountEmail, string> parsed = AccountEmail.Parse(email);
             if (parsed.IsFailure)
             {
@@ -74,12 +77,12 @@ internal static partial class CiTokenEndpoints
                     return Results.BadRequest(new { error = secret.Error });
                 }
 
-                if (secret.Value.IsRepositoryRoleSecret)
+                if (secret.Value.Scope == CiSecretScope.Repository)
                 {
-                    return Results.BadRequest(new { error = CiTokenSecret.RepositoryRoleSecretRefusal });
+                    return Results.BadRequest(new { error = CiTokenSecret.RepositorySecretRefusal });
                 }
 
-                Result<(OrgSecretVisibility?, IReadOnlyList<string>), string> access = ParseAccess(body, secret.Value);
+                Result<(OrgSecretVisibility?, IReadOnlyList<string>), string> access = ParseAccess(body);
                 if (access.IsFailure)
                 {
                     return Results.BadRequest(new { error = access.Error });
@@ -117,9 +120,17 @@ internal static partial class CiTokenEndpoints
 
             if (roles.Value is IReadOnlyList<CiRole> named)
             {
+                // Which roles are keyed, from the catalog when one is
+                // configured; one that cannot be read refuses before any token.
+                Result<Func<CiRole, bool>, string> keying = await laneCatalog.KeyedForWriteAsync(cancellationToken);
+                if (keying.IsFailure)
+                {
+                    return Refused("CatalogUnreadable", keying.Error);
+                }
+
                 // Before any token exists: a keyed role written whole needs the
                 // key beside the token, or it would be left half from this account.
-                if (named.FirstOrDefault(static role => role.Keyed) is CiRole keyed)
+                if (named.FirstOrDefault(keying.Value) is CiRole keyed)
                 {
                     // The store, not only the roster's record of it: a key the
                     // store has lost would leave every key half unset.
@@ -137,7 +148,7 @@ internal static partial class CiTokenEndpoints
                     }
                 }
 
-                Result<CiTokenRequest, string> resolved = await ResolveAsync(parsed.Value, named, github, cancellationToken);
+                Result<CiTokenRequest, string> resolved = await ResolveAsync(parsed.Value, named, keying.Value, github, cancellationToken);
                 if (resolved.IsFailure)
                 {
                     return Refused("SecretUnreadable", resolved.Error);
@@ -218,9 +229,9 @@ internal static partial class CiTokenEndpoints
                 return Result<IReadOnlyList<CiRole>?, string>.Failure("roles: " + parsed.Error);
             }
 
-            if (parsed.Value.TokenSecret.IsRepositoryRoleSecret)
+            if (parsed.Value.Scope == CiSecretScope.Repository)
             {
-                return Result<IReadOnlyList<CiRole>?, string>.Failure("roles: " + CiTokenSecret.RepositoryRoleSecretRefusal);
+                return Result<IReadOnlyList<CiRole>?, string>.Failure("roles: " + CiTokenSecret.RepositorySecretRefusal);
             }
 
             if (roles.Contains(parsed.Value))
@@ -242,6 +253,7 @@ internal static partial class CiTokenEndpoints
     private static async Task<Result<CiTokenRequest, string>> ResolveAsync(
         AccountEmail email,
         IReadOnlyList<CiRole> roles,
+        Func<CiRole, bool> keyed,
         IGhApiReader github,
         CancellationToken cancellationToken)
     {
@@ -255,7 +267,7 @@ internal static partial class CiTokenEndpoints
             }
 
             SecretTarget? key = null;
-            if (role.Keyed && role.KeySecret is CiTokenSecret keySecret)
+            if (keyed(role) && role.KeySecret is CiTokenSecret keySecret)
             {
                 Result<SecretTarget, GhApiFailure> read = await github.ReadAccessAsync(keySecret, cancellationToken);
                 if (read.IsFailure)
@@ -282,22 +294,16 @@ internal static partial class CiTokenEndpoints
     }
 
     /// <summary>
-    /// Who may read an organization secret. A repository secret takes neither
-    /// field; an organization secret with neither keeps what GitHub has (null
-    /// here), and <c>selected</c> needs the repositories, by name, that may read it.
+    /// Who may read an organization secret. One named with neither field keeps
+    /// what GitHub has (null here), and <c>selected</c> needs the repositories,
+    /// by name, that may read it.
     /// </summary>
-    private static Result<(OrgSecretVisibility?, IReadOnlyList<string>), string> ParseAccess(JsonObject body, CiTokenSecret secret)
+    private static Result<(OrgSecretVisibility?, IReadOnlyList<string>), string> ParseAccess(JsonObject body)
     {
         string? visibility = Text(body, "visibility");
         IReadOnlyList<string> repositories = body["repositories"] is JsonArray array
             ? [.. array.Select(static node => node is JsonValue value && value.TryGetValue(out string? text) ? text.Trim() : string.Empty)]
             : [];
-        if (secret.Scope == CiSecretScope.Repository)
-        {
-            return visibility is null && repositories.Count == 0
-                ? Result<(OrgSecretVisibility?, IReadOnlyList<string>), string>.Success((null, []))
-                : Result<(OrgSecretVisibility?, IReadOnlyList<string>), string>.Failure("visibility and repositories apply to an organization secret only");
-        }
 
         // None named: the caller reads it back from GitHub (see ReadAccessAsync).
         if (visibility is null)
