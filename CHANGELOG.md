@@ -10,6 +10,10 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- **Sign-in links name the account.** The sign-in URL that Start sign-in and Log in again open,
+  and the link the panel shows, carry `login_hint` with the account's address, so a signed-out
+  browser fills in the email box. The Console's own login page ignores the hint, so Open Console is
+  unchanged.
 - **A lane catalog decides which roles are keyed.** `laneCatalog` in `config.json` names a
   version-1 lane-funding file by repository, path and optional ref. The tool reads it with one
   `gh api` call on Load lane catalog or the first Generate CI token or Push API key that needs it.
