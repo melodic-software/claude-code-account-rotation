@@ -54,8 +54,9 @@ internal static partial class ApiKeyEndpoints
             CredentialMutationGate gate,
             SwitchOptions options,
             ILoggerFactory loggers,
+            LaneCatalogStore laneCatalog,
             CancellationToken cancellationToken) =>
-            DeleteKeyAsync(SecretKind.ConsoleApiKey, email, keepStoredKey, rosterFile, store, gate, options, loggers, cancellationToken));
+            DeleteKeyAsync(SecretKind.ConsoleApiKey, email, keepStoredKey, rosterFile, store, gate, options, loggers, laneCatalog, cancellationToken));
 
         MapAdminKey(mutations);
     }
@@ -90,8 +91,9 @@ internal static partial class ApiKeyEndpoints
             CredentialMutationGate gate,
             SwitchOptions options,
             ILoggerFactory loggers,
+            LaneCatalogStore laneCatalog,
             CancellationToken cancellationToken) =>
-            DeleteKeyAsync(SecretKind.AdminKey, email, keepStoredKey, rosterFile, store, gate, options, loggers, cancellationToken));
+            DeleteKeyAsync(SecretKind.AdminKey, email, keepStoredKey, rosterFile, store, gate, options, loggers, laneCatalog, cancellationToken));
 
         mutations.MapPost("/accounts/{email}/api-key/check", static async (
             string email,
@@ -405,9 +407,11 @@ internal static partial class ApiKeyEndpoints
         CredentialMutationGate gate,
         SwitchOptions options,
         ILoggerFactory loggers,
+        LaneCatalogStore laneCatalog,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(loggers);
+        ArgumentNullException.ThrowIfNull(laneCatalog);
         Result<AccountEmail, string> parsed = AccountEmail.Parse(email);
         if (parsed.IsFailure)
         {
@@ -457,7 +461,7 @@ internal static partial class ApiKeyEndpoints
                 + "), so the card still shows a key. Delete it again to clear the badge.");
         }
 
-        return Results.Ok(new ApiKeyDeletionView(DashboardAssembler.View(recorded.Value)!, removal.Warning));
+        return Results.Ok(new ApiKeyDeletionView(DashboardAssembler.View(recorded.Value, laneCatalog.IsKeyedNow)!, removal.Warning));
     }
 
     /// <summary>

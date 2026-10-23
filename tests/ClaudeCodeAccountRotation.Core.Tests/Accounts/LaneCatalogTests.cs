@@ -104,6 +104,15 @@ public sealed class LaneCatalogTests
     public void AKeyedFlagThatIsNotABooleanIsRefused() =>
         LaneCatalog.Parse(Minimal(Role("INTAKE", keyed: "\"yes\""))).IsFailure.ShouldBeTrue();
 
+    // A list given as anything but an array is refused, never read as empty:
+    // an empty currentSecrets would quietly turn a keyed role token-only.
+    [Theory]
+    [InlineData("\"lanes\": [ { \"id\": \"l\", \"currentSecrets\": \"INTAKE_CLAUDE_API_KEY\" } ]")]
+    [InlineData("\"lanes\": { \"id\": \"l\" }")]
+    public void AListThatIsNotAnArrayIsRefused(string lanes) =>
+        LaneCatalog.Parse(Minimal("{ \"id\": \"r\", \"secretPrefix\": \"INTAKE\", \"tokenSecret\": \"INTAKE_CLAUDE_CODE_OAUTH_TOKEN\", \"keySecret\": \"INTAKE_CLAUDE_API_KEY\", \"keyed\": false, " + lanes + " }"))
+            .Error.ShouldContain("not a list");
+
     [Fact]
     public void ACurrentSecretThatIsNoSecretNameIsRefused() =>
         LaneCatalog.Parse(Minimal(Role("INTAKE", currentSecrets: "\"not a name\""))).IsFailure.ShouldBeTrue();

@@ -81,9 +81,10 @@ internal sealed partial class DashboardAssembler(
 
     /// <summary>
     /// The roster entry as the page reads it, with each role keyed by
-    /// <paramref name="keyed"/>, or by <see cref="CiRole.Keyed"/> when none is given.
+    /// <paramref name="keyed"/>: <see cref="LaneCatalogStore.IsKeyedNow"/> at
+    /// every caller, so no card view keys a role differently from the dashboard.
     /// </summary>
-    public static RosterEntryView? View(RosterEntry? entry, Func<CiRole, bool>? keyed = null) => entry is null
+    public static RosterEntryView? View(RosterEntry? entry, Func<CiRole, bool> keyed) => entry is null
         ? null
         : new RosterEntryView(
             entry.Email.Value,
@@ -107,11 +108,11 @@ internal sealed partial class DashboardAssembler(
                 assignment.Role.TokenSecretName,
                 // A token-only role's lanes read no key, so a key half an
                 // earlier release recorded is not shown.
-                (keyed ?? IsKeyed)(assignment.Role) ? assignment.Role.KeySecretName : null,
+                keyed(assignment.Role) ? assignment.Role.KeySecretName : null,
                 assignment.TokenSetOn,
                 assignment.TokenSetAt,
-                (keyed ?? IsKeyed)(assignment.Role) ? assignment.KeySetOn : null,
-                (keyed ?? IsKeyed)(assignment.Role) ? assignment.KeySetAt : null))],
+                keyed(assignment.Role) ? assignment.KeySetOn : null,
+                keyed(assignment.Role) ? assignment.KeySetAt : null))],
             entry.ConsoleApiKeySetOn,
             entry.AdminKeySetOn,
             entry.BacksCiRole);
@@ -296,8 +297,6 @@ internal sealed partial class DashboardAssembler(
             TokenOnlyPrefixes(laneCatalog.Snapshot.Catalog),
             LaneCatalogView.Of(laneCatalog));
     }
-
-    private static bool IsKeyed(CiRole role) => role.Keyed;
 
     /// <summary>The prefixes the page treats as token-only: the catalog's unkeyed roles once it is read, else the fixed list.</summary>
     private static IReadOnlyList<string> TokenOnlyPrefixes(LaneCatalog? catalog) => catalog is null

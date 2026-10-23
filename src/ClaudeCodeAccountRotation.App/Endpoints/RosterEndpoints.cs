@@ -57,6 +57,7 @@ internal static partial class RosterEndpoints
             ClaudeStateFile stateFile,
             IClaudeCliAuthStatus cli,
             ClaudeCodeAccountRotationConfiguration configuration,
+            LaneCatalogStore laneCatalog,
             CancellationToken cancellationToken) =>
         {
             ArgumentNullException.ThrowIfNull(body);
@@ -125,7 +126,7 @@ internal static partial class RosterEndpoints
                 UsageView.Unread,
                 UsageNote: null,
                 RefreshStateView.Idle,
-                DashboardAssembler.View(entry)));
+                DashboardAssembler.View(entry, laneCatalog.IsKeyedNow)));
         });
 
         routes.MapGet("/api/lane-history", static async (
@@ -152,9 +153,11 @@ internal static partial class RosterEndpoints
             string email,
             JsonObject body,
             RosterFile rosterFile,
+            LaneCatalogStore laneCatalog,
             CancellationToken cancellationToken) =>
         {
             ArgumentNullException.ThrowIfNull(body);
+            ArgumentNullException.ThrowIfNull(laneCatalog);
             Result<AccountEmail, string> parsed = AccountEmail.Parse(email);
             if (parsed.IsFailure)
             {
@@ -217,7 +220,7 @@ internal static partial class RosterEndpoints
                 },
                 cancellationToken,
                 via: LaneVia.Edit);
-            return refusal ?? Results.Ok(DashboardAssembler.View(updated));
+            return refusal ?? Results.Ok(DashboardAssembler.View(updated, laneCatalog.IsKeyedNow));
         });
 
         mutations.MapDelete("/accounts/{email}", static async (
@@ -409,6 +412,7 @@ internal static partial class RosterEndpoints
             ClaudeStateFile stateFile,
             IClaudeCliAuthStatus cli,
             ClaudeCodeAccountRotationConfiguration configuration,
+            LaneCatalogStore laneCatalog,
             CancellationToken cancellationToken) =>
         {
             Result<AccountEmail, string> parsed = AccountEmail.Parse(email);
@@ -455,7 +459,7 @@ internal static partial class RosterEndpoints
                 UsageView.Unread,
                 UsageNote: null,
                 RefreshStateView.Idle,
-                DashboardAssembler.View(entry)));
+                DashboardAssembler.View(entry, laneCatalog.IsKeyedNow)));
         });
     }
 

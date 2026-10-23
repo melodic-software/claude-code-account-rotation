@@ -136,12 +136,24 @@ public sealed record LaneCatalog(string Organization, IReadOnlyList<LaneCatalogR
             return Result<LaneCatalogRole, string>.Failure("gives " + prefix + " a keyed that is not true or false");
         }
 
+        // A list of any other shape is refused, never read as empty: an empty
+        // currentSecrets would quietly turn a keyed role token-only.
+        if (item["lanes"] is JsonNode laneList && laneList is not JsonArray)
+        {
+            return Result<LaneCatalogRole, string>.Failure("gives " + prefix + " lanes that are not a list");
+        }
+
         List<LaneCatalogLane> lanes = [];
         foreach (JsonNode? laneNode in item["lanes"] as JsonArray ?? [])
         {
             if (laneNode is not JsonObject lane)
             {
                 return Result<LaneCatalogRole, string>.Failure("gives " + prefix + " a lane that is not an object");
+            }
+
+            if (lane["currentSecrets"] is JsonNode secretList && secretList is not JsonArray)
+            {
+                return Result<LaneCatalogRole, string>.Failure("gives a lane of " + prefix + " currentSecrets that are not a list");
             }
 
             List<string> secrets = [];

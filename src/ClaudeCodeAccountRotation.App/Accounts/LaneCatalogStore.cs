@@ -42,10 +42,17 @@ internal sealed class LaneCatalogStore(ClaudeCodeAccountRotationConfiguration co
             return Result<Func<CiRole, bool>, string>.Success(KeyedBy(null));
         }
 
-        LaneCatalog? held = Snapshot.Catalog;
-        if (held is not null)
+        // A catalog held from an earlier read does not outlive a read that
+        // failed since: it stays for the page, and writes wait for a good read.
+        LaneCatalogSnapshot held = Snapshot;
+        if (held.Error is string failed)
         {
-            return Result<Func<CiRole, bool>, string>.Success(KeyedBy(held));
+            return Result<Func<CiRole, bool>, string>.Failure("the lane catalog says which roles are keyed, and its last read failed: " + failed + ". Load it again once that is fixed.");
+        }
+
+        if (held.Catalog is LaneCatalog catalog)
+        {
+            return Result<Func<CiRole, bool>, string>.Success(KeyedBy(catalog));
         }
 
         Result<LaneCatalog, string> read = await RefreshAsync(cancellationToken);
