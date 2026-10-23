@@ -864,7 +864,7 @@ function holding(email, roles) {
 const AUTOMATIONS_TOKEN = { prefix: "AUTOMATIONS", organization: "octo", tokenSecret: "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", keySecret: "AUTOMATIONS_CLAUDE_API_KEY", tokenSetOn: "2026-10-01", keySetOn: null };
 const AUTOMATIONS_KEY = Object.assign({}, AUTOMATIONS_TOKEN, { tokenSetOn: null, keySetOn: "2026-10-01" });
 
-test("a ticked role scans each other account that holds it, once, and never this account", () => {
+test("a ticked role checks each other account that holds it, once, and never this account", () => {
   const accounts = [
     holding("a@example.com", [AUTOMATIONS_TOKEN]),
     holding("me@example.com", [AUTOMATIONS_KEY]),
@@ -875,126 +875,64 @@ test("a ticked role scans each other account that holds it, once, and never this
   assert.deepStrictEqual(limitStopSources([{ tokenSecret: "OTHER_CLAUDE_CODE_OAUTH_TOKEN", organization: "octo" }], accounts, "me@example.com"), []);
 });
 
-test("a typed row naming a held role, in any case, scans its holder", () => {
+test("a typed row naming a held role, in any case, checks its holder", () => {
   const accounts = [holding("a@example.com", [AUTOMATIONS_TOKEN])];
   const typed = newRoleItem("automations", "OCTO").item;
   assert.deepStrictEqual(limitStopSources([typed], accounts, "me@example.com"), ["a@example.com"]);
 });
 
-test("a split role scans the holder of each half", () => {
+test("a split role checks the holder of each half", () => {
   const accounts = [holding("a@example.com", [AUTOMATIONS_TOKEN]), holding("b@example.com", [AUTOMATIONS_KEY])];
   const ticked = [{ tokenSecret: "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", organization: "octo" }];
   assert.deepStrictEqual(limitStopSources(ticked, accounts, "me@example.com"), ["a@example.com", "b@example.com"]);
 });
 
-const FAILED_RUNS_ONLY = "Failed runs only: a stop a fallback or a re-run recovered from is not read.";
+const CREDIT_NOT_CHECKED = "Credit stops on Console keys are not checked.";
 
-function answering(body) {
-  const sent = [];
-  return { sent: sent, post: (path, method, request) => { sent.push([path, method, request]); return Promise.resolve({ ok: true, body: body }); } };
+function usageOf(email, limits) {
+  return { email: email, usage: { source: "refresh", limits: limits } };
 }
 
-function hitFor(account, label, credential) {
-  return { account: account, repository: "octo/lanes", runId: 101, url: "https://github.com/octo/lanes/actions/runs/101", createdAt: "2026-10-18T09:00:00+00:00", role: "AUTOMATIONS", credential: credential, label: label };
+function usageLimit(kind, label, percent, severity, resetsAt, windowReset) {
+  return { kind: kind, label: label, percent: percent, severity: severity, resetsAt: resetsAt || null, known: true, windowReset: !!windowReset };
 }
 
-test("two previous holders are scanned with one request naming both, and each account's hits are shown under it", async () => {
-  const server = answering({
-    outcome: "checked",
-    hits: [hitFor("b@example.com", "credit stop", "AUTOMATIONS_CLAUDE_API_KEY"), hitFor("a@example.com", "subscription limit", "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN")],
-    problems: []
-  });
+test("an account moved off at a critical 5-hour or 7-day figure is named with the figure and its reset, and asks", async () => {
+  const resets = "2026-10-23T08:00:00+00:00";
+  const accounts = [
+    usageOf("a@example.com", [usageLimit("session", "5-hour", 40, "normal"), usageLimit("weekly_all", "7-day", 93, "critical", resets)]),
+    usageOf("b@example.com", [usageLimit("session", "5-hour", 97, "critical", resets), usageLimit("weekly_all", "7-day", 50, "normal")])
+  ];
   const asked = [];
-  const moved = await limitStopGate(["a@example.com", "b@example.com"], server.post, (lines) => { asked.push(lines.map((line) => line.text)); return Promise.resolve(true); });
-  assert.strictEqual(moved, true);
-  assert.deepStrictEqual(server.sent, [["/api/roles/limit-stops", "POST", { from: ["a@example.com", "b@example.com"] }]]);
+  assert.strictEqual(await limitStopGate(["a@example.com", "b@example.com"], accounts, (lines) => { asked.push(lines.map((line) => line.text)); return Promise.resolve(true); }), true);
+  const at = new Date(resets).toLocaleString();
   assert.deepStrictEqual(asked, [[
-    "a@example.com: This account hit a limit in the last 7 days.",
-    "subscription limit · AUTOMATIONS (AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN) · octo/lanes · 2026-10-18",
-    "b@example.com: This account hit a limit in the last 7 days.",
-    "credit stop · AUTOMATIONS (AUTOMATIONS_CLAUDE_API_KEY) · octo/lanes · 2026-10-18",
-    FAILED_RUNS_ONLY
+    "a@example.com: at 93% of its 7-day limit, resets " + at + ".",
+    "b@example.com: at 97% of its 5-hour limit, resets " + at + ".",
+    CREDIT_NOT_CHECKED
   ]]);
+  assert.strictEqual(await limitStopGate(["a@example.com"], accounts, () => Promise.resolve(false)), false);
 });
 
-test("with no other holder no scan runs and the move goes ahead", async () => {
-  const server = answering({ outcome: "checked", hits: [], problems: [] });
-  assert.strictEqual(await limitStopGate([], server.post, () => { throw new Error("asked"); }), true);
-  assert.deepStrictEqual(server.sent, []);
+test("no account moved off near a limit moves at once without asking", async () => {
+  const accounts = [usageOf("a@example.com", [usageLimit("session", "5-hour", 85, "warning"), usageLimit("weekly_all", "7-day", 89, "warning")])];
+  assert.strictEqual(await limitStopGate(["a@example.com"], accounts, () => { throw new Error("asked"); }), true);
+  assert.strictEqual(await limitStopGate([], accounts, () => { throw new Error("asked"); }), true);
 });
 
-test("a clean scan moves at once without asking", async () => {
-  const server = answering({ outcome: "checked", hits: [], problems: [] });
-  assert.strictEqual(await limitStopGate(["a@example.com"], server.post, () => { throw new Error("asked"); }), true);
-  assert.strictEqual(server.sent.length, 1);
+test("a window that already reset and a model-scoped figure do not warn", () => {
+  const accounts = [usageOf("a@example.com", [usageLimit("session", "5-hour", null, "critical", null, true), usageLimit("weekly_scoped", "Fable", 99, "critical")])];
+  assert.strictEqual(limitStopNotice(["a@example.com"], accounts), null);
 });
 
-test("with no lane repositories the warning says so and the move goes ahead only on Move anyway", async () => {
-  const server = answering({ outcome: "notChecked", hits: [], problems: [] });
-  const asked = [];
-  assert.strictEqual(await limitStopGate(["a@example.com"], server.post, (lines) => { asked.push(lines[0].text); return Promise.resolve(true); }), true);
-  assert.strictEqual(await limitStopGate(["a@example.com"], server.post, () => Promise.resolve(false)), false);
-  assert.deepStrictEqual(asked, ["limit stops not checked: no lane repositories configured"]);
-});
-
-test("a failed request, or an answer the warning cannot be read from, still asks rather than blocking", async () => {
-  const failing = (path, method, request) => Promise.reject(new Error("offline"));
-  const asked = [];
-  const ask = (lines) => { asked.push(lines[0].text); return Promise.resolve(true); };
-  assert.strictEqual(await limitStopGate(["a@example.com"], failing, ask), true);
-  assert.strictEqual(await limitStopGate(["a@example.com"], answering({ outcome: "checked", hits: { not: "a list" } }).post, ask), true);
-  assert.strictEqual(await limitStopGate(["a@example.com"], answering(null).post, ask), true);
-  assert.strictEqual(asked.length, 3);
-  assert.strictEqual(asked[0], "limit stops not checked for a@example.com. Refused: Error: offline");
-  assert.ok(asked[1].startsWith("limit stops not checked: TypeError"), asked[1]);
-  assert.strictEqual(asked[2], "limit stops not checked for a@example.com. Refused: unknown reason");
-});
-
-test("a partial scan says so beside its hits, and no line mentions Anthropic support", () => {
-  const lines = limitStopNotice(["a@example.com"], { ok: true, body: { outcome: "partial", hits: [hitFor("a@example.com", "credit stop", "AUTOMATIONS_CLAUDE_API_KEY")], problems: ["GitHub's API rate limit was reached"] } });
+test("an account with no usage read says its limits were not checked", () => {
+  const lines = limitStopNotice(["a@example.com", "b@example.com"], [{ email: "a@example.com", usage: null }]);
   assert.deepStrictEqual(lines.map((line) => line.text), [
-    "a@example.com: This account hit a limit in the last 7 days.",
-    "credit stop · AUTOMATIONS (AUTOMATIONS_CLAUDE_API_KEY) · octo/lanes · 2026-10-18",
-    "limit stops checked only in part: GitHub's API rate limit was reached",
-    FAILED_RUNS_ONLY
+    "a@example.com: no usage read yet, so its limits were not checked.",
+    "b@example.com: no usage read yet, so its limits were not checked.",
+    CREDIT_NOT_CHECKED
   ]);
-  assert.strictEqual(lines[1].url, "https://github.com/octo/lanes/actions/runs/101");
   assert.ok(lines.every((line) => line.text.indexOf("Anthropic support") < 0));
-});
-
-test("a split role and a typed held role are scanned with one request naming every holder", async () => {
-  const reviews = Object.assign({}, AUTOMATIONS_TOKEN, { prefix: "REVIEWS", tokenSecret: "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", keySecret: "REVIEWS_CLAUDE_API_KEY" });
-  const accounts = [holding("a@example.com", [AUTOMATIONS_TOKEN]), holding("b@example.com", [AUTOMATIONS_KEY]), holding("c@example.com", [reviews])];
-  const picked = [{ tokenSecret: "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", organization: "octo" }, newRoleItem("reviews", "octo").item];
-  const server = answering({ outcome: "checked", hits: [], problems: [] });
-  assert.strictEqual(await limitStopGate(limitStopSources(picked, accounts, "me@example.com"), server.post, () => { throw new Error("asked"); }), true);
-  assert.deepStrictEqual(server.sent, [["/api/roles/limit-stops", "POST", { from: ["a@example.com", "b@example.com", "c@example.com"] }]]);
-});
-
-test("a partial scan names how far back each repository it did not finish was read, and each it never reached", () => {
-  const coveredBack = "2026-10-16T08:30:00+00:00";
-  const lines = limitStopNotice(["a@example.com"], { ok: true, body: {
-    outcome: "partial",
-    hits: [],
-    problems: ["the check used its 60 GitHub calls and stopped there", "octo/other: not reached, as the check stopped before it"],
-    coverage: [
-      { repository: "octo/done", complete: true, coveredBack: "2026-10-14T12:00:00+00:00" },
-      { repository: "octo/lanes", complete: false, coveredBack: coveredBack },
-      { repository: "octo/other", complete: false, coveredBack: null }
-    ]
-  } });
-  const texts = lines.map((line) => line.text);
-  assert.deepStrictEqual(texts, [
-    "limit stops checked only in part: the check used its 60 GitHub calls and stopped there; octo/other: not reached, as the check stopped before it",
-    "octo/lanes: checked in part, covered back to " + new Date(Date.UTC(2026, 9, 16, 8, 30)).toLocaleString(),
-    "octo/other: not reached",
-    FAILED_RUNS_ONLY
-  ]);
-  assert.ok(texts.every((text) => text.indexOf("octo/done") < 0));
-});
-
-test("a checked scan with every repository complete and no hit still moves without asking", () => {
-  assert.strictEqual(limitStopNotice(["a@example.com"], { ok: true, body: { outcome: "checked", hits: [], problems: [], coverage: [{ repository: "octo/lanes", complete: true, coveredBack: null }] } }), null);
 });
 
 const { keyRoleChoices, costSettingsBody } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
