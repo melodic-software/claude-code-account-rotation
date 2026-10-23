@@ -25,11 +25,13 @@ internal sealed record GhReadQuery(string Name, string Document);
 internal static class GhReadQueries
 {
     /// <summary>
-    /// The check suites one batch reads: one page of the run listing, each
-    /// run's suite. Basis: the release plan's live probe and third-party
-    /// reports that <c>nodes(ids:)</c> takes 100 ids; GitHub documents no cap.
+    /// The check suites one batch reads at first: half a page of the run
+    /// listing. GitHub cut off a batch of 75 or 100 claude-code-plugins suites
+    /// for its resource limits and passed 50, with no documented threshold
+    /// (#318); a cut-off batch is read again in halves.
+    /// Basis: https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api#other-resource-limits.
     /// </summary>
-    public const int SuitesPerBatch = LimitStopScan.RunsPerPage;
+    public const int SuitesPerBatch = LimitStopScan.RunsPerPage / 2;
 
     /// <summary>The check runs read of one suite; more is a cut-off read.</summary>
     public const int CheckRunsPerSuite = 50;
@@ -235,7 +237,11 @@ internal sealed class GhGraphQlReader(string executable, TimeSpan timeout) : IGh
         if (errors.Count > 0 && (data is null || !errors.TrueForAll(error => DeletedNode(error, data))))
         {
             string types = string.Join(", ", errors.Select(static error => Type(error) ?? "untyped").Distinct(StringComparer.Ordinal));
-            return Result<JsonNode, GhApiFailure>.Failure(new GhApiFailure("GitHub's GraphQL API answered the " + name + " query with errors (" + types + ")", RateLimited: false, status));
+            return Result<JsonNode, GhApiFailure>.Failure(new GhApiFailure(
+                "GitHub's GraphQL API answered the " + name + " query with errors (" + types + ")",
+                RateLimited: false,
+                status,
+                ResourceLimited: errors.Exists(static error => Type(error) == "RESOURCE_LIMITS_EXCEEDED")));
         }
 
         if (data is null)

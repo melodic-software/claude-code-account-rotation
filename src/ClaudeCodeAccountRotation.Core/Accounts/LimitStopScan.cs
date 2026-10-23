@@ -97,8 +97,12 @@ public sealed record LimitStopHit(LaneRun Run, CiRole Role, RoleHalf Half, strin
 /// </summary>
 public static class LimitStopScan
 {
-    /// <summary>The most GitHub calls one scan makes. Basis: the issue's "about 30 API calls per click".</summary>
-    public const int MaxCalls = 30;
+    /// <summary>
+    /// The most GitHub calls one scan makes. Basis: the owner's answer of
+    /// 2026-10-22 (#318); claude-code-plugins' 1,513 failed runs in 7 days take
+    /// 16 pages and 31 batches of 50, with room for halved batches.
+    /// </summary>
+    public const int MaxCalls = 60;
 
     /// <summary>
     /// The GraphQL points a scan leaves unspent: it stops when a batch reports

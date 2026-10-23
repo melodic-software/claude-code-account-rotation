@@ -938,7 +938,7 @@ test("a partial scan names how far back each repository it did not finish was re
   const lines = limitStopNotice(["a@example.com"], { ok: true, body: {
     outcome: "partial",
     hits: [],
-    problems: ["the check used its 30 GitHub calls and stopped there", "octo/other: not reached, as the check stopped before it"],
+    problems: ["the check used its 60 GitHub calls and stopped there", "octo/other: not reached, as the check stopped before it"],
     coverage: [
       { repository: "octo/done", complete: true, coveredBack: "2026-10-14T12:00:00+00:00" },
       { repository: "octo/lanes", complete: false, coveredBack: coveredBack },
@@ -947,7 +947,7 @@ test("a partial scan names how far back each repository it did not finish was re
   } });
   const texts = lines.map((line) => line.text);
   assert.deepStrictEqual(texts, [
-    "limit stops checked only in part: the check used its 30 GitHub calls and stopped there; octo/other: not reached, as the check stopped before it",
+    "limit stops checked only in part: the check used its 60 GitHub calls and stopped there; octo/other: not reached, as the check stopped before it",
     "octo/lanes: checked in part, covered back to " + new Date(Date.UTC(2026, 9, 16, 8, 30)).toLocaleString(),
     "octo/other: not reached",
     FAILED_RUNS_ONLY
