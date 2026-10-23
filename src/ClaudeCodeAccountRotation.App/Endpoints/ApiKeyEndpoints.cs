@@ -455,7 +455,7 @@ internal static partial class ApiKeyEndpoints
             .Where(static held => held.Role.Keyed)
             .Select(static held => held.Role.KeySecret)
             .OfType<CiTokenSecret>()
-            .Where(static secret => !secret.IsRepositoryRoleSecret)];
+            .Where(static secret => secret.Scope == CiSecretScope.Organization)];
 
     /// <summary>The key's name in a log line.</summary>
     private static string Label(SecretKind kind) => kind == SecretKind.AdminKey ? "Admin key" : "console API key";

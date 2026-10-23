@@ -248,6 +248,7 @@ public sealed class CiTokenRoleEndpointTests
     [InlineData("""{"roles":[{"prefix":"","repository":"octo/repo"}]}""")]
     [InlineData("""{"roles":[{"tokenSecret":"reviews_claude_code_oauth_token","repository":"octo/repo"}],"force":true}""")]
     [InlineData("""{"roles":[{"prefix":"PR_VERIFY","organization":"octo"},{"prefix":"PR_UNBLOCK","repository":"octo/repo","allowRepoScope":true}]}""")]
+    [InlineData("""{"roles":[{"tokenSecret":"LANE_TOKEN","repository":"octo/repo"}]}""")]
     public async Task ARoleInOneRepositoryIsRefusedBeforeAnythingStarts(string json)
     {
         (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken);
@@ -259,7 +260,7 @@ public sealed class CiTokenRoleEndpointTests
 
         started.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
         (await started.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["error"]!.GetValue<string>()
-            .ShouldBe("roles: " + CiTokenSecret.RepositoryRoleSecretRefusal);
+            .ShouldBe("roles: " + CiTokenSecret.RepositorySecretRefusal);
         factory.SetupToken.Children.ShouldBeEmpty();
         reader.Paths.ShouldBeEmpty();
         factory.Secrets.Sets.ShouldBeEmpty();

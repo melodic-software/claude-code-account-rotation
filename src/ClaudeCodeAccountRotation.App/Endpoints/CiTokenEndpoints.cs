@@ -24,8 +24,8 @@ namespace ClaudeCodeAccountRotation.App.Endpoints;
 /// the account's stored Console key for a <see cref="CiRole.Keyed"/> role), with every
 /// organization secret's visibility read back first so setting it keeps it;
 /// or, as release 2.1.0 did, one <c>secretName</c> with its owner and
-/// visibility, set as named. Neither puts a Claude role secret in one
-/// repository (<see cref="CiTokenSecret.IsRepositoryRoleSecret"/>).
+/// visibility, set as named. Neither writes a secret in one repository
+/// (<see cref="CiTokenSecret.RepositorySecretRefusal"/>).
 /// </para>
 /// <para>
 /// The same shape as a login: start returns the sign-in URL and opens it, and
@@ -74,12 +74,12 @@ internal static partial class CiTokenEndpoints
                     return Results.BadRequest(new { error = secret.Error });
                 }
 
-                if (secret.Value.IsRepositoryRoleSecret)
+                if (secret.Value.Scope == CiSecretScope.Repository)
                 {
-                    return Results.BadRequest(new { error = CiTokenSecret.RepositoryRoleSecretRefusal });
+                    return Results.BadRequest(new { error = CiTokenSecret.RepositorySecretRefusal });
                 }
 
-                Result<(OrgSecretVisibility?, IReadOnlyList<string>), string> access = ParseAccess(body, secret.Value);
+                Result<(OrgSecretVisibility?, IReadOnlyList<string>), string> access = ParseAccess(body);
                 if (access.IsFailure)
                 {
                     return Results.BadRequest(new { error = access.Error });
@@ -218,9 +218,9 @@ internal static partial class CiTokenEndpoints
                 return Result<IReadOnlyList<CiRole>?, string>.Failure("roles: " + parsed.Error);
             }
 
-            if (parsed.Value.TokenSecret.IsRepositoryRoleSecret)
+            if (parsed.Value.Scope == CiSecretScope.Repository)
             {
-                return Result<IReadOnlyList<CiRole>?, string>.Failure("roles: " + CiTokenSecret.RepositoryRoleSecretRefusal);
+                return Result<IReadOnlyList<CiRole>?, string>.Failure("roles: " + CiTokenSecret.RepositorySecretRefusal);
             }
 
             if (roles.Contains(parsed.Value))
@@ -282,22 +282,16 @@ internal static partial class CiTokenEndpoints
     }
 
     /// <summary>
-    /// Who may read an organization secret. A repository secret takes neither
-    /// field; an organization secret with neither keeps what GitHub has (null
-    /// here), and <c>selected</c> needs the repositories, by name, that may read it.
+    /// Who may read an organization secret. One named with neither field keeps
+    /// what GitHub has (null here), and <c>selected</c> needs the repositories,
+    /// by name, that may read it.
     /// </summary>
-    private static Result<(OrgSecretVisibility?, IReadOnlyList<string>), string> ParseAccess(JsonObject body, CiTokenSecret secret)
+    private static Result<(OrgSecretVisibility?, IReadOnlyList<string>), string> ParseAccess(JsonObject body)
     {
         string? visibility = Text(body, "visibility");
         IReadOnlyList<string> repositories = body["repositories"] is JsonArray array
             ? [.. array.Select(static node => node is JsonValue value && value.TryGetValue(out string? text) ? text.Trim() : string.Empty)]
             : [];
-        if (secret.Scope == CiSecretScope.Repository)
-        {
-            return visibility is null && repositories.Count == 0
-                ? Result<(OrgSecretVisibility?, IReadOnlyList<string>), string>.Success((null, []))
-                : Result<(OrgSecretVisibility?, IReadOnlyList<string>), string>.Failure("visibility and repositories apply to an organization secret only");
-        }
 
         // None named: the caller reads it back from GitHub (see ReadAccessAsync).
         if (visibility is null)
