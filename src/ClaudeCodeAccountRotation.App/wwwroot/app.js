@@ -1245,10 +1245,12 @@
       var answered = picked.length ? costSettingsBody(cost.autoReload.value, cost.extraUsage.value, account.email) : null;
       if (answered && answered.error) { status.textContent = answered.error; return; }
       var body = apiKeyBody(field.value);
-      field.value = "";
       if (!body && !stored) { status.textContent = "Paste the key first."; return; }
       if (!body && !picked.length) { status.textContent = "Paste a new key, or pick a role to send the stored one to."; return; }
+      // The field is cleared only once the key is on its way: a Cancel at
+      // the limit-stop check keeps it, since the Console shows a key once.
       var go = function () {
+        field.value = "";
         busy = true;
         setButtonsDisabled(true);
         var said = [];
