@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Accounts;
+using ClaudeCodeAccountRotation.Core.Configuration;
 
 namespace ClaudeCodeAccountRotation.App.Adapters.Process;
 
@@ -152,6 +153,58 @@ internal static class GhApiReads
 
     /// <summary>The most pages one listing reads: 5,000 secrets. Basis: judgment, far above what an organization holds.</summary>
     public const int MaxPages = 50;
+
+    /// <summary>
+    /// The lane catalog at <paramref name="source"/>, through the contents API:
+    /// one call, the file's base64 content decoded and parsed. The source must
+    /// already be held to the configuration validator's rules: its parts are
+    /// the path. A failure, a rate limit included, is returned as read.
+    /// Basis: https://docs.github.com/en/rest/repos/contents#get-repository-content.
+    /// </summary>
+    public static async Task<Result<LaneCatalog, GhApiFailure>> ReadLaneCatalogAsync(
+        this IGhApiReader reader,
+        LaneCatalogSource source,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(reader);
+        ArgumentNullException.ThrowIfNull(source);
+        string where = source.Path + " in " + source.Repository + (source.Ref is string named ? " at " + named : string.Empty);
+        string path = "repos/" + source.Repository + "/contents/" + source.Path
+            + (source.Ref is string reference ? "?ref=" + Uri.EscapeDataString(reference) : string.Empty);
+        Result<JsonNode, GhApiFailure> read = await reader.GetAsync(path, cancellationToken);
+        if (read.IsFailure)
+        {
+            return Result<LaneCatalog, GhApiFailure>.Failure(read.Error.Status == 404 && !read.Error.RateLimited
+                ? read.Error with { Message = "no lane catalog at " + where + " (" + read.Error.Message + ")" }
+                : read.Error);
+        }
+
+        if (read.Value is not JsonObject file
+            || file["type"]?.GetValueKind() != JsonValueKind.String || file["type"]!.GetValue<string>() != "file"
+            || file["encoding"]?.GetValueKind() != JsonValueKind.String || file["encoding"]!.GetValue<string>() != "base64"
+            || file["content"]?.GetValueKind() != JsonValueKind.String)
+        {
+            return CatalogFailure("the lane catalog at " + where + " is not a file GitHub sent as base64");
+        }
+
+        string json;
+        try
+        {
+            json = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(file["content"]!.GetValue<string>().Replace("\n", string.Empty, StringComparison.Ordinal)));
+        }
+        catch (FormatException)
+        {
+            return CatalogFailure("the lane catalog at " + where + " is not base64");
+        }
+
+        Result<LaneCatalog, string> parsed = LaneCatalog.Parse(json);
+        return parsed.IsSuccess
+            ? Result<LaneCatalog, GhApiFailure>.Success(parsed.Value)
+            : CatalogFailure(parsed.Error + " (" + where + ")");
+
+        static Result<LaneCatalog, GhApiFailure> CatalogFailure(string message) =>
+            Result<LaneCatalog, GhApiFailure>.Failure(new GhApiFailure(message, RateLimited: false));
+    }
 
     /// <summary>
     /// Every Actions secret of <paramref name="organization"/>, a page per call

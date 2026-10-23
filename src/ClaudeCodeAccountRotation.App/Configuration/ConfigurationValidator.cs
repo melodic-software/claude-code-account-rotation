@@ -57,6 +57,26 @@ internal static class ConfigurationValidator
             }
         }
 
+        // Each part becomes part of a contents API path or its ref query, so
+        // nothing in it may leave that path: no traversal, no query, no option.
+        if (configuration.LaneCatalog is LaneCatalogSource catalog)
+        {
+            if (CiTokenSecret.Parse(CiTokenSecret.DefaultName, catalog.Repository, null).IsFailure || catalog.Repository.Split('/')[1] is "." or "..")
+            {
+                return Failure("laneCatalog.repository is written owner/name, as GitHub names a repository: " + catalog.Repository);
+            }
+
+            if (!SafeSegments(catalog.Path))
+            {
+                return Failure("laneCatalog.path is a file path in the repository, of letters, digits, '.', '_' and '-' between slashes, with no . or .. part: " + catalog.Path);
+            }
+
+            if (catalog.Ref is string reference && (!SafeSegments(reference) || reference.StartsWith('-')))
+            {
+                return Failure("laneCatalog.ref is a branch, tag or commit of letters, digits, '.', '_', '-' and '/', with no . or .. part: " + reference);
+            }
+        }
+
         if (configuration.Role == RotationRole.Follower)
         {
             return ValidateFollower(configuration, volumeOf);
@@ -357,6 +377,10 @@ internal static class ConfigurationValidator
 
     private static bool Contains(string parent, string child) =>
         child.StartsWith(parent + Path.DirectorySeparatorChar, Comparison);
+
+    /// <summary>Slash-separated parts of letters, digits, '.', '_' and '-', none empty, . or ..</summary>
+    private static bool SafeSegments(string value) =>
+        value.Split('/').All(static part => part.Length > 0 && part is not "." and not ".." && part.All(static c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-'));
 
     private static Result<Unit, string> Failure(string reason) => Result<Unit, string>.Failure(reason);
 }

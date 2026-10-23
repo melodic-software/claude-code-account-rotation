@@ -64,6 +64,12 @@ internal static class ConfigurationFile
             return Result<ClaudeCodeAccountRotationConfiguration, string>.Failure("the configuration file " + fullPath + " has laneRepositories that is not an array of owner/name strings");
         }
 
+        // The same for the catalog's source: a wrong shape is refused, not read as none.
+        if (raw["laneCatalog"] is JsonNode catalog && LaneCatalog(catalog) is null)
+        {
+            return Result<ClaudeCodeAccountRotationConfiguration, string>.Failure("the configuration file " + fullPath + " has laneCatalog that is not an object with repository and path strings (and an optional ref string)");
+        }
+
         return Result<ClaudeCodeAccountRotationConfiguration, string>.Success(Merge(defaults, raw));
     }
 
@@ -101,6 +107,9 @@ internal static class ConfigurationFile
         ["peers"] = PeersToJson(configuration.Peers),
         ["remoteControlTask"] = configuration.RemoteControlTask,
         ["laneRepositories"] = configuration.LaneRepositories is null ? null : new JsonArray([.. configuration.LaneRepositories.Select(static repository => (JsonNode)repository)]),
+        ["laneCatalog"] = configuration.LaneCatalog is LaneCatalogSource source
+            ? new JsonObject { ["repository"] = source.Repository, ["path"] = source.Path, ["ref"] = source.Ref }
+            : null,
     };
 
     private static JsonArray PeersToJson(IReadOnlyList<PeerConfiguration>? peers)
@@ -176,8 +185,25 @@ internal static class ConfigurationFile
             // Absent keeps the default, so a file written before this key restarts
             // the default task; a null or empty value written there turns it off.
             raw.ContainsKey("remoteControlTask") ? Text(raw, "remoteControlTask") : defaults.RemoteControlTask,
-            LaneRepositories(raw) ?? defaults.LaneRepositories);
+            LaneRepositories(raw) ?? defaults.LaneRepositories,
+            raw["laneCatalog"] is JsonNode catalog ? LaneCatalog(catalog) : defaults.LaneCatalog);
     }
+
+    /// <summary>
+    /// <c>laneCatalog</c>: <c>repository</c> and <c>path</c> strings, trimmed,
+    /// and an optional <c>ref</c> string, blank for the default branch; null
+    /// for any other shape. The validator holds each part to GitHub's rules.
+    /// </summary>
+    private static LaneCatalogSource? LaneCatalog(JsonNode node) =>
+        node is JsonObject source
+        && source["repository"] is JsonValue repository && repository.TryGetValue(out string? repositoryText)
+        && source["path"] is JsonValue path && path.TryGetValue(out string? pathText)
+        && (source["ref"] is null || (source["ref"] is JsonValue reference && reference.TryGetValue(out string? _)))
+            ? new LaneCatalogSource(
+                repositoryText.Trim(),
+                pathText.Trim(),
+                source["ref"]?.GetValue<string>().Trim() is { Length: > 0 } text ? text : null)
+            : null;
 
     /// <summary>
     /// <c>laneRepositories</c>: <c>owner/name</c> entries, trimmed, blanks
