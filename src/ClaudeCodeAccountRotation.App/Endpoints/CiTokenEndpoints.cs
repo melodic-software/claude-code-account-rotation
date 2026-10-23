@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using ClaudeCodeAccountRotation.App.Accounts;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Adapters.Process;
 using ClaudeCodeAccountRotation.App.Dashboard;
@@ -49,10 +50,12 @@ internal static partial class CiTokenEndpoints
             IGhApiReader github,
             ISecretStore store,
             IBrowserLauncher browsers,
+            LaneCatalogStore laneCatalog,
             CancellationToken cancellationToken) =>
         {
             ArgumentNullException.ThrowIfNull(body);
             ArgumentNullException.ThrowIfNull(github);
+            ArgumentNullException.ThrowIfNull(laneCatalog);
             Result<AccountEmail, string> parsed = AccountEmail.Parse(email);
             if (parsed.IsFailure)
             {
@@ -117,9 +120,17 @@ internal static partial class CiTokenEndpoints
 
             if (roles.Value is IReadOnlyList<CiRole> named)
             {
+                // Which roles are keyed, from the catalog when one is
+                // configured; one that cannot be read refuses before any token.
+                Result<Func<CiRole, bool>, string> keying = await laneCatalog.KeyedForWriteAsync(cancellationToken);
+                if (keying.IsFailure)
+                {
+                    return Refused("CatalogUnreadable", keying.Error);
+                }
+
                 // Before any token exists: a keyed role written whole needs the
                 // key beside the token, or it would be left half from this account.
-                if (named.FirstOrDefault(static role => role.Keyed) is CiRole keyed)
+                if (named.FirstOrDefault(keying.Value) is CiRole keyed)
                 {
                     // The store, not only the roster's record of it: a key the
                     // store has lost would leave every key half unset.
@@ -137,7 +148,7 @@ internal static partial class CiTokenEndpoints
                     }
                 }
 
-                Result<CiTokenRequest, string> resolved = await ResolveAsync(parsed.Value, named, github, cancellationToken);
+                Result<CiTokenRequest, string> resolved = await ResolveAsync(parsed.Value, named, keying.Value, github, cancellationToken);
                 if (resolved.IsFailure)
                 {
                     return Refused("SecretUnreadable", resolved.Error);
@@ -242,6 +253,7 @@ internal static partial class CiTokenEndpoints
     private static async Task<Result<CiTokenRequest, string>> ResolveAsync(
         AccountEmail email,
         IReadOnlyList<CiRole> roles,
+        Func<CiRole, bool> keyed,
         IGhApiReader github,
         CancellationToken cancellationToken)
     {
@@ -255,7 +267,7 @@ internal static partial class CiTokenEndpoints
             }
 
             SecretTarget? key = null;
-            if (role.Keyed && role.KeySecret is CiTokenSecret keySecret)
+            if (keyed(role) && role.KeySecret is CiTokenSecret keySecret)
             {
                 Result<SecretTarget, GhApiFailure> read = await github.ReadAccessAsync(keySecret, cancellationToken);
                 if (read.IsFailure)

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Reflection;
+using ClaudeCodeAccountRotation.App.Accounts;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Adapters.Http;
 using ClaudeCodeAccountRotation.App.Adapters.Peers;
@@ -259,6 +260,7 @@ internal static class AppComposition
         services.AddSingleton<IGhApiReader>(gh.IsSuccess
             ? new GhApiReader(gh.Value, TimeSpan.FromSeconds(60))
             : new UnavailableGhApiReader(gh.Error));
+        services.AddSingleton<LaneCatalogStore>();
         // The limit-stop check's GraphQL reads: queries only, never through the write gate.
         services.AddSingleton<IGhGraphQlReader>(gh.IsSuccess
             ? new GhGraphQlReader(gh.Value, TimeSpan.FromSeconds(60))

@@ -1,5 +1,8 @@
 using System.Collections.Immutable;
+using ClaudeCodeAccountRotation.App.Accounts;
 using ClaudeCodeAccountRotation.App.Switching;
+using ClaudeCodeAccountRotation.Core.Accounts;
+using ClaudeCodeAccountRotation.Core.Configuration;
 using ClaudeCodeAccountRotation.Core.Quota;
 using ClaudeCodeAccountRotation.Core.Switching;
 
@@ -26,7 +29,52 @@ internal sealed record DashboardView(
     IReadOnlyList<AlertView> Alerts,
     DateTimeOffset? AlertsComputedAt,
     IReadOnlyList<decimal> AlertThresholds,
-    IReadOnlyList<string> TokenOnlyRolePrefixes);
+    IReadOnlyList<string> TokenOnlyRolePrefixes,
+    LaneCatalogView LaneCatalog);
+
+/// <summary>
+/// The lane catalog as the store holds it, never read for this view: whether
+/// one is configured and where, when it was read, the last read's failure,
+/// and each role, with no key secret for a role that is not keyed.
+/// </summary>
+internal sealed record LaneCatalogView(
+    bool Configured,
+    LaneCatalogSource? Source,
+    DateTimeOffset? ReadAt,
+    string? Error,
+    string? Organization,
+    IReadOnlyList<LaneCatalogRoleView> Roles)
+{
+    public static LaneCatalogView Of(LaneCatalogStore store)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        LaneCatalogSnapshot held = store.Snapshot;
+        LaneCatalog? catalog = held.Catalog;
+        return new LaneCatalogView(
+            store.Source is not null,
+            store.Source,
+            held.ReadAt,
+            held.Error,
+            catalog?.Organization,
+            catalog is null ? [] : [.. catalog.Roles.Select(role =>
+            {
+                CiRole named = new(role.Prefix, CiSecretScope.Organization, catalog.Organization);
+                bool keyed = catalog.IsKeyed(named) == true;
+                return new LaneCatalogRoleView(role.Id, role.Prefix, catalog.Organization, named.TokenSecretName, keyed ? named.KeySecretName : null, keyed, role.Category, [.. role.Lanes.Select(static lane => lane.Id)]);
+            })]);
+    }
+}
+
+/// <summary>One catalog role as the page reads it.</summary>
+internal sealed record LaneCatalogRoleView(
+    string Id,
+    string Prefix,
+    string Organization,
+    string TokenSecret,
+    string? KeySecret,
+    bool Keyed,
+    string Category,
+    IReadOnlyList<string> Lanes);
 
 /// <summary>
 /// One account's 7-day figure past a threshold: <c>Level</c> is <c>warning</c>
