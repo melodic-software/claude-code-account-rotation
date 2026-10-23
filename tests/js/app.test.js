@@ -922,10 +922,15 @@ test("no account moved off near a limit moves at once without asking", async () 
 
 test("a window that already reset and a model-scoped figure do not warn", () => {
   const accounts = [usageOf("a@example.com", [
-    usageLimit("session", "5-hour", 96, "critical", null, true),
+    usageLimit("session", "5-hour", null, null, null, true),
     usageLimit("weekly_all", "7-day", 40, "normal"),
     usageLimit("weekly_scoped", "Fable", 99, "critical")
   ])];
+  assert.strictEqual(limitStopNotice(["a@example.com"], accounts), null);
+});
+
+test("an account whose windows both reset since its last read moves without asking", () => {
+  const accounts = [usageOf("a@example.com", [usageLimit("session", "5-hour", null, null, null, true), usageLimit("weekly_all", "7-day", null, null, null, true)])];
   assert.strictEqual(limitStopNotice(["a@example.com"], accounts), null);
 });
 
