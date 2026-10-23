@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-10-23
+
 ### Added
 
 - **A lane catalog decides which roles are keyed.** `laneCatalog` in `config.json` names a
