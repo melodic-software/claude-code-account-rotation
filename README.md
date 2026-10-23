@@ -494,13 +494,26 @@ Prerequisite: the GitHub CLI (`gh`) on PATH, signed in (`gh auth login`) as some
 those secrets (`admin:org` for organization secrets). The tool checks this before a token is made.
 
 1. Pick the card with the most 7-day headroom. If any role you will pick has a key half, store the
-   account's Console API key first (··· menu, Set API key). Open Console, in that panel, opens the
-   Console's API keys page in the account's mapped browser profile, so you create the key signed in
-   as that account (the Set Admin key panel opens the Admin keys page). After Save the panel says
-   where the key is kept (Credential Manager on Windows, the Secret Service on Linux) and what
-   sends it to GitHub: Push API key, naming the key secrets, when the account already backs a role
-   with a key half; otherwise Generate CI token with such a role.
-2. Open its ··· menu, then Generate CI token. Tick the roles it is to back. With a lane catalog
+   account's Console API key first (··· menu, Set API key). Before you make the key, turn the
+   account's auto-reload (Console) and extra usage (claude.ai) off. Open Console, in that panel,
+   opens the Console's API keys page in the account's mapped browser profile, so you create the key
+   signed in as that account; name it `github-actions` (the Set Admin key panel opens the Admin keys
+   page). The panel lists the keyed roles, the catalog's when one is read, each with the account
+   that sets its key now. Tick the roles the key is to back, answer Auto-reload and Extra usage,
+   paste the key, and choose Save and send. The key is stored (Credential Manager on Windows, the
+   Secret Service on Linux) and sent to each ticked role's key secret, and that key half moves off
+   the account that set it before, after the limit-stop check below. With a key already stored,
+   leave the field blank to send the stored one; Push API key opens the same panel. With no role
+   ticked, Save only stores the key.
+
+   The key is sent only when you answer that auto-reload and extra usage are both off. No API
+   this tool can call reads auto-reload, so it asks on every write that sends a key (this panel,
+   and Generate CI token for a keyed role) and sends nothing on a missing answer or an `On`. When
+   the account's last usage read says extra usage is on, it refuses whatever you answered; turn it
+   off, refresh the account's usage, and try again. The card's roster records the day you last
+   confirmed both off.
+2. Open its ··· menu, then Generate CI token. Tick the roles it is to back, and for a keyed role
+   answer Auto-reload and Extra usage as above. With a lane catalog
    read, the list holds the catalog's roles, then any other role an account backs. Without one, it
    holds every role an account backs and, after Check roles, every role the organization's
    secrets name; when no role is known yet, the panel offers Check roles itself and redraws the
@@ -526,17 +539,20 @@ set and the message names each one that was not. A role whose token was set but 
 or whose key was set but whose token failed, is `split` (token from one account, key from
 another): the account that set the half that failed keeps it, and both cards say `split` and name
 both accounts until that half is re-sent. Every claim moves only the halves it sets. Push API key,
-in the ··· menu, sends the stored key to the key secret of every role the account backs, with no
-sign-in. Use it after replacing a Console key too. The first rate-limit answer from GitHub stops
-every write after it, and nothing retries it.
+in the ··· menu, sends the stored key to the key secret of the roles you tick, with no sign-in.
+Use it after replacing a Console key too. The first rate-limit answer from GitHub stops every
+write after it, and nothing retries it.
 
-The same start is `POST /api/accounts/{email}/ci-token` with `{"roles":[{"prefix":"AUTOMATIONS",
-"organization":"octo"}]}` (`tokenSecret` in place of `prefix` for a token-only role). The 2.1.0
+The same start is `POST /api/accounts/{email}/ci-token` with `{"roles":[{"prefix":"PR_VERIFY",
+"organization":"octo"}],"costSettings":{"autoReload":"off","extraUsage":"off"}}` (`tokenSecret`
+in place of `prefix` for a token-only role, which needs no `costSettings`). The 2.1.0
 body, one `secretName` with its organization, `visibility` and `repositories`, still works: it
 writes the token half only, to that one secret, and refuses a repository. With an organization and no `visibility`, it keeps the visibility the secret has;
 a secret that does not exist yet is created visible to all repositories when its name ends in
 `CLAUDE_CODE_OAUTH_TOKEN` (a role's), and private otherwise, as gh's default made it.
-Push is `POST /api/accounts/{email}/api-key/push`.
+Push is `POST /api/accounts/{email}/api-key/push` with the same `costSettings` and an optional
+`roles` list in the same shape: keyed roles only, and only roles the catalog lists when one is
+configured. With no `roles`, it sends the key to every keyed role the account backs.
 
 `claude setup-token` draws its screen only when its input is a terminal, so the tool runs it
 under one: a pseudoconsole (ConPTY, Windows 10 1809 or later) on Windows, and a POSIX

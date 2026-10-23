@@ -62,6 +62,7 @@ public sealed class RosterFileCiRoleTests : IDisposable
         role.Role.TokenSecretName.ShouldBe("CLAUDE_CODE_OAUTH_TOKEN");
         role.Role.KeySecretName.ShouldBeNull();
         role.TokenSetOn.ShouldBe(new DateOnly(2026, 3, 4));
+        entry.CostSettingsConfirmedOn.ShouldBeNull();
     }
 
     [Fact]
@@ -84,6 +85,7 @@ public sealed class RosterFileCiRoleTests : IDisposable
         RosterEntry entry = new(Email("a@example.com"), CiTokenGeneratedOn: new DateOnly(2026, 10, 6))
         {
             ConsoleApiKeySetOn = new DateOnly(2026, 10, 1),
+            CostSettingsConfirmedOn = new DateOnly(2026, 10, 3),
             CiRoles =
             [
                 new CiRoleAssignment(

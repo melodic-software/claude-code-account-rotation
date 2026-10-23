@@ -115,7 +115,8 @@ internal sealed partial class DashboardAssembler(
                 keyed(assignment.Role) ? assignment.KeySetAt : null))],
             entry.ConsoleApiKeySetOn,
             entry.AdminKeySetOn,
-            entry.BacksCiRole);
+            entry.BacksCiRole,
+            entry.CostSettingsConfirmedOn);
 
     public async Task<DashboardView> AssembleAsync(CancellationToken cancellationToken)
     {

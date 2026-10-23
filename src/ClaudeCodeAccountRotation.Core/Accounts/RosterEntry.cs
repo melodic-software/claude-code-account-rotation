@@ -43,6 +43,13 @@ public sealed record RosterEntry(
     /// <summary>The date this account's Admin key was stored, or null when none is.</summary>
     public DateOnly? AdminKeySetOn { get; init; }
 
+    /// <summary>
+    /// The date the owner last confirmed, on a key write, that this account's
+    /// auto-reload and extra usage are both off (see <see cref="CostGate"/>),
+    /// or null when never or when the last answer said one was on.
+    /// </summary>
+    public DateOnly? CostSettingsConfirmedOn { get; init; }
+
     /// <summary>The token secret of the role whose token half was set last, or null when no role has one.</summary>
     public CiTokenSecret? CiTokenSecret => CiRoles
         .Where(static assignment => assignment.HasToken)
@@ -106,6 +113,7 @@ public sealed record RosterEntry(
             && CiTokenGeneratedOn == other.CiTokenGeneratedOn
             && ConsoleApiKeySetOn == other.ConsoleApiKeySetOn
             && AdminKeySetOn == other.AdminKeySetOn
+            && CostSettingsConfirmedOn == other.CostSettingsConfirmedOn
             && CiRoles.SequenceEqual(other.CiRoles));
 
     public override int GetHashCode() =>

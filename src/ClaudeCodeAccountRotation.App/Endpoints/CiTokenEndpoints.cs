@@ -4,6 +4,7 @@ using ClaudeCodeAccountRotation.App.Accounts;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Adapters.Process;
 using ClaudeCodeAccountRotation.App.Dashboard;
+using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.App.Security;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Accounts;
@@ -51,6 +52,8 @@ internal static partial class CiTokenEndpoints
             ISecretStore store,
             IBrowserLauncher browsers,
             LaneCatalogStore laneCatalog,
+            QuotaState quota,
+            TimeProvider clock,
             CancellationToken cancellationToken) =>
         {
             ArgumentNullException.ThrowIfNull(body);
@@ -146,6 +149,13 @@ internal static partial class CiTokenEndpoints
                     {
                         return Refused("NoConsoleKey", "paste this account's Console key first (Set API key): " + keyed + " has a key half.");
                     }
+
+                    // The key goes live with the token, so the cost gate runs
+                    // here, before any secret is read or token made.
+                    if (await ApiKeyEndpoints.CostGateAsync(parsed.Value, ApiKeyEndpoints.CostAnswer(body), rosterFile, quota, clock, cancellationToken) is IResult gated)
+                    {
+                        return gated;
+                    }
                 }
 
                 Result<CiTokenRequest, string> resolved = await ResolveAsync(parsed.Value, named, keying.Value, github, cancellationToken);
@@ -203,7 +213,7 @@ internal static partial class CiTokenEndpoints
     /// <c>prefix</c> (empty for the legacy role) or <c>tokenSecret</c> for a
     /// token-only role, then <c>repository</c> or <c>organization</c>.
     /// </summary>
-    private static Result<IReadOnlyList<CiRole>?, string> ParseRoles(JsonObject body)
+    internal static Result<IReadOnlyList<CiRole>?, string> ParseRoles(JsonObject body)
     {
         if (!body.TryGetPropertyValue("roles", out JsonNode? node))
         {
