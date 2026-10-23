@@ -6,6 +6,19 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Changed
+
+- **The limit-stop check reads usage, not GitHub.** Before Start sign-in or Save and send moves a
+  role off other accounts, the page checks those accounts' 5-hour and 7-day figures from the
+  last dashboard. At 90% or more it names the account, the figure and its reset, with Move anyway
+  and Cancel. It makes no GitHub call and starts at once. The 2.6.0 check read a week of failed
+  lane runs, about 50 calls and 3.5 minutes per click, from the hourly allowance CI shares (#320).
+  Credit stops on Console keys are not checked: no local figure shows them.
+
+### Removed
+
+- **`POST /api/roles/limit-stops`** and its run and annotation reads through `gh api graphql`.
+
 ## [2.6.0] - 2026-10-23
 
 ### Added
