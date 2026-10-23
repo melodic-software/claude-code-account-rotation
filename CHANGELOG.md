@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-10-23
+
 ### Added
 
 - **Sign-in links name the account.** The sign-in URL that Start sign-in and Log in again open,
