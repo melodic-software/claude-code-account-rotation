@@ -9,9 +9,11 @@ namespace ClaudeCodeAccountRotation.App.Adapters.Process;
 /// <summary>
 /// Why a <c>gh api</c> call gave no answer. A rate limit ends whatever asked;
 /// nothing retries it. <paramref name="Status"/> is the HTTP status GitHub
-/// answered with, or null when none was seen.
+/// answered with, or null when none was seen. <paramref name="ResourceLimited"/>
+/// is a GraphQL query GitHub cut off for its resource limits, which a smaller
+/// query may pass.
 /// </summary>
-internal sealed record GhApiFailure(string Message, bool RateLimited, int? Status = null);
+internal sealed record GhApiFailure(string Message, bool RateLimited, int? Status = null, bool ResourceLimited = false);
 
 /// <summary>Reads the GitHub REST API through <c>gh api</c>, one GET per call, so the request carries gh's own User-Agent and sign-in.</summary>
 internal interface IGhApiReader

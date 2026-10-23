@@ -14,8 +14,8 @@ namespace ClaudeCodeAccountRotation.App.Tests.Endpoints;
 /// <summary>
 /// <c>POST /api/roles/limit-stops</c>: nothing is read without lane
 /// repositories; per repository a page of 100 failed runs of the last 7 days,
-/// then one GraphQL batch of their check suites, every call from a budget of
-/// 30; the budget, the point floor, a rate limit or a cut-off read reads
+/// then GraphQL batches of 50 of their check suites, halved when GitHub cuts
+/// one off for its resource limits, every call from a budget of 60; the budget, the point floor, a rate limit or a cut-off read reads
 /// partial and says how far back each repository was read. The app's clock
 /// reads 2026-09-07 12:00 UTC, so the window opens 2026-08-31 12:00 UTC.
 /// </summary>
@@ -158,6 +158,9 @@ public sealed class LimitStopEndpointTests
     private static Result<JsonNode, GhApiFailure> RateLimited() =>
         Result<JsonNode, GhApiFailure>.Failure(new GhApiFailure(GhApiReader.RateLimitMessage, RateLimited: true, 403));
 
+    private static Result<JsonNode, GhApiFailure> ResourceLimited() =>
+        Result<JsonNode, GhApiFailure>.Failure(new GhApiFailure("GitHub's GraphQL API answered the check suite annotations query with errors (RESOURCE_LIMITS_EXCEEDED)", RateLimited: false, 200, ResourceLimited: true));
+
     private static JsonObject Coverage(JsonObject body, int index) => body["coverage"]!.AsArray()[index]!.AsObject();
 
     private static DateTimeOffset? CoveredBack(JsonObject coverage) =>
@@ -250,37 +253,40 @@ public sealed class LimitStopEndpointTests
         reader.Paths[9].ShouldBe(RunsPath("octo/lanes", 10));
         reader.Paths[10].ShouldBe(RunsPath("octo/lanes", 1, Nth(999).CreatedAt));
         reader.Paths[11].ShouldBe(RunsPath("octo/lanes", 2, Nth(999).CreatedAt));
-        graphQl.Batches[10].Count.ShouldBe(99);
-        graphQl.Batches[10].ShouldNotContain(Nth(999).Suite);
+        // Two batches a page: the narrowed page 1 is batches 20 and 21.
+        graphQl.Batches.Count.ShouldBe(25);
+        List<string> narrowed = [.. graphQl.Batches[20], .. graphQl.Batches[21]];
+        narrowed.Count.ShouldBe(99);
+        narrowed.ShouldNotContain(Nth(999).Suite);
         body["outcome"]!.GetValue<string>().ShouldBe("checked");
         body["runsRead"]!.GetValue<int>().ShouldBe(1204);
-        body["calls"]!.GetValue<int>().ShouldBe(26);
+        body["calls"]!.GetValue<int>().ShouldBe(38);
         Coverage(body, 0)["complete"]!.GetValue<bool>().ShouldBeTrue();
         CoveredBack(Coverage(body, 0)).ShouldBe(Nth(1203).CreatedAt);
     }
 
     [Fact]
-    public async Task ThirtyCallsEndTheScanAsPartialCoveredBackToTheOldestRunReadInFull()
+    public async Task SixtyCallsEndTheScanAsPartialCoveredBackToTheOldestRunReadInFull()
     {
         (AppFactory factory, SpyReader reader, SpyGraphQl graphQl) = await StartAsync("octo/lanes", "octo/other");
         await using AppFactory _ = factory;
 
-        // Twenty full pages are there to read; 15 pages and their 15 batches spend the budget.
+        // Full pages without end; 20 pages and their 40 batches spend the budget.
         reader.Fallback = (call, _) => Stream("octo/lanes", call <= 10 ? (call - 1) * 100 : 999 + ((call - 11) * 100));
 
         JsonObject body = await ScanAsync(factory, A);
 
-        (reader.Paths.Count + graphQl.Batches.Count).ShouldBe(30);
-        reader.Paths.Count.ShouldBe(15);
-        body["calls"]!.GetValue<int>().ShouldBe(30);
+        (reader.Paths.Count + graphQl.Batches.Count).ShouldBe(60);
+        reader.Paths.Count.ShouldBe(20);
+        body["calls"]!.GetValue<int>().ShouldBe(60);
         body["outcome"]!.GetValue<string>().ShouldBe("partial");
         Coverage(body, 0)["complete"]!.GetValue<bool>().ShouldBeFalse();
-        CoveredBack(Coverage(body, 0)).ShouldBe(Nth(1498).CreatedAt);
+        CoveredBack(Coverage(body, 0)).ShouldBe(Nth(1998).CreatedAt);
         Coverage(body, 1)["repository"]!.GetValue<string>().ShouldBe("octo/other");
         Coverage(body, 1)["complete"]!.GetValue<bool>().ShouldBeFalse();
         CoveredBack(Coverage(body, 1)).ShouldBeNull();
         Problems(body).ShouldBe([
-            "the check used its 30 GitHub calls and stopped there",
+            "the check used its 60 GitHub calls and stopped there",
             "octo/other: not reached, as the check stopped before it",
         ]);
         reader.Paths.ShouldAllBe(static path => path.StartsWith("repos/octo/lanes/", StringComparison.Ordinal));
@@ -311,21 +317,21 @@ public sealed class LimitStopEndpointTests
         (AppFactory factory, SpyReader reader, SpyGraphQl graphQl) = await StartAsync("octo/lanes", "octo/other");
         await using AppFactory _ = factory;
 
-        // Fourteen full pages and a short fifteenth, each with its batch: the 30th call ends octo/lanes.
+        // Nineteen full pages and a short twentieth of 55, each with two batches: the 60th call ends octo/lanes.
         reader.Fallback = (call, path) => path.StartsWith("repos/octo/lanes/", StringComparison.Ordinal)
-            ? Stream("octo/lanes", call <= 10 ? (call - 1) * 100 : 999 + ((call - 11) * 100), call == 15 ? 5 : 100)
+            ? Stream("octo/lanes", call <= 10 ? (call - 1) * 100 : 999 + ((call - 11) * 100), call == 20 ? 55 : 100)
             : Runs("octo/other");
 
         JsonObject body = await ScanAsync(factory, A);
 
-        body["calls"]!.GetValue<int>().ShouldBe(30);
+        body["calls"]!.GetValue<int>().ShouldBe(60);
         reader.Paths.ShouldAllBe(static path => path.StartsWith("repos/octo/lanes/", StringComparison.Ordinal));
         Coverage(body, 0)["complete"]!.GetValue<bool>().ShouldBeTrue();
         Coverage(body, 1)["complete"]!.GetValue<bool>().ShouldBeFalse();
         CoveredBack(Coverage(body, 1)).ShouldBeNull();
         body["outcome"]!.GetValue<string>().ShouldBe("partial");
         Problems(body).ShouldBe([
-            "the check used its 30 GitHub calls and stopped there",
+            "the check used its 60 GitHub calls and stopped there",
             "octo/other: not reached, as the check stopped before it",
         ]);
     }
@@ -344,7 +350,46 @@ public sealed class LimitStopEndpointTests
         graphQl.Batches.Count.ShouldBe(1);
         body["outcome"]!.GetValue<string>().ShouldBe("partial");
         Problems(body).ShouldHaveSingleItem().ShouldContain(LimitStopScan.GraphQlPointFloor.ToString("N0", CultureInfo.InvariantCulture));
+        CoveredBack(Coverage(body, 0)).ShouldBe(Nth(49).CreatedAt);
+    }
+
+    [Fact]
+    public async Task ABatchCutOffForResourceLimitsIsReadAgainInHalvesAndLaterBatchesKeepTheSmallerSize()
+    {
+        (AppFactory factory, SpyReader reader, SpyGraphQl graphQl) = await StartAsync("octo/lanes");
+        await using AppFactory _ = factory;
+        reader.Answers.Enqueue(Stream("octo/lanes", 0));
+        reader.Answers.Enqueue(Runs("octo/lanes"));
+        graphQl.Answers.Enqueue(ResourceLimited());
+
+        JsonObject body = await ScanAsync(factory, A);
+
+        graphQl.Batches.Select(static batch => batch.Count).ShouldBe([50, 25, 25, 25, 25]);
+        graphQl.Batches.Skip(1).SelectMany(static batch => batch).ShouldBe([.. Enumerable.Range(0, 100).Select(static index => Nth(index).Suite)]);
+        body["outcome"]!.GetValue<string>().ShouldBe("checked");
+        body["runsRead"]!.GetValue<int>().ShouldBe(100);
+        body["calls"]!.GetValue<int>().ShouldBe(7);
         CoveredBack(Coverage(body, 0)).ShouldBe(Nth(99).CreatedAt);
+    }
+
+    [Fact]
+    public async Task ASingleSuiteStillCutOffForResourceLimitsEndsTheRepositoryAsPartial()
+    {
+        (AppFactory factory, SpyReader reader, SpyGraphQl graphQl) = await StartAsync("octo/lanes");
+        await using AppFactory _ = factory;
+        reader.Answers.Enqueue(Stream("octo/lanes", 0, 3));
+        for (int cut = 0; cut < 3; cut++)
+        {
+            graphQl.Answers.Enqueue(ResourceLimited());
+        }
+
+        JsonObject body = await ScanAsync(factory, A);
+
+        graphQl.Batches.Select(static batch => batch.Count).ShouldBe([3, 2, 1]);
+        body["outcome"]!.GetValue<string>().ShouldBe("partial");
+        Problems(body).ShouldBe(["octo/lanes: " + ResourceLimited().Error.Message]);
+        body["runsRead"]!.GetValue<int>().ShouldBe(0);
+        CoveredBack(Coverage(body, 0)).ShouldBeNull();
     }
 
     [Fact]

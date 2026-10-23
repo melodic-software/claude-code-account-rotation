@@ -8,8 +8,10 @@ namespace ClaudeCodeAccountRotation.App.Endpoints;
 /// <summary>
 /// The reads of one limit-stop scan. Per lane repository, newest first: a
 /// page of the failed runs of the last <see cref="LimitStopScan.Window"/>,
-/// then one GraphQL batch reading the check runs of every attempt of those
-/// runs and every job's annotations, failed or not; a check run whose
+/// then GraphQL batches reading the check runs of every attempt of those
+/// runs and every job's annotations, failed or not. A batch GitHub cuts off
+/// for its resource limits is read again in halves, and later batches keep
+/// the smaller size. A check run whose
 /// annotations the batch cut off gets one REST read. Every call comes from
 /// one <see cref="ScanCallBudget"/> of <see cref="LimitStopScan.MaxCalls"/>.
 /// <see cref="ListingRange"/> pages the listing and <see cref="RunCoverage"/>
@@ -17,13 +19,14 @@ namespace ClaudeCodeAccountRotation.App.Endpoints;
 /// is skipped. A failed read ends its repository in part; the budget,
 /// GitHub's rate limit, or a batch leaving fewer than
 /// <see cref="LimitStopScan.GraphQlPointFloor"/> points ends the scan, and
-/// each repository not reached is named. Nothing retries.
+/// each repository not reached is named. Nothing else retries.
 /// </summary>
 internal sealed class LimitStopScanRunner
 {
     private readonly IGhApiReader _reader;
     private readonly IGhGraphQlReader _graphQl;
     private readonly ScanCallBudget _budget = new(LimitStopScan.MaxCalls);
+    private int _suitesPerBatch = GhReadQueries.SuitesPerBatch;
     private bool _stopped;
 
     private LimitStopScanRunner(IGhApiReader reader, IGhGraphQlReader graphQl)
@@ -102,31 +105,14 @@ internal sealed class LimitStopScanRunner
 
     /// <summary>
     /// Reads the check runs and annotations of <paramref name="runs"/>, newest
-    /// first, in one GraphQL call: true when every one so far was read in full.
-    /// The point floor ends the scan, not this repository: a last page just
-    /// read still completes it.
+    /// first: true when every one so far was read in full. The point floor
+    /// ends the scan, not this repository: a last page just read still
+    /// completes it.
     /// </summary>
     private async Task<bool> ReadBatchAsync(string repository, List<ListedRun> runs, RunCoverage coverage, CancellationToken cancellationToken)
     {
         List<string> ids = [.. runs.Where(static run => !run.FromFork).Select(static run => run.CheckSuiteNodeId).OfType<string>()];
-        SuiteBatch batch = new(int.MaxValue, []);
-        if (ids.Count > 0)
-        {
-            if (!Take())
-            {
-                return false;
-            }
-
-            Result<SuiteBatch, GhApiFailure> read = await _graphQl.ReadCheckSuitesAsync(ids, cancellationToken);
-            if (read.IsFailure)
-            {
-                Fail(repository, read.Error);
-                return false;
-            }
-
-            batch = read.Value;
-        }
-
+        List<SuiteRead?> suites = await ReadSuitesAsync(repository, ids, cancellationToken);
         foreach (ListedRun listed in runs)
         {
             string named = repository + ": run " + listed.Run.Id.ToString(CultureInfo.InvariantCulture);
@@ -142,21 +128,53 @@ internal sealed class LimitStopScanRunner
             }
             else
             {
-                // A null suite is a run deleted since it was listed: nothing left to read.
-                whole = batch.Suites[ids.IndexOf(id)] is not SuiteRead suite || await ReadSuiteAsync(repository, listed.Run, suite, cancellationToken);
+                // A suite past the ones read was never reached; a null one is
+                // a run deleted since it was listed: nothing left to read.
+                int index = ids.IndexOf(id);
+                whole = index < suites.Count && (suites[index] is not SuiteRead suite || await ReadSuiteAsync(repository, listed.Run, suite, cancellationToken));
                 RunsRead += whole ? 1 : 0;
             }
 
             coverage.Read(listed.Run, whole);
         }
 
-        if (batch.Remaining < LimitStopScan.GraphQlPointFloor)
+        return suites.Count == ids.Count && coverage.Contiguous;
+    }
+
+    /// <summary>
+    /// The suites of <paramref name="ids"/> in their order, read in batches of
+    /// <see cref="_suitesPerBatch"/>. Fewer come back when the budget, a failed
+    /// read or the point floor stops the reading.
+    /// </summary>
+    private async Task<List<SuiteRead?>> ReadSuitesAsync(string repository, List<string> ids, CancellationToken cancellationToken)
+    {
+        List<SuiteRead?> suites = [];
+        while (suites.Count < ids.Count && Take())
         {
-            Stop("GitHub's GraphQL points fell to " + batch.Remaining.ToString("N0", CultureInfo.InvariantCulture) + ", under the "
-                + LimitStopScan.GraphQlPointFloor.ToString("N0", CultureInfo.InvariantCulture) + " the check leaves for other work, so it stopped there");
+            List<string> batch = ids.GetRange(suites.Count, Math.Min(_suitesPerBatch, ids.Count - suites.Count));
+            Result<SuiteBatch, GhApiFailure> read = await _graphQl.ReadCheckSuitesAsync(batch, cancellationToken);
+            if (read.IsFailure && read.Error.ResourceLimited && batch.Count > 1)
+            {
+                _suitesPerBatch = (batch.Count + 1) / 2;
+                continue;
+            }
+
+            if (read.IsFailure)
+            {
+                Fail(repository, read.Error);
+                break;
+            }
+
+            suites.AddRange(read.Value.Suites);
+            if (read.Value.Remaining < LimitStopScan.GraphQlPointFloor)
+            {
+                Stop("GitHub's GraphQL points fell to " + read.Value.Remaining.ToString("N0", CultureInfo.InvariantCulture) + ", under the "
+                    + LimitStopScan.GraphQlPointFloor.ToString("N0", CultureInfo.InvariantCulture) + " the check leaves for other work, so it stopped there");
+                break;
+            }
         }
 
-        return coverage.Contiguous;
+        return suites;
     }
 
     /// <summary>The records of one check suite's check runs: true when none was cut off.</summary>
