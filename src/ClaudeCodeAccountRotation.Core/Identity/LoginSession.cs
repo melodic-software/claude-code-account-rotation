@@ -26,7 +26,8 @@ public enum LoginSessionState
 
 /// <summary>
 /// One login in flight. Carries no token material and no submitted code: the
-/// sign-in URL is the authorize URL the CLI printed, and the message comes from
+/// sign-in URL is the authorize URL the CLI printed with the account as its
+/// <c>login_hint</c> (<see cref="SignInUrl"/>), and the message comes from
 /// a fixed vocabulary rather than from the child's output.
 /// </summary>
 public sealed record LoginSession(

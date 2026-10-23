@@ -520,8 +520,9 @@ those secrets (`admin:org` for organization secrets). The tool checks this befor
    list from what it finds, and to create a role you type its prefix and organization, and the
    page asks before it creates the secrets. Choose Start sign-in: the button names the browser and profile it opens, or says
    you will get a link when no browser is mapped.
-3. Anthropic's sign-in page opens in the account's mapped browser profile. Sign in as that
-   account, then paste the code it shows into the card and choose Submit code.
+3. Anthropic's sign-in page opens in the account's mapped browser profile, with the account's
+   address in its email box when the profile is signed out. Sign in as that account, then paste
+   the code it shows into the card and choose Submit code.
 4. The tool sets each role's token secret from the new token, then its key secret from the stored
    key, one at a time and at least a second apart. Before any token is made it reads who may see
    each existing secret and passes that back (`--visibility all`, `private`, or `--repos` with the

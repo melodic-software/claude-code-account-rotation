@@ -151,6 +151,7 @@ public sealed class ClaudeCliLoginSessionRunnerTests : IDisposable
         Result<LoginSession, string> started = await runner.StartAsync(Email(ParkedEmail), Folder(ParkedEmail), TestContext.Current.CancellationToken);
 
         started.IsSuccess.ShouldBeTrue(started.IsFailure ? started.Error : "");
+        started.Value.SignInUrl!.Query.ShouldEndWith("&login_hint=parked%40example.com");
         runner.IsRunningAgainst(Folder(ParkedEmail)).ShouldBeTrue();
         runner.IsRunningAgainst(Folder(LiveEmail)).ShouldBeFalse();
     }
