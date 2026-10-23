@@ -111,7 +111,7 @@ internal sealed class LimitStopScanRunner
     private async Task<bool> ReadBatchAsync(string repository, List<ListedRun> runs, RunCoverage coverage, CancellationToken cancellationToken)
     {
         List<string> ids = [.. runs.Where(static run => !run.FromFork).Select(static run => run.CheckSuiteNodeId).OfType<string>()];
-        List<SuiteRead?> suites = await ReadSuitesAsync(repository, ids, cancellationToken);
+        (List<SuiteRead?> suites, int remaining) = await ReadSuitesAsync(repository, ids, cancellationToken);
         foreach (ListedRun listed in runs)
         {
             string named = repository + ": run " + listed.Run.Id.ToString(CultureInfo.InvariantCulture);
@@ -137,6 +137,12 @@ internal sealed class LimitStopScanRunner
             coverage.Read(listed.Run, whole);
         }
 
+        if (remaining < LimitStopScan.GraphQlPointFloor)
+        {
+            Stop("GitHub's GraphQL points fell to " + remaining.ToString("N0", CultureInfo.InvariantCulture) + ", under the "
+                + LimitStopScan.GraphQlPointFloor.ToString("N0", CultureInfo.InvariantCulture) + " the check leaves for other work, so it stopped there");
+        }
+
         return suites.Count == ids.Count && coverage.Contiguous;
     }
 
@@ -145,11 +151,14 @@ internal sealed class LimitStopScanRunner
     /// <see cref="GhReadQueries.SuitesPerBatch"/>, halved for the rest of the
     /// page after each cut-off. GitHub cut off about one batch of 50 in ten
     /// live, so each page starts at 50 again (#318). Fewer come back when the
-    /// budget, a failed read or the point floor stops the reading.
+    /// budget, a failed read or the point floor stops the reading; the points
+    /// left are the last batch's, and the caller ends the scan on the floor
+    /// once this page's follow-ups are read.
     /// </summary>
-    private async Task<List<SuiteRead?>> ReadSuitesAsync(string repository, List<string> ids, CancellationToken cancellationToken)
+    private async Task<(List<SuiteRead?> Suites, int Remaining)> ReadSuitesAsync(string repository, List<string> ids, CancellationToken cancellationToken)
     {
         List<SuiteRead?> suites = [];
+        int remaining = int.MaxValue;
         int size = GhReadQueries.SuitesPerBatch;
         while (suites.Count < ids.Count && Take())
         {
@@ -168,15 +177,14 @@ internal sealed class LimitStopScanRunner
             }
 
             suites.AddRange(read.Value.Suites);
-            if (read.Value.Remaining < LimitStopScan.GraphQlPointFloor)
+            remaining = read.Value.Remaining;
+            if (remaining < LimitStopScan.GraphQlPointFloor)
             {
-                Stop("GitHub's GraphQL points fell to " + read.Value.Remaining.ToString("N0", CultureInfo.InvariantCulture) + ", under the "
-                    + LimitStopScan.GraphQlPointFloor.ToString("N0", CultureInfo.InvariantCulture) + " the check leaves for other work, so it stopped there");
                 break;
             }
         }
 
-        return suites;
+        return (suites, remaining);
     }
 
     /// <summary>The records of one check suite's check runs: true when none was cut off.</summary>

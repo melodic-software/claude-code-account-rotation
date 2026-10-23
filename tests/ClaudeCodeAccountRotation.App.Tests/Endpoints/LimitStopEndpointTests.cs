@@ -440,6 +440,25 @@ public sealed class LimitStopEndpointTests
     }
 
     [Fact]
+    public async Task ALastPageUnderThePointFloorStillGetsItsFollowUpAndCompletesItsRepository()
+    {
+        (AppFactory factory, SpyReader reader, SpyGraphQl graphQl) = await StartAsync("octo/lanes", "octo/other");
+        await using AppFactory _ = factory;
+        Run run = new(101, new DateTimeOffset(2026, 9, 5, 9, 0, 0, TimeSpan.Zero));
+        reader.Answers.Enqueue(Runs("octo/lanes", run));
+        reader.Answers.Enqueue(Annotations(["warning"]));
+        graphQl.Answers.Enqueue(Batch(900, Suite(run, new CheckRun("claude", "SUCCESS", ["warning"], MoreAnnotations: true, DatabaseId: 777))));
+
+        JsonObject body = await ScanAsync(factory, A);
+
+        reader.Paths.ShouldBe([RunsPath("octo/lanes"), "repos/octo/lanes/check-runs/777/annotations?per_page=100"]);
+        Coverage(body, 0)["complete"]!.GetValue<bool>().ShouldBeTrue();
+        Coverage(body, 1)["complete"]!.GetValue<bool>().ShouldBeFalse();
+        Problems(body)[0].ShouldContain(LimitStopScan.GraphQlPointFloor.ToString("N0", CultureInfo.InvariantCulture));
+        body["outcome"]!.GetValue<string>().ShouldBe("partial");
+    }
+
+    [Fact]
     public async Task ACheckRunWithSixtyAnnotationsIsFinishedWithOneRestReadAndTheScanStaysChecked()
     {
         (AppFactory factory, SpyReader reader, SpyGraphQl graphQl) = await StartAsync("octo/lanes");
