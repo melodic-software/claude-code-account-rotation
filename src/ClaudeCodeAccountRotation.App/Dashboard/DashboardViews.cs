@@ -191,7 +191,8 @@ internal sealed record RosterEntryView(
     IReadOnlyList<CiRoleView>? CiRoles = null,
     DateOnly? ConsoleApiKeySetOn = null,
     DateOnly? AdminKeySetOn = null,
-    bool BacksCiRole = false);
+    bool BacksCiRole = false,
+    DateOnly? CostSettingsConfirmedOn = null);
 
 /// <summary>A CI secret as the page reads it: its name, and exactly one of a repository or an organization.</summary>
 internal sealed record CiTokenSecretView(string Name, string? Repository, string? Organization);

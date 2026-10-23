@@ -10,6 +10,9 @@
   // since usage is read only when asked (decision #164).
   var STALE_SECONDS = 30 * 60;
 
+  // What every lane's Console key is named, so a key list says which is a lane's.
+  var CONSOLE_KEY_NAME = "github-actions";
+
   // Loaded by Node for tests/js, which has no page: export the pure helpers and stop.
   if (typeof document === "undefined") {
     module.exports = {
@@ -58,6 +61,8 @@
     module.exports.killSwitchRows = killSwitchRows;
     module.exports.toggleKillSwitch = toggleKillSwitch;
     module.exports.limitStopSources = limitStopSources;
+    module.exports.keyRoleChoices = keyRoleChoices;
+    module.exports.costSettingsBody = costSettingsBody;
     module.exports.limitStopNotice = limitStopNotice;
     module.exports.limitStopGate = limitStopGate;
     return;
@@ -999,6 +1004,9 @@
       labeled(form, "New role's organization", where);
     }
 
+    // A keyed role's Console key goes live with the token, so the owner
+    // answers the cost questions first (issue #317 item 1).
+    var cost = roles.some(function (role) { return role.keyed; }) || !cataloged ? costQuestions(form) : null;
     var start = element("button", null, words.start);
     start.type = "submit";
     form.appendChild(start);
@@ -1006,6 +1014,7 @@
     var status = element("p", "muted");
     form.addEventListener("submit", function (event) {
       event.preventDefault();
+      var keyedPicked = roles.some(function (role, index) { return boxes[index].checked && role.keyed; });
       var picked = roles.filter(function (_, index) { return boxes[index].checked; }).map(function (role) { return role.item; });
       var created = newRoleItem(prefix.value, where.value, lastRoleCheck, lastDashboard && lastDashboard.tokenOnlyRolePrefixes);
       if (created && created.error) { status.textContent = created.error; return; }
@@ -1016,7 +1025,13 @@
         picked.push(created.item);
       }
       if (!picked.length) { status.textContent = "Pick at least one role."; return; }
-      var go = function () { startCiToken(account.email, { roles: picked }, form, status, panel); };
+      var body = { roles: picked };
+      if (cost && (keyedPicked || created)) {
+        var answered = costSettingsBody(cost.autoReload.value, cost.extraUsage.value, account.email);
+        if (answered.error && keyedPicked) { status.textContent = answered.error; return; }
+        if (!answered.error) { body.costSettings = answered.costSettings; }
+      }
+      var go = function () { startCiToken(account.email, body, form, status, panel); };
       var froms = limitStopSources(picked, lastAccounts, account.email);
       if (!froms.length) { go(); return; }
       checkLimitStops(froms, panel, status, go);
@@ -1029,7 +1044,7 @@
 
   // Load the configured lane catalog from inside the CI panel: one read on the
   // click, then the panel drawn again from the dashboard that follows.
-  function catalogLoader(account, notice) {
+  function catalogLoader(account, notice, reopen) {
     var box = element("form", "roster-form role-check");
     box.appendChild(element("p", "muted", notice));
     var load = element("button", "secondary", "Load lane catalog");
@@ -1052,7 +1067,7 @@
         .then(function (loaded) {
           busy = false;
           setButtonsDisabled(false);
-          if (loaded) { openCiTokenPanel(account); }
+          if (loaded) { (reopen || openCiTokenPanel)(account); }
         });
     });
     return box;
@@ -1137,18 +1152,24 @@
       });
   }
 
-  // Push API key: the stored Console key to the key secret of every role this
-  // account backs, with no setup-token run. After replacing a key, or to
-  // repair a role left split.
-  function pushApiKey(email) {
-    if (!window.confirm("Send " + email + "'s stored Console API key to the key secret of every role it backs?")) {
-      return Promise.resolve();
+  // The two cost questions every write of a Console key asks: auto-reload in
+  // the Console and extra usage on the plan. Neither has an answer until the
+  // owner picks one; this tool cannot read auto-reload, so it never assumes.
+  function costQuestions(form) {
+    function ask(text) {
+      var select = element("select");
+      [["", "Choose"], ["off", "Off"], ["on", "On"]].forEach(function (pair) {
+        var option = element("option", null, pair[1]);
+        option.value = pair[0];
+        select.appendChild(option);
+      });
+      labeled(form, text, select);
+      return select;
     }
-    return mutate(accountPath(email, "/api-key/push"), "POST", null, function (result) {
-      if (!result.ok) { showToast(refused(result.body), "error"); return null; }
-      showToast(result.body.message, result.body.failed ? "warn" : "ok");
-      return null;
-    });
+    return {
+      autoReload: ask("Auto-reload (Console, Billing)"),
+      extraUsage: ask("Extra usage (claude.ai, Usage)")
+    };
   }
 
   // Set API key: the account's Console API key, pasted once on this machine
@@ -1156,6 +1177,9 @@
   // field is cleared as soon as it is read, and the key never comes back to
   // this page. A details.login, so an open one holds the poll's re-render.
   // With admin set, the same panel takes the optional Admin key instead.
+  // For the Console key the same panel is the one flow that puts it live:
+  // paste it (or keep the stored one), tick the keyed roles it is to back,
+  // answer the two cost questions, and it is stored and sent in one click.
   function openApiKeyPanel(account, admin) {
     var key = keyKind(admin);
     var card = cardNodes[account.email];
@@ -1163,19 +1187,39 @@
     var existing = card.querySelector("details.api-key");
     if (existing) { existing.parentNode.removeChild(existing); }
 
+    var roster = account.roster || {};
+    var stored = !admin && !!roster.consoleApiKeySetOn;
     var panel = element("details", "login api-key");
     panel.open = true;
     panel.appendChild(element("summary", null, key.title + " for " + account.email));
     panel.appendChild(element("p", "muted",
       "Paste this account's " + key.title + "." + (admin ? " It is used only when you click Check API key." : "")
       + " It is kept only in this machine's OS store, never in a file of this tool's, and is not shown here again."));
+    var catalog = lastDashboard && lastDashboard.laneCatalog;
+    if (!admin) {
+      panel.appendChild(element("p", "muted",
+        "In the Console, name the key " + CONSOLE_KEY_NAME + " and turn auto-reload and extra usage off for this account first."
+        + (roster.costSettingsConfirmedOn ? " You last confirmed both off on " + roster.costSettingsConfirmedOn + "." : "")));
+      if (catalogNotice(catalog)) {
+        panel.appendChild(catalogLoader(account, catalogNotice(catalog), function (again) { openApiKeyPanel(again); }));
+      }
+    }
     var form = element("form", "roster-form");
     var field = element("input");
     field.type = "password";
     field.autocomplete = "off";
     field.spellcheck = false;
-    labeled(form, key.label, field);
-    var save = element("button", null, "Save");
+    labeled(form, stored ? key.label + " (blank keeps the stored key)" : key.label, field);
+    var choices = admin ? [] : keyRoleChoices(lastAccounts, catalog, account.email);
+    var boxes = choices.map(function (choice) {
+      var box = element("input");
+      box.type = "checkbox";
+      box.checked = choice.checked;
+      labeled(form, choice.label, box);
+      return box;
+    });
+    var cost = choices.length ? costQuestions(form) : null;
+    var save = element("button", null, choices.length ? "Save and send" : "Save");
     save.type = "submit";
     form.appendChild(save);
     // The Console page that creates this kind of key, in the account's mapped
@@ -1197,36 +1241,113 @@
     var status = element("p", "muted");
     form.addEventListener("submit", function (event) {
       event.preventDefault();
+      var picked = choices.filter(function (_, index) { return boxes[index].checked; });
+      var answered = picked.length ? costSettingsBody(cost.autoReload.value, cost.extraUsage.value, account.email) : null;
+      if (answered && answered.error) { status.textContent = answered.error; return; }
       var body = apiKeyBody(field.value);
       field.value = "";
-      if (!body) { status.textContent = "Paste the key first."; return; }
-      busy = true;
-      setButtonsDisabled(true);
-      send(accountPath(account.email, key.path), "PUT", body)
-        .then(function (result) {
-          if (!result.ok) { status.textContent = refused(result.body); return; }
-          // The panel stays, now saying where the key is and what sends it
-          // on, until Close. The card is redrawn under it at once, so its
-          // badge and Push API key are there while the panel is open.
-          var said = keyStoredWords(result.body, admin);
-          form.parentNode.removeChild(form);
-          status.textContent = said;
-          panel.appendChild(actionButton("Close", "secondary", function () {
-            if (panel.parentNode) { panel.parentNode.removeChild(panel); }
-          }));
-          showToast(said, "ok");
-          return refresh(true).then(function () {
-            var redrawn = cardNodes[account.email];
-            if (redrawn && panel.parentNode !== redrawn) { redrawn.appendChild(panel); }
-          });
-        })
-        .catch(function (error) { status.textContent = "Request failed: " + error; })
-        .then(function () { busy = false; setButtonsDisabled(false); });
+      if (!body && !stored) { status.textContent = "Paste the key first."; return; }
+      if (!body && !picked.length) { status.textContent = "Paste a new key, or pick a role to send the stored one to."; return; }
+      var go = function () {
+        busy = true;
+        setButtonsDisabled(true);
+        var said = [];
+        var saved = body ? send(accountPath(account.email, key.path), "PUT", body) : Promise.resolve({ ok: true, body: null });
+        saved
+          .then(function (result) {
+            if (!result.ok) { status.textContent = refused(result.body); return null; }
+            if (result.body) { said.push(keyStoredWords(result.body, admin)); }
+            if (!picked.length) { return true; }
+            return send(accountPath(account.email, "/api-key/push"), "POST", {
+              roles: picked.map(function (choice) { return choice.item; }),
+              costSettings: answered.costSettings
+            }).then(function (pushed) {
+              if (!pushed.ok) { said.push(refused(pushed.body)); return false; }
+              said.push(pushed.body.message);
+              return !pushed.body.failed;
+            });
+          })
+          .then(function (done) {
+            if (done === null) { return null; }
+            // The panel stays, now saying what was stored and sent, until
+            // Close. The card is redrawn under it at once.
+            form.parentNode.removeChild(form);
+            status.textContent = said.join(" ");
+            panel.appendChild(actionButton("Close", "secondary", function () {
+              if (panel.parentNode) { panel.parentNode.removeChild(panel); }
+            }));
+            showToast(said.join(" "), done ? "ok" : "warn");
+            return refresh(true).then(function () {
+              var redrawn = cardNodes[account.email];
+              if (redrawn && panel.parentNode !== redrawn) { redrawn.appendChild(panel); }
+            });
+          })
+          .catch(function (error) { status.textContent = "Request failed: " + error; })
+          .then(function () { busy = false; setButtonsDisabled(false); });
+      };
+      var froms = [];
+      picked.forEach(function (choice) {
+        if (choice.holder && choice.holder !== account.email && froms.indexOf(choice.holder) < 0) { froms.push(choice.holder); }
+      });
+      if (!froms.length) { go(); return; }
+      checkLimitStops(froms, panel, status, go);
     });
     panel.appendChild(form);
     panel.appendChild(status);
     card.appendChild(panel);
     field.focus();
+  }
+
+  // The roles Set API key offers: with a catalog read, its keyed roles only,
+  // in catalog order; without one, the keyed roles an account on the roster
+  // backs in an organization (the dashboard sends no key secret for a
+  // token-only role). Each says who sets its key secret now, and starts
+  // ticked when this account does.
+  function keyRoleChoices(accounts, catalog, email) {
+    var cataloged = catalog && (catalog.roles || []).length ? catalog.roles : null;
+    var seen = {};
+    var choices = [];
+    function holderOf(id) {
+      var found = (accounts || []).filter(function (account) {
+        return ((account.roster && account.roster.ciRoles) || []).some(function (held) {
+          return held.keySetOn && held.keySecret && (held.keySecret + "@" + held.organization).toLowerCase() === id;
+        });
+      })[0];
+      return found ? found.email : null;
+    }
+    function add(prefix, organization, keySecret) {
+      if (!keySecret || !organization) { return; }
+      var id = (keySecret + "@" + organization).toLowerCase();
+      if (seen[id]) { return; }
+      seen[id] = true;
+      var holder = holderOf(id);
+      choices.push({
+        item: { prefix: prefix, organization: organization },
+        holder: holder,
+        checked: holder === email,
+        label: prefix + " in org " + organization + " · " + keySecret + " · " + (holder ? "key from " + holder : "no key yet")
+      });
+    }
+    if (cataloged) {
+      cataloged.forEach(function (role) { if (role.keyed) { add(role.prefix, role.organization, role.keySecret); } });
+    } else {
+      (accounts || []).forEach(function (account) {
+        ((account.roster && account.roster.ciRoles) || []).forEach(function (role) { add(role.prefix, role.organization, role.keySecret); });
+      });
+    }
+    return choices;
+  }
+
+  // The owner's two answers as the server reads them, or the reason they
+  // cannot be sent: one unanswered, or one on.
+  function costSettingsBody(autoReload, extraUsage, email) {
+    if (!autoReload || !extraUsage) {
+      return { error: "Answer both: is auto-reload off, and is extra usage off, for " + email + "?" };
+    }
+    if (autoReload === "on" || extraUsage === "on") {
+      return { error: "Turn auto-reload and extra usage off for " + email + " first: no lane key is sent while either is on." };
+    }
+    return { costSettings: { autoReload: autoReload, extraUsage: extraUsage } };
   }
 
   function clearApiKey(email, admin) {
@@ -1870,6 +1991,7 @@
       roles.push({
         item: item,
         holder: holder,
+        keyed: !!role.keySecret,
         label: ciRoleLabel(role) + " in " + roleWhere(role)
           + (role.keySecret ? " · token+key" : " · token only") + " · " + (holder ? "backed by " + holder : "no holder")
       });
@@ -2609,7 +2731,7 @@
     if (roster) {
       menu.appendChild(menuItem(more, roster.consoleApiKeySetOn ? "Replace API key" : "Set API key", "quiet sm", function () { openApiKeyPanel(account); }));
       if (roster.consoleApiKeySetOn && (roster.ciRoles || []).some(function (role) { return role.keySecret; })) {
-        menu.appendChild(menuItem(more, "Push API key", "quiet sm", function () { pushApiKey(account.email); }));
+        menu.appendChild(menuItem(more, "Push API key", "quiet sm", function () { openApiKeyPanel(account); }));
       }
       if (roster.consoleApiKeySetOn) {
         menu.appendChild(menuItem(more, "Delete API key", "quiet sm", function () { clearApiKey(account.email); }));

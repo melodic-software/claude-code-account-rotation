@@ -75,10 +75,29 @@ public sealed class CiTokenRoleEndpointTests
         return (factory, reader);
     }
 
+    /// <summary>The owner's answer that both cost settings are off, as the page sends it (issue #317 item 1).</summary>
+    private static JsonObject BothOff() => new() { ["autoReload"] = "off", ["extraUsage"] = "off" };
+
+    /// <summary><paramref name="body"/> with the owner's both-off answer added, unless it carries its own.</summary>
+    private static JsonObject Confirmed(object? body)
+    {
+        JsonObject node = body is null ? [] : System.Text.Json.JsonSerializer.SerializeToNode(body)!.AsObject();
+        if (!node.ContainsKey("costSettings"))
+        {
+            node["costSettings"] = BothOff();
+        }
+
+        return node;
+    }
+
+    /// <summary>Push API key with the owner's both-off answer, and the roles when given.</summary>
+    private static Task<HttpResponseMessage> PushAsync(HttpClient client, object? body = null) =>
+        client.PostAsJsonAsync(Account(Email, "/api-key/push"), Confirmed(body), TestContext.Current.CancellationToken);
+
     /// <summary>Starts the session, pastes the code, and returns every body the page got back, the last one the session's end.</summary>
     private static async Task<List<string>> AssignAsync(HttpClient client, object body, CancellationToken cancellationToken)
     {
-        using HttpResponseMessage started = await client.PostAsJsonAsync(Account(Email, "/ci-token"), body, cancellationToken);
+        using HttpResponseMessage started = await client.PostAsJsonAsync(Account(Email, "/ci-token"), Confirmed(body), cancellationToken);
         string startBody = await started.Content.ReadAsStringAsync(cancellationToken);
         started.StatusCode.ShouldBe(HttpStatusCode.OK, startBody);
         string id = JsonNode.Parse(startBody)!["id"]!.GetValue<string>();
@@ -154,7 +173,7 @@ public sealed class CiTokenRoleEndpointTests
             .ClaimingToken(new CiRole("AUTOMATIONS", CiSecretScope.Organization, "octo"), before, null));
         using HttpClient client = factory.CreateMutatingClient();
 
-        using HttpResponseMessage pushed = await client.PostAsync(Account(Email, "/api-key/push"), content: null, TestContext.Current.CancellationToken);
+        using HttpResponseMessage pushed = await PushAsync(client);
 
         pushed.StatusCode.ShouldBe(HttpStatusCode.OK);
         factory.Secrets.Sets.Select(static set => set.Secret.Name).ShouldBe(["REVIEWS_CLAUDE_API_KEY"]);
@@ -174,7 +193,7 @@ public sealed class CiTokenRoleEndpointTests
         using HttpClient client = factory.CreateMutatingClient();
 
         using HttpResponseMessage started = await client.PostAsJsonAsync(Account(Email, "/ci-token"), new { roles = new[] { new { prefix = "PR_UNBLOCK", organization = "octo" } } }, TestContext.Current.CancellationToken);
-        using HttpResponseMessage pushed = await client.PostAsync(Account(Email, "/api-key/push"), content: null, TestContext.Current.CancellationToken);
+        using HttpResponseMessage pushed = await PushAsync(client);
 
         started.StatusCode.ShouldBe(HttpStatusCode.Conflict);
         (await started.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).ShouldContain("no lane catalog at lane-funding.json in octo/lanes");
@@ -205,7 +224,7 @@ public sealed class CiTokenRoleEndpointTests
         reader.Answers[CatalogPath] = Result<JsonNode, GhApiFailure>.Failure(new GhApiFailure("GitHub answered HTTP 502", RateLimited: false, Status: 502));
         using HttpResponseMessage failed = await client.PostAsync(refresh, content: null, TestContext.Current.CancellationToken);
         using HttpResponseMessage started = await client.PostAsJsonAsync(Account(Email, "/ci-token"), new { roles = new[] { new { prefix = "REVIEWS", organization = "octo" } } }, TestContext.Current.CancellationToken);
-        using HttpResponseMessage pushed = await client.PostAsync(Account(Email, "/api-key/push"), content: null, TestContext.Current.CancellationToken);
+        using HttpResponseMessage pushed = await PushAsync(client);
 
         failed.StatusCode.ShouldBe(HttpStatusCode.Conflict);
         started.StatusCode.ShouldBe(HttpStatusCode.Conflict);
@@ -348,7 +367,7 @@ public sealed class CiTokenRoleEndpointTests
 
         using HttpResponseMessage started = await client.PostAsJsonAsync(
             Account(Email, "/ci-token"),
-            new { roles = new[] { new { prefix = "PR_UNBLOCK", organization = "octo" } } },
+            Confirmed(new { roles = new[] { new { prefix = "PR_UNBLOCK", organization = "octo" } } }),
             TestContext.Current.CancellationToken);
 
         started.StatusCode.ShouldBe(HttpStatusCode.Conflict);
@@ -494,7 +513,7 @@ public sealed class CiTokenRoleEndpointTests
         AnswerAll(reader, "REVIEWS_CLAUDE_API_KEY", "PR_UNBLOCK_CLAUDE_API_KEY");
         using HttpClient client = factory.CreateMutatingClient();
 
-        using HttpResponseMessage pushed = await client.PostAsync(Account(Email, "/api-key/push"), content: null, TestContext.Current.CancellationToken);
+        using HttpResponseMessage pushed = await PushAsync(client);
 
         pushed.StatusCode.ShouldBe(HttpStatusCode.OK);
         factory.Secrets.Sets.Select(static set => set.Secret.Name).ShouldBe(["PR_UNBLOCK_CLAUDE_API_KEY"]);
@@ -510,7 +529,7 @@ public sealed class CiTokenRoleEndpointTests
         AnswerAll(reader, "REVIEWS_CLAUDE_API_KEY");
         using HttpClient client = factory.CreateMutatingClient();
 
-        using HttpResponseMessage pushed = await client.PostAsync(Account(Email, "/api-key/push"), content: null, TestContext.Current.CancellationToken);
+        using HttpResponseMessage pushed = await PushAsync(client);
 
         pushed.StatusCode.ShouldBe(HttpStatusCode.Conflict);
         (await pushed.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).ShouldContain("backs no role with a key half");
@@ -531,7 +550,7 @@ public sealed class CiTokenRoleEndpointTests
         AnswerAll(reader, "PR_VERIFY_CLAUDE_API_KEY");
         using HttpClient client = factory.CreateMutatingClient();
 
-        using HttpResponseMessage pushed = await client.PostAsync(Account(Email, "/api-key/push"), content: null, TestContext.Current.CancellationToken);
+        using HttpResponseMessage pushed = await PushAsync(client);
 
         pushed.StatusCode.ShouldBe(HttpStatusCode.OK);
         factory.Secrets.Sets.Select(static set => set.Secret.ToString()).ShouldBe(["PR_VERIFY_CLAUDE_API_KEY in org octo"]);
@@ -594,7 +613,7 @@ public sealed class CiTokenRoleEndpointTests
         reader.Answers["orgs/octo/actions/secrets/PR_UNBLOCK_CLAUDE_API_KEY"] = PathReader.Secret("PR_UNBLOCK_CLAUDE_API_KEY", "all");
         using HttpClient client = factory.CreateMutatingClient();
 
-        using HttpResponseMessage pushed = await client.PostAsync(Account(Email, "/api-key/push"), content: null, TestContext.Current.CancellationToken);
+        using HttpResponseMessage pushed = await PushAsync(client);
 
         pushed.StatusCode.ShouldBe(HttpStatusCode.OK);
         factory.Secrets.Sets.Single().Secret.Name.ShouldBe("PR_UNBLOCK_CLAUDE_API_KEY");
@@ -686,7 +705,7 @@ public sealed class CiTokenRoleEndpointTests
         reader.Answers["orgs/octo/actions/secrets/PR_UNBLOCK_CLAUDE_API_KEY"] = PathReader.Secret("PR_UNBLOCK_CLAUDE_API_KEY", "all");
         using HttpClient client = factory.CreateMutatingClient();
 
-        using HttpResponseMessage pushed = await client.PostAsync(Account(Email, "/api-key/push"), content: null, TestContext.Current.CancellationToken);
+        using HttpResponseMessage pushed = await PushAsync(client);
         string body = await pushed.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
 
         pushed.StatusCode.ShouldBe(HttpStatusCode.OK, body);
@@ -709,7 +728,7 @@ public sealed class CiTokenRoleEndpointTests
         await using AppFactory host = factory;
         using HttpClient client = factory.CreateMutatingClient();
 
-        using HttpResponseMessage pushed = await client.PostAsync(Account(Email, "/api-key/push"), content: null, TestContext.Current.CancellationToken);
+        using HttpResponseMessage pushed = await PushAsync(client);
 
         pushed.StatusCode.ShouldBe(HttpStatusCode.Conflict);
         factory.Secrets.Sets.ShouldBeEmpty();
@@ -724,7 +743,7 @@ public sealed class CiTokenRoleEndpointTests
         using HttpClient client = factory.CreateMutatingClient();
 
         List<string> bodies = await AssignAsync(client, _bothRoles, TestContext.Current.CancellationToken);
-        using (HttpResponseMessage pushed = await client.PostAsync(Account(Email, "/api-key/push"), content: null, TestContext.Current.CancellationToken))
+        using (HttpResponseMessage pushed = await PushAsync(client))
         {
             bodies.Add(await pushed.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
         }
@@ -744,6 +763,215 @@ public sealed class CiTokenRoleEndpointTests
             files.ShouldAllBe(text => !text.Contains(planted, StringComparison.Ordinal));
             arguments.ShouldAllBe(text => !text.Contains(planted, StringComparison.Ordinal));
         }
+    }
+
+    // Issue #317 item 1: a key goes live only once the owner has said both
+    // auto-reload and extra usage are off; no answer, or half of one, is unknown.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("""{}""")]
+    [InlineData("""{"costSettings":{"autoReload":"off"}}""")]
+    [InlineData("""{"costSettings":{"autoReload":"off","extraUsage":"maybe"}}""")]
+    public async Task PushIsRefusedWhileTheCostSettingsAreUnknown(string? json)
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken);
+        await using AppFactory host = factory;
+        RosterEntry held = (await RosterAsync(factory)).Find(Parse(Email))!;
+        await SeedAsync(factory, held.ClaimingToken(_prVerify, new DateOnly(2026, 6, 1), null));
+        AnswerAll(reader, "PR_VERIFY_CLAUDE_API_KEY");
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using StringContent? content = json is null ? null : new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+        using HttpResponseMessage pushed = await client.PostAsync(Account(Email, "/api-key/push"), content, TestContext.Current.CancellationToken);
+
+        pushed.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        (await pushed.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["refusal"]!.GetValue<string>().ShouldBe("CostSettingsUnconfirmed");
+        factory.Secrets.Sets.ShouldBeEmpty();
+        reader.Paths.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData("on", "off")]
+    [InlineData("off", "on")]
+    [InlineData("ON", "on")]
+    public async Task PushIsRefusedWhenTheOwnerSaysACostSettingIsOnAndTheRecordIsCleared(string autoReload, string extraUsage)
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken);
+        await using AppFactory host = factory;
+        RosterEntry held = (await RosterAsync(factory)).Find(Parse(Email))!;
+        await SeedAsync(factory, held.ClaimingToken(_prVerify, new DateOnly(2026, 6, 1), null) with { CostSettingsConfirmedOn = new DateOnly(2026, 8, 1) });
+        AnswerAll(reader, "PR_VERIFY_CLAUDE_API_KEY");
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage pushed = await PushAsync(client, new { costSettings = new { autoReload, extraUsage } });
+
+        pushed.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        (await pushed.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["refusal"]!.GetValue<string>().ShouldBe("CostSettingOn");
+        factory.Secrets.Sets.ShouldBeEmpty();
+        (await RosterAsync(factory)).Find(Parse(Email))!.CostSettingsConfirmedOn.ShouldBeNull();
+    }
+
+    // The usage response's extra_usage block is the one setting this tool can
+    // read; a read that says it is on outranks the owner's answer.
+    [Fact]
+    public async Task PushIsRefusedWhenTheUsageReadSaysExtraUsageIsOnWhateverTheOwnerAnswered()
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken);
+        await using AppFactory host = factory;
+        RosterEntry held = (await RosterAsync(factory)).Find(Parse(Email))!;
+        await SeedAsync(factory, held.ClaimingToken(_prVerify, new DateOnly(2026, 6, 1), null));
+        AnswerAll(reader, "PR_VERIFY_CLAUDE_API_KEY");
+        factory.Services.GetRequiredService<ClaudeCodeAccountRotation.App.Quota.QuotaState>().RecordSnapshot(new ClaudeCodeAccountRotation.Core.Quota.UsageSnapshot(
+            Parse(Email), factory.Clock.GetUtcNow(), ClaudeCodeAccountRotation.Core.Quota.QuotaSource.OnDemandRefresh, [], new ClaudeCodeAccountRotation.Core.Quota.ExtraUsageState(IsEnabled: true, null, SpendLimitReached: false)));
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage pushed = await PushAsync(client);
+
+        pushed.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        (await pushed.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["refusal"]!.GetValue<string>().ShouldBe("ExtraUsageOn");
+        factory.Secrets.Sets.ShouldBeEmpty();
+    }
+
+    // Both off, and a usage read that says extra usage is off: the picked role's
+    // key secret is set once, in the organization, visible to all repositories,
+    // and the day is recorded on the account.
+    [Fact]
+    public async Task PushToAPickedRoleSetsItsKeySecretOnceWhenBothAreOffAndRecordsTheDay()
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken);
+        await using AppFactory host = factory;
+        reader.Answers["orgs/octo/actions/secrets/PR_VERIFY_CLAUDE_API_KEY"] = PathReader.NotFound();
+        factory.Services.GetRequiredService<ClaudeCodeAccountRotation.App.Quota.QuotaState>().RecordSnapshot(new ClaudeCodeAccountRotation.Core.Quota.UsageSnapshot(
+            Parse(Email), factory.Clock.GetUtcNow(), ClaudeCodeAccountRotation.Core.Quota.QuotaSource.OnDemandRefresh, [], new ClaudeCodeAccountRotation.Core.Quota.ExtraUsageState(IsEnabled: false, null, SpendLimitReached: false)));
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage pushed = await PushAsync(client, new { roles = new[] { new { prefix = "PR_VERIFY", organization = "octo" } } });
+        string body = await pushed.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+        pushed.StatusCode.ShouldBe(HttpStatusCode.OK, body);
+        (CiTokenSecret secret, OrgSecretVisibility? visibility, IReadOnlyList<string> repositories, string value) = factory.Secrets.Sets.Single();
+        secret.ToString().ShouldBe("PR_VERIFY_CLAUDE_API_KEY in org octo");
+        string.Join(' ', GhSecretWriter.Arguments(secret, visibility, repositories).Skip(5)).ShouldBe("--org octo --visibility all");
+        value.ShouldBe(PlantedKey);
+        factory.SetupToken.Children.ShouldBeEmpty();
+        RosterEntry entry = (await RosterAsync(factory)).Find(Parse(Email))!;
+        entry.CiRoles.Select(static held => (held.Role, held.HasToken, held.HasKey)).ShouldBe([(_prVerify, false, true)]);
+        entry.CostSettingsConfirmedOn.ShouldBe(new DateOnly(2026, 9, 7));
+        body.ShouldNotContain(PlantedKey);
+    }
+
+    [Fact]
+    public async Task APickedRoleTakesTheKeyHalfOffItsPreviousHolderAndLeavesItsToken()
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken);
+        await using AppFactory host = factory;
+        DateOnly before = new(2026, 6, 1);
+        await SeedAsync(factory, new RosterEntry(Parse(Previous)).ClaimingToken(_prVerify, before, null).ClaimingKey(_prVerify, before, null));
+        AnswerAll(reader, "PR_VERIFY_CLAUDE_API_KEY");
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage pushed = await PushAsync(client, new { roles = new[] { new { prefix = "PR_VERIFY", organization = "octo" } } });
+
+        pushed.StatusCode.ShouldBe(HttpStatusCode.OK);
+        Roster roster = await RosterAsync(factory);
+        roster.Find(Parse(Previous))!.CiRoles.ShouldBe([new CiRoleAssignment(_prVerify, before)]);
+        roster.Find(Parse(Email))!.CiRoles.Single().HasKey.ShouldBeTrue();
+    }
+
+    // The picker's roles keep Generate CI token's refusal of one repository,
+    // whatever extra field the body carries.
+    [Theory]
+    [InlineData("""{"roles":[{"prefix":"PR_VERIFY","repository":"octo/repo"}]}""")]
+    [InlineData("""{"roles":[{"prefix":"PR_VERIFY","organization":"octo"},{"prefix":"INTAKE","repository":"octo/repo","allowRepoScope":true}],"force":true}""")]
+    public async Task APickedRoleInOneRepositoryIsRefusedBeforeAnythingIsRead(string json)
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken);
+        await using AppFactory host = factory;
+        using HttpClient client = factory.CreateMutatingClient();
+        JsonObject body = JsonNode.Parse(json)!.AsObject();
+        body["costSettings"] = BothOff();
+
+        using HttpResponseMessage pushed = await client.PostAsJsonAsync(Account(Email, "/api-key/push"), body, TestContext.Current.CancellationToken);
+
+        pushed.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
+        (await pushed.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["error"]!.GetValue<string>()
+            .ShouldBe("roles: " + CiTokenSecret.RepositorySecretRefusal);
+        reader.Paths.ShouldBeEmpty();
+        factory.Secrets.Sets.ShouldBeEmpty();
+    }
+
+    // Only a keyed role takes a key: the catalog's keyed:false AUTOMATIONS, a
+    // role the catalog does not list, and, with no catalog, the fixed list's
+    // token-only REVIEWS are each refused.
+    [Theory]
+    [InlineData(true, "AUTOMATIONS", "takes no API key")]
+    [InlineData(true, "PR_VERIFY", "is not in the lane catalog")]
+    [InlineData(false, "REVIEWS", "takes no API key")]
+    public async Task APickedRoleThatTakesNoKeyIsRefused(bool withCatalog, string prefix, string reason)
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken, withCatalog);
+        await using AppFactory host = factory;
+        AnswerCatalog(reader);
+        AnswerAll(reader, prefix + "_CLAUDE_API_KEY");
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage pushed = await PushAsync(client, new { roles = new[] { new { prefix, organization = "octo" } } });
+
+        pushed.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
+        (await pushed.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).ShouldContain(reason);
+        factory.Secrets.Sets.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task APickedKeyedCatalogRoleIsSent()
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken, withCatalog: true);
+        await using AppFactory host = factory;
+        AnswerCatalog(reader);
+        AnswerAll(reader, "REVIEWS_CLAUDE_API_KEY");
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage pushed = await PushAsync(client, new { roles = new[] { new { prefix = "REVIEWS", organization = "octo" } } });
+
+        pushed.StatusCode.ShouldBe(HttpStatusCode.OK);
+        factory.Secrets.Sets.Select(static set => set.Secret.Name).ShouldBe(["REVIEWS_CLAUDE_API_KEY"]);
+    }
+
+    // Generate CI token puts the key live too when a role is keyed, so it
+    // passes the same gate before any secret is read or token made.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("on")]
+    public async Task KeyedGenerateIsRefusedBeforeSetupTokenUnlessBothAreOff(string? autoReload)
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: true, TestContext.Current.CancellationToken);
+        await using AppFactory host = factory;
+        using HttpClient client = factory.CreateMutatingClient();
+        object body = autoReload is null
+            ? new { roles = new[] { new { prefix = "PR_UNBLOCK", organization = "octo" } } }
+            : new { roles = new[] { new { prefix = "PR_UNBLOCK", organization = "octo" } }, costSettings = new { autoReload, extraUsage = "off" } };
+
+        using HttpResponseMessage started = await client.PostAsJsonAsync(Account(Email, "/ci-token"), body, TestContext.Current.CancellationToken);
+
+        started.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        (await started.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["refusal"]!.GetValue<string>()
+            .ShouldBe(autoReload is null ? "CostSettingsUnconfirmed" : "CostSettingOn");
+        factory.SetupToken.Children.ShouldBeEmpty();
+        reader.Paths.ShouldBeEmpty();
+    }
+
+    // A token-only role sends no key, so it asks no cost question.
+    [Fact]
+    public async Task TokenOnlyGenerateNeedsNoCostAnswer()
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: false, TestContext.Current.CancellationToken);
+        await using AppFactory host = factory;
+        AnswerAll(reader, "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN");
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage started = await client.PostAsJsonAsync(Account(Email, "/ci-token"), new { roles = new[] { new { prefix = "REVIEWS", organization = "octo" } } }, TestContext.Current.CancellationToken);
+
+        started.StatusCode.ShouldBe(HttpStatusCode.OK);
     }
 
     /// <summary>A file's text, read beside the host, which may still hold it open.</summary>
