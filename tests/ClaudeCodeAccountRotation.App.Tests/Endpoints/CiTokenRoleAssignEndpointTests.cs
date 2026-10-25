@@ -298,4 +298,57 @@ public sealed partial class CiTokenRoleEndpointTests
                 ("FALLBACK_CLAUDE_CODE_OAUTH_TOKEN", false, null),
             ]);
     }
+    // A Delete CI token clicked in another tab while Generate CI token's
+    // writes run takes the token out of the store; the session ending after
+    // it must not record a token the store no longer holds.
+    [Fact]
+    public async Task ATokenDeletedWhileGenerateRunsIsNotRecordedAsStored()
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: false, TestContext.Current.CancellationToken);
+        await using AppFactory host = factory;
+        AnswerAll(reader, "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN");
+        KeyStore store = StoreOf(factory);
+        factory.Secrets.SetErrorFor = _ =>
+        {
+            store.Items.Remove((SecretKind.CiToken, Email));
+            return null;
+        };
+        using HttpClient client = factory.CreateMutatingClient();
+
+        await AssignAsync(client, new { roles = new[] { new { prefix = "REVIEWS", organization = "octo" } } }, TestContext.Current.CancellationToken);
+
+        store.Items.ShouldNotContainKey((SecretKind.CiToken, Email));
+        (await RosterAsync(factory)).Find(Parse(Email))!.CiTokenStoredOn.ShouldBeNull();
+    }
+
+    // The account removed while Assign to role's write runs: the secret now
+    // holds its token, so the account that held the half before must not
+    // still be recorded as its holder, and the removed account stays removed.
+    [Fact]
+    public async Task AnAccountRemovedWhileAssignRunsStillTakesTheHalfOffItsHolder()
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: false, TestContext.Current.CancellationToken);
+        await using AppFactory host = factory;
+        AnswerAll(reader, "PR_UNBLOCK_CLAUDE_CODE_OAUTH_TOKEN");
+        await SeedAsync(factory, new RosterEntry(Parse(Previous)).ClaimingToken(_prUnblock, new DateOnly(2026, 6, 1), null));
+        using HttpClient client = factory.CreateMutatingClient();
+        using (HttpResponseMessage pasted = await PasteTokenAsync(client, _pastedToken))
+        {
+            pasted.StatusCode.ShouldBe(HttpStatusCode.OK);
+        }
+
+        RosterFile rosterFile = factory.Services.GetRequiredService<RosterFile>();
+        factory.Secrets.SetErrorFor = _ =>
+        {
+            rosterFile.UpdateAsync(roster => roster.Without(Parse(Email)), CancellationToken.None).GetAwaiter().GetResult();
+            return null;
+        };
+
+        using HttpResponseMessage assigned = await AssignRoleAsync(client, new { prefix = "PR_UNBLOCK", organization = "octo" }, "token");
+
+        assigned.StatusCode.ShouldBe(HttpStatusCode.OK);
+        Roster roster = await RosterAsync(factory);
+        roster.Find(Parse(Email)).ShouldBeNull();
+        roster.Find(Parse(Previous))!.CiRoles.ShouldBeEmpty();
+    }
 }

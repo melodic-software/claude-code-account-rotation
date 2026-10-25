@@ -19,7 +19,8 @@ All notable changes to this project are documented in this file. The format foll
   the role takes no key.
 - **`extraTokenSecrets`** in `config.json`: token-only targets beyond the lane catalog's roles, in
   its organization. The default is `CLAUDE_CODE_OAUTH_TOKEN` and
-  `FALLBACK_CLAUDE_CODE_OAUTH_TOKEN`.
+  `FALLBACK_CLAUDE_CODE_OAUTH_TOKEN`. A role on the roster named by one of them now never takes a
+  key, so a `FALLBACK` role recorded with a key half before this release is token only.
 
 ## [2.7.0] - 2026-10-23
 

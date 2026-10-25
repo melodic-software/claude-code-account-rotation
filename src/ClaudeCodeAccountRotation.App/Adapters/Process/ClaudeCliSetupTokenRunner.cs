@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Adapters.SecretStore;
+using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Identity;
@@ -88,6 +89,8 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
     private readonly LoginChildFactory _start;
     private readonly ICiSecretWriter _secrets;
     private readonly ISecretStore _keys;
+    private readonly CredentialMutationGate? _gate;
+    private readonly TimeSpan _gateTimeout;
     private readonly RosterFile _roster;
     private readonly TimeProvider _clock;
     private readonly TimeSpan _replyBudget;
@@ -103,7 +106,9 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
         TimeProvider clock,
         ILogger<ClaudeCliSetupTokenRunner> logger,
         TimeSpan? replyBudget = null,
-        ISecretStore? keys = null)
+        ISecretStore? keys = null,
+        CredentialMutationGate? gate = null,
+        TimeSpan? gateTimeout = null)
     {
         ArgumentNullException.ThrowIfNull(start);
         ArgumentNullException.ThrowIfNull(secrets);
@@ -117,6 +122,8 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
         _logger = logger;
         _replyBudget = replyBudget ?? TimeSpan.FromSeconds(30);
         _keys = keys ?? new UnavailableSecretStore("no OS store was given to read the key from");
+        _gate = gate;
+        _gateTimeout = gateTimeout ?? TimeSpan.FromSeconds(10);
     }
 
     public async Task<Result<LoginSession, string>> StartAsync(CiTokenRequest request, CancellationToken cancellationToken)
@@ -497,10 +504,22 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
             }
         }
 
+        // Under the credential gate, so a Store or Delete CI token clicked
+        // while this ran cannot land between the check and the record: the
+        // token is recorded only when the store still holds this one.
+        using IDisposable? permit = kept.IsSuccess ? await TryHoldGateAsync() : null;
+        bool stillKept = kept.IsSuccess
+            && await _keys.ReadAsync(SecretKind.CiToken, request.Email, CancellationToken.None) is { IsSuccess: true, Value: string held }
+            && string.Equals(held, token, StringComparison.Ordinal);
+        if (kept.IsSuccess && !stillKept)
+        {
+            keptNote = " The stored CI token was replaced or deleted while this ran, so this one is not kept.";
+        }
+
         var today = DateOnly.FromDateTime(_clock.GetLocalNow().DateTime);
         if (set.Count == 0)
         {
-            bool recorded = kept.IsSuccess && await RecordKeptAsync(request.Email, today);
+            bool recorded = stillKept && await RecordKeptAsync(request.Email, today);
             Settle(
                 session,
                 LoginSessionState.Failed,
@@ -542,7 +561,7 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
                         entry = isKey ? entry.ClaimingKey(role.Role, today, setAt) : entry.ClaimingToken(role.Role, today, setAt);
                     }
 
-                    if (kept.IsSuccess)
+                    if (stillKept)
                     {
                         entry = entry with { CiTokenStoredOn = today };
                     }
@@ -560,7 +579,7 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
         {
             // A kept token the roster does not record is one the page cannot
             // show or delete, so it goes back out of the store.
-            if (kept.IsSuccess)
+            if (stillKept)
             {
                 _ = await _keys.DeleteAsync(SecretKind.CiToken, request.Email, CancellationToken.None);
                 keptNote = " The token was not kept in the OS store.";
@@ -578,7 +597,7 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
             return;
         }
 
-        if (removed && kept.IsSuccess)
+        if (removed && stillKept)
         {
             _ = await _keys.DeleteAsync(SecretKind.CiToken, request.Email, CancellationToken.None);
             keptNote = string.Empty;
@@ -592,6 +611,24 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
             session,
             failed.Count == 0 ? LoginSessionState.Completed : LoginSessionState.Failed,
             outcome + (failed.Count == 0 ? string.Empty : " " + NotSet(failed, holders, request.Email.Value)) + expires + keptNote);
+    }
+
+    /// <summary>The credential gate, or null when none was given or it stays busy past the timeout.</summary>
+    private async Task<IDisposable?> TryHoldGateAsync()
+    {
+        if (_gate is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return await _gate.AcquireAsync(_gateTimeout, CancellationToken.None);
+        }
+        catch (TimeoutException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

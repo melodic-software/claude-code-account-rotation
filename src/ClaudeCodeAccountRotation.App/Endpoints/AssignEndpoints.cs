@@ -123,6 +123,7 @@ internal static partial class AssignEndpoints
         }
 
         string? tokenValue = null;
+        DateOnly? storedOn = entry.CiTokenStoredOn;
         if (wantToken)
         {
             Result<string?, string> read = entry.CiTokenStoredOn is null
@@ -212,22 +213,34 @@ internal static partial class AssignEndpoints
                 : "Set " + string.Join(", ", sent.Select(half => (half.IsKey ? target.KeySecret! : target.TokenSecret).ToString())) + " from " + account.Value + ".")
             + (failed.Count == 0 ? string.Empty : " Not set: " + string.Join("; ", failed) + ".");
         RosterEntry? updated = null;
+        bool removed = false;
         try
         {
             await rosterFile.UpdateAsync(
                 roster =>
                 {
-                    updated = roster.Find(account);
+                    if (sent.Count == 0)
+                    {
+                        updated = roster.Find(account);
+                        return roster;
+                    }
+
+                    // An account removed while the writes ran is not put back,
+                    // but each half it set is still taken off the account that
+                    // held it: that secret no longer holds their value.
+                    RosterEntry? found = roster.Find(account);
+                    removed = found is null;
+                    RosterEntry entry = found ?? new RosterEntry(account);
+                    DateOnly tokenDay = entry.CiTokenStoredOn ?? storedOn ?? today;
                     foreach ((bool isKey, DateTimeOffset setAt) in sent)
                     {
                         // The token half keeps the day its token was stored, so
                         // its expiry runs from when the token was made.
-                        updated = isKey
-                            ? updated?.ClaimingKey(target, today, setAt)
-                            : updated?.ClaimingToken(target, updated.CiTokenStoredOn ?? today, setAt);
+                        entry = isKey ? entry.ClaimingKey(target, today, setAt) : entry.ClaimingToken(target, tokenDay, setAt);
                     }
 
-                    return updated is null || sent.Count == 0 ? roster : roster.With(updated);
+                    updated = removed ? null : entry;
+                    return removed ? roster.With(entry).Without(account) : roster.With(entry);
                 },
                 CancellationToken.None,
                 via: LaneVia.Assign);
@@ -237,6 +250,11 @@ internal static partial class AssignEndpoints
             return Results.Json(
                 new { error = message + " The roster could not record it (" + exception.GetType().Name + "), so the card does not show it yet; assign again to record it." },
                 statusCode: StatusCodes.Status500InternalServerError);
+        }
+
+        if (removed)
+        {
+            message += " " + account.Value + " was removed while this ran, so no account on the roster backs those halves now.";
         }
 
         return Results.Ok(new AssignView(DashboardAssembler.View(updated, laneCatalog.IsKeyedNow), message, failed.Count));
