@@ -54,7 +54,8 @@ internal interface ICiTokenSessionRunner
 /// <c>sk-ant-oat01-</c> prefix and character set, with exactly one distinct
 /// token required. Anything else (no token, two tokens, an error, the child
 /// ending) fails closed with the manual commands in the message. The token is
-/// never logged, returned, stored, or put on a command line: the output buffer
+/// never logged, returned, written to a file, or put on a command line; it is
+/// kept only in the OS store, for Assign to role to send again: the output buffer
 /// is cleared as soon as it is read, and the child is killed before
 /// <c>gh</c> runs. Each session gets an empty config directory of its own,
 /// deleted when the session ends, so the CLI's bookkeeping never touches an
@@ -457,6 +458,15 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
     private async Task DeliverAsync(Session session, string token)
     {
         CiTokenRequest request = session.Request;
+        // Kept in the OS store first, so a token no secret took can still be
+        // sent with Assign to role; a store that refuses stops nothing.
+        Result<Unit, string> kept = await _keys.WriteAsync(SecretKind.CiToken, request.Email, token, CancellationToken.None);
+        if (kept.IsFailure)
+        {
+            LogTokenNotKept(request.Email.Value);
+        }
+
+        string keptNote = kept.IsSuccess ? string.Empty : " The token could not be kept in the OS store (" + kept.Error.TrimEnd('.') + "), so Assign to role cannot send it again.";
         (string? key, string? keyError) = request.Roles.Any(static role => role.Key is not null)
             ? await ReadKeyAsync(request.Email)
             : (null, null);
@@ -487,17 +497,20 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
             }
         }
 
+        var today = DateOnly.FromDateTime(_clock.GetLocalNow().DateTime);
         if (set.Count == 0)
         {
+            bool recorded = kept.IsSuccess && await RecordKeptAsync(request.Email, today);
             Settle(
                 session,
                 LoginSessionState.Failed,
                 "The token was made but could not be stored: " + (failed.Count == 1 ? failed[0].Error.TrimEnd('.') : NotSet(failed, holders: null).TrimEnd('.'))
-                + ". The token was not kept anywhere, so it can never be used; start again once that is fixed.");
+                + (recorded
+                    ? ". It is kept in this machine's OS store; send it with Assign to role once that is fixed."
+                    : ". The token was not kept anywhere, so it can never be used; start again once that is fixed."));
             return;
         }
 
-        var today = DateOnly.FromDateTime(_clock.GetLocalNow().DateTime);
         string setNames = string.Join(", ", set.Select(static half => Secret(half.Role, half.IsKey).ToString()));
         string tokenNames = string.Join("; ", set.Where(static half => !half.IsKey).Select(static half => half.Role.Token.Secret.ToString()));
         Dictionary<(RoleTarget, bool), string> holders = [];
@@ -529,6 +542,11 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
                         entry = isKey ? entry.ClaimingKey(role.Role, today, setAt) : entry.ClaimingToken(role.Role, today, setAt);
                     }
 
+                    if (kept.IsSuccess)
+                    {
+                        entry = entry with { CiTokenStoredOn = today };
+                    }
+
                     // Claimed by halves: a half not set this time still holds its
                     // holder's value, and stays theirs.
                     return removed ? roster.With(entry).Without(request.Email) : roster.With(entry);
@@ -540,6 +558,14 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
         catch (Exception)
 #pragma warning restore CA1031
         {
+            // A kept token the roster does not record is one the page cannot
+            // show or delete, so it goes back out of the store.
+            if (kept.IsSuccess)
+            {
+                _ = await _keys.DeleteAsync(SecretKind.CiToken, request.Email, CancellationToken.None);
+                keptNote = " The token was not kept in the OS store.";
+            }
+
             // The secrets are set whatever went wrong here, and the session must
             // say so rather than fall through to "no token was printed".
             Settle(
@@ -548,8 +574,14 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
                 "Set " + setNames + ", but the roster could not be updated, so the card does not show it yet."
                 + (tokenNames.Length == 0 ? string.Empty : " On this card open Edit, set \"CI token generated on\" to "
                     + today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + " and the CI secret name and where to each of these in turn, saving each: " + tokenNames + ".")
-                + (failed.Count == 0 ? string.Empty : " " + NotSet(failed, holders: null)));
+                + (failed.Count == 0 ? string.Empty : " " + NotSet(failed, holders: null)) + keptNote);
             return;
+        }
+
+        if (removed && kept.IsSuccess)
+        {
+            _ = await _keys.DeleteAsync(SecretKind.CiToken, request.Email, CancellationToken.None);
+            keptNote = string.Empty;
         }
 
         string expires = " The token expires around " + today.AddDays((int)TokenLifetime.TotalDays).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + ".";
@@ -559,7 +591,43 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
         Settle(
             session,
             failed.Count == 0 ? LoginSessionState.Completed : LoginSessionState.Failed,
-            outcome + (failed.Count == 0 ? string.Empty : " " + NotSet(failed, holders, request.Email.Value)) + expires);
+            outcome + (failed.Count == 0 ? string.Empty : " " + NotSet(failed, holders, request.Email.Value)) + expires + keptNote);
+    }
+
+    /// <summary>
+    /// Records the day a token no secret took was kept, so the page shows it.
+    /// An account gone from the roster, or a roster that cannot be written,
+    /// takes the token back out of the store.
+    /// </summary>
+    private async Task<bool> RecordKeptAsync(AccountEmail email, DateOnly today)
+    {
+        bool recorded = false;
+        try
+        {
+            await _roster.UpdateAsync(
+                roster =>
+                {
+                    if (roster.Find(email) is not RosterEntry entry)
+                    {
+                        return roster;
+                    }
+
+                    recorded = true;
+                    return roster.With(entry with { CiTokenStoredOn = today });
+                },
+                CancellationToken.None);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            recorded = false;
+        }
+
+        if (!recorded)
+        {
+            _ = await _keys.DeleteAsync(SecretKind.CiToken, email, CancellationToken.None);
+        }
+
+        return recorded;
     }
 
     /// <summary>The account's stored Console key, or why there is none.</summary>
@@ -720,6 +788,9 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "CI token for {Account} could not be stored as secret {Secret}")]
     private partial void LogSecretFailed(string account, string secret);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "CI token for {Account} could not be kept in the OS store")]
+    private partial void LogTokenNotKept(string account);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "CI token for {Account} failed")]
     private partial void LogFailed(string account);

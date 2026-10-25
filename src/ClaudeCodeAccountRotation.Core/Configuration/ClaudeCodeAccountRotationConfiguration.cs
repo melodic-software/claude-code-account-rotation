@@ -41,6 +41,12 @@ namespace ClaudeCodeAccountRotation.Core.Configuration;
 /// none: the roles are then typed by hand and keyed by
 /// <see cref="Accounts.CiRole.Keyed"/>.
 /// </para>
+/// <para>
+/// <paramref name="ExtraTokenSecrets"/> is <c>extraTokenSecrets</c>: secrets in
+/// the lane catalog's organization, beyond its roles, that Generate CI token and
+/// Assign to role may set. Each takes a token only. Null, as in a file written
+/// before the key, means the defaults.
+/// </para>
 /// </summary>
 public sealed record ClaudeCodeAccountRotationConfiguration(
     string LiveConfigDirectory,
@@ -59,7 +65,8 @@ public sealed record ClaudeCodeAccountRotationConfiguration(
     IReadOnlyList<PeerConfiguration>? Peers = null,
     string? RemoteControlTask = null,
     IReadOnlyList<string>? LaneRepositories = null,
-    LaneCatalogSource? LaneCatalog = null);
+    LaneCatalogSource? LaneCatalog = null,
+    IReadOnlyList<string>? ExtraTokenSecrets = null);
 
 /// <summary>
 /// A lane-funding catalog's file: its repository (<c>owner/name</c>), its path

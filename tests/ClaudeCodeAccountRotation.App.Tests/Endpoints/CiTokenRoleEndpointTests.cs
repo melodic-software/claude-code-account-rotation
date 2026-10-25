@@ -19,7 +19,7 @@ namespace ClaudeCodeAccountRotation.App.Tests.Endpoints;
 /// role's two secrets, with who may read each secret passed back, and Push API
 /// key re-sending the key alone.
 /// </summary>
-public sealed class CiTokenRoleEndpointTests
+public sealed partial class CiTokenRoleEndpointTests
 {
     private const string Email = "lane@example.com";
     private const string Previous = "previous@example.com";
@@ -278,10 +278,11 @@ public sealed class CiTokenRoleEndpointTests
         refreshed.StatusCode.ShouldBe(HttpStatusCode.OK);
         after["organization"]!.GetValue<string>().ShouldBe("octo");
         after["roles"]!.AsArray().Select(static role => (role!["prefix"]!.GetValue<string>(), role["keyed"]!.GetValue<bool>(), role["keySecret"]?.GetValue<string>()))
-            .ShouldBe([("REVIEWS", true, "REVIEWS_CLAUDE_API_KEY"), ("AUTOMATIONS", false, null)]);
+            // Then the default extra token secrets, token only: the bare shared one and the fallback.
+            .ShouldBe([("REVIEWS", true, "REVIEWS_CLAUDE_API_KEY"), ("AUTOMATIONS", false, null), ("", false, null), ("FALLBACK", false, null)]);
         reader.Paths.Count(static path => path == CatalogPath).ShouldBe(1);
         dashboard["tokenOnlyRolePrefixes"]!.AsArray().Select(static prefix => prefix!.GetValue<string>()).ShouldBe(["AUTOMATIONS"]);
-        dashboard["laneCatalog"]!["roles"]!.AsArray().Count.ShouldBe(2);
+        dashboard["laneCatalog"]!["roles"]!.AsArray().Count.ShouldBe(4);
     }
 
     [Fact]
@@ -1026,6 +1027,8 @@ public sealed class CiTokenRoleEndpointTests
     private sealed class KeyStore : ISecretStore
     {
         private readonly Dictionary<(SecretKind, string), string> _items = [];
+
+        public Dictionary<(SecretKind, string), string> Items => _items;
 
         public Task<Result<Unit, string>> ProbeAsync(CancellationToken cancellationToken) => Task.FromResult(Result<Unit, string>.Success(Unit.Value));
 

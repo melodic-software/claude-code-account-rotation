@@ -17,10 +17,14 @@ Status: a tagged release exists.
   machine (a WSL distribution) crosses a volume, where a rename does not exist: there the pair is
   staged, verified by fingerprint, promoted and deleted under a journal, so at most one *reachable*
   copy exists at every instant. Nothing is ever copied to another machine.
-- CI tokens never leave memory. An account's Console API key is the exception: you paste it once
-  per machine, and it is kept only in the OS store (Windows Credential Manager, persisted for this
-  computer only, or the Secret Service through libsecret on Linux). The tool never writes it to a
-  file of its own, a log or a page, and never copies it to another machine. The key belongs to your
+- An account's two CI credentials, its Console API key and its `claude setup-token` CI token, are
+  kept only in the OS store (Windows Credential Manager, persisted for this computer only, or the
+  Secret Service through libsecret on Linux), once per account, so Assign to role can send either
+  to any role without a new sign-in. Storing CI tokens is an owner decision (2026-10-25); earlier
+  releases kept them in memory only. You paste the key once per machine; the token is kept when
+  Generate CI token makes it, or pasted with Store CI token. The tool never writes either to a
+  file of its own, a log, a page or a command line, and never copies one to another machine. Each
+  belongs to your
   user on this machine, so setting or removing it needs your interactive sign-in: an SSH or service
   session has no credential store (Windows error 1312). With no usable store, setting a key is
   refused with the cause. A store that does not answer within 15 s is reported as a failure, but
@@ -526,9 +530,11 @@ those secrets (`admin:org` for organization secrets). The tool checks this befor
    visible to all repositories. Each half set from this account is taken off the account that
    backed it.
 
-The token and key never leave memory: they are not shown, logged, written to disk, or passed as an
-argument. A failure before any secret is set (a rejected code, `gh` refusing every write, or a CLI
-release whose screen the tool cannot read) ends the session without storing anything, and the
+The token is kept in the OS store beside the key, so Assign to role can send it again. Neither is
+shown, logged, written to a file, or passed as an argument. When `gh` refuses every write the token
+is still kept, and the message says to send it with Assign to role. Any other failure before a
+token exists (a rejected code, or a CLI release whose screen the tool cannot read) ends the session
+without storing anything, and the
 message gives the manual commands: `claude setup-token`, then `gh secret set <name> --org <org>`
 with the secret's current visibility (`--visibility all`, `--visibility private`, or `--repos a,b`
 for selected repositories), since gh otherwise makes it private. When some halves are set and others are not, the roster records the halves that were
@@ -550,6 +556,30 @@ a secret that does not exist yet is created visible to all repositories when its
 Push is `POST /api/accounts/{email}/api-key/push` with the same `costSettings` and an optional
 `roles` list in the same shape: keyed roles only, and only roles the catalog lists when one is
 configured. With no `roles`, it sends the key to every keyed role the account backs.
+
+### Assign to role
+
+Each account's token and key are stored once, then sent to any role with one action. The card says
+which halves this machine holds for the account (`CI token`, `API key`) and which roles it backs.
+
+- **Store CI token** in the ··· menu pastes a `claude setup-token` token (`sk-ant-oat01-...`) made
+  by hand; Generate CI token keeps the one it makes. **Delete CI token** removes it from the store.
+  Removing the account deletes it too.
+- **Assign to role** in the ··· menu sends the stored token, the stored key, or both, to one
+  role's secrets, keeping each secret's visibility, and moves those halves to this account. It
+  refuses before any write when a half asked for is not stored, when a key is asked for a role
+  whose lanes read none, or when the cost questions are not answered off for a key. The token half
+  is dated by the day the token was stored, so its expiry runs from when it was made; a pasted
+  token is dated by the day of the paste.
+- Beyond the catalog's roles, the targets include each secret `extraTokenSecrets` names in the
+  catalog's organization, token only. By default these are `CLAUDE_CODE_OAUTH_TOKEN`, the shared
+  review token other repositories read, and `FALLBACK_CLAUDE_CODE_OAUTH_TOKEN`, the central
+  fallback. Set the key in `config.json` to change them, or to `[]` for none.
+
+The routes are `PUT /api/accounts/{email}/ci-token-value` with `{"token":"..."}`, `DELETE` on the
+same path, and `POST /api/accounts/{email}/assign` with `{"role":{"prefix":"PR_VERIFY",
+"organization":"octo"},"halves":"both","costSettings":{"autoReload":"off","extraUsage":"off"}}`
+(`halves` is `token`, `key` or `both`; `tokenSecret` in place of `prefix` for a token-only role).
 
 `claude setup-token` draws its screen only when its input is a terminal, so the tool runs it
 under one: a pseudoconsole (ConPTY, Windows 10 1809 or later) on Windows, and a POSIX

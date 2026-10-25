@@ -418,6 +418,7 @@ internal static class AppComposition
         LoginEndpoints.Map(app);
         CiTokenEndpoints.Map(app);
         ApiKeyEndpoints.Map(app);
+        AssignEndpoints.Map(app);
         ConsolePageEndpoints.Map(app);
         RoleEndpoints.Map(app);
         ShutdownEndpoints.Map(app);

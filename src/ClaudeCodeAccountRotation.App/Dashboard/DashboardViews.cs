@@ -35,7 +35,8 @@ internal sealed record DashboardView(
 /// <summary>
 /// The lane catalog as the store holds it, never read for this view: whether
 /// one is configured and where, when it was read, the last read's failure,
-/// and each role, with no key secret for a role that is not keyed.
+/// and each role, with no key secret for a role that is not keyed, then each
+/// configured extra token secret the catalog does not already list.
 /// </summary>
 internal sealed record LaneCatalogView(
     bool Configured,
@@ -61,8 +62,14 @@ internal sealed record LaneCatalogView(
                 CiRole named = new(role.Prefix, CiSecretScope.Organization, catalog.Organization);
                 bool keyed = catalog.IsKeyed(named) == true;
                 return new LaneCatalogRoleView(role.Id, role.Prefix, catalog.Organization, named.TokenSecretName, keyed ? named.KeySecretName : null, keyed, role.Category, [.. role.Lanes.Select(static lane => lane.Id)]);
-            })]);
+            }).Concat(store.ExtraRoles(catalog)
+                .Where(extra => !catalog.Roles.Any(role => string.Equals(role.Prefix, extra.Prefix, StringComparison.OrdinalIgnoreCase)))
+                .Select(static extra => new LaneCatalogRoleView(
+                extra.TokenSecretName.ToLowerInvariant(), extra.Prefix, extra.Owner, extra.TokenSecretName, null, Keyed: false, ExtraCategory, [])))]);
     }
+
+    /// <summary>The category of an extra token secret, which the catalog does not list.</summary>
+    public const string ExtraCategory = "extra";
 }
 
 /// <summary>One catalog role as the page reads it.</summary>
@@ -192,7 +199,8 @@ internal sealed record RosterEntryView(
     DateOnly? ConsoleApiKeySetOn = null,
     DateOnly? AdminKeySetOn = null,
     bool BacksCiRole = false,
-    DateOnly? CostSettingsConfirmedOn = null);
+    DateOnly? CostSettingsConfirmedOn = null,
+    DateOnly? CiTokenStoredOn = null);
 
 /// <summary>A CI secret as the page reads it: its name, and exactly one of a repository or an organization.</summary>
 internal sealed record CiTokenSecretView(string Name, string? Repository, string? Organization);

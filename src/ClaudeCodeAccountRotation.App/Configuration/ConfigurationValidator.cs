@@ -57,6 +57,15 @@ internal static class ConfigurationValidator
             }
         }
 
+        // Each becomes a gh argument, so each is held to GitHub's secret-name rules.
+        foreach (string name in configuration.ExtraTokenSecrets ?? [])
+        {
+            if (CiTokenSecret.Parse(name, null, "octo").IsFailure)
+            {
+                return Failure("extraTokenSecrets entries are secret names: letters, digits and underscores, starting with neither a digit nor GITHUB_: " + name);
+            }
+        }
+
         // Each part becomes part of a contents API path or its ref query, so
         // nothing in it may leave that path: no traversal, no query, no option.
         if (configuration.LaneCatalog is LaneCatalogSource catalog)
