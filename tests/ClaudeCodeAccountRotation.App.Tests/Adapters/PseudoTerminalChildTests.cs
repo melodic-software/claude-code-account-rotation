@@ -223,8 +223,10 @@ public sealed class PseudoTerminalChildTests : IDisposable
     /// The code-entry contract with the real CLI, through the runner as the
     /// dashboard drives it: a made-up code is typed into the real
     /// <c>claude setup-token</c>, which sends it to Anthropic's token endpoint
-    /// and draws its own refusal ("OAuth error: Request failed with status code
-    /// 400"). That refusal proves the code arrived and was submitted; a code the
+    /// and draws its own refusal (today "OAuth error: Request failed with status
+    /// code 400"). Any refusal the CLI draws after the code proves the code
+    /// arrived and was submitted, whatever the endpoint answered (a 400, a rate
+    /// limit, a network error), so the exact status is not asserted; a code the
     /// CLI never received ends instead in "did not answer the code", with the
     /// screen it was left on. Nothing signs in and no token can be made.
     /// </summary>
@@ -245,8 +247,8 @@ public sealed class PseudoTerminalChildTests : IDisposable
         await runner.FinishedAsync(started.Value.Id);
 
         answered.State.ShouldBe(LoginSessionState.Failed, answered.Message);
-        answered.Message!.ShouldContain("rejected", customMessage: answered.Message);
-        answered.Message!.ShouldContain("status code 400", customMessage: answered.Message);
+        answered.Message!.ShouldContain("rejected; claude setup-token said:", customMessage: answered.Message);
+        answered.Message!.ShouldNotContain("did not answer the code", customMessage: answered.Message);
         answered.Message!.ShouldNotContain("not-a-real-code");
         secrets.Sets.ShouldBeEmpty();
     }

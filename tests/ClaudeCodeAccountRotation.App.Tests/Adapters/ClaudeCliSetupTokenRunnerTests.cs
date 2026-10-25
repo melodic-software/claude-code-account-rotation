@@ -347,6 +347,29 @@ public sealed class ClaudeCliSetupTokenRunnerTests : IDisposable
     }
 
     [Fact]
+    public async Task AReplyBudgetThatRunsOutAsTheTokenArrivesNeverLeavesASetSecretReportedAsFailed()
+    {
+        // Once the code is typed the reply budget runs out at once, racing the pump
+        // that is reading the token: whichever wins, the secret is set exactly when
+        // the session completes.
+        await OnRosterAsync();
+        ExpiringClock clock = new();
+        _script.OnCode = (child, _) =>
+        {
+            clock.ExpireNewTimers = true;
+            child.Emit(SetupTokenScript.SuccessScreen(SetupTokenScript.Token));
+        };
+        using ClaudeCliSetupTokenRunner runner = new(_script.Start, _secrets, _roster, clock, _logger, TimeSpan.FromSeconds(10));
+
+        LoginSession started = (await runner.StartAsync(Request(), TestContext.Current.CancellationToken)).Value;
+        await runner.SubmitCodeAsync(started.Id, "code", TestContext.Current.CancellationToken);
+        await runner.FinishedAsync(started.Id);
+
+        LoginSession ended = runner.Status(started.Id)!;
+        (_secrets.Sets.Count == 1).ShouldBe(ended.State == LoginSessionState.Completed, ended.State + ": " + ended.Message);
+    }
+
+    [Fact]
     public async Task TheScreenShownForAStuckSessionNeverCarriesATokenStillArriving()
     {
         // A token with no whitespace after it yet is not taken, and must not be shown either.
@@ -393,4 +416,13 @@ public sealed class ClaudeCliSetupTokenRunnerTests : IDisposable
         submitted.IsFailure.ShouldBeTrue();
         runner.Status(started.Id)!.State.ShouldBe(LoginSessionState.Failed);
     }
+}
+
+/// <summary>The system clock, except that a timer made once <see cref="ExpireNewTimers"/> is set fires at once.</summary>
+internal sealed class ExpiringClock : TimeProvider
+{
+    public volatile bool ExpireNewTimers;
+
+    public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) =>
+        System.CreateTimer(callback, state, ExpireNewTimers ? TimeSpan.Zero : dueTime, period);
 }

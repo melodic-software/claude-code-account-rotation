@@ -506,6 +506,13 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
 
                 lock (session.Sync)
                 {
+                    // A reply budget that ran out first has already ended the
+                    // session as failed; a secret written now would contradict it.
+                    if (session.State != LoginSessionState.Pending)
+                    {
+                        return;
+                    }
+
                     // From here the secret may be written, so the session ends as
                     // what that write did, never as an expiry noticed meanwhile.
                     session.Delivering = true;
