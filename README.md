@@ -529,7 +529,9 @@ those secrets (`admin:org` for organization secrets). The tool checks this befor
 The token and key never leave memory: they are not shown, logged, written to disk, or passed as an
 argument. A failure before any secret is set (a rejected code, `gh` refusing every write, or a CLI
 release whose screen the tool cannot read) ends the session without storing anything, and the
-message gives the manual commands: `claude setup-token`, then `gh secret set <name> --org <org>`
+message gives the manual commands. A CLI that shows no token within 30 seconds of Submit code
+ends the session then, and the message quotes the last rows of its screen with the code and
+anything token-shaped replaced by `[redacted]`. The manual commands are: `claude setup-token`, then `gh secret set <name> --org <org>`
 with the secret's current visibility (`--visibility all`, `--visibility private`, or `--repos a,b`
 for selected repositories), since gh otherwise makes it private. When some halves are set and others are not, the roster records the halves that were
 set and the message names each one that was not. A role whose token was set but whose key failed,
