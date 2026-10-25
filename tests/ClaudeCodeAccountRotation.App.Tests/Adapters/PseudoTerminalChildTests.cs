@@ -218,4 +218,36 @@ public sealed class PseudoTerminalChildTests : IDisposable
         url.Query.ShouldMatch("[?&]code_challenge=[A-Za-z0-9_-]{43}&");
         url.Query.ShouldMatch("[?&]state=[A-Za-z0-9_-]{43}$");
     }
+
+    /// <summary>
+    /// The code-entry contract with the real CLI, through the runner as the
+    /// dashboard drives it: a made-up code is typed into the real
+    /// <c>claude setup-token</c>, which sends it to Anthropic's token endpoint
+    /// and draws its own refusal ("OAuth error: Request failed with status code
+    /// 400"). That refusal proves the code arrived and was submitted; a code the
+    /// CLI never received ends instead in "did not answer the code", with the
+    /// screen it was left on. Nothing signs in and no token can be made.
+    /// </summary>
+    [Fact]
+    public async Task TheRealSetupTokenReceivesTheCodeTypedThroughThisHost()
+    {
+        string path = Require("claude");
+        Result<ClaudeExecutable, string> cli = ClaudeExecutableLocator.Locate(path, null, OperatingSystem.IsWindows(), Environment.SystemDirectory);
+        cli.IsSuccess.ShouldBeTrue();
+        RecordingSecretWriter secrets = new();
+        using RosterFile roster = new(_root);
+        using ClaudeCliSetupTokenRunner runner = new(PseudoTerminalChild.Factory(cli.Value), secrets, roster, TimeProvider.System, new RecordingLogger<ClaudeCliSetupTokenRunner>(), TimeSpan.FromSeconds(60));
+        CiTokenSecret secret = CiTokenSecret.Parse("CLAUDE_CODE_OAUTH_TOKEN", null, "octo").Value;
+
+        Result<LoginSession, string> started = await runner.StartAsync(new CiTokenRequest(AccountEmail.Parse("ci@example.com").Value, secret, OrgSecretVisibility.Private, []), TestContext.Current.CancellationToken);
+        started.IsSuccess.ShouldBeTrue(started.IsFailure ? started.Error : null);
+        LoginSession answered = (await runner.SubmitCodeAsync(started.Value.Id, "ccar-contract-test-not-a-real-code#ccar-contract-test-state", TestContext.Current.CancellationToken)).Value;
+        await runner.FinishedAsync(started.Value.Id);
+
+        answered.State.ShouldBe(LoginSessionState.Failed, answered.Message);
+        answered.Message!.ShouldContain("rejected", customMessage: answered.Message);
+        answered.Message!.ShouldContain("status code 400", customMessage: answered.Message);
+        answered.Message!.ShouldNotContain("not-a-real-code");
+        secrets.Sets.ShouldBeEmpty();
+    }
 }

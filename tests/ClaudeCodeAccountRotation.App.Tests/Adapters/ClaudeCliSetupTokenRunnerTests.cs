@@ -328,6 +328,60 @@ public sealed class ClaudeCliSetupTokenRunnerTests : IDisposable
     }
 
     [Fact]
+    public async Task ACodeThatGetsNoAnswerFailsWithinTheReplyBudgetShowingTheScreen()
+    {
+        // What #334 saw: the code goes in, the child redraws and then waits.
+        _script.OnCode = static (child, _) => child.Emit("\r\n Paste code here if prompted > ******************ef#state\r\n Still thinking\r\n");
+        using ClaudeCliSetupTokenRunner runner = new(_script.Start, _secrets, _roster, TimeProvider.System, _logger, TimeSpan.FromMilliseconds(300));
+
+        LoginSession started = (await runner.StartAsync(Request(), TestContext.Current.CancellationToken)).Value;
+        LoginSession answered = (await runner.SubmitCodeAsync(started.Id, "code-abcdef#state", TestContext.Current.CancellationToken)).Value;
+
+        answered.State.ShouldBe(LoginSessionState.Failed);
+        answered.Message!.ShouldContain("did not answer the code");
+        answered.Message!.ShouldContain("Still thinking");
+        answered.Message!.ShouldContain("******************");
+        answered.Message!.ShouldNotContain("ef#state");
+        _script.Last.Killed.ShouldBeTrue();
+        _secrets.Sets.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task TheScreenShownForAStuckSessionNeverCarriesATokenStillArriving()
+    {
+        // A token with no whitespace after it yet is not taken, and must not be shown either.
+        _script.OnCode = static (child, _) => child.Emit("\r\n Your OAuth token (valid for 1 year):\r\n\r\n " + SetupTokenScript.Token);
+        using ClaudeCliSetupTokenRunner runner = new(_script.Start, _secrets, _roster, TimeProvider.System, _logger, TimeSpan.FromMilliseconds(300));
+
+        LoginSession started = (await runner.StartAsync(Request(), TestContext.Current.CancellationToken)).Value;
+        LoginSession answered = (await runner.SubmitCodeAsync(started.Id, "code", TestContext.Current.CancellationToken)).Value;
+
+        answered.State.ShouldBe(LoginSessionState.Failed);
+        answered.Message!.ShouldContain("Your OAuth token");
+        answered.Message!.ShouldNotContain("sk-ant");
+        _secrets.Sets.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData("Error: Invalid code")]
+    [InlineData("Token exchange failed: 401")]
+    [InlineData("The authorization code has expired")]
+    public async Task AnErrorScreenOtherThanTheRetryOneEndsTheSessionAtOnce(string screen)
+    {
+        _script.OnCode = (child, _) => child.Emit("\r\n " + screen + "\r\n");
+        // Ended by the screen, not the budget: a budget run out says "did not answer", never "rejected".
+        using ClaudeCliSetupTokenRunner runner = new(_script.Start, _secrets, _roster, TimeProvider.System, _logger, TimeSpan.FromSeconds(5));
+
+        LoginSession started = (await runner.StartAsync(Request(), TestContext.Current.CancellationToken)).Value;
+        LoginSession answered = (await runner.SubmitCodeAsync(started.Id, "code", TestContext.Current.CancellationToken)).Value;
+
+        answered.State.ShouldBe(LoginSessionState.Failed);
+        answered.Message!.ShouldContain("rejected");
+        answered.Message!.ShouldContain(screen);
+        _script.Last.Killed.ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task ACodeTheChildCanNoLongerTakeFailsTheSession()
     {
         _script.OnCode = static (_, _) => throw new IOException("broken pipe");

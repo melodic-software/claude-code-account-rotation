@@ -6,6 +6,18 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Fixed
+
+- **Generate CI token no longer waits ten minutes on a code it gets no answer to.** When
+  `claude setup-token` shows no token, no error and does not exit within the 30-second reply
+  wait after Submit code, the session ends at once as failed, with the last rows of its screen
+  in the message (the code's echo and anything token-shaped replaced by `[redacted]`). Any
+  failure word on the screen after the code (error, failed, invalid, expired, denied, retry) now
+  ends it too, quoting what the CLI said; before, only "OAuth error" and "to retry" did (#334).
+- **CI drives the real CLI through code entry.** The contract test types a made-up code into the
+  real `claude setup-token` on Linux and Windows and expects the CLI's own refusal, which proves
+  the code was received. The CLI pin moves from 2.1.290 to 2.1.310.
+
 ## [2.7.0] - 2026-10-23
 
 ### Changed
