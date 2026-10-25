@@ -91,7 +91,7 @@ jobs:
       # The CLI is pinned so a release cannot turn CI red on its own; bump it
       # deliberately, which is when the contract test earns its keep.
       - name: Install the Claude Code CLI for the pseudo-terminal contract test
-        run: npm install --global @anthropic-ai/claude-code@2.1.310
+        run: npm install --global @anthropic-ai/claude-code@2.1.309
       - name: Test
         run: dotnet test ClaudeCodeAccountRotation.slnx -c Release --no-build
         env:
