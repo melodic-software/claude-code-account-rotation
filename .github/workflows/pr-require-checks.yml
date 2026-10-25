@@ -85,11 +85,13 @@ jobs:
       # The pseudo-terminal host's tests run real processes on both runners, so
       # the Windows pseudoconsole path is exercised for real: a Node script that
       # refuses to run without a terminal, and the real `claude setup-token`,
-      # which only prints its sign-in URL (no code is sent, nothing signs in).
+      # which prints its sign-in URL and is then typed a made-up code. The CLI
+      # sends that code to Anthropic's token endpoint and draws its own refusal,
+      # which proves the code arrived; nothing signs in and no token is made.
       # The CLI is pinned so a release cannot turn CI red on its own; bump it
       # deliberately, which is when the contract test earns its keep.
       - name: Install the Claude Code CLI for the pseudo-terminal contract test
-        run: npm install --global @anthropic-ai/claude-code@2.1.290
+        run: npm install --global @anthropic-ai/claude-code@2.1.310
       - name: Test
         run: dotnet test ClaudeCodeAccountRotation.slnx -c Release --no-build
         env:

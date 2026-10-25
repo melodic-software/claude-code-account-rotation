@@ -534,8 +534,10 @@ The token is kept in the OS store beside the key, so Assign to role can send it 
 shown, logged, written to a file, or passed as an argument. When `gh` refuses every write the token
 is still kept, and the message says to send it with Assign to role. Any other failure before a
 token exists (a rejected code, or a CLI release whose screen the tool cannot read) ends the session
-without storing anything, and the
-message gives the manual commands: `claude setup-token`, then `gh secret set <name> --org <org>`
+without storing anything, and the message gives the manual commands. A CLI that shows no token
+within 30 seconds of Submit code ends the session then, and the message quotes the last rows of its
+screen with the code and anything token-shaped replaced by `[redacted]`. The manual commands are:
+`claude setup-token`, then `gh secret set <name> --org <org>`
 with the secret's current visibility (`--visibility all`, `--visibility private`, or `--repos a,b`
 for selected repositories), since gh otherwise makes it private. When some halves are set and others are not, the roster records the halves that were
 set and the message names each one that was not. A role whose token was set but whose key failed,

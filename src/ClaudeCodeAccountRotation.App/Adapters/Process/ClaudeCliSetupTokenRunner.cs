@@ -79,9 +79,16 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
     internal const string ManualFallback =
         " To do it by hand: run `claude setup-token`, sign in as the account, then `gh secret set <name> --org <org>` with the secret's current visibility (`--visibility all`, `--visibility private`, or `--repos a,b` for selected repositories, since gh otherwise makes it private) and paste the token.";
 
-    private const string RejectedMessage = "That code was rejected. Start again and paste the whole code from the browser." + ManualFallback;
+    private const string NoAnswerMessage = "claude setup-token did not answer the code, so the session was stopped rather than left waiting.";
+    private const int ScreenTailLines = 6;
+    private const int ScreenTailLength = 600;
+
+    // The shortest run of the code's characters that marks a word as the code
+    // echoed back: setup-token masks what is typed but its last six characters.
+    private const int EchoedCodeRun = 6;
     private const string ExpiredMessage = "This CI token session expired after ten minutes. Start it again.";
-    private const string EndedMessage = "claude setup-token ended without printing a token." + ManualFallback;
+    private const string EndedSentence = "claude setup-token ended without printing a token.";
+    private const string EndedMessage = EndedSentence + ManualFallback;
     private const string AmbiguousMessage = "claude setup-token printed its token in a way that could not be read with certainty (more than one token, or one broken across rows), so none was used." + ManualFallback;
     private const string CancelledMessage = "The request that started this CI token session was cancelled. Start it again.";
     private const string NoUrlMessage = "claude setup-token printed no sign-in URL; run it by hand once to see what it says.";
@@ -232,6 +239,7 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
             }
 
             session.CodeSubmitted = true;
+            session.Code = trimmed;
             session.Output.Clear();
         }
 
@@ -248,6 +256,26 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
         }
 
         await WaitAsync(session.Finished.Task, cancellationToken);
+        bool unanswered;
+        lock (session.Sync)
+        {
+            // No token, no error and no exit within the reply budget: what the
+            // child shows now is all the operator can act on, so it ends here
+            // with that screen rather than waiting out the session's lifetime.
+            // Checked and settled under one lock, so a token read meanwhile
+            // (which sets Delivering under it too) is never cut off.
+            unanswered = session.State == LoginSessionState.Pending && !session.Delivering;
+            if (unanswered)
+            {
+                Settle(session, LoginSessionState.Failed, NoAnswerMessage + Said(ScreenTail(Visible(session.Output.ToString()), session.Code)) + ManualFallback);
+            }
+        }
+
+        if (unanswered)
+        {
+            Cancel(session);
+        }
+
         return Result<LoginSession, string>.Success(Snapshot(session));
     }
 
@@ -355,6 +383,48 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
         return null;
     }
 
+    /// <summary>
+    /// The last rows of the visible text, for a message the operator reads,
+    /// with every word that could be a secret replaced: anything token-shaped
+    /// (the prefix, or a long run of token characters, which is what a token
+    /// still arriving or cut at a row's edge looks like) and the submitted
+    /// code wherever it is echoed back.
+    /// </summary>
+    internal static string ScreenTail(string visible, string? code)
+    {
+        IEnumerable<string> rows = visible.Split('\n')
+            .Select(static row => row.Trim())
+            .Where(static row => row.Length > 0)
+            .TakeLast(ScreenTailLines)
+            .Select(row => string.Join(' ', row.Split(' ', StringSplitOptions.RemoveEmptyEntries).Select(word => Redact(word, code))));
+        string tail = string.Join(" / ", rows);
+        return tail.Length <= ScreenTailLength ? tail : "..." + tail[^ScreenTailLength..];
+    }
+
+    private static string Redact(string word, string? code)
+    {
+        string bare = word.TrimStart('*');
+        bool secret = bare.Contains("sk-ant", StringComparison.OrdinalIgnoreCase)
+            || LongTokenRunPattern().IsMatch(bare)
+            || (code is not null && SharesRun(bare, code));
+        return secret ? word[..(word.Length - bare.Length)] + "[redacted]" : word;
+    }
+
+    private static bool SharesRun(string word, string code)
+    {
+        for (int start = 0; start + EchoedCodeRun <= word.Length; start++)
+        {
+            if (code.Contains(word.AsSpan(start, EchoedCodeRun), StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string Said(string tail) => tail.Length == 0 ? " It showed nothing after the code." : " Its screen ended with: \"" + tail + "\".";
+
     private static bool HasParameter(Uri url, string name) =>
         url.Query.TrimStart('?').Split('&').Any(pair => pair.StartsWith(name + "=", StringComparison.Ordinal) && pair.Length > name.Length + 1);
 
@@ -391,6 +461,18 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
             string? chunk = await session.Child.ReadAsync(session.Lifetime.Token);
             if (chunk is null)
             {
+                string? last;
+                lock (session.Sync)
+                {
+                    last = session.CodeSubmitted ? ScreenTail(Visible(session.Output.ToString()), session.Code) : null;
+                }
+
+                // Before a code the pump's own settle says how it ended.
+                if (last is not null)
+                {
+                    Settle(session, LoginSessionState.Failed, EndedSentence + Said(last) + ManualFallback);
+                }
+
                 return;
             }
 
@@ -432,6 +514,13 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
 
                 lock (session.Sync)
                 {
+                    // A reply budget that ran out first has already ended the
+                    // session as failed; a secret written now would contradict it.
+                    if (session.State != LoginSessionState.Pending)
+                    {
+                        return;
+                    }
+
                     // From here the secret may be written, so the session ends as
                     // what that write did, never as an expiry noticed meanwhile.
                     session.Delivering = true;
@@ -441,10 +530,18 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
                 return;
             }
 
-            if (visible.Contains("OAuth error", StringComparison.OrdinalIgnoreCase)
-                || visible.Contains("to retry", StringComparison.OrdinalIgnoreCase))
+            // After the code, any word of failure ends the session on the
+            // child's own answer: the retry screen ("OAuth error ... Press Enter
+            // to retry") and whatever other refusal a later CLI words differently.
+            if (FailureWordPattern().IsMatch(visible))
             {
-                Settle(session, LoginSessionState.Failed, RejectedMessage);
+                string said;
+                lock (session.Sync)
+                {
+                    said = ScreenTail(visible, session.Code);
+                }
+
+                Settle(session, LoginSessionState.Failed, "That code was rejected; claude setup-token said: \"" + said + "\". Start again and paste the whole code from the browser." + ManualFallback);
                 return;
             }
 
@@ -816,6 +913,12 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
     [GeneratedRegex(@"https://[^\s\p{Cc}""'<>]+(?=\s)", RegexOptions.None, matchTimeoutMilliseconds: 2000)]
     private static partial Regex CompleteUrlPattern();
 
+    [GeneratedRegex(@"[A-Za-z0-9_-]{24,}", RegexOptions.None, matchTimeoutMilliseconds: 2000)]
+    private static partial Regex LongTokenRunPattern();
+
+    [GeneratedRegex(@"\b(?:error|failed|failure|invalid|expired|denied|unauthorized|retry)\b", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 2000)]
+    private static partial Regex FailureWordPattern();
+
     // Audit lines name the account and the secret, never the token or the code.
     [LoggerMessage(Level = LogLevel.Information, Message = "CI token for {Account} started (secret {Secret})")]
     private partial void LogStarted(string account, string secret);
@@ -869,6 +972,9 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
         public Uri? SignInUrl { get; set; }
 
         public bool CodeSubmitted { get; set; }
+
+        /// <summary>The code typed in, held only to keep it out of any screen text shown back.</summary>
+        public string? Code { get; set; }
 
         /// <summary>Set once a token was read and the secret write may have begun.</summary>
         public bool Delivering { get; set; }
