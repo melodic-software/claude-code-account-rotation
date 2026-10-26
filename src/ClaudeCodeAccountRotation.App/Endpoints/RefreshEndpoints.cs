@@ -13,7 +13,8 @@ using Microsoft.AspNetCore.Routing;
 namespace ClaudeCodeAccountRotation.App.Endpoints;
 
 /// <summary>
-/// The three ways a refresh starts: every account, one card's button, or the
+/// The ways a refresh starts: every account, every account backing a CI role,
+/// one card's button, or the
 /// Claude Code <c>StopFailure</c> hook with matcher <c>rate_limit</c>, whose
 /// payload names no account and so reads this side's live one.
 /// <para>
@@ -40,6 +41,13 @@ internal static class RefreshEndpoints
             QuotaRefreshWorker worker,
             QuotaState state,
             TimeProvider timeProvider) => Start(worker, state, timeProvider, RefreshRequest.All));
+
+        // The fifteen-minute read's pass, at once: what --read-ci-usage posts,
+        // for a CI run that saw its subscription warn.
+        mutations.MapPost("/refresh/ci-roles", static (
+            QuotaRefreshWorker worker,
+            QuotaState state,
+            TimeProvider timeProvider) => Start(worker, state, timeProvider, RefreshRequest.CiRoleAccounts));
 
         mutations.MapPost("/accounts/{email}/refresh", static async (
             string email,

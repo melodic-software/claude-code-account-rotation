@@ -794,11 +794,11 @@ test("meterTicks marks the server's thresholds only on an account that backs a C
 test("alertLines writes the server's percent and threshold the way a card writes a figure", () => {
   const accounts = [{ email: "a@example.com", roster: { alias: "Work" } }];
   assert.deepStrictEqual(alertLines([
-    { account: "a@example.com", level: "critical", percent: 92.4, threshold: 85 },
-    { account: "z@example.com", level: "warning", percent: 89.6, threshold: 60 }
+    { account: "a@example.com", level: "critical", percent: 92.4, threshold: 85, window: "7-day" },
+    { account: "z@example.com", level: "warning", percent: 89.6, threshold: 60, window: "Fable" }
   ], accounts), [
     { kind: "crit", text: "Work: 7-day usage at 92%, past 85%" },
-    { kind: "warn", text: "z@example.com: 7-day usage at 90%, past 60%" }
+    { kind: "warn", text: "z@example.com: Fable usage at 90%, past 60%" }
   ]);
   assert.deepStrictEqual(alertLines(undefined, accounts), []);
 });

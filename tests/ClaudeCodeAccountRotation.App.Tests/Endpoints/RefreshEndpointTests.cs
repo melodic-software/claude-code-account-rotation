@@ -10,6 +10,7 @@ using ClaudeCodeAccountRotation.Core.Configuration;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Quota;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Endpoints;
 
@@ -29,6 +30,8 @@ public sealed class RefreshEndpointTests
     private const string ParkedEmail = "b@example.com";
 
     private static Uri AllUri => new("/api/refresh", UriKind.Relative);
+
+    private static Uri CiRolesUri => new("/api/refresh/ci-roles", UriKind.Relative);
 
     private static Uri HookUri => new(HookRoute, UriKind.Relative);
 
@@ -405,6 +408,70 @@ public sealed class RefreshEndpointTests
         dashboard["alertThresholds"]!.AsArray().Select(static value => value!.GetValue<decimal>()).ShouldBe([70m, 90m]);
         (await CardAsync(client, ParkedEmail))["roster"]!["backsCiRole"]!.GetValue<bool>().ShouldBeTrue();
         dashboard["alertsComputedAt"]!.GetValue<DateTimeOffset>().ShouldBe(factory.Clock.GetUtcNow());
+    }
+
+    [Fact]
+    public async Task TheCiRolePassReadsOnlyTheAccountsBackingARoleAndNotifiesOnce()
+    {
+        // The live pair is not expired here, so a pass over every account would
+        // send a usage read for it too; this one sends only the parked account's.
+        await using AppFactory factory = await LiveAndParkedAsync(TestContext.Current.CancellationToken, liveExpired: false);
+        await BackACiRoleAsync(factory);
+        Script(factory, Usage(weekly: 92));
+        Script(factory, Usage(weekly: 93));
+        using HttpClient client = factory.CreateMutatingClient();
+        QuotaState state = factory.Services.GetRequiredService<QuotaState>();
+
+        using (HttpResponseMessage started = await client.PostAsync(CiRolesUri, content: null, TestContext.Current.CancellationToken))
+        {
+            started.StatusCode.ShouldBe(HttpStatusCode.Accepted);
+        }
+
+        await state.CurrentRun;
+        factory.Clock.Advance(CiUsageSchedule.Interval);
+        (await client.PostAsync(CiRolesUri, content: null, TestContext.Current.CancellationToken)).Dispose();
+        await state.CurrentRun;
+
+        factory.Outbound.Requests.Count.ShouldBe(2);
+        factory.Outbound.Requests.ShouldAllBe(static request => request.Method == HttpMethod.Get);
+        JsonNode alert = (await DashboardAsync(client))["alerts"]!.AsArray().Single()!;
+        alert["window"]!.GetValue<string>().ShouldBe("7-day");
+        alert["level"]!.GetValue<string>().ShouldBe("critical");
+        (string title, string body) = factory.Desktop.Shown.Single();
+        title.ShouldBe(ParkedEmail + ": 7-day usage at 92%");
+        body.ShouldStartWith("Backs CI role AUTOMATIONS. Past the 90% critical threshold. ");
+    }
+
+    [Fact]
+    public async Task EveryFifteenMinutesTheScheduleStartsTheCiRolePass()
+    {
+        await using AppFactory factory = await LiveAndParkedAsync(TestContext.Current.CancellationToken, liveExpired: false);
+        TaskCompletionSource tick = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource ticked = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        List<TimeSpan> intervals = [];
+        factory.Overrides = services => services.Replace(ServiceDescriptor.Singleton<ScheduleDelay>(async (interval, cancellationToken) =>
+        {
+            intervals.Add(interval);
+            if (intervals.Count == 1)
+            {
+                await tick.Task.WaitAsync(cancellationToken);
+                return;
+            }
+
+            ticked.TrySetResult();
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+        }));
+        await BackACiRoleAsync(factory);
+        Script(factory, Usage(weekly: 75));
+        QuotaState state = factory.Services.GetRequiredService<QuotaState>();
+
+        tick.SetResult();
+        await ticked.Task.WaitAsync(TestContext.Current.CancellationToken);
+        await state.CurrentRun;
+
+        intervals.ShouldBe([TimeSpan.FromMinutes(15), TimeSpan.FromMinutes(15)]);
+        factory.Outbound.Requests.Single().Method.ShouldBe(HttpMethod.Get);
+        state.Alerts!.Alerts.Single().Account.Value.ShouldBe(ParkedEmail);
     }
 
     [Fact]

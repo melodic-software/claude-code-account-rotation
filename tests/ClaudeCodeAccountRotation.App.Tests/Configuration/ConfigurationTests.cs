@@ -743,6 +743,8 @@ public sealed class ConfigurationTests : IDisposable
         parsed.Open.ShouldBeFalse();
 
         StartupArguments.Parse(["--open"]).Value.Open.ShouldBeTrue();
+        StartupArguments.Parse(["--read-ci-usage"]).Value.ReadCiUsage.ShouldBeTrue();
+        parsed.ReadCiUsage.ShouldBeFalse();
         StartupArguments.Parse(["--version"]).Value.ShowVersion.ShouldBeTrue();
         StartupArguments.Parse(["--help"]).Value.ShowHelp.ShouldBeTrue();
         StartupArguments.Parse(["-h"]).Value.ShowHelp.ShouldBeTrue();

@@ -148,6 +148,9 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
     /// </summary>
     public RecordingHandler Outbound { get; } = new();
 
+    /// <summary>Every desktop notification a usage alert raised; none reaches this machine's desktop.</summary>
+    public Quota.RecordingDesktopNotifier Desktop { get; } = new();
+
     /// <summary>
     /// Every delay the refresh engine asked for, in order, and none of them
     /// taken. The engine paces itself with an injected delegate rather than
@@ -256,6 +259,7 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
             services.Replace(ServiceDescriptor.Singleton<TimeProvider>(Clock));
             // The pacing delegate, recorded rather than taken; see Waits.
             services.Replace(ServiceDescriptor.Singleton<Func<TimeSpan, CancellationToken, Task>>(Waits.Record));
+            services.Replace(ServiceDescriptor.Singleton<IDesktopNotifier>(Desktop));
             services.Replace(ServiceDescriptor.Singleton<IClaudeCliAuthStatus>(Cli));
             // Both ports, or a removal would resolve the real CLI on this machine.
             services.Replace(ServiceDescriptor.Singleton<IClaudeCliLogout>(Cli));

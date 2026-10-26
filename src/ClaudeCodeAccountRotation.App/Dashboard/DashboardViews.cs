@@ -84,13 +84,14 @@ internal sealed record LaneCatalogRoleView(
     IReadOnlyList<string> Lanes);
 
 /// <summary>
-/// One account's 7-day figure past a threshold: <c>Level</c> is <c>warning</c>
+/// One account's window past a threshold: <c>Window</c> is the window's label
+/// (5-hour, 7-day, or a model's weekly window), <c>Level</c> is <c>warning</c>
 /// or <c>critical</c>, and <c>Threshold</c> the percentage that level stands
 /// for. <c>AlertsComputedAt</c> on the dashboard says when the list was
 /// computed, null before it ever was; <c>AlertThresholds</c> are where a CI-role
 /// account's 7-day meter marks them.
 /// </summary>
-internal sealed record AlertView(string Account, string Level, decimal Percent, decimal Threshold);
+internal sealed record AlertView(string Account, string Level, decimal Percent, decimal Threshold, string Window);
 
 internal sealed record LiveAccountView(string? Email, bool HasCredentials, string? Fingerprint);
 

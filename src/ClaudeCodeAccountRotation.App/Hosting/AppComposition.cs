@@ -120,6 +120,19 @@ internal static class AppComposition
             return Result<bool, string>.Failure("configuration refused (" + configPath + "): " + verdict.Error);
         }
 
+        if (arguments.ReadCiUsage)
+        {
+            using HttpClient client = new() { Timeout = TimeSpan.FromSeconds(10) };
+            Result<Unit, string> read = await CiUsageTrigger.PostAsync(client, InstanceLock.ReadRunning(configuration.AppDataDirectory), cancellationToken);
+            if (read.IsFailure)
+            {
+                return Result<bool, string>.Failure(read.Error);
+            }
+
+            await Console.Out.WriteLineAsync("A usage read of every CI-role account started.");
+            return Result<bool, string>.Success(false);
+        }
+
         int bindPort = arguments.Port == 0 ? 0 : configuration.ListenPort;
         string listenUrl = "http://127.0.0.1:" + bindPort.ToString(System.Globalization.CultureInfo.InvariantCulture);
         Result<InstanceLock, string> instance = InstanceLock.TryAcquire(configuration.AppDataDirectory, listenUrl);
@@ -316,6 +329,9 @@ internal static class AppComposition
         // object holding the channel its 202 writes to.
         services.AddSingleton<QuotaRefreshWorker>();
         services.AddHostedService(static provider => provider.GetRequiredService<QuotaRefreshWorker>());
+        // After the worker it drives. The leader only: the follower serves no refresh.
+        services.AddSingleton<ScheduleDelay>(static (interval, cancellationToken) => Task.Delay(interval, cancellationToken));
+        services.AddHostedService<CiUsageSchedule>();
         // No checks registered: liveness only. MapRoutes maps the /healthz route this serves.
         services.AddHealthChecks();
 
@@ -642,7 +658,25 @@ internal static class AppComposition
             TimeProvider timeProvider = provider.GetRequiredService<TimeProvider>();
             return (delay, cancellationToken) => Task.Delay(delay, timeProvider, cancellationToken);
         });
+        services.AddSingleton<IDesktopNotifier>(static _ => DesktopNotifier());
+        services.AddSingleton(static provider => new UsageAlertNotifier(
+            provider.GetRequiredService<ClaudeCodeAccountRotationConfiguration>().AppDataDirectory,
+            provider.GetRequiredService<IDesktopNotifier>(),
+            provider.GetRequiredService<ILogger<UsageAlertNotifier>>()));
         services.AddSingleton<QuotaRefresh>();
+    }
+
+    /// <summary>A toast on Windows, <c>notify-send</c> where it is on PATH, else none: the alert still shows on the page.</summary>
+    private static IDesktopNotifier DesktopNotifier()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return new WindowsToastNotifier(ScheduledTaskRemoteControl.WindowsPowerShell(Environment.SystemDirectory));
+        }
+
+        return NotifySendNotifier.Locate(Environment.GetEnvironmentVariable("PATH")) is string notifySend
+            ? new NotifySendNotifier(ScheduledTaskRemoteControl.WindowsRunner(notifySend))
+            : new UnavailableDesktopNotifier("no notify-send on PATH");
     }
 
     /// <summary>
