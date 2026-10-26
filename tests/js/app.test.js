@@ -1015,7 +1015,8 @@ test("assign offers each stored half the role takes, and says what is missing", 
   const both = { ciTokenStoredOn: "2026-10-01", consoleApiKeySetOn: "2026-10-02" };
   assert.deepStrictEqual(assignHalves(both, keyed).choices.map((choice) => choice.value), ["both", "token", "key"]);
   assert.deepStrictEqual(assignHalves(both, tokenOnly).choices.map((choice) => choice.value), ["token"]);
-  assert.strictEqual(assignHalves(both, tokenOnly).why, null);
+  assert.strictEqual(assignHalves(both, tokenOnly).why, "the key, since this role's lanes read a token only (lane catalog)");
+  assert.strictEqual(assignHalves({ ciTokenStoredOn: "2026-10-01" }, tokenOnly).why, null);
   const keyOnly = assignHalves({ consoleApiKeySetOn: "2026-10-02" }, keyed);
   assert.deepStrictEqual(keyOnly.choices.map((choice) => choice.value), ["key"]);
   assert.match(keyOnly.why, /no CI token is stored/);

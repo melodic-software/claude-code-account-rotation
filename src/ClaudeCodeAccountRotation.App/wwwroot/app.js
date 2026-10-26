@@ -2310,6 +2310,7 @@
     var missing = [];
     if (!token) { missing.push("no CI token is stored (Generate CI token or Store CI token)"); }
     if (role && role.keyed && !(roster && roster.consoleApiKeySetOn)) { missing.push("no API key is stored (Set API key)"); }
+    if (role && !role.keyed && roster && roster.consoleApiKeySetOn) { missing.push("the key, since this role's lanes read a token only (lane catalog)"); }
     return { choices: choices, why: missing.length ? missing.join("; ") : null };
   }
 
