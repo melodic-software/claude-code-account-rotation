@@ -69,10 +69,34 @@ public sealed class UsageAlertNotifierTests : IDisposable
         desktop.Shown.Count.ShouldBe(1);
     }
 
+    [Fact]
+    public async Task ALatchThatCannotBeWrittenStillShowsTheNotification()
+    {
+        // A read-only directory refuses the write with UnauthorizedAccessException, not IOException.
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Skip("Unix file modes make the directory read-only.");
+            return;
+        }
+
+        Directory.CreateDirectory(_appData);
+        File.SetUnixFileMode(_appData, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        RecordingDesktopNotifier desktop = new();
+
+        await Notifier(desktop).NotifyAsync(Alerts(), Roster(), Limits, _now, TestContext.Current.CancellationToken);
+
+        desktop.Shown.Count.ShouldBe(1);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_appData))
         {
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(_appData, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
+
             Directory.Delete(_appData, recursive: true);
         }
     }

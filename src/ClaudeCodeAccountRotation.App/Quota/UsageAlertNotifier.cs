@@ -56,7 +56,7 @@ internal sealed partial class UsageAlertNotifier
             Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
             await AtomicJsonFile.WriteAsync(_path, ToJson(_latch.Entries), cancellationToken);
         }
-        catch (IOException exception)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             // A latch that could not be kept costs one repeat after a restart, not the notification.
             LogLatchNotWritten(exception.GetType().Name);
