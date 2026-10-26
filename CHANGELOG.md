@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-10-26
+
 ### Added
 
 - **Usage reads of CI-role accounts every 15 minutes.** By owner decision, the leader reads the
