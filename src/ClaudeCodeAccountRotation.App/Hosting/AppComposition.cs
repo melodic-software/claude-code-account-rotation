@@ -123,7 +123,7 @@ internal static class AppComposition
         if (arguments.ReadCiUsage)
         {
             using HttpClient client = new() { Timeout = TimeSpan.FromSeconds(10) };
-            Result<Unit, string> read = await CiUsageTrigger.PostAsync(client, InstanceLock.ReadRunning(configuration.AppDataDirectory), cancellationToken);
+            Result<Unit, string> read = await CiUsageTrigger.PostAsync(client, configuration.Role, InstanceLock.ReadRunning(configuration.AppDataDirectory), cancellationToken);
             if (read.IsFailure)
             {
                 return Result<bool, string>.Failure(read.Error);

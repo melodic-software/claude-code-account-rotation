@@ -3,21 +3,28 @@ using System.Net.Http.Headers;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Security;
 using ClaudeCodeAccountRotation.Core;
+using ClaudeCodeAccountRotation.Core.Configuration;
 
 namespace ClaudeCodeAccountRotation.App.Hosting;
 
 /// <summary>
 /// <c>--read-ci-usage</c>: asks the running instance for the CI-role pass,
 /// with the headers every dashboard write takes, the way the rate-limit stop
-/// hook asks for its read. Starts nothing of its own.
+/// hook asks for its read. Starts nothing of its own. The follower maps no
+/// refresh route, so on that side it refuses before sending.
 /// </summary>
 internal static class CiUsageTrigger
 {
     public const string Route = "/api/refresh/ci-roles";
 
-    public static async Task<Result<Unit, string>> PostAsync(HttpClient client, (string Url, string Token)? running, CancellationToken cancellationToken)
+    public static async Task<Result<Unit, string>> PostAsync(HttpClient client, RotationRole role, (string Url, string Token)? running, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(client);
+        if (role == RotationRole.Follower)
+        {
+            return Result<Unit, string>.Failure("this is the follower, which runs no usage read; run --read-ci-usage with the leader's executable");
+        }
+
         if (running is not var (url, token))
         {
             return Result<Unit, string>.Failure("no instance is running on this side; start it first");

@@ -1,6 +1,7 @@
 using System.Net;
 using ClaudeCodeAccountRotation.App.Hosting;
 using ClaudeCodeAccountRotation.App.Tests.Adapters;
+using ClaudeCodeAccountRotation.Core.Configuration;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Hosting;
 
@@ -17,7 +18,7 @@ public sealed class CiUsageTriggerTests
         using RecordingHandler handler = new(new HttpResponseMessage(HttpStatusCode.Accepted));
         using HttpClient client = new(handler);
 
-        (await CiUsageTrigger.PostAsync(client, ("http://127.0.0.1:48211", "secret-token"), TestContext.Current.CancellationToken)).IsSuccess.ShouldBeTrue();
+        (await CiUsageTrigger.PostAsync(client, RotationRole.Leader, ("http://127.0.0.1:48211", "secret-token"), TestContext.Current.CancellationToken)).IsSuccess.ShouldBeTrue();
 
         HttpRequestMessage sent = handler.Requests.Single();
         sent.Method.ShouldBe(HttpMethod.Post);
@@ -32,7 +33,7 @@ public sealed class CiUsageTriggerTests
         using RecordingHandler handler = new(RecordingHandler.Json(HttpStatusCode.Conflict, """{"refusal":"RefreshInProgress","message":"A refresh is already running"}"""));
         using HttpClient client = new(handler);
 
-        (await CiUsageTrigger.PostAsync(client, ("http://127.0.0.1:48211", "t"), TestContext.Current.CancellationToken)).Error
+        (await CiUsageTrigger.PostAsync(client, RotationRole.Leader, ("http://127.0.0.1:48211", "t"), TestContext.Current.CancellationToken)).Error
             .ShouldBe("the instance refused the read (409): A refresh is already running");
     }
 
@@ -42,7 +43,18 @@ public sealed class CiUsageTriggerTests
         using RecordingHandler handler = new();
         using HttpClient client = new(handler);
 
-        (await CiUsageTrigger.PostAsync(client, null, TestContext.Current.CancellationToken)).IsFailure.ShouldBeTrue();
+        (await CiUsageTrigger.PostAsync(client, RotationRole.Leader, null, TestContext.Current.CancellationToken)).IsFailure.ShouldBeTrue();
+        handler.Requests.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task TheFollowerRefusesAndSendsNothing()
+    {
+        using RecordingHandler handler = new(new HttpResponseMessage(HttpStatusCode.NotFound));
+        using HttpClient client = new(handler);
+
+        (await CiUsageTrigger.PostAsync(client, RotationRole.Follower, ("http://127.0.0.1:48212", "t"), TestContext.Current.CancellationToken)).Error
+            .ShouldBe("this is the follower, which runs no usage read; run --read-ci-usage with the leader's executable");
         handler.Requests.ShouldBeEmpty();
     }
 }

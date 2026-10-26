@@ -366,7 +366,8 @@ lockouts; an account the WSL side holds is read there. A tick that finds a pass 
 lockout standing is skipped. `claude-code-account-rotation --read-ci-usage` asks the running
 instance for the same read at once (`POST /api/refresh/ci-roles`, with the headers
 `POST /api/shutdown` takes), for example when a CI run reports its subscription is warning; it
-exits non-zero with the reason when nothing is running or the read is refused.
+exits non-zero with the reason when nothing is running, the read is refused, or it runs on the
+follower, which has no refresh route: run it with the leader's executable.
 
 When one of those accounts reaches the warning threshold of its 5-hour window, its 7-day window,
 or a model's weekly window (such as Fable's), a line above the cards says so; from the critical

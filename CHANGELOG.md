@@ -6,6 +6,15 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Fixed
+
+- **`--read-ci-usage` on the follower.** The WSL follower maps no refresh route, so the flag
+  failed there with a bare 404. It now refuses before sending and says to run it with the leader's
+  executable.
+- **Assign to role says why a stored key is not offered.** For a role the lane catalog marks
+  token-only, the Send list offers the token alone; the panel now says the key is left out because
+  that role's lanes read a token only.
+
 ## [2.9.0] - 2026-10-26
 
 ### Added
