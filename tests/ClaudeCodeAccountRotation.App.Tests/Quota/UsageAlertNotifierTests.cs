@@ -48,6 +48,40 @@ public sealed class UsageAlertNotifierTests : IDisposable
         body.ShouldBe("Backs CI role AUTOMATIONS. Past the 70% warning. Best spare: spare@example.com (10% used).");
     }
 
+    private static Func<AccountEmail, IReadOnlyList<UsageLimit>> FiveHour(double percent, DateTimeOffset resets) => email => email == _ci
+        ? [new UsageLimit("session", LimitKind.Session, "session", percent, null, resets, null, IsActive: true)]
+        : [new UsageLimit("weekly_all", LimitKind.WeeklyAll, "weekly", 10, null, _reset, null, IsActive: true)];
+
+    private async Task<IReadOnlyList<(string Title, string Body)>> NotifyFiveHourAsync(double percent, DateTimeOffset resets, DateTimeOffset now)
+    {
+        RecordingDesktopNotifier desktop = new();
+        Func<AccountEmail, IReadOnlyList<UsageLimit>> limits = FiveHour(percent, resets);
+        await Notifier(desktop).NotifyAsync(UsageAlerts.Evaluate(Roster(), limits, now), Roster(), limits, now, TestContext.Current.CancellationToken);
+        return desktop.Shown;
+    }
+
+    [Theory]
+    [InlineData(55, "Past the 50% warning. ")]
+    [InlineData(80, "Past the 75% critical threshold. ")]
+    public async Task AFiveHourNotificationNamesTheFiveHourThreshold(double percent, string threshold) =>
+        (await NotifyFiveHourAsync(percent, _now.AddHours(2), _now)).Single().Body.ShouldContain(threshold);
+
+    [Fact]
+    public async Task AFiveHourLatchWrittenByTwoNineStillLoadsAndHoldsItsWindow()
+    {
+        // 2.9.x latched a 5-hour warning at 70%; the file names the level, not the percentage.
+        DateTimeOffset resets = _now.AddHours(2);
+        Directory.CreateDirectory(_appData);
+        await File.WriteAllTextAsync(
+            Path.Combine(_appData, UsageAlertNotifier.FileName),
+            "[{\"account\":\"ci@example.com\",\"window\":\"5-hour\",\"level\":\"warning\",\"resetsAt\":\"" + resets.UtcDateTime.ToString("O", System.Globalization.CultureInfo.InvariantCulture) + "\"}]",
+            TestContext.Current.CancellationToken);
+
+        (await NotifyFiveHourAsync(60, resets, _now)).ShouldBeEmpty();
+        (await NotifyFiveHourAsync(80, resets, _now)).Single().Body.ShouldContain("Past the 75% critical threshold. ");
+        (await NotifyFiveHourAsync(55, resets.AddHours(5), resets.AddMinutes(1))).Single().Body.ShouldContain("Past the 50% warning. ");
+    }
+
     [Fact]
     public async Task TheSameThresholdIsNotNotifiedAgainEvenAfterARestart()
     {

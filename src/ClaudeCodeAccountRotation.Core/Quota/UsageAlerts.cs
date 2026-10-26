@@ -3,7 +3,7 @@ using ClaudeCodeAccountRotation.Core.Identity;
 
 namespace ClaudeCodeAccountRotation.Core.Quota;
 
-/// <summary>How close a figure is to running out: past <see cref="UsageAlerts.WarnAt"/>, or past <see cref="UsageAlerts.CriticalAt"/>.</summary>
+/// <summary>How close a figure is to running out: past its window's <see cref="AlertThresholds.WarnAt"/>, or past its <see cref="AlertThresholds.CriticalAt"/>.</summary>
 public enum AlertLevel
 {
     Warning,
@@ -15,11 +15,22 @@ public enum AlertLevel
 /// label (<see cref="UsageLimit.Label"/>): "5-hour", "7-day", or a model's
 /// weekly window by the endpoint's own display name. <see cref="ResetsAt"/> is
 /// when that window turns over, which is what tells one window from the next.
+/// <see cref="Kind"/> is the window's kind, which picks its thresholds.
 /// </summary>
-public sealed record UsageAlert(AccountEmail Account, AlertLevel Level, decimal Percent, string Window, DateTimeOffset? ResetsAt)
+public sealed record UsageAlert(AccountEmail Account, AlertLevel Level, decimal Percent, string Window, DateTimeOffset? ResetsAt, LimitKind Kind)
 {
-    /// <summary>The threshold <see cref="Level"/> stands for.</summary>
-    public decimal Threshold => Level == AlertLevel.Critical ? UsageAlerts.CriticalAt : UsageAlerts.WarnAt;
+    /// <summary>The threshold <see cref="Level"/> stands for on this window.</summary>
+    public decimal Threshold => UsageAlerts.For(Kind).At(Level);
+}
+
+/// <summary>One window's warning and critical percentages.</summary>
+public sealed record AlertThresholds(decimal WarnAt, decimal CriticalAt)
+{
+    /// <summary>The percentage <paramref name="level"/> stands for.</summary>
+    public decimal At(AlertLevel level) => level == AlertLevel.Critical ? CriticalAt : WarnAt;
+
+    /// <summary>Both, lowest first: where a meter marks them.</summary>
+    public IReadOnlyList<decimal> Ascending => [WarnAt, CriticalAt];
 }
 
 /// <summary>
@@ -28,14 +39,18 @@ public sealed record UsageAlert(AccountEmail Account, AlertLevel Level, decimal 
 /// </summary>
 public static class UsageAlerts
 {
-    /// <summary>Basis: the plan's acceptance criteria for #255, "warned at 70% and 90%".</summary>
-    public const decimal WarnAt = 70m;
+    /// <summary>
+    /// The 5-hour window's thresholds. Basis: lane-funding 24 h usage analysis,
+    /// 2026-10-26: the steepest measured climb was about 22 points per
+    /// 15-minute read on one account, so 70 to 90 left less than one read to act.
+    /// </summary>
+    public static AlertThresholds FiveHour { get; } = new(50m, 75m);
 
-    /// <summary>Basis: as <see cref="WarnAt"/>.</summary>
-    public const decimal CriticalAt = 90m;
+    /// <summary>The 7-day and every model's weekly window. Basis: the plan's acceptance criteria for #255, "warned at 70% and 90%".</summary>
+    public static AlertThresholds Weekly { get; } = new(70m, 90m);
 
-    /// <summary>Every threshold, lowest first: where a meter marks them.</summary>
-    public static IReadOnlyList<decimal> Thresholds { get; } = [WarnAt, CriticalAt];
+    /// <summary>The thresholds of a window of <paramref name="kind"/>.</summary>
+    public static AlertThresholds For(LimitKind kind) => kind == LimitKind.Session ? FiveHour : Weekly;
 
     /// <summary>
     /// One alert per window of each account that <see cref="RosterEntry.BacksCiRole"/>,
@@ -55,9 +70,10 @@ public static class UsageAlerts
             foreach (UsageLimit limit in Open(limits(entry.Email), now))
             {
                 decimal percent = (decimal)limit.Percent;
-                if (percent >= WarnAt)
+                AlertThresholds thresholds = For(limit.Kind);
+                if (percent >= thresholds.WarnAt)
                 {
-                    alerts.Add(new UsageAlert(entry.Email, percent >= CriticalAt ? AlertLevel.Critical : AlertLevel.Warning, percent, limit.Label, limit.ResetsAt));
+                    alerts.Add(new UsageAlert(entry.Email, percent >= thresholds.CriticalAt ? AlertLevel.Critical : AlertLevel.Warning, percent, limit.Label, limit.ResetsAt, limit.Kind));
                 }
             }
         }

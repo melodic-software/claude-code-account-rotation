@@ -371,7 +371,9 @@ follower, which has no refresh route: run it with the leader's executable.
 
 When one of those accounts reaches the warning threshold of its 5-hour window, its 7-day window,
 or a model's weekly window (such as Fable's), a line above the cards says so; from the critical
-threshold the line is red. Both thresholds are set in
+threshold the line is red. The 5-hour window warns at 50% and is critical at 75%, since a busy CI
+account can climb about 22 points between two 15-minute reads; the 7-day and model windows warn
+at 70% and are critical at 90%. The thresholds are set in
 [`UsageAlerts.cs`](src/ClaudeCodeAccountRotation.Core/Quota/UsageAlerts.cs). Each threshold also
 raises one desktop notification per window: it names the account, the CI roles it backs, and the
 best spare, the other roster account with the most headroom (the lowest figure across its open
