@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-10-26
+
 ### Added
 
 - **CI tokens are stored like Console keys.** By owner decision, an account's `claude setup-token`
