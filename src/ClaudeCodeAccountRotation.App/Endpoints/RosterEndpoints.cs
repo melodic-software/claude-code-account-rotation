@@ -378,7 +378,7 @@ internal static partial class RosterEndpoints
                     await profiles.DeleteFolderAsync(folder, committed);
                 }
 
-                // Both stored keys go with the account. A recorded key the store
+                // Every stored credential goes with the account. A recorded one the store
                 // cannot delete keeps the entry and its record, so a retry (which
                 // finds no folder left to revoke or delete) comes back here, unless
                 // the operator says to leave the key: then the response names it.

@@ -28,6 +28,12 @@ internal static class ConfigurationDefaults
 
     public static readonly TimeSpan DefaultRefreshLockWaitBound = TimeSpan.FromSeconds(10);
 
+    /// <summary>
+    /// The secrets outside the lane catalog's roles a CI token may go to: the
+    /// shared review token other repositories read, and the central fallback.
+    /// </summary>
+    public static readonly IReadOnlyList<string> DefaultExtraTokenSecrets = ["CLAUDE_CODE_OAUTH_TOKEN", "FALLBACK_CLAUDE_CODE_OAUTH_TOKEN"];
+
     public static ClaudeCodeAccountRotationConfiguration ForCurrentUser()
     {
         string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -56,6 +62,7 @@ internal static class ConfigurationDefaults
             // No override until the operator writes one: the launcher looks in the
             // platform's known install locations first.
             System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty,
-            RemoteControlTask: RemoteControlTask);
+            RemoteControlTask: RemoteControlTask,
+            ExtraTokenSecrets: DefaultExtraTokenSecrets);
     }
 }

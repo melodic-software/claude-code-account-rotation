@@ -19,11 +19,12 @@ using static ClaudeCodeAccountRotation.App.Endpoints.EndpointRefusals;
 namespace ClaudeCodeAccountRotation.App.Endpoints;
 
 /// <summary>
-/// An account's Console API key, and its optional Admin key, each pasted once
-/// on this machine and kept in the OS store. A key arrives in the request body
-/// only, and nothing returns it: each route answers with the roster entry,
-/// whose <c>consoleApiKeySetOn</c> and <c>adminKeySetOn</c> are all the page
-/// knows, so loading the page never reads the store. A store answers with it
+/// An account's Console API key, its optional Admin key, and its CI token,
+/// each pasted once on this machine (or, for the token, kept by Generate CI
+/// token) and held in the OS store. A value arrives in the request body only,
+/// and nothing returns it: each route answers with the roster entry, whose
+/// <c>consoleApiKeySetOn</c>, <c>adminKeySetOn</c> and <c>ciTokenStoredOn</c>
+/// are all the page knows, so loading the page never reads the store. A store answers with it
 /// the store's name and where Push API key would send the key. With no usable store the
 /// key is refused with the cause, and nothing is written.
 /// </summary>
@@ -60,6 +61,31 @@ internal static partial class ApiKeyEndpoints
             DeleteKeyAsync(SecretKind.ConsoleApiKey, email, keepStoredKey, rosterFile, store, gate, options, loggers, laneCatalog, cancellationToken));
 
         MapAdminKey(mutations);
+
+        mutations.MapPut("/accounts/{email}/ci-token-value", static (
+            string email,
+            JsonObject body,
+            RosterFile rosterFile,
+            ISecretStore store,
+            CredentialMutationGate gate,
+            SwitchOptions options,
+            TimeProvider clock,
+            ILoggerFactory loggers,
+            LaneCatalogStore laneCatalog,
+            CancellationToken cancellationToken) =>
+            PutKeyAsync(SecretKind.CiToken, email, body, rosterFile, store, gate, options, clock, loggers, laneCatalog, cancellationToken));
+
+        mutations.MapDelete("/accounts/{email}/ci-token-value", static (
+            string email,
+            bool? keepStoredKey,
+            RosterFile rosterFile,
+            ISecretStore store,
+            CredentialMutationGate gate,
+            SwitchOptions options,
+            ILoggerFactory loggers,
+            LaneCatalogStore laneCatalog,
+            CancellationToken cancellationToken) =>
+            DeleteKeyAsync(SecretKind.CiToken, email, keepStoredKey, rosterFile, store, gate, options, loggers, laneCatalog, cancellationToken));
     }
 
     /// <summary>
@@ -456,10 +482,18 @@ internal static partial class ApiKeyEndpoints
         }
 
         // Trimmed, since a paste often brings a line break with it.
-        string? key = body["key"] is JsonValue value && value.TryGetValue(out string? text) ? text.Trim() : null;
+        string field = kind == SecretKind.CiToken ? "token" : "key";
+        string? key = body[field] is JsonValue value && value.TryGetValue(out string? text) ? text.Trim() : null;
         if (string.IsNullOrEmpty(key))
         {
-            return Results.BadRequest(new { error = "key must be the " + Title(kind) + ", as text" });
+            return Results.BadRequest(new { error = field + " must be the " + Title(kind) + ", as text" });
+        }
+
+        // A Console key pasted here would go to token secrets, so only a
+        // setup-token token's shape is kept.
+        if (kind == SecretKind.CiToken && !LooksLikeCiToken(key))
+        {
+            return Results.BadRequest(new { error = "token must be the one claude setup-token printed: sk-ant-oat01- followed by letters, digits, '_' and '-'" });
         }
 
         AccountEmail target = parsed.Value;
@@ -496,7 +530,8 @@ internal static partial class ApiKeyEndpoints
         Result<RosterEntry, string> recorded = await TryRecordAsync(rosterFile, kind, target, today);
         if (recorded.IsSuccess)
         {
-            // An Admin key never goes to GitHub, so it has no push targets.
+            // Only a Console key has push targets: an Admin key never goes to
+            // GitHub, and a CI token goes with Assign to role.
             IReadOnlyList<string> pushesTo = kind == SecretKind.ConsoleApiKey
                 ? [.. PushTargets(recorded.Value, laneCatalog.IsKeyedNow).Select(static role => role.KeySecret!.ToString())]
                 : [];
@@ -591,10 +626,31 @@ internal static partial class ApiKeyEndpoints
             .Where(role => keyed(role) && role.KeySecret is { Scope: CiSecretScope.Organization })];
 
     /// <summary>The key's name in a log line.</summary>
-    private static string Label(SecretKind kind) => kind == SecretKind.AdminKey ? "Admin key" : "console API key";
+    private static string Label(SecretKind kind) => kind switch
+    {
+        SecretKind.AdminKey => "Admin key",
+        SecretKind.CiToken => "CI token",
+        _ => "console API key",
+    };
 
     /// <summary>The key's name in a message to the operator.</summary>
-    private static string Title(SecretKind kind) => kind == SecretKind.AdminKey ? "Admin key" : "Console API key";
+    private static string Title(SecretKind kind) => kind switch
+    {
+        SecretKind.AdminKey => "Admin key",
+        SecretKind.CiToken => "CI token",
+        _ => "Console API key",
+    };
+
+    /// <summary>Whether a pasted value has the shape of a <c>claude setup-token</c> token.</summary>
+    internal static bool LooksLikeCiToken(string value) =>
+        value.StartsWith(CiTokenPrefix, StringComparison.Ordinal)
+        && value.Length > CiTokenPrefix.Length
+        && value.AsSpan(CiTokenPrefix.Length).IndexOfAnyExcept(_ciTokenCharacters) < 0;
+
+    private const string CiTokenPrefix = "sk-ant-oat01-";
+
+    private static readonly System.Buffers.SearchValues<char> _ciTokenCharacters =
+        System.Buffers.SearchValues.Create("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-");
 
     private static async Task<IDisposable?> TryAcquireAsync(CredentialMutationGate gate, SwitchOptions options, CancellationToken cancellationToken)
     {
@@ -683,7 +739,12 @@ internal static partial class ApiKeyEndpoints
     }
 
     private static bool Recorded(RosterEntry entry, SecretKind kind) =>
-        (kind == SecretKind.AdminKey ? entry.AdminKeySetOn : entry.ConsoleApiKeySetOn) is not null;
+        kind switch
+        {
+            SecretKind.AdminKey => entry.AdminKeySetOn,
+            SecretKind.CiToken => entry.CiTokenStoredOn,
+            _ => entry.ConsoleApiKeySetOn,
+        } is not null;
 
     /// <summary>The command that removes a stored key by hand, on this platform.</summary>
     // secret-tool clear removes only unlocked items, so the keyring is unlocked first.
@@ -703,6 +764,7 @@ internal static partial class ApiKeyEndpoints
             {
                 updated = roster.Find(target) is not RosterEntry entry ? null
                     : kind == SecretKind.AdminKey ? entry with { AdminKeySetOn = setOn }
+                    : kind == SecretKind.CiToken ? entry with { CiTokenStoredOn = setOn }
                     : entry with { ConsoleApiKeySetOn = setOn };
                 return updated is null ? roster : roster.With(updated);
             },

@@ -12,8 +12,9 @@ internal sealed record LaneCatalogSnapshot(LaneCatalog? Catalog, DateTimeOffset?
 /// The lane catalog <c>laneCatalog</c> names, read through <c>gh api</c> on
 /// a refresh or the first write that needs it, and held in memory from then
 /// on. It decides which roles are keyed: the catalog when one is configured,
-/// <see cref="CiRole.Keyed"/> when none is. A write never guesses past a
-/// catalog it could not read.
+/// <see cref="CiRole.Keyed"/> when none is, and never one of the configured
+/// <c>extraTokenSecrets</c>, which take a token only. A write never guesses
+/// past a catalog it could not read.
 /// </summary>
 internal sealed class LaneCatalogStore(ClaudeCodeAccountRotationConfiguration configuration, IGhApiReader reader, TimeProvider clock) : IDisposable
 {
@@ -29,6 +30,23 @@ internal sealed class LaneCatalogStore(ClaudeCodeAccountRotationConfiguration co
     /// A catalog not read yet leaves <see cref="CiRole.Keyed"/> in charge.
     /// </summary>
     public bool IsKeyedNow(CiRole role) => KeyedBy(Snapshot.Catalog)(role);
+
+    /// <summary>Whether <paramref name="role"/> is one of the configured extra token secrets, in any organization.</summary>
+    public bool IsExtra(CiRole role)
+    {
+        ArgumentNullException.ThrowIfNull(role);
+        return role.Scope == CiSecretScope.Organization
+            && (configuration.ExtraTokenSecrets ?? []).Contains(role.TokenSecretName, StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>The extra token secrets as roles in <paramref name="catalog"/>'s organization, in configured order.</summary>
+    public IReadOnlyList<CiRole> ExtraRoles(LaneCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        return [.. (configuration.ExtraTokenSecrets ?? [])
+            .Select(name => CiRole.FromTokenSecret(new CiTokenSecret(name, CiSecretScope.Organization, catalog.Organization)))
+            .Distinct()];
+    }
 
     /// <summary>
     /// The keyed test a write uses: the catalog, read first when it has not
@@ -89,6 +107,6 @@ internal sealed class LaneCatalogStore(ClaudeCodeAccountRotationConfiguration co
 
     public void Dispose() => _read.Dispose();
 
-    /// <summary>The catalog's answer for a role it speaks for, else <see cref="CiRole.Keyed"/>.</summary>
-    private static Func<CiRole, bool> KeyedBy(LaneCatalog? catalog) => role => catalog?.IsKeyed(role) ?? role.Keyed;
+    /// <summary>The catalog's answer for a role it speaks for, else <see cref="CiRole.Keyed"/>; never an extra token secret.</summary>
+    private Func<CiRole, bool> KeyedBy(LaneCatalog? catalog) => role => !IsExtra(role) && (catalog?.IsKeyed(role) ?? role.Keyed);
 }

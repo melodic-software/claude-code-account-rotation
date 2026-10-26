@@ -65,6 +65,9 @@
     module.exports.costSettingsBody = costSettingsBody;
     module.exports.limitStopNotice = limitStopNotice;
     module.exports.limitStopGate = limitStopGate;
+    module.exports.ciTokenBadge = ciTokenBadge;
+    module.exports.assignHalves = assignHalves;
+    module.exports.ciTokenValueBody = ciTokenValueBody;
     return;
   }
 
@@ -1330,6 +1333,133 @@
     return { costSettings: { autoReload: autoReload, extraUsage: extraUsage } };
   }
 
+  // Store CI token: a `claude setup-token` token made by hand, pasted once and
+  // kept in the OS store beside the Console key. The field is cleared as soon
+  // as it is read, and the token never comes back to this page.
+  function openCiTokenValuePanel(account) {
+    var card = cardNodes[account.email];
+    if (!card) { return; }
+    var existing = card.querySelector("details.ci-token-value");
+    if (existing) { existing.parentNode.removeChild(existing); }
+    var panel = element("details", "login ci-token-value");
+    panel.open = true;
+    panel.appendChild(element("summary", null, "CI token for " + account.email));
+    panel.appendChild(element("p", "muted",
+      "Paste a token `claude setup-token` printed for this account. It is kept only in this machine's OS store, never in a file of this tool's, and is not shown here again. Assign to role sends it to a role."));
+    var form = element("form", "roster-form");
+    var field = element("input");
+    field.type = "password";
+    field.autocomplete = "off";
+    field.spellcheck = false;
+    labeled(form, "CI token", field);
+    var save = element("button", null, "Store");
+    save.type = "submit";
+    form.appendChild(save);
+    form.appendChild(actionButton("Cancel", "secondary", function () { panel.parentNode.removeChild(panel); }));
+    var status = element("p", "muted");
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      var body = ciTokenValueBody(field.value);
+      field.value = "";
+      if (!body) { status.textContent = "Paste the token first."; return; }
+      mutate(accountPath(account.email, "/ci-token-value"), "PUT", body, function (result) {
+        if (!result.ok) { status.textContent = refused(result.body); return null; }
+        if (panel.parentNode) { panel.parentNode.removeChild(panel); }
+        showToast("CI token stored for " + account.email + " in " + result.body.storedIn + ".", "ok");
+        return null;
+      });
+    });
+    panel.appendChild(form);
+    panel.appendChild(status);
+    card.appendChild(panel);
+    field.focus();
+  }
+
+  function clearCiTokenValue(email) {
+    if (!window.confirm("Delete " + email + "'s CI token from this machine's OS store? Secrets it was sent to keep it.")) {
+      return Promise.resolve();
+    }
+    return mutate(accountPath(email, "/ci-token-value"), "DELETE", null, function (result) {
+      showToast(result.ok ? "CI token deleted for " + email : refused(result.body), result.ok ? "ok" : "error");
+      return null;
+    });
+  }
+
+  // Assign to role: send this account's stored token, key, or both to one
+  // role, with no sign-in. The roles are the CI panel's; the halves offered
+  // are the ones this machine stores and the role takes.
+  function openAssignPanel(account) {
+    var card = cardNodes[account.email];
+    if (!card) { return; }
+    var existing = card.querySelector("details.assign-role");
+    if (existing) { existing.parentNode.removeChild(existing); }
+    var roster = account.roster || {};
+    var panel = element("details", "login assign-role");
+    panel.open = true;
+    panel.appendChild(element("summary", null, "Assign " + account.email + " to a role"));
+    var catalog = lastDashboard && lastDashboard.laneCatalog;
+    if (catalogNotice(catalog)) { panel.appendChild(catalogLoader(account, catalogNotice(catalog), function (again) { openAssignPanel(again); })); }
+    var roles = assignableRoles(lastAccounts, lastRoleCheck, catalog);
+    if (!roles.length) { panel.appendChild(inlineRoleCheck(account)); }
+    var form = element("form", "roster-form");
+    var picker = element("select");
+    roles.forEach(function (role, index) {
+      var option = element("option", null, role.label);
+      option.value = String(index);
+      picker.appendChild(option);
+    });
+    labeled(form, "Role", picker);
+    var halves = element("select");
+    labeled(form, "Send", halves);
+    var note = element("p", "muted");
+    form.appendChild(note);
+    var cost = costQuestions(form);
+    var send = element("button", null, "Assign");
+    send.type = "submit";
+    form.appendChild(send);
+    form.appendChild(actionButton("Cancel", "secondary", function () { panel.parentNode.removeChild(panel); }));
+    var status = element("p", "muted");
+    function redraw() {
+      var role = roles[Number(picker.value)];
+      var offered = assignHalves(roster, role);
+      halves.textContent = "";
+      offered.choices.forEach(function (choice) {
+        var option = element("option", null, choice.label);
+        option.value = choice.value;
+        halves.appendChild(option);
+      });
+      note.textContent = offered.why ? "Not offered: " + offered.why + "." : "";
+      send.disabled = !offered.choices.length;
+    }
+    picker.addEventListener("change", redraw);
+    redraw();
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      var role = roles[Number(picker.value)];
+      if (!role || !halves.value) { status.textContent = "Pick a role and what to send."; return; }
+      var body = { role: role.item, halves: halves.value };
+      if (halves.value !== "token") {
+        var answered = costSettingsBody(cost.autoReload.value, cost.extraUsage.value, account.email);
+        if (answered.error) { status.textContent = answered.error; return; }
+        body.costSettings = answered.costSettings;
+      }
+      var go = function () {
+        mutate(accountPath(account.email, "/assign"), "POST", body, function (result) {
+          status.textContent = result.ok ? result.body.message : refused(result.body);
+          if (result.ok) { showToast(result.body.message, result.body.failed ? "warn" : "ok"); }
+          return null;
+        });
+      };
+      var froms = limitStopSources([role.item], lastAccounts, account.email);
+      if (!froms.length) { go(); return; }
+      checkLimitStops(froms, panel, status, go);
+    });
+    panel.appendChild(form);
+    panel.appendChild(status);
+    card.appendChild(panel);
+    picker.focus();
+  }
+
   function clearApiKey(email, admin) {
     var key = keyKind(admin);
     if (!window.confirm("Delete " + email + "'s " + key.title + " from this machine's OS store?")) {
@@ -1986,7 +2116,9 @@
       return backer ? backer.email : null;
     }
     (cataloged || []).forEach(function (role) {
-      add({ name: role.prefix, prefix: role.prefix, repository: null, organization: role.organization, tokenSecret: role.tokenSecret, keySecret: role.keySecret }, holderOf(role));
+      // An extra token secret is named by the secret itself, not a prefix.
+      var extra = role.category === "extra";
+      add({ name: extra ? role.tokenSecret : role.prefix, prefix: extra ? "" : role.prefix, repository: null, organization: role.organization, tokenSecret: role.tokenSecret, keySecret: role.keySecret }, holderOf(role));
     });
     (accounts || []).forEach(function (account) {
       ((account.roster && account.roster.ciRoles) || []).forEach(function (role) { add(role, account.email); });
@@ -2159,6 +2291,35 @@
 
   // The card's key badge: the day the key was stored, from the roster, so
   // the page never reads the store to draw it. Null when none is stored.
+  // The card's badge for a CI token kept in the OS store: the day only, never the token.
+  function ciTokenBadge(roster) {
+    var setOn = roster && roster.ciTokenStoredOn;
+    return setOn ? { text: "CI token", title: "CI token stored in this machine's OS store on " + setOn + "; Assign to role can send it." } : null;
+  }
+
+  // Which halves Assign to role can send for one role: each half this
+  // machine stores, the key only for a role that takes one. Each choice
+  // carries its value for the route, and `why` says what is missing.
+  function assignHalves(roster, role) {
+    var token = !!(roster && roster.ciTokenStoredOn);
+    var key = !!(roster && roster.consoleApiKeySetOn) && !!(role && role.keyed);
+    var choices = [];
+    if (token && key) { choices.push({ value: "both", label: "Token and key" }); }
+    if (token) { choices.push({ value: "token", label: "Token only" }); }
+    if (key) { choices.push({ value: "key", label: "Key only" }); }
+    var missing = [];
+    if (!token) { missing.push("no CI token is stored (Generate CI token or Store CI token)"); }
+    if (role && role.keyed && !(roster && roster.consoleApiKeySetOn)) { missing.push("no API key is stored (Set API key)"); }
+    return { choices: choices, why: missing.length ? missing.join("; ") : null };
+  }
+
+  // The body Store CI token sends, or null for a blank field. Trimmed, since a
+  // paste often brings a line break; the server checks the token's shape.
+  function ciTokenValueBody(value) {
+    var token = String(value || "").trim();
+    return token ? { token: token } : null;
+  }
+
   function apiKeyBadge(roster) {
     var setOn = roster && roster.consoleApiKeySetOn;
     return setOn ? { text: "API key", title: "Console API key stored in this machine's OS store on " + setOn + "." } : null;
@@ -2610,6 +2771,12 @@
       ciBadge.title = ci.title;
       badges.appendChild(ciBadge);
     });
+    var tokenBadge = ciTokenBadge(roster);
+    if (tokenBadge) {
+      var tokenChip = element("span", "badge api-key", tokenBadge.text);
+      tokenChip.title = tokenBadge.title;
+      badges.appendChild(tokenChip);
+    }
     var keyBadge = apiKeyBadge(roster);
     if (keyBadge) {
       var keyChip = element("span", "badge api-key", keyBadge.text);
@@ -2680,6 +2847,13 @@
       menu.appendChild(menuItem(more, "Open claude.ai", "quiet sm", function () { openAccountPage(account.email, "claude-ai", "claude.ai"); }));
       menu.appendChild(menuItem(more, "Open Console", "quiet sm", function () { openAccountPage(account.email, "keys", "the Console's API keys page"); }));
       menu.appendChild(menuItem(more, "Generate CI token", "quiet sm", function () { openCiTokenPanel(account); }));
+      menu.appendChild(menuItem(more, roster.ciTokenStoredOn ? "Replace CI token" : "Store CI token", "quiet sm", function () { openCiTokenValuePanel(account); }));
+      if (roster.ciTokenStoredOn) {
+        menu.appendChild(menuItem(more, "Delete CI token", "quiet sm", function () { clearCiTokenValue(account.email); }));
+      }
+      if (roster.ciTokenStoredOn || roster.consoleApiKeySetOn) {
+        menu.appendChild(menuItem(more, "Assign to role", "quiet sm", function () { openAssignPanel(account); }));
+      }
     }
     if (roster) {
       menu.appendChild(menuItem(more, roster.consoleApiKeySetOn ? "Replace API key" : "Set API key", "quiet sm", function () { openApiKeyPanel(account); }));

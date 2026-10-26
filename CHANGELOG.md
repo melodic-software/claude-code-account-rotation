@@ -6,6 +6,22 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Added
+
+- **CI tokens are stored like Console keys.** By owner decision, an account's `claude setup-token`
+  token is kept in the OS store (Credential Manager, or the Secret Service), once per account:
+  Generate CI token keeps the token it makes, even when `gh` refuses every write, and Store CI
+  token pastes one made by hand (`PUT`/`DELETE /api/accounts/{email}/ci-token-value`). The roster
+  records only the day (`ciTokenStoredOn`). Earlier releases never stored a CI token.
+- **Assign to role.** One action sends an account's stored token, stored key, or both to one
+  role's secrets, with no sign-in, and records the move on the roster and in the lane history
+  (`POST /api/accounts/{email}/assign`). It refuses before any write when a half is not stored or
+  the role takes no key.
+- **`extraTokenSecrets`** in `config.json`: token-only targets beyond the lane catalog's roles, in
+  its organization. The default is `CLAUDE_CODE_OAUTH_TOKEN` and
+  `FALLBACK_CLAUDE_CODE_OAUTH_TOKEN`. A role on the roster named by one of them now never takes a
+  key, so a `FALLBACK` role recorded with a key half before this release is token only.
+
 ### Fixed
 
 - **Generate CI token no longer waits ten minutes on a code it gets no answer to.** When

@@ -64,6 +64,12 @@ internal static class ConfigurationFile
             return Result<ClaudeCodeAccountRotationConfiguration, string>.Failure("the configuration file " + fullPath + " has laneRepositories that is not an array of owner/name strings");
         }
 
+        if (raw["extraTokenSecrets"] is JsonNode extras
+            && (extras is not JsonArray names || names.Any(static name => name?.GetValueKind() != JsonValueKind.String)))
+        {
+            return Result<ClaudeCodeAccountRotationConfiguration, string>.Failure("the configuration file " + fullPath + " has extraTokenSecrets that is not an array of secret names");
+        }
+
         // The same for the catalog's source: a wrong shape is refused, not read as none.
         if (raw["laneCatalog"] is JsonNode catalog && LaneCatalog(catalog) is null)
         {
@@ -110,6 +116,7 @@ internal static class ConfigurationFile
         ["laneCatalog"] = configuration.LaneCatalog is LaneCatalogSource source
             ? new JsonObject { ["repository"] = source.Repository, ["path"] = source.Path, ["ref"] = source.Ref }
             : null,
+        ["extraTokenSecrets"] = configuration.ExtraTokenSecrets is null ? null : new JsonArray([.. configuration.ExtraTokenSecrets.Select(static name => (JsonNode)name)]),
     };
 
     private static JsonArray PeersToJson(IReadOnlyList<PeerConfiguration>? peers)
@@ -186,7 +193,10 @@ internal static class ConfigurationFile
             // the default task; a null or empty value written there turns it off.
             raw.ContainsKey("remoteControlTask") ? Text(raw, "remoteControlTask") : defaults.RemoteControlTask,
             LaneRepositories(raw) ?? defaults.LaneRepositories,
-            raw["laneCatalog"] is JsonNode catalog ? LaneCatalog(catalog) : defaults.LaneCatalog);
+            raw["laneCatalog"] is JsonNode catalog ? LaneCatalog(catalog) : defaults.LaneCatalog,
+            raw["extraTokenSecrets"] is JsonArray extras
+                ? [.. extras.Select(static name => name!.GetValue<string>().Trim()).Where(static name => name.Length > 0)]
+                : defaults.ExtraTokenSecrets);
     }
 
     /// <summary>

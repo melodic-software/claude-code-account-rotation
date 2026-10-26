@@ -267,7 +267,9 @@ internal static class AppComposition
             provider.GetRequiredService<RosterFile>(),
             provider.GetRequiredService<TimeProvider>(),
             provider.GetRequiredService<ILogger<ClaudeCliSetupTokenRunner>>(),
-            keys: provider.GetRequiredService<ISecretStore>()));
+            keys: provider.GetRequiredService<ISecretStore>(),
+            gate: provider.GetRequiredService<CredentialMutationGate>(),
+            gateTimeout: provider.GetRequiredService<SwitchOptions>().MutationGateTimeout));
         // Console and Admin keys live in the OS store or nowhere: no file fallback.
         services.AddSingleton<ISecretStore>(
             OperatingSystem.IsWindows() ? new WindowsCredentialStore()
@@ -418,6 +420,7 @@ internal static class AppComposition
         LoginEndpoints.Map(app);
         CiTokenEndpoints.Map(app);
         ApiKeyEndpoints.Map(app);
+        AssignEndpoints.Map(app);
         ConsolePageEndpoints.Map(app);
         RoleEndpoints.Map(app);
         ShutdownEndpoints.Map(app);

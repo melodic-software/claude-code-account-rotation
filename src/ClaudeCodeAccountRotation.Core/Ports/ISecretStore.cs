@@ -2,16 +2,20 @@ using ClaudeCodeAccountRotation.Core.Identity;
 
 namespace ClaudeCodeAccountRotation.Core.Ports;
 
-/// <summary>The keys an account can have in the OS store.</summary>
+/// <summary>The credentials an account can have in the OS store.</summary>
 public enum SecretKind
 {
     ConsoleApiKey,
     AdminKey,
+
+    /// <summary>The account's <c>claude setup-token</c> CI token, kept so Assign to role can send it again.</summary>
+    CiToken,
 }
 
 /// <summary>
 /// The operating system's own protected store for an account's Console and
-/// Admin API keys: Credential Manager on Windows, the Secret Service on Linux.
+/// Admin API keys and its CI token: Credential Manager on Windows, the Secret
+/// Service on Linux.
 /// Kept on this machine only, and never in a file of this tool's: a platform
 /// with no usable store refuses to keep a key rather than fall back to one.
 /// Out of process, so a port.
@@ -47,6 +51,7 @@ public static class SecretNames
     {
         SecretKind.ConsoleApiKey => "console-api-key",
         SecretKind.AdminKey => "admin-key",
+        SecretKind.CiToken => "ci-token",
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
     };
 

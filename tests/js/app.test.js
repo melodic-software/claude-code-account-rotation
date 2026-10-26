@@ -998,3 +998,42 @@ test("the cost answers go to the server only when both say off", () => {
   assert.ok(costSettingsBody("off", "on", "a@example.com").error.startsWith("Turn auto-reload and extra usage off"));
   assert.deepStrictEqual(costSettingsBody("off", "off", "a@example.com"), { costSettings: { autoReload: "off", extraUsage: "off" } });
 });
+
+const { ciTokenBadge, assignHalves, ciTokenValueBody } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+
+test("the CI token badge shows only the day the token was stored", () => {
+  assert.strictEqual(ciTokenBadge(null), null);
+  assert.strictEqual(ciTokenBadge({ ciTokenStoredOn: null }), null);
+  const badge = ciTokenBadge({ ciTokenStoredOn: "2026-10-25" });
+  assert.strictEqual(badge.text, "CI token");
+  assert.match(badge.title, /2026-10-25/);
+});
+
+test("assign offers each stored half the role takes, and says what is missing", () => {
+  const keyed = { keyed: true };
+  const tokenOnly = { keyed: false };
+  const both = { ciTokenStoredOn: "2026-10-01", consoleApiKeySetOn: "2026-10-02" };
+  assert.deepStrictEqual(assignHalves(both, keyed).choices.map((choice) => choice.value), ["both", "token", "key"]);
+  assert.deepStrictEqual(assignHalves(both, tokenOnly).choices.map((choice) => choice.value), ["token"]);
+  assert.strictEqual(assignHalves(both, tokenOnly).why, null);
+  const keyOnly = assignHalves({ consoleApiKeySetOn: "2026-10-02" }, keyed);
+  assert.deepStrictEqual(keyOnly.choices.map((choice) => choice.value), ["key"]);
+  assert.match(keyOnly.why, /no CI token is stored/);
+  const tokenNoKey = assignHalves({ ciTokenStoredOn: "2026-10-01" }, keyed);
+  assert.deepStrictEqual(tokenNoKey.choices.map((choice) => choice.value), ["token"]);
+  assert.match(tokenNoKey.why, /no API key is stored/);
+});
+
+test("a pasted CI token is trimmed, and a blank one sends nothing", () => {
+  assert.deepStrictEqual(ciTokenValueBody("  tok \n"), { token: "tok" });
+  assert.strictEqual(ciTokenValueBody("   "), null);
+});
+
+test("an extra token secret in the catalog is offered under its own name, token only", () => {
+  const catalog = { roles: [{ prefix: "FALLBACK", organization: "octo", tokenSecret: "FALLBACK_CLAUDE_CODE_OAUTH_TOKEN", keySecret: null, keyed: false, category: "extra" }] };
+  const roles = assignableRoles([], null, catalog);
+  assert.strictEqual(roles.length, 1);
+  assert.deepStrictEqual(roles[0].item, { tokenSecret: "FALLBACK_CLAUDE_CODE_OAUTH_TOKEN", organization: "octo" });
+  assert.strictEqual(roles[0].keyed, false);
+  assert.match(roles[0].label, /^FALLBACK_CLAUDE_CODE_OAUTH_TOKEN in org octo · token only/);
+});

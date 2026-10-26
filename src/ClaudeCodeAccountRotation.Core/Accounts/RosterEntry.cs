@@ -44,6 +44,13 @@ public sealed record RosterEntry(
     public DateOnly? AdminKeySetOn { get; init; }
 
     /// <summary>
+    /// The date this account's CI token was kept in the OS store, by Generate
+    /// CI token or a paste, or null when none is. Assign to role dates a token
+    /// half by it, so the half's expiry runs from when the token was made.
+    /// </summary>
+    public DateOnly? CiTokenStoredOn { get; init; }
+
+    /// <summary>
     /// The date the owner last confirmed, on a key write, that this account's
     /// auto-reload and extra usage are both off (see <see cref="CostGate"/>),
     /// or null when never or when the last answer said one was on.
@@ -113,6 +120,7 @@ public sealed record RosterEntry(
             && CiTokenGeneratedOn == other.CiTokenGeneratedOn
             && ConsoleApiKeySetOn == other.ConsoleApiKeySetOn
             && AdminKeySetOn == other.AdminKeySetOn
+            && CiTokenStoredOn == other.CiTokenStoredOn
             && CostSettingsConfirmedOn == other.CostSettingsConfirmedOn
             && CiRoles.SequenceEqual(other.CiRoles));
 
