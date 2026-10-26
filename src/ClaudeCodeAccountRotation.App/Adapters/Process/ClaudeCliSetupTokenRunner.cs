@@ -563,7 +563,10 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
     {
         CiTokenRequest request = session.Request;
         // Kept in the OS store first, so a token no secret took can still be
-        // sent with Assign to role; a store that refuses stops nothing.
+        // sent with Assign to role; a store that refuses stops nothing. The
+        // token it replaces is held, so a roster that cannot record the new one
+        // gets back the token its date describes.
+        string? previous = await _keys.ReadAsync(SecretKind.CiToken, request.Email, CancellationToken.None) is { IsSuccess: true, Value: string stored } ? stored : null;
         Result<Unit, string> kept = await _keys.WriteAsync(SecretKind.CiToken, request.Email, token, CancellationToken.None);
         if (kept.IsFailure)
         {
@@ -616,7 +619,7 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
         var today = DateOnly.FromDateTime(_clock.GetLocalNow().DateTime);
         if (set.Count == 0)
         {
-            bool recorded = stillKept && await RecordKeptAsync(request.Email, today);
+            bool recorded = stillKept && await RecordKeptAsync(request.Email, today, previous);
             Settle(
                 session,
                 LoginSessionState.Failed,
@@ -675,11 +678,11 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
 #pragma warning restore CA1031
         {
             // A kept token the roster does not record is one the page cannot
-            // show or delete, so it goes back out of the store.
+            // show or delete, so the store goes back to what the roster says.
             if (stillKept)
             {
-                _ = await _keys.DeleteAsync(SecretKind.CiToken, request.Email, CancellationToken.None);
-                keptNote = " The token was not kept in the OS store.";
+                await RestoreAsync(request.Email, previous);
+                keptNote = previous is null ? " The token was not kept in the OS store." : " The token was not kept in the OS store; the one stored before it still is.";
             }
 
             // The secrets are set whatever went wrong here, and the session must
@@ -730,12 +733,14 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
 
     /// <summary>
     /// Records the day a token no secret took was kept, so the page shows it.
-    /// An account gone from the roster, or a roster that cannot be written,
-    /// takes the token back out of the store.
+    /// An account gone from the roster takes the token back out of the store; a
+    /// roster that cannot be written gets back the token stored before, which
+    /// is the one its date describes.
     /// </summary>
-    private async Task<bool> RecordKeptAsync(AccountEmail email, DateOnly today)
+    private async Task<bool> RecordKeptAsync(AccountEmail email, DateOnly today, string? previous)
     {
         bool recorded = false;
+        bool gone = false;
         try
         {
             await _roster.UpdateAsync(
@@ -743,6 +748,7 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
                 {
                     if (roster.Find(email) is not RosterEntry entry)
                     {
+                        gone = true;
                         return roster;
                     }
 
@@ -758,11 +764,17 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
 
         if (!recorded)
         {
-            _ = await _keys.DeleteAsync(SecretKind.CiToken, email, CancellationToken.None);
+            await RestoreAsync(email, gone ? null : previous);
         }
 
         return recorded;
     }
+
+    /// <summary>Puts <paramref name="previous"/> back in the store, or empties it when there was none.</summary>
+    private async Task RestoreAsync(AccountEmail email, string? previous) =>
+        _ = previous is null
+            ? await _keys.DeleteAsync(SecretKind.CiToken, email, CancellationToken.None)
+            : await _keys.WriteAsync(SecretKind.CiToken, email, previous, CancellationToken.None);
 
     /// <summary>The account's stored Console key, or why there is none.</summary>
     private async Task<(string? Key, string? Error)> ReadKeyAsync(AccountEmail email)

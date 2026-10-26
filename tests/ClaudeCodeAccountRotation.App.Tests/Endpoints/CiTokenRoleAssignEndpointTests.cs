@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Runtime.Versioning;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Adapters.Process;
@@ -319,6 +320,46 @@ public sealed partial class CiTokenRoleEndpointTests
 
         store.Items.ShouldNotContainKey((SecretKind.CiToken, Email));
         (await RosterAsync(factory)).Find(Parse(Email))!.CiTokenStoredOn.ShouldBeNull();
+    }
+
+    public static bool OnUnix => !OperatingSystem.IsWindows();
+
+    // A roster that cannot be written still records the pasted token's day, so
+    // the store must still hold the pasted token, not lose both to the new one.
+    // A read-only app-data directory blocks the roster's temp-file write but
+    // not its read; Windows has no such directory mode.
+    [Theory(SkipUnless = nameof(OnUnix), Skip = "A read-only directory mode is the Unix way to refuse the roster's write")]
+    [InlineData(true)]
+    [InlineData(false)]
+    [UnsupportedOSPlatform("windows")]
+    public async Task ARosterThatCannotRecordTheNewTokenLeavesThePreviousOneStored(bool secretTakesIt)
+    {
+        (AppFactory factory, PathReader reader) = await StartAsync(withKey: false, TestContext.Current.CancellationToken);
+        await using AppFactory host = factory;
+        AnswerAll(reader, "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN");
+        using HttpClient client = factory.CreateMutatingClient();
+        using (HttpResponseMessage pasted = await PasteTokenAsync(client, _pastedToken))
+        {
+            pasted.StatusCode.ShouldBe(HttpStatusCode.OK);
+        }
+
+        UnixFileMode mode = File.GetUnixFileMode(factory.AppData);
+        factory.Secrets.SetErrorFor = _ =>
+        {
+            File.SetUnixFileMode(factory.AppData, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+            return secretTakesIt ? null : "gh secret set failed (stand-in)";
+        };
+        try
+        {
+            await AssignAsync(client, new { roles = new[] { new { prefix = "REVIEWS", organization = "octo" } } }, TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            File.SetUnixFileMode(factory.AppData, mode);
+        }
+
+        StoreOf(factory).Items[(SecretKind.CiToken, Email)].ShouldBe(_pastedToken);
+        (await RosterAsync(factory)).Find(Parse(Email))!.CiTokenStoredOn.ShouldBe(new DateOnly(2026, 9, 7));
     }
 
     // The account removed while Assign to role's write runs: the secret now
