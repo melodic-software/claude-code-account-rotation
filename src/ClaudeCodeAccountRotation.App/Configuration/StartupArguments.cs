@@ -3,16 +3,17 @@ using ClaudeCodeAccountRotation.Core;
 
 namespace ClaudeCodeAccountRotation.App.Configuration;
 
-/// <summary>The command line: <c>--config &lt;path&gt;</c>, <c>--port &lt;n&gt;</c>, <c>--open</c>, <c>--version</c>, <c>--help</c> (and <c>-h</c>, <c>/?</c>).</summary>
-internal sealed record StartupArguments(string? ConfigPath, int? Port, bool Open, bool ShowVersion, bool ShowHelp)
+/// <summary>The command line: <c>--config &lt;path&gt;</c>, <c>--port &lt;n&gt;</c>, <c>--open</c>, <c>--read-ci-usage</c>, <c>--version</c>, <c>--help</c> (and <c>-h</c>, <c>/?</c>).</summary>
+internal sealed record StartupArguments(string? ConfigPath, int? Port, bool Open, bool ShowVersion, bool ShowHelp, bool ReadCiUsage = false)
 {
     public const string Usage = """
-        claude-code-account-rotation [--config <path>] [--port <n>] [--open] [--version] [--help]
+        claude-code-account-rotation [--config <path>] [--port <n>] [--open] [--read-ci-usage] [--version] [--help]
 
           --config <path>   configuration file (default: <app data>/claude-code-account-rotation/config.json)
           --port <n>        listen port for this launch (overrides the configured port; 0 lets the operating system choose a free port)
           --open            open the dashboard in the default browser, signed in; if an instance is already running, open that one and exit;
                             on Windows with none running, start one in the background with no window, open it, and exit
+          --read-ci-usage   ask the running instance to read every CI-role account's usage now, and exit
           --version         print the version and exit
           --help, -h, /?    print this text and exit
         """;
@@ -25,6 +26,7 @@ internal sealed record StartupArguments(string? ConfigPath, int? Port, bool Open
         bool open = false;
         bool showVersion = false;
         bool showHelp = false;
+        bool readCiUsage = false;
 
         for (int index = 0; index < arguments.Count; index++)
         {
@@ -44,6 +46,9 @@ internal sealed record StartupArguments(string? ConfigPath, int? Port, bool Open
                 case "--open":
                     open = true;
                     break;
+                case "--read-ci-usage":
+                    readCiUsage = true;
+                    break;
                 case "--version":
                     showVersion = true;
                     break;
@@ -57,6 +62,6 @@ internal sealed record StartupArguments(string? ConfigPath, int? Port, bool Open
             }
         }
 
-        return Result<StartupArguments, string>.Success(new StartupArguments(configPath, port, open, showVersion, showHelp));
+        return Result<StartupArguments, string>.Success(new StartupArguments(configPath, port, open, showVersion, showHelp, readCiUsage));
     }
 }

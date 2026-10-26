@@ -2176,7 +2176,7 @@
       var name = account ? uniqueName(account, accounts) : alert.account;
       return {
         kind: alert.level === "critical" ? "crit" : "warn",
-        text: name + ": 7-day usage at " + percentText(alert.percent) + ", past " + percentText(alert.threshold)
+        text: name + ": " + alert.window + " usage at " + percentText(alert.percent) + ", past " + percentText(alert.threshold)
       };
     });
   }

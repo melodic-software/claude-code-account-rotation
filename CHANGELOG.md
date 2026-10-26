@@ -6,6 +6,20 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-10-26
+
+### Added
+
+- **Usage reads of CI-role accounts every 15 minutes.** By owner decision, the leader reads the
+  usage of every account that backs a CI role every 15 minutes, in the existing refresh pass and
+  under its budget and lockouts. `--read-ci-usage` (`POST /api/refresh/ci-roles`) asks the running
+  instance for that read at once.
+- **Usage alerts on every window, with desktop notifications.** Alerts now cover the 5-hour, 7-day
+  and each model's weekly window at 70% and 90%, and each threshold raises one desktop notification
+  per window (a toast on Windows, `notify-send` on Linux) naming the account, its CI roles and the
+  best spare account. Fired thresholds are kept in `alert-latch.json`. The dashboard's `alerts[]`
+  entries gain `window`.
+
 ## [2.8.0] - 2026-10-26
 
 ### Added

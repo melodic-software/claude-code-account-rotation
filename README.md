@@ -37,14 +37,15 @@ Status: a tagged release exists.
   clear` removes only unlocked items).
 - The tool identifies itself honestly on every request it makes.
 - Every switch is a human click; nothing rotates on its own. [Usage alerts](#usage-alerts) never
-  act: they only say that an account backing a CI role is near the end of its 7-day window.
+  act: they only say that an account backing a CI role is near the end of a usage window.
 - The tool never calls the model API.
 - It reads the undocumented usage endpoint with its own User-Agent, which the research rates GRAY
-  (no Anthropic statement either way), not ALLOWED. It reads only when the dashboard is opened,
-  Refresh is pressed, or the rate-limit stop hook fires, at most once a minute per account, never
-  on a timer. It reads GitHub only through `gh api`, with gh's own User-Agent and sign-in, and
-  only when you click Check roles, Generate CI token, Push API key, or a kill switch's Stop or
-  Start: those read secret names, dates and visibility, never a secret's value, and the kill
+  (no Anthropic statement either way), not ALLOWED. It reads when the dashboard is opened,
+  Refresh is pressed, the rate-limit stop hook fires, `--read-ci-usage` asks, and every 15 minutes
+  for the accounts that back a CI role (owner decision, 2026-10-25), at most once a minute per
+  account. No other account is read on a timer. It reads GitHub only through `gh api`, with gh's
+  own User-Agent and sign-in, and only when you click Check roles, Generate CI token, Push API
+  key, or a kill switch's Stop or Start: those read secret names, dates and visibility, never a secret's value, and the kill
   switches' values. Stop or Start reads the variable's visibility first and reads the switch back
   after the write. The limit-stop check before a role moves makes no GitHub call. The first
   rate-limit answer stops what was clicked, and nothing retries it. Writes go one at a time, at least a second
@@ -135,8 +136,9 @@ its terms at any time.
   human-click bullet under [Posture](#posture).
 - [ ] Keep the tool's own User-Agent and never imitate Claude Code's: Anthropic has banned tools
   that spoofed the Claude Code client ([public report](https://x.com/trq212/status/2009689809875591565)).
-- [ ] Read usage only when asked, inside the existing budget: the usage endpoint is undocumented;
-  see the read-budget bullet under [Posture](#posture).
+- [ ] Read usage inside the existing budget: on request, and every 15 minutes only for the
+  accounts that back a CI role. The usage endpoint is undocumented; see the read-budget bullet
+  under [Posture](#posture).
 - [ ] CI: role secrets are organization secrets visible to all of the organization's repositories,
   on purpose: every lane in the organization reads its role's pair. Each account you own makes one
   `claude setup-token` token, which goes into every role that account backs, and the lane launcher
@@ -158,10 +160,10 @@ its terms at any time.
 | --- | --- | --- |
 | Model inference outside `claude` | No | [Posture](#posture), first bullet |
 | Proxy between `claude` and Anthropic | No | [Posture](#posture), first bullet |
-| Background timer for reads, refreshes or switches | No | [Posture](#posture), switch and read bullets; [`QuotaRefresh.cs`](src/ClaudeCodeAccountRotation.App/Quota/QuotaRefresh.cs) |
-| Refreshes a parked token | Only during a requested read: when its recorded expiry has passed, or once when the usage endpoint answers 401, followed by one retried read. Done under the tool's own write gate; a switch holds Claude Code's own refresh lock | [`QuotaRefresh.cs`](src/ClaudeCodeAccountRotation.App/Quota/QuotaRefresh.cs), [`OAuthRefreshLock.cs`](src/ClaudeCodeAccountRotation.App/Adapters/FileSystem/OAuthRefreshLock.cs) |
-| Usage reads | Bounded: at most once a minute per account, only on request | [Posture](#posture), read bullet; [`RefreshBudget.cs`](src/ClaudeCodeAccountRotation.Core/Quota/RefreshBudget.cs) |
-| Usage alerts | Information only, never an action | [Usage alerts](#usage-alerts) |
+| Background timer for reads, refreshes or switches | Reads only: every 15 minutes, of the accounts that back a CI role, which can refresh a parked one's token as below. No timer refreshes or switches anything else | [Posture](#posture), switch and read bullets; [`CiUsageSchedule.cs`](src/ClaudeCodeAccountRotation.App/Quota/CiUsageSchedule.cs) |
+| Refreshes a parked token | Only during a read (requested, or the CI-role accounts' 15-minute one): when its recorded expiry has passed, or once when the usage endpoint answers 401, followed by one retried read. Done under the tool's own write gate; a switch holds Claude Code's own refresh lock | [`QuotaRefresh.cs`](src/ClaudeCodeAccountRotation.App/Quota/QuotaRefresh.cs), [`OAuthRefreshLock.cs`](src/ClaudeCodeAccountRotation.App/Adapters/FileSystem/OAuthRefreshLock.cs) |
+| Usage reads | Bounded: at most once a minute per account; on request, and every 15 minutes for CI-role accounts | [Posture](#posture), read bullet; [`RefreshBudget.cs`](src/ClaudeCodeAccountRotation.Core/Quota/RefreshBudget.cs) |
+| Usage alerts | Information only, never an action: a line on the page and a desktop notification | [Usage alerts](#usage-alerts) |
 | User-Agent | Its own on every Anthropic request; GitHub reads and writes go through `gh`, with gh's own | [`AnthropicEndpoints.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Http/AnthropicEndpoints.cs), [`GhProcess.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Process/GhProcess.cs) |
 | Admin API reads | Only on Check API key, with a stored Admin key: the organization's key list, metadata only, never a model call | [Posture](#posture); [`AnthropicAdminKeysClient.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Http/AnthropicAdminKeysClient.cs) |
 | OAuth `client_id` for parked refreshes | Claude Code's public one | [Posture](#posture); [`AnthropicEndpoints.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Http/AnthropicEndpoints.cs) |
@@ -357,20 +359,38 @@ refresh is already running).
 
 ## Usage alerts
 
-An account that backs a CI role spends its 7-day window on CI runs as well as on your sessions,
-often while nobody is watching its card. When such an account's 7-day figure reaches the warning
-threshold, a line above the cards says so; from the critical threshold the line is red. Both
-thresholds are set in [`UsageAlerts.cs`](src/ClaudeCodeAccountRotation.Core/Quota/UsageAlerts.cs).
+An account that backs a CI role spends its windows on CI runs as well as on your sessions, often
+while nobody is watching its card. So the leader reads every such account's usage every 15
+minutes, in the same refresh pass the page starts and under the same once-a-minute budget and
+lockouts; an account the WSL side holds is read there. A tick that finds a pass running or a
+lockout standing is skipped. `claude-code-account-rotation --read-ci-usage` asks the running
+instance for the same read at once (`POST /api/refresh/ci-roles`, with the headers
+`POST /api/shutdown` takes), for example when a CI run reports its subscription is warning; it
+exits non-zero with the reason when nothing is running or the read is refused.
+
+When one of those accounts reaches the warning threshold of its 5-hour window, its 7-day window,
+or a model's weekly window (such as Fable's), a line above the cards says so; from the critical
+threshold the line is red. Both thresholds are set in
+[`UsageAlerts.cs`](src/ClaudeCodeAccountRotation.Core/Quota/UsageAlerts.cs). Each threshold also
+raises one desktop notification per window: it names the account, the CI roles it backs, and the
+best spare, the other roster account with the most headroom (the lowest figure across its open
+windows; a paused, unread or spent account is never named). A window fires again only after it
+resets. Which thresholds have fired is kept in `alert-latch.json` under the app data directory, so
+a restart does not repeat them. On Windows the notification is a toast shown through Windows
+PowerShell under its own Start entry, since a desktop app's toast needs a Start shortcut's
+AppUserModelID; on Linux it is `notify-send` when that is on PATH. A notification that cannot be
+shown is logged, and the line on the page still shows.
+
 Each CI-role account's 7-day meter carries a tick at each threshold, and its card has a Re-issue
 token button beside the meters. The button opens the Generate CI token panel with that account's
 roles already ticked. To move a role off the account instead, open Generate CI token on the
 account that is to take it.
 
-The alerts are computed at the end of a full refresh pass, which the page starts when it opens and
-when you click Refresh all. The 10-second poll only shows the last result and its time, and a
-card's own Refresh usage leaves the alerts as they were. They use the figures the cards show, so a
-window that has reset since it was read raises nothing. No alert switches an account, moves a
-role, or sends anything.
+The alerts are computed at the end of a full refresh pass (page open, Refresh all) and of each
+CI-role pass. The 10-second poll only shows the last result and its time, and a card's own
+Refresh usage leaves the alerts as they were. They use the figures the cards show, so a window
+that has reset since it was read raises nothing. No alert switches an account, moves a role, or
+sends anything off this machine.
 
 ## Remote Control after a switch
 

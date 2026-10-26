@@ -88,6 +88,7 @@ internal sealed partial class QuotaRefresh
     private readonly ILogger<QuotaRefresh> _logger;
     private readonly TimeSpan _gateWait;
     private readonly PeerRegistry? _peers;
+    private readonly UsageAlertNotifier? _notifier;
 
     public QuotaRefresh(
         ICredentialPairStore pairs,
@@ -108,9 +109,11 @@ internal sealed partial class QuotaRefresh
         Func<TimeSpan, CancellationToken, Task> pace,
         ILogger<QuotaRefresh> logger,
         TimeSpan? gateWait = null,
-        PeerRegistry? peers = null)
+        PeerRegistry? peers = null,
+        UsageAlertNotifier? notifier = null)
     {
         _peers = peers;
+        _notifier = notifier;
         _pairs = pairs;
         _profiles = profiles;
         _rosterFile = rosterFile;
@@ -163,12 +166,13 @@ internal sealed partial class QuotaRefresh
                 sentRead |= turn.SentRead;
             }
 
-            // Only a full pass, which is what page open and Refresh all start,
-            // computes the alerts: a card's own refresh or the stop hook reads
-            // one account, and the dashboard poll only renders what is stored.
-            if (request.IsAll && !stopping.IsCancellationRequested)
+            // Only a full pass (page open, Refresh all) or a CI-role pass (the
+            // fifteen-minute read, or one asked for at once) computes the alerts:
+            // a card's own refresh or the stop hook reads one account, and the
+            // dashboard poll only renders what is stored.
+            if (request.Account is null && !stopping.IsCancellationRequested)
             {
-                RecordAlerts(roster);
+                await RecordAlertsAsync(roster, stopping);
             }
         }
         catch (OperationCanceledException) when (stopping.IsCancellationRequested)
@@ -228,7 +232,9 @@ internal sealed partial class QuotaRefresh
         AccountEmail? liveEmail = (await _stateFile.ReadAccountBlockAsync(stopping))?.Email;
         IReadOnlyList<ParkedProfile> parked = await _profiles.ListAsync(stopping);
         Roster roster = await _rosterFile.ReadAsync(stopping);
-        bool Wanted(AccountEmail email) => request.Account is null || request.Account == email;
+        bool Wanted(AccountEmail email) => request.CiRoles
+            ? roster.Find(email) is { BacksCiRole: true }
+            : request.Account is null || request.Account == email;
         // The reading of what this side holds the page makes too: the account the
         // state file names, and the live pair's fingerprint for when the CLI has
         // rotated past a record. Judging slots on the name alone could call a
@@ -326,20 +332,22 @@ internal sealed partial class QuotaRefresh
 
     /// <summary>
     /// The alerts for every account on <paramref name="roster"/>, from the
-    /// merge its card is built from (<see cref="QuotaState.MergedFor"/>). A
-    /// 7-day window that has reset counts as no figure, because the card blanks it.
+    /// merge its card is built from (<see cref="QuotaState.MergedFor"/>), and a
+    /// desktop notification for each one not yet fired in its window.
     /// </summary>
-    private void RecordAlerts(Roster roster)
+    private async Task RecordAlertsAsync(Roster roster, CancellationToken stopping)
     {
         DateTimeOffset now = _timeProvider.GetUtcNow();
-        _state.RecordAlerts(UsageAlerts.Evaluate(roster, email => SevenDayPercent(email, now)), now);
+        IReadOnlyList<UsageAlert> alerts = UsageAlerts.Evaluate(roster, LimitsFor, now);
+        _state.RecordAlerts(alerts, now);
+        if (_notifier is not null)
+        {
+            await _notifier.NotifyAsync(alerts, roster, LimitsFor, now, stopping);
+        }
     }
 
-    private decimal? SevenDayPercent(AccountEmail email, DateTimeOffset now) =>
-        _state.MergedFor(email)?.Rows.Select(static row => row.Limit)
-            .FirstOrDefault(static limit => limit.Kind == LimitKind.WeeklyAll) is UsageLimit weekly && !weekly.HasResetBy(now)
-            ? (decimal)weekly.Percent
-            : null;
+    private IReadOnlyList<UsageLimit> LimitsFor(AccountEmail email) =>
+        _state.MergedFor(email)?.Rows.Select(static row => row.Limit).ToList() ?? [];
 
     /// <summary>The live pair's fingerprint, or null when there is no pair to name: absent, logged out, or torn.</summary>
     private async Task<RefreshTokenFingerprint?> LiveFingerprintAsync(CancellationToken stopping)
