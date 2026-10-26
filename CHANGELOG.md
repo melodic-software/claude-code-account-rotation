@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **The 5-hour window alerts earlier.** A CI-role account's 5-hour window now warns at 50% and is
+  critical at 75%, since the steepest measured climb was about 22 points per 15-minute read
+  (lane-funding 24 h usage analysis, 2026-10-26); 70 to 90 left less than one read to act. The
+  7-day and model weekly windows stay at 70% and 90%. `alert-latch.json` from 2.9.x still loads.
+
 ## [2.9.1] - 2026-10-26
 
 ### Fixed

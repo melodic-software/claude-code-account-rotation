@@ -295,7 +295,7 @@ internal sealed partial class DashboardAssembler(
             Pass(capturedAt),
             [.. (alerts?.Alerts ?? []).Select(static alert => new AlertView(alert.Account.Value, Wire(alert.Level), alert.Percent, alert.Threshold, alert.Window))],
             alerts?.ComputedAt,
-            UsageAlerts.Thresholds,
+            UsageAlerts.For(LimitKind.WeeklyAll).Ascending,
             TokenOnlyPrefixes(laneCatalog.Snapshot.Catalog),
             LaneCatalogView.Of(laneCatalog));
     }

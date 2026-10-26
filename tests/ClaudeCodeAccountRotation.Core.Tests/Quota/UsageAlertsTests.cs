@@ -5,12 +5,13 @@ using ClaudeCodeAccountRotation.Core.Quota;
 namespace ClaudeCodeAccountRotation.Core.Tests.Quota;
 
 /// <summary>
-/// The 70% and 90% thresholds come from the plan's acceptance criteria (#255),
-/// and the three windows (5-hour, 7-day, each model's weekly) from the owner's
-/// decision on the usage alerts: an account backing a CI role is warned at 70%
-/// of any of them and critically at 90%. Every expected value below is one of
-/// those two literals, a figure on either side of them, or a window label the
-/// usage endpoint's own <c>kind</c> or display name stands for.
+/// The three windows (5-hour, 7-day, each model's weekly) come from the owner's
+/// decision on the usage alerts. The 7-day and each model's weekly window warn
+/// at 70% and go critical at 90% (the plan's acceptance criteria, #255); the
+/// 5-hour window warns at 50% and goes critical at 75% (lane-funding 24 h usage
+/// analysis, 2026-10-26). Every expected value below is one of those literals,
+/// a figure on either side of them, or a window label the usage endpoint's own
+/// <c>kind</c> or display name stands for.
 /// </summary>
 public sealed class UsageAlertsTests
 {
@@ -49,7 +50,7 @@ public sealed class UsageAlertsTests
     {
         UsageAlert alert = SevenDay(70, 0).Single();
 
-        alert.ShouldBe(new UsageAlert(_ci, AlertLevel.Warning, 70m, "7-day", _weekEnd));
+        alert.ShouldBe(new UsageAlert(_ci, AlertLevel.Warning, 70m, "7-day", _weekEnd, LimitKind.WeeklyAll));
         alert.Threshold.ShouldBe(70m);
     }
 
@@ -72,7 +73,39 @@ public sealed class UsageAlertsTests
     [Fact]
     public void TheFiveHourWindowAlertsToo() =>
         Evaluate(Roster(), email => email == _ci ? [Session(91)] : []).Single()
-            .ShouldBe(new UsageAlert(_ci, AlertLevel.Critical, 91m, "5-hour", _now.AddHours(2)));
+            .ShouldBe(new UsageAlert(_ci, AlertLevel.Critical, 91m, "5-hour", _now.AddHours(2), LimitKind.Session));
+
+    private static IReadOnlyList<UsageAlert> FiveHour(double percent) =>
+        Evaluate(Roster(), email => email == _ci ? [Session(percent)] : []);
+
+    [Fact]
+    public void JustUnderFiftyRaisesNothingOnTheFiveHourWindow() => FiveHour(49.9).ShouldBeEmpty();
+
+    [Fact]
+    public void FiftyIsAWarningOnTheFiveHourWindow()
+    {
+        UsageAlert alert = FiveHour(50).Single();
+
+        alert.Level.ShouldBe(AlertLevel.Warning);
+        alert.Threshold.ShouldBe(50m);
+    }
+
+    [Fact]
+    public void JustUnderSeventyFiveIsStillAWarningOnTheFiveHourWindow() =>
+        FiveHour(74.9).Single().Level.ShouldBe(AlertLevel.Warning);
+
+    [Fact]
+    public void SeventyFiveIsCriticalOnTheFiveHourWindow()
+    {
+        UsageAlert alert = FiveHour(75).Single();
+
+        alert.Level.ShouldBe(AlertLevel.Critical);
+        alert.Threshold.ShouldBe(75m);
+    }
+
+    [Fact]
+    public void TheWeeklyWindowsKeepTheirSeventyWarning() =>
+        Evaluate(Roster(), email => email == _ci ? [Weekly(69.9), Scoped(69.9, "Fable")] : []).ShouldBeEmpty();
 
     [Fact]
     public void EachModelsWeeklyWindowAlertsUnderItsOwnName()

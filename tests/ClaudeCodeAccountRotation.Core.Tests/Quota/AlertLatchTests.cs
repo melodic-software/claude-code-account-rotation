@@ -15,7 +15,7 @@ public sealed class AlertLatchTests
     private static readonly DateTimeOffset _reset = _now.AddDays(3);
 
     private static UsageAlert Alert(AlertLevel level, string window = "7-day", DateTimeOffset? resets = null) =>
-        new(_ci, level, level == AlertLevel.Critical ? 92m : 72m, window, resets ?? _reset);
+        new(_ci, level, level == AlertLevel.Critical ? 92m : 72m, window, resets ?? _reset, window == "5-hour" ? LimitKind.Session : LimitKind.WeeklyAll);
 
     [Fact]
     public void AThresholdFiresOnceAndNotAgainOnTheNextRead()
