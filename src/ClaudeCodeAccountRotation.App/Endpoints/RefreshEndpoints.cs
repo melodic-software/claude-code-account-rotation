@@ -12,6 +12,9 @@ using Microsoft.AspNetCore.Routing;
 
 namespace ClaudeCodeAccountRotation.App.Endpoints;
 
+/// <summary>Waits out <see cref="RefreshEndpoints.CiRoleWait"/>. Its own type, so a test can end the wait without moving the schedule's.</summary>
+internal delegate Task CiRoleWaitDelay(TimeSpan ceiling, CancellationToken cancellationToken);
+
 /// <summary>
 /// The ways a refresh starts: every account, every account backing a CI role,
 /// one card's button, or the
@@ -22,7 +25,8 @@ namespace ClaudeCodeAccountRotation.App.Endpoints;
 /// operation that outlives its request — a browser navigating away mid-rotation
 /// would strand a pair — so the route hands the work to the hosted worker and
 /// returns 202, and the page's existing ten-second poll watches each card land
-/// through <c>GET /api/dashboard</c>.
+/// through <c>GET /api/dashboard</c>. The CI-role route's <c>?wait=true</c>
+/// is the one exception, and it waits on the worker's pass rather than running it.
 /// </para>
 /// <para>
 /// Every refusal is 409 with a refusal token, the shape every refusal on this
@@ -32,6 +36,15 @@ namespace ClaudeCodeAccountRotation.App.Endpoints;
 /// </summary>
 internal static class RefreshEndpoints
 {
+    /// <summary>
+    /// How long <c>?wait=true</c> holds the request. A CI-role account's turn is
+    /// at worst a token refresh and a usage read of
+    /// <see cref="Adapters.Http.AnthropicEndpoints.RequestTimeout"/> each, plus
+    /// the gate wait and the spacing, so about 45 seconds: this covers four such
+    /// accounts all at their worst, and an ordinary pass ends in seconds.
+    /// </summary>
+    public static readonly TimeSpan CiRoleWait = TimeSpan.FromMinutes(3);
+
     public static void Map(IEndpointRouteBuilder routes)
     {
         ArgumentNullException.ThrowIfNull(routes);
@@ -43,11 +56,40 @@ internal static class RefreshEndpoints
             TimeProvider timeProvider) => Start(worker, state, timeProvider, RefreshRequest.All));
 
         // The fifteen-minute read's pass, at once: what --read-ci-usage posts,
-        // for a CI run that saw its subscription warn.
-        mutations.MapPost("/refresh/ci-roles", static (
+        // for a CI run that saw its subscription warn. With ?wait=true the
+        // request stays open until the pass ends and answers with the CI-role
+        // table, so the command makes one request instead of polling. Only the
+        // wait belongs to the request: the pass still runs on the worker, and a
+        // caller that disconnects or times out ends its wait, never the pass.
+        mutations.MapPost("/refresh/ci-roles", static async (
+            bool? wait,
             QuotaRefreshWorker worker,
             QuotaState state,
-            TimeProvider timeProvider) => Start(worker, state, timeProvider, RefreshRequest.CiRoleAccounts));
+            RosterFile rosterFile,
+            CiRoleWaitDelay delay,
+            TimeProvider timeProvider,
+            CancellationToken cancellationToken) =>
+        {
+            if (wait != true)
+            {
+                return Start(worker, state, timeProvider, RefreshRequest.CiRoleAccounts);
+            }
+
+            if (Claim(worker, state, timeProvider, RefreshRequest.CiRoleAccounts) is IResult refused)
+            {
+                return refused;
+            }
+
+            // Taken right after the claim, which created it, so this is this pass.
+            Task run = state.CurrentRun;
+            using var ceiling = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            bool finished = await Task.WhenAny(run, delay(CiRoleWait, ceiling.Token)) == run;
+            await ceiling.CancelAsync();
+
+            return Results.Json(
+                CiUsageReport.For(finished, await rosterFile.ReadAsync(cancellationToken), state, timeProvider.GetUtcNow()),
+                statusCode: finished ? StatusCodes.Status200OK : StatusCodes.Status202Accepted);
+        });
 
         mutations.MapPost("/accounts/{email}/refresh", static async (
             string email,
@@ -102,7 +144,12 @@ internal static class RefreshEndpoints
     /// would make is already refused, so starting one would burn the single run
     /// slot on a pass that sends nothing.
     /// </summary>
-    private static IResult Start(QuotaRefreshWorker worker, QuotaState state, TimeProvider timeProvider, RefreshRequest request)
+    private static IResult Start(QuotaRefreshWorker worker, QuotaState state, TimeProvider timeProvider, RefreshRequest request) =>
+        Claim(worker, state, timeProvider, request)
+            ?? Results.Json(new { started = true }, statusCode: StatusCodes.Status202Accepted);
+
+    /// <summary>Starts the pass, or returns the 409 that says why not.</summary>
+    private static IResult? Claim(QuotaRefreshWorker worker, QuotaState state, TimeProvider timeProvider, RefreshRequest request)
     {
         DateTimeOffset now = timeProvider.GetUtcNow();
         if (state.LockedUntil(now) is DateTimeOffset until)
@@ -110,9 +157,7 @@ internal static class RefreshEndpoints
             return Refused("RateLimited", RefreshMessages.RateLimited(until - now));
         }
 
-        return worker.TryStart(request)
-            ? Results.Json(new { started = true }, statusCode: StatusCodes.Status202Accepted)
-            : Refused("RefreshInProgress", "A refresh is already running");
+        return worker.TryStart(request) ? null : Refused("RefreshInProgress", "A refresh is already running");
     }
 
     /// <summary>

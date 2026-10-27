@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
+using ClaudeCodeAccountRotation.App.Endpoints;
 using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.App.Tests.Adapters;
 using ClaudeCodeAccountRotation.Core.Accounts;
@@ -32,6 +33,8 @@ public sealed class RefreshEndpointTests
     private static Uri AllUri => new("/api/refresh", UriKind.Relative);
 
     private static Uri CiRolesUri => new("/api/refresh/ci-roles", UriKind.Relative);
+
+    private static Uri CiRolesWaitUri => new("/api/refresh/ci-roles?wait=true", UriKind.Relative);
 
     private static Uri HookUri => new(HookRoute, UriKind.Relative);
 
@@ -440,6 +443,80 @@ public sealed class RefreshEndpointTests
         (string title, string body) = factory.Desktop.Shown.Single();
         title.ShouldBe(ParkedEmail + ": 7-day usage at 92%");
         body.ShouldStartWith("Backs CI role AUTOMATIONS. Past the 90% critical threshold. ");
+    }
+
+    [Fact]
+    public async Task WaitAnswersOnceThePassEndsWithOneRowPerCiRoleAccount()
+    {
+        await using AppFactory factory = await LiveAndParkedAsync(TestContext.Current.CancellationToken, liveExpired: false);
+        // The live account on the roster too, backing nothing: it sorts first,
+        // so the parked account is the roster's second entry and the only row.
+        await factory.Services.GetRequiredService<RosterFile>().UpdateAsync(
+            static roster => roster.With(new RosterEntry(new AccountEmail(LiveEmail))), TestContext.Current.CancellationToken);
+        await BackACiRoleAsync(factory);
+        Script(factory, UsageResponse);
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage answered = await client.PostAsync(CiRolesWaitUri, content: null, TestContext.Current.CancellationToken);
+
+        answered.StatusCode.ShouldBe(HttpStatusCode.OK);
+        factory.Services.GetRequiredService<QuotaState>().InProgress.ShouldBeFalse();
+        factory.Outbound.Requests.Count.ShouldBe(1);
+        JsonNode report = (await answered.Content.ReadFromJsonAsync<JsonNode>(TestContext.Current.CancellationToken))!;
+        report["finished"]!.GetValue<bool>().ShouldBeTrue();
+        JsonNode row = report["accounts"]!.AsArray().Single()!;
+        row["index"]!.GetValue<int>().ShouldBe(1);
+        row["roles"]!.AsArray().Select(static role => role!.GetValue<string>()).ShouldBe(["AUTOMATIONS"]);
+        row["email"]!.GetValue<string>().ShouldBe(ParkedEmail);
+        row["refresh"]!["state"]!.GetValue<string>().ShouldBe("read");
+        JsonNode weekly = row["usage"]!["limits"]!.AsArray()[1]!;
+        weekly["label"]!.GetValue<string>().ShouldBe("7-day");
+        weekly["percent"]!.GetValue<double>().ShouldBe(20);
+        weekly["resetsAt"]!.GetValue<DateTimeOffset>().ShouldBe(new DateTimeOffset(2026, 9, 8, 23, 59, 59, TimeSpan.Zero));
+    }
+
+    [Fact]
+    public async Task WaitAnswers202WhenTheCeilingPassesWithThePassStillRunning()
+    {
+        await using AppFactory factory = await LiveAndParkedAsync(TestContext.Current.CancellationToken, liveExpired: false);
+        factory.Overrides = static services => services.Replace(ServiceDescriptor.Singleton<CiRoleWaitDelay>(static (_, _) => Task.CompletedTask));
+        await BackACiRoleAsync(factory);
+        Script(factory, UsageResponse);
+        TaskCompletionSource held = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        factory.Outbound.Hold = held.Task;
+        using HttpClient client = factory.CreateMutatingClient();
+        QuotaState state = factory.Services.GetRequiredService<QuotaState>();
+
+        using HttpResponseMessage answered = await client.PostAsync(CiRolesWaitUri, content: null, TestContext.Current.CancellationToken);
+
+        answered.StatusCode.ShouldBe(HttpStatusCode.Accepted);
+        (await answered.Content.ReadFromJsonAsync<JsonNode>(TestContext.Current.CancellationToken))!["finished"]!.GetValue<bool>().ShouldBeFalse();
+        // The wait ended, not the pass: it finishes once the read is answered.
+        state.InProgress.ShouldBeTrue();
+        held.SetResult();
+        await state.CurrentRun;
+        state.OutcomeFor(new AccountEmail(ParkedEmail))!.Kind.ShouldBe(RefreshOutcomeKind.Read);
+    }
+
+    [Fact]
+    public async Task WaitIsRefusedLikeTheRouteWhileAPassIsRunning()
+    {
+        await using AppFactory factory = await LiveAndParkedAsync(TestContext.Current.CancellationToken, liveExpired: false);
+        await BackACiRoleAsync(factory);
+        Script(factory, UsageResponse);
+        TaskCompletionSource held = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        factory.Outbound.Hold = held.Task;
+        using HttpClient client = factory.CreateMutatingClient();
+        (await client.PostAsync(CiRolesUri, content: null, TestContext.Current.CancellationToken)).Dispose();
+
+        using HttpResponseMessage refused = await client.PostAsync(CiRolesWaitUri, content: null, TestContext.Current.CancellationToken);
+
+        refused.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        JsonNode body = (await refused.Content.ReadFromJsonAsync<JsonNode>(TestContext.Current.CancellationToken))!;
+        body["refusal"]!.GetValue<string>().ShouldBe("RefreshInProgress");
+        body["message"]!.GetValue<string>().ShouldBe("A refresh is already running");
+        held.SetResult();
+        await factory.Services.GetRequiredService<QuotaState>().CurrentRun;
     }
 
     [Fact]

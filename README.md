@@ -364,10 +364,22 @@ while nobody is watching its card. So the leader reads every such account's usag
 minutes, in the same refresh pass the page starts and under the same once-a-minute budget and
 lockouts; an account the WSL side holds is read there. A tick that finds a pass running or a
 lockout standing is skipped. `claude-code-account-rotation --read-ci-usage` asks the running
-instance for the same read at once (`POST /api/refresh/ci-roles`, with the headers
-`POST /api/shutdown` takes), for example when a CI run reports its subscription is warning; it
-exits non-zero with the reason when nothing is running, the read is refused, or it runs on the
-follower, which has no refresh route: run it with the leader's executable.
+instance for the same read at once (`POST /api/refresh/ci-roles?wait=true`, with the headers
+`POST /api/shutdown` takes), for example when a CI run reports its subscription is warning. The
+instance answers when the pass ends, and the command prints one line per account backing a CI
+role: its index in `roster.json`'s `accounts`, its role prefixes, how its read went, and each
+window's percent and reset time (UTC), as its card shows them:
+
+```text
+#  Roles               Read  Usage
+1  AUTOMATIONS,REVIEW  read  5-hour 42% resets 2026-10-27 14:30Z, 7-day 61% resets 2026-10-30 09:00Z, Fable 18% resets 2026-10-30 09:00Z
+```
+
+It prints no e-mail address unless `--emails` is added, which adds that column. It exits
+non-zero with the reason when nothing is running, the read is refused, the pass has not ended
+after 3 minutes (it keeps running, and the dashboard shows it land), or it runs on the follower,
+which has no refresh route: run it with the leader's executable. Without `?wait=true` the route
+answers 202 at once, as before.
 
 When one of those accounts reaches the warning threshold of its 5-hour window, its 7-day window,
 or a model's weekly window (such as Fable's), a line above the cards says so; from the critical

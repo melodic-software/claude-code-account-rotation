@@ -738,7 +738,7 @@ internal sealed partial class DashboardAssembler(
     /// operator can act on.
     /// </para>
     /// </summary>
-    private static UsageView Usage(MergedUsage? merged, DateTimeOffset capturedAt)
+    internal static UsageView Usage(MergedUsage? merged, DateTimeOffset capturedAt)
     {
         if (merged is null)
         {
@@ -862,7 +862,7 @@ internal sealed partial class DashboardAssembler(
     /// <c>session-will-refresh</c>. Derived rather than listed in a switch, so a
     /// kind added later cannot reach the page under a name nobody updated.
     /// </summary>
-    private static string Kebab(RefreshOutcomeKind kind)
+    internal static string Kebab(RefreshOutcomeKind kind)
     {
         string name = kind.ToString();
         StringBuilder kebab = new(name.Length + 4);

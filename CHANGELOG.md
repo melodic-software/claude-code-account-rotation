@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **`--read-ci-usage` waits and prints the table.** It now waits, up to 3 minutes, for the pass it
+  started, then prints one line per account backing a CI role: its roster index, role prefixes,
+  read outcome, and each window's percent and reset time. No e-mail address is printed unless
+  `--emails` is added. The instance signals the end itself: `POST /api/refresh/ci-roles?wait=true`
+  answers when the pass ends (200 with the table) or when the wait runs out (202, nonzero exit);
+  without `wait` the route still answers 202 at once. No file format changes.
+
 ## [2.10.0] - 2026-10-26
 
 ### Changed

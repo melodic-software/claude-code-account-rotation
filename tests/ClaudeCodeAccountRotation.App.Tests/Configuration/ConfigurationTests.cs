@@ -745,6 +745,10 @@ public sealed class ConfigurationTests : IDisposable
         StartupArguments.Parse(["--open"]).Value.Open.ShouldBeTrue();
         StartupArguments.Parse(["--read-ci-usage"]).Value.ReadCiUsage.ShouldBeTrue();
         parsed.ReadCiUsage.ShouldBeFalse();
+        // The e-mail column is opt-in, and only the table has one.
+        StartupArguments.Parse(["--read-ci-usage"]).Value.Emails.ShouldBeFalse();
+        StartupArguments.Parse(["--read-ci-usage", "--emails"]).Value.Emails.ShouldBeTrue();
+        StartupArguments.Parse(["--emails"]).Error.ShouldBe("--emails is valid only with --read-ci-usage");
         StartupArguments.Parse(["--version"]).Value.ShowVersion.ShouldBeTrue();
         StartupArguments.Parse(["--help"]).Value.ShowHelp.ShouldBeTrue();
         StartupArguments.Parse(["-h"]).Value.ShowHelp.ShouldBeTrue();
@@ -790,6 +794,8 @@ public sealed class ConfigurationTests : IDisposable
         output.ShouldContain("--config");
         output.ShouldContain("--port");
         output.ShouldContain("--version");
+        output.ShouldContain("--read-ci-usage");
+        output.ShouldContain("--emails");
         output.ShouldContain("--help");
         output.ShouldContain("-h");
         output.ShouldContain("/?");
