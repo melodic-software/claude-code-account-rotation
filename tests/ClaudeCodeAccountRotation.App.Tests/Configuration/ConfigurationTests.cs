@@ -749,6 +749,9 @@ public sealed class ConfigurationTests : IDisposable
         StartupArguments.Parse(["--read-ci-usage"]).Value.Emails.ShouldBeFalse();
         StartupArguments.Parse(["--read-ci-usage", "--emails"]).Value.Emails.ShouldBeTrue();
         StartupArguments.Parse(["--emails"]).Error.ShouldBe("--emails is valid only with --read-ci-usage");
+        StartupArguments.Parse(["--read-ci-usage"]).Value.AllAccounts.ShouldBeFalse();
+        StartupArguments.Parse(["--read-ci-usage", "--all-accounts"]).Value.AllAccounts.ShouldBeTrue();
+        StartupArguments.Parse(["--all-accounts"]).Error.ShouldBe("--all-accounts is valid only with --read-ci-usage");
         StartupArguments.Parse(["--version"]).Value.ShowVersion.ShouldBeTrue();
         StartupArguments.Parse(["--help"]).Value.ShowHelp.ShouldBeTrue();
         StartupArguments.Parse(["-h"]).Value.ShowHelp.ShouldBeTrue();

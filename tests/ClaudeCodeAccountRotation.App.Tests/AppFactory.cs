@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Adapters.Process;
 using ClaudeCodeAccountRotation.App.Hosting;
+using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.App.Tests.Adapters;
 using ClaudeCodeAccountRotation.App.Tests.Hosting;
@@ -260,6 +261,9 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
             // The pacing delegate, recorded rather than taken; see Waits.
             services.Replace(ServiceDescriptor.Singleton<Func<TimeSpan, CancellationToken, Task>>(Waits.Record));
             services.Replace(ServiceDescriptor.Singleton<IDesktopNotifier>(Desktop));
+            // Never a look of its own: a test that moves the clock past a reset
+            // it seeded would otherwise get a read it never scripted.
+            services.Replace(ServiceDescriptor.Singleton<UsageResetDelay>(static (_, cancellationToken) => Task.Delay(Timeout.Infinite, cancellationToken)));
             services.Replace(ServiceDescriptor.Singleton<IClaudeCliAuthStatus>(Cli));
             // Both ports, or a removal would resolve the real CLI on this machine.
             services.Replace(ServiceDescriptor.Singleton<IClaudeCliLogout>(Cli));

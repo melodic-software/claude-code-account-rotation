@@ -3,11 +3,11 @@ using ClaudeCodeAccountRotation.Core;
 
 namespace ClaudeCodeAccountRotation.App.Configuration;
 
-/// <summary>The command line: <c>--config &lt;path&gt;</c>, <c>--port &lt;n&gt;</c>, <c>--open</c>, <c>--read-ci-usage</c> (with <c>--emails</c>), <c>--version</c>, <c>--help</c> (and <c>-h</c>, <c>/?</c>).</summary>
-internal sealed record StartupArguments(string? ConfigPath, int? Port, bool Open, bool ShowVersion, bool ShowHelp, bool ReadCiUsage = false, bool Emails = false)
+/// <summary>The command line: <c>--config &lt;path&gt;</c>, <c>--port &lt;n&gt;</c>, <c>--open</c>, <c>--read-ci-usage</c> (with <c>--emails</c> and <c>--all-accounts</c>), <c>--version</c>, <c>--help</c> (and <c>-h</c>, <c>/?</c>).</summary>
+internal sealed record StartupArguments(string? ConfigPath, int? Port, bool Open, bool ShowVersion, bool ShowHelp, bool ReadCiUsage = false, bool Emails = false, bool AllAccounts = false)
 {
     public const string Usage = """
-        claude-code-account-rotation [--config <path>] [--port <n>] [--open] [--read-ci-usage [--emails]] [--version] [--help]
+        claude-code-account-rotation [--config <path>] [--port <n>] [--open] [--read-ci-usage [--emails] [--all-accounts]] [--version] [--help]
 
           --config <path>   configuration file (default: <app data>/claude-code-account-rotation/config.json)
           --port <n>        listen port for this launch (overrides the configured port; 0 lets the operating system choose a free port)
@@ -16,6 +16,8 @@ internal sealed record StartupArguments(string? ConfigPath, int? Port, bool Open
           --read-ci-usage   ask the running instance to read every CI-role account's usage now, wait for it,
                             print one line per account (roster index, roles, read outcome, each window), and exit
           --emails          with --read-ci-usage, add each account's e-mail to the table
+          --all-accounts    with --read-ci-usage, print every roster account, not only the CI-role ones;
+                            only the CI-role accounts are read, the rest show their last figures
           --version         print the version and exit
           --help, -h, /?    print this text and exit
         """;
@@ -30,6 +32,7 @@ internal sealed record StartupArguments(string? ConfigPath, int? Port, bool Open
         bool showHelp = false;
         bool readCiUsage = false;
         bool emails = false;
+        bool allAccounts = false;
 
         for (int index = 0; index < arguments.Count; index++)
         {
@@ -55,6 +58,9 @@ internal sealed record StartupArguments(string? ConfigPath, int? Port, bool Open
                 case "--emails":
                     emails = true;
                     break;
+                case "--all-accounts":
+                    allAccounts = true;
+                    break;
                 case "--version":
                     showVersion = true;
                     break;
@@ -73,6 +79,11 @@ internal sealed record StartupArguments(string? ConfigPath, int? Port, bool Open
             return Result<StartupArguments, string>.Failure("--emails is valid only with --read-ci-usage");
         }
 
-        return Result<StartupArguments, string>.Success(new StartupArguments(configPath, port, open, showVersion, showHelp, readCiUsage, emails));
+        if (allAccounts && !readCiUsage)
+        {
+            return Result<StartupArguments, string>.Failure("--all-accounts is valid only with --read-ci-usage");
+        }
+
+        return Result<StartupArguments, string>.Success(new StartupArguments(configPath, port, open, showVersion, showHelp, readCiUsage, emails, allAccounts));
     }
 }

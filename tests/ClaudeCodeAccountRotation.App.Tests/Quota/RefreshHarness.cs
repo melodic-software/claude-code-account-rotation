@@ -119,6 +119,8 @@ internal sealed class RefreshHarness : IDisposable
 
     public CredentialMutationGate Gate { get; } = new();
 
+    public RosterFile Roster => _roster;
+
     public QuotaState State { get; } = new();
 
     public FaultyPairStore Store { get; }

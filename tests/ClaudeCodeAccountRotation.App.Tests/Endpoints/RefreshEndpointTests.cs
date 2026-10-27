@@ -476,6 +476,27 @@ public sealed class RefreshEndpointTests
     }
 
     [Fact]
+    public async Task WaitWithAllAnswersEveryRosterAccountButReadsOnlyTheCiRoleOnes()
+    {
+        await using AppFactory factory = await LiveAndParkedAsync(TestContext.Current.CancellationToken, liveExpired: false);
+        await factory.Services.GetRequiredService<RosterFile>().UpdateAsync(
+            static roster => roster.With(new RosterEntry(new AccountEmail(LiveEmail))), TestContext.Current.CancellationToken);
+        await BackACiRoleAsync(factory);
+        Script(factory, UsageResponse);
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage answered = await client.PostAsync(new Uri("/api/refresh/ci-roles?wait=true&all=true", UriKind.Relative), content: null, TestContext.Current.CancellationToken);
+
+        answered.StatusCode.ShouldBe(HttpStatusCode.OK);
+        factory.Outbound.Requests.Count.ShouldBe(1);
+        JsonArray rows = (await answered.Content.ReadFromJsonAsync<JsonNode>(TestContext.Current.CancellationToken))!["accounts"]!.AsArray();
+        rows.Select(static row => row!["index"]!.GetValue<int>()).ShouldBe([0, 1]);
+        rows.Select(static row => row!["email"]!.GetValue<string>()).ShouldBe([LiveEmail, ParkedEmail]);
+        rows[0]!["roles"]!.AsArray().ShouldBeEmpty();
+        rows[1]!["roles"]!.AsArray().Select(static role => role!.GetValue<string>()).ShouldBe(["AUTOMATIONS"]);
+    }
+
+    [Fact]
     public async Task WaitNamesTheLegacyRoleAsThePageDoes()
     {
         await using AppFactory factory = await LiveAndParkedAsync(TestContext.Current.CancellationToken, liveExpired: false);
