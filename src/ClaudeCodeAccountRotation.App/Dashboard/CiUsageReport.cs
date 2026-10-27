@@ -14,7 +14,9 @@ internal sealed record CiUsageReport(bool Finished, IReadOnlyList<CiUsageRow> Ac
     /// <summary>
     /// The rows, built from the roster and the figures the pass left behind.
     /// The usage is the card's own (<see cref="DashboardAssembler.Usage"/>), so
-    /// the table and the page cannot show an account two different ways.
+    /// the table and the page cannot show an account's figures two different
+    /// ways. The read column is the last outcome alone: a stranded folder,
+    /// which the card names instead, is the page's to show.
     /// </summary>
     public static CiUsageReport For(bool finished, Roster roster, QuotaState quota, DateTimeOffset capturedAt)
     {
@@ -27,9 +29,7 @@ internal sealed record CiUsageReport(bool Finished, IReadOnlyList<CiUsageRow> Ac
                 row.index,
                 [.. row.entry.CiRoles.Select(static assignment => assignment.Role.Prefix)],
                 row.entry.Email.Value,
-                quota.OutcomeFor(row.entry.Email) is RefreshOutcome outcome
-                    ? new RefreshStateView(DashboardAssembler.Kebab(outcome.Kind), outcome.Message, outcome.RetryAt)
-                    : RefreshStateView.Idle,
+                DashboardAssembler.Refresh(quota.OutcomeFor(row.entry.Email)),
                 DashboardAssembler.Usage(quota.MergedFor(row.entry.Email), capturedAt)))]);
     }
 }

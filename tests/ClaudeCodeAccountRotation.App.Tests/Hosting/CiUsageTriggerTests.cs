@@ -108,6 +108,17 @@ public sealed class CiUsageTriggerTests
     }
 
     [Fact]
+    public async Task AnInstanceThatIgnoresTheWaitIsNotReportedAsATimeout()
+    {
+        // A release before this one answers the route at once with its 202 body.
+        using RecordingHandler handler = new(RecordingHandler.Json(HttpStatusCode.Accepted, """{"started":true}"""));
+        using HttpClient client = new(handler);
+
+        (await CiUsageTrigger.PostAsync(client, RotationRole.Leader, ("http://127.0.0.1:48211", "t"), TestContext.Current.CancellationToken)).Error
+            .ShouldBe("the instance started the read but does not wait for it; upgrade it to this release to get the table");
+    }
+
+    [Fact]
     public async Task ARefusalCarriesTheInstancesMessage()
     {
         using RecordingHandler handler = new(RecordingHandler.Json(HttpStatusCode.Conflict, """{"refusal":"RefreshInProgress","message":"A refresh is already running"}"""));

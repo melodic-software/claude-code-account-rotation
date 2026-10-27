@@ -52,6 +52,12 @@ internal static class CiUsageTrigger
                 return Result<CiUsageReport, string>.Success(report);
             }
 
+            if (response.StatusCode == HttpStatusCode.Accepted
+                && JsonNode.Parse(await response.Content.ReadAsStringAsync(cancellationToken))?["finished"] is null)
+            {
+                return Result<CiUsageReport, string>.Failure("the instance started the read but does not wait for it; upgrade it to this release to get the table");
+            }
+
             if (response.StatusCode == HttpStatusCode.Accepted)
             {
                 return Result<CiUsageReport, string>.Failure(

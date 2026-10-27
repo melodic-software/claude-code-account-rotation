@@ -838,10 +838,13 @@ internal sealed partial class DashboardAssembler(
             return new RefreshStateView(Kebab(RefreshOutcomeKind.Stranded), RefreshMessages.Stranded, RetryAt: null);
         }
 
-        return quota.OutcomeFor(email) is RefreshOutcome outcome
-            ? new RefreshStateView(Kebab(outcome.Kind), outcome.Message, outcome.RetryAt)
-            : RefreshStateView.Idle;
+        return Refresh(quota.OutcomeFor(email));
     }
+
+    /// <summary>An account's last outcome as the wire reads it, or idle before it has one.</summary>
+    internal static RefreshStateView Refresh(RefreshOutcome? outcome) => outcome is null
+        ? RefreshStateView.Idle
+        : new RefreshStateView(Kebab(outcome.Kind), outcome.Message, outcome.RetryAt);
 
     /// <summary>The pass as a whole: running or not, the lockout that is still standing, and what the last one came to.</summary>
     private RefreshView Pass(DateTimeOffset capturedAt)
@@ -862,7 +865,7 @@ internal sealed partial class DashboardAssembler(
     /// <c>session-will-refresh</c>. Derived rather than listed in a switch, so a
     /// kind added later cannot reach the page under a name nobody updated.
     /// </summary>
-    internal static string Kebab(RefreshOutcomeKind kind)
+    private static string Kebab(RefreshOutcomeKind kind)
     {
         string name = kind.ToString();
         StringBuilder kebab = new(name.Length + 4);
