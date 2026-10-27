@@ -476,6 +476,24 @@ public sealed class RefreshEndpointTests
     }
 
     [Fact]
+    public async Task WaitNamesTheLegacyRoleAsThePageDoes()
+    {
+        await using AppFactory factory = await LiveAndParkedAsync(TestContext.Current.CancellationToken, liveExpired: false);
+        await factory.Services.GetRequiredService<RosterFile>().UpdateAsync(
+            static roster => roster.With(new RosterEntry(new AccountEmail(ParkedEmail))
+                .ClaimingToken(new CiRole(string.Empty, CiSecretScope.Organization, "octo"), new DateOnly(2026, 9, 1), setAt: null)),
+            TestContext.Current.CancellationToken);
+        Script(factory, UsageResponse);
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage answered = await client.PostAsync(CiRolesWaitUri, content: null, TestContext.Current.CancellationToken);
+
+        JsonNode report = (await answered.Content.ReadFromJsonAsync<JsonNode>(TestContext.Current.CancellationToken))!;
+        report["accounts"]!.AsArray().Single()!["roles"]!.AsArray().Select(static role => role!.GetValue<string>())
+            .ShouldBe([CiRole.LegacyName]);
+    }
+
+    [Fact]
     public async Task WaitAnswers202WhenTheCeilingPassesWithThePassStillRunning()
     {
         await using AppFactory factory = await LiveAndParkedAsync(TestContext.Current.CancellationToken, liveExpired: false);

@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`--read-ci-usage` names the legacy role.** An account backing the bare
+  `CLAUDE_CODE_OAUTH_TOKEN` printed an empty role (`REVIEWS,`); the table now names each role the
+  way the page does, `legacy (review lanes)` for that one.
+
 ## [2.11.0] - 2026-10-27
 
 ### Changed
