@@ -11,7 +11,9 @@ namespace ClaudeCodeAccountRotation.App.Quota;
 /// navigating away would abort it mid-rotation and strand a pair), it outruns
 /// the request pipeline's own timeouts, and the dashboard's poll takes the
 /// mutation gate with a zero wait every ten seconds, so a pass holding a request
-/// open would fight it.
+/// open would fight it. The CI-role route's <c>?wait=true</c> holds a request
+/// open on <see cref="QuotaState.CurrentRun"/> only: the pass still runs here
+/// and the request holds no gate, so the poll is unaffected.
 /// <para>
 /// One request at a time: the channel is bounded at one and
 /// <see cref="TryStart"/> claims <see cref="QuotaState.InProgress"/> before
