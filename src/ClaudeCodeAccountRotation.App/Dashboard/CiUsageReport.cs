@@ -27,7 +27,7 @@ internal sealed record CiUsageReport(bool Finished, IReadOnlyList<CiUsageRow> Ac
             .Where(static row => row.entry.BacksCiRole)
             .Select(row => new CiUsageRow(
                 row.index,
-                [.. row.entry.CiRoles.Select(static assignment => assignment.Role.Prefix)],
+                [.. row.entry.CiRoles.Select(static assignment => assignment.Role.Name)],
                 row.entry.Email.Value,
                 DashboardAssembler.Refresh(quota.OutcomeFor(row.entry.Email)),
                 DashboardAssembler.Usage(quota.MergedFor(row.entry.Email), capturedAt)))]);
