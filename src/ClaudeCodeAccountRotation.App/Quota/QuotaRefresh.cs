@@ -166,10 +166,12 @@ internal sealed partial class QuotaRefresh
                 sentRead |= turn.SentRead;
             }
 
-            // Only a full pass (page open, Refresh all) or a CI-role pass (the
-            // fifteen-minute read, or one asked for at once) computes the alerts:
-            // a card's own refresh or the stop hook reads one account, and the
-            // dashboard poll only renders what is stored.
+            // Only a full pass (page open, Refresh all), a CI-role pass (the
+            // fifteen-minute read, or one asked for at once) or a reset read
+            // computes the alerts, the last so an alert on a window that has
+            // reset goes as soon as the account is read again: a card's own
+            // refresh or the stop hook reads one account, and the dashboard poll
+            // only renders what is stored.
             if (request.Account is null && !stopping.IsCancellationRequested)
             {
                 await RecordAlertsAsync(roster, stopping);
@@ -232,7 +234,9 @@ internal sealed partial class QuotaRefresh
         AccountEmail? liveEmail = (await _stateFile.ReadAccountBlockAsync(stopping))?.Email;
         IReadOnlyList<ParkedProfile> parked = await _profiles.ListAsync(stopping);
         Roster roster = await _rosterFile.ReadAsync(stopping);
-        bool Wanted(AccountEmail email) => request.CiRoles
+        bool Wanted(AccountEmail email) => request.Accounts is { } named
+            ? named.Contains(email)
+            : request.CiRoles
             ? roster.Find(email) is { BacksCiRole: true }
             : request.Account is null || request.Account == email;
         // The reading of what this side holds the page makes too: the account the

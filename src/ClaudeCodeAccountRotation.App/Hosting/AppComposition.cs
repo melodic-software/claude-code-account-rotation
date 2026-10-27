@@ -123,13 +123,13 @@ internal static class AppComposition
         if (arguments.ReadCiUsage)
         {
             using HttpClient client = new() { Timeout = CiUsageTrigger.ClientTimeout };
-            Result<CiUsageReport, string> read = await CiUsageTrigger.PostAsync(client, configuration.Role, InstanceLock.ReadRunning(configuration.AppDataDirectory), cancellationToken);
+            Result<CiUsageReport, string> read = await CiUsageTrigger.PostAsync(client, configuration.Role, InstanceLock.ReadRunning(configuration.AppDataDirectory), arguments.AllAccounts, cancellationToken);
             if (read.IsFailure)
             {
                 return Result<bool, string>.Failure(read.Error);
             }
 
-            await Console.Out.WriteLineAsync(CiUsageTrigger.Format(read.Value, arguments.Emails));
+            await Console.Out.WriteLineAsync(CiUsageTrigger.Format(read.Value, arguments.Emails, arguments.AllAccounts));
             return Result<bool, string>.Success(false);
         }
 
@@ -333,6 +333,8 @@ internal static class AppComposition
         services.AddSingleton<ScheduleDelay>(static (interval, cancellationToken) => Task.Delay(interval, cancellationToken));
         services.AddSingleton<CiRoleWaitDelay>(static (ceiling, cancellationToken) => Task.Delay(ceiling, cancellationToken));
         services.AddHostedService<CiUsageSchedule>();
+        services.AddSingleton<UsageResetDelay>(static (wait, cancellationToken) => Task.Delay(wait, cancellationToken));
+        services.AddHostedService<UsageResetSchedule>();
         // No checks registered: liveness only. MapRoutes maps the /healthz route this serves.
         services.AddHealthChecks();
 

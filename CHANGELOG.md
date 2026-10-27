@@ -4,6 +4,21 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Every roster account is read again once its usage window resets.** The leader reads an
+  account once, about a minute after a 5-hour, 7-day or model window its last figure was captured
+  in resets, whether or not it backs a CI role, so an account a role is waiting to move to stops
+  showing a spent window. The time comes from the reset instants the reads already hold; it is one
+  read per reset, through the same pass, once-a-minute budget and lockouts as every other read.
+  CI-role accounts keep their 15-minute read, and get the same one read when a reset falls between
+  two of those.
+- **`--read-ci-usage --all-accounts`** prints every roster account by index, not only the CI-role
+  ones. Only the CI-role accounts are read; the rest show their last figures. E-mail addresses
+  still appear only with `--emails`.
+
 ## [2.11.1] - 2026-10-27
 
 ### Fixed

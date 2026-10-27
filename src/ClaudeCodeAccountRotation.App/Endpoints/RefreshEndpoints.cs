@@ -61,8 +61,11 @@ internal static class RefreshEndpoints
         // table, so the command makes one request instead of polling. Only the
         // wait belongs to the request: the pass still runs on the worker, and a
         // caller that disconnects or times out ends its wait, never the pass.
+        // With all=true the table has a row for every roster account; the pass
+        // still reads only the CI-role ones, and the rest show their last figures.
         mutations.MapPost("/refresh/ci-roles", static async (
             bool? wait,
+            bool? all,
             QuotaRefreshWorker worker,
             QuotaState state,
             RosterFile rosterFile,
@@ -87,7 +90,7 @@ internal static class RefreshEndpoints
             await ceiling.CancelAsync();
 
             return Results.Json(
-                CiUsageReport.For(finished, await rosterFile.ReadAsync(cancellationToken), state, timeProvider.GetUtcNow()),
+                CiUsageReport.For(finished, await rosterFile.ReadAsync(cancellationToken), state, timeProvider.GetUtcNow(), all == true),
                 statusCode: finished ? StatusCodes.Status200OK : StatusCodes.Status202Accepted);
         });
 

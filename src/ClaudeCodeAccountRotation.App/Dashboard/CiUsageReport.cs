@@ -7,7 +7,8 @@ namespace ClaudeCodeAccountRotation.App.Dashboard;
 /// What <c>POST /api/refresh/ci-roles?wait=true</c> answers once the pass it
 /// started has ended, or once the wait has run out with the pass still going:
 /// <see cref="Finished"/> says which. One row per roster entry backing a CI
-/// role, the same filter the pass reads by.
+/// role, the same filter the pass reads by, or per roster entry when every
+/// account is asked for.
 /// </summary>
 internal sealed record CiUsageReport(bool Finished, IReadOnlyList<CiUsageRow> Accounts)
 {
@@ -18,13 +19,13 @@ internal sealed record CiUsageReport(bool Finished, IReadOnlyList<CiUsageRow> Ac
     /// ways. The read column is the last outcome alone: a stranded folder,
     /// which the card names instead, is the page's to show.
     /// </summary>
-    public static CiUsageReport For(bool finished, Roster roster, QuotaState quota, DateTimeOffset capturedAt)
+    public static CiUsageReport For(bool finished, Roster roster, QuotaState quota, DateTimeOffset capturedAt, bool allAccounts = false)
     {
         ArgumentNullException.ThrowIfNull(roster);
         ArgumentNullException.ThrowIfNull(quota);
         return new CiUsageReport(finished, [.. roster.Entries
             .Select(static (entry, index) => (entry, index))
-            .Where(static row => row.entry.BacksCiRole)
+            .Where(row => allAccounts || row.entry.BacksCiRole)
             .Select(row => new CiUsageRow(
                 row.index,
                 [.. row.entry.CiRoles.Select(static assignment => assignment.Role.Name)],
@@ -35,7 +36,7 @@ internal sealed record CiUsageReport(bool Finished, IReadOnlyList<CiUsageRow> Ac
 }
 
 /// <summary>
-/// One CI-role account: its position in <c>roster.json</c>'s <c>accounts</c>
+/// One account, a CI-role one unless every account was asked for: its position in <c>roster.json</c>'s <c>accounts</c>
 /// array, the prefixes of the roles it backs, its e-mail, how its turn in the
 /// last pass went, and its usage as its card shows it.
 /// </summary>

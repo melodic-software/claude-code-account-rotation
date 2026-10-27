@@ -41,9 +41,10 @@ Status: a tagged release exists.
 - The tool never calls the model API.
 - It reads the undocumented usage endpoint with its own User-Agent, which the research rates GRAY
   (no Anthropic statement either way), not ALLOWED. It reads when the dashboard is opened,
-  Refresh is pressed, the rate-limit stop hook fires, `--read-ci-usage` asks, and every 15 minutes
-  for the accounts that back a CI role (owner decision, 2026-10-25), at most once a minute per
-  account. No other account is read on a timer. It reads GitHub only through `gh api`, with gh's
+  Refresh is pressed, the rate-limit stop hook fires, `--read-ci-usage` asks, every 15 minutes
+  for the accounts that back a CI role (owner decision, 2026-10-25), and once for any roster
+  account just after a usage window its last read was captured in resets (issue #373), at most
+  once a minute per account. No other account is read on a timer. It reads GitHub only through `gh api`, with gh's
   own User-Agent and sign-in, and only when you click Check roles, Generate CI token, Push API
   key, or a kill switch's Stop or Start: those read secret names, dates and visibility, never a secret's value, and the kill
   switches' values. Stop or Start reads the variable's visibility first and reads the switch back
@@ -136,8 +137,8 @@ its terms at any time.
   human-click bullet under [Posture](#posture).
 - [ ] Keep the tool's own User-Agent and never imitate Claude Code's: Anthropic has banned tools
   that spoofed the Claude Code client ([public report](https://x.com/trq212/status/2009689809875591565)).
-- [ ] Read usage inside the existing budget: on request, and every 15 minutes only for the
-  accounts that back a CI role. The usage endpoint is undocumented; see the read-budget bullet
+- [ ] Read usage inside the existing budget: on request, every 15 minutes only for the
+  accounts that back a CI role, and once per account after each of its windows resets. The usage endpoint is undocumented; see the read-budget bullet
   under [Posture](#posture).
 - [ ] CI: role secrets are organization secrets visible to all of the organization's repositories,
   on purpose: every lane in the organization reads its role's pair. Each account you own makes one
@@ -160,9 +161,9 @@ its terms at any time.
 | --- | --- | --- |
 | Model inference outside `claude` | No | [Posture](#posture), first bullet |
 | Proxy between `claude` and Anthropic | No | [Posture](#posture), first bullet |
-| Background timer for reads, refreshes or switches | Reads only: every 15 minutes, of the accounts that back a CI role, which can refresh a parked one's token as below. No timer refreshes or switches anything else | [Posture](#posture), switch and read bullets; [`CiUsageSchedule.cs`](src/ClaudeCodeAccountRotation.App/Quota/CiUsageSchedule.cs) |
-| Refreshes a parked token | Only during a read (requested, or the CI-role accounts' 15-minute one): when its recorded expiry has passed, or once when the usage endpoint answers 401, followed by one retried read. Done under the tool's own write gate; a switch holds Claude Code's own refresh lock | [`QuotaRefresh.cs`](src/ClaudeCodeAccountRotation.App/Quota/QuotaRefresh.cs), [`OAuthRefreshLock.cs`](src/ClaudeCodeAccountRotation.App/Adapters/FileSystem/OAuthRefreshLock.cs) |
-| Usage reads | Bounded: at most once a minute per account; on request, and every 15 minutes for CI-role accounts | [Posture](#posture), read bullet; [`RefreshBudget.cs`](src/ClaudeCodeAccountRotation.Core/Quota/RefreshBudget.cs) |
+| Background timer for reads, refreshes or switches | Reads only: every 15 minutes, of the accounts that back a CI role, and once per roster account after each of its usage windows resets; either can refresh a parked one's token as below. No timer refreshes or switches anything else | [Posture](#posture), switch and read bullets; [`CiUsageSchedule.cs`](src/ClaudeCodeAccountRotation.App/Quota/CiUsageSchedule.cs), [`UsageResetSchedule.cs`](src/ClaudeCodeAccountRotation.App/Quota/UsageResetSchedule.cs) |
+| Refreshes a parked token | Only during a read (requested, the CI-role accounts' 15-minute one, or a reset read): when its recorded expiry has passed, or once when the usage endpoint answers 401, followed by one retried read. Done under the tool's own write gate; a switch holds Claude Code's own refresh lock | [`QuotaRefresh.cs`](src/ClaudeCodeAccountRotation.App/Quota/QuotaRefresh.cs), [`OAuthRefreshLock.cs`](src/ClaudeCodeAccountRotation.App/Adapters/FileSystem/OAuthRefreshLock.cs) |
+| Usage reads | Bounded: at most once a minute per account; on request, every 15 minutes for CI-role accounts, and once per account after each window reset | [Posture](#posture), read bullet; [`RefreshBudget.cs`](src/ClaudeCodeAccountRotation.Core/Quota/RefreshBudget.cs) |
 | Usage alerts | Information only, never an action: a line on the page and a desktop notification | [Usage alerts](#usage-alerts) |
 | User-Agent | Its own on every Anthropic request; GitHub reads and writes go through `gh`, with gh's own | [`AnthropicEndpoints.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Http/AnthropicEndpoints.cs), [`GhProcess.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Process/GhProcess.cs) |
 | Admin API reads | Only on Check API key, with a stored Admin key: the organization's key list, metadata only, never a model call | [Posture](#posture); [`AnthropicAdminKeysClient.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Http/AnthropicAdminKeysClient.cs) |
@@ -363,7 +364,11 @@ An account that backs a CI role spends its windows on CI runs as well as on your
 while nobody is watching its card. So the leader reads every such account's usage every 15
 minutes, in the same refresh pass the page starts and under the same once-a-minute budget and
 lockouts; an account the WSL side holds is read there. A tick that finds a pass running or a
-lockout standing is skipped. `claude-code-account-rotation --read-ci-usage` asks the running
+lockout standing is skipped. Separately, every roster account, with or without a role, is read
+once about a minute after a window its last figure was captured in resets, timed from the reset
+instants the reads hold, so an account a role is waiting to move to shows the new window without a
+manual refresh; a CI-role account gets that read too when a reset falls between two 15-minute
+reads. `claude-code-account-rotation --read-ci-usage` asks the running
 instance for the same read at once (`POST /api/refresh/ci-roles?wait=true`, with the headers
 `POST /api/shutdown` takes), for example when a CI run reports its subscription is warning. The
 instance answers when the pass ends, and the command prints one line per account backing a CI
@@ -375,7 +380,9 @@ window's percent and reset time (UTC), as its card shows them:
 1  AUTOMATIONS,REVIEW  read  5-hour 42% resets 2026-10-27 14:30Z, 7-day 61% resets 2026-10-30 09:00Z, Fable 18% resets 2026-10-30 09:00Z
 ```
 
-It prints no e-mail address unless `--emails` is added, which adds that column. It exits
+It prints no e-mail address unless `--emails` is added, which adds that column. `--all-accounts`
+prints every roster account, not only the CI-role ones (`all=true` on the route); only the CI-role
+accounts are read, and the rest show their last figures, with `-` for their roles. It exits
 non-zero with the reason when nothing is running, the read is refused, the pass has not ended
 after 3 minutes (it keeps running, and the dashboard shows it land), or it runs on the follower,
 which has no refresh route: run it with the leader's executable. Without `?wait=true` the route

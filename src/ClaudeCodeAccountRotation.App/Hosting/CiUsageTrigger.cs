@@ -17,7 +17,8 @@ namespace ClaudeCodeAccountRotation.App.Hosting;
 /// <c>--read-ci-usage</c>: asks the running instance for the CI-role pass,
 /// with the headers every dashboard write takes, the way the rate-limit stop
 /// hook asks for its read, and waits in that one request for the pass to end
-/// and the table to come back. Starts nothing of its own. The follower maps no
+/// and the table to come back. <c>--all-accounts</c> adds <c>&amp;all=true</c>,
+/// which widens the table to every roster account and leaves the pass as it is. Starts nothing of its own. The follower maps no
 /// refresh route, so on that side it refuses before sending.
 /// </summary>
 internal static class CiUsageTrigger
@@ -27,7 +28,7 @@ internal static class CiUsageTrigger
     /// <summary>The instance's own wait plus room for its answer, so the instance says it ran out first.</summary>
     public static readonly TimeSpan ClientTimeout = RefreshEndpoints.CiRoleWait + TimeSpan.FromSeconds(30);
 
-    public static async Task<Result<CiUsageReport, string>> PostAsync(HttpClient client, RotationRole role, (string Url, string Token)? running, CancellationToken cancellationToken)
+    public static async Task<Result<CiUsageReport, string>> PostAsync(HttpClient client, RotationRole role, (string Url, string Token)? running, bool allAccounts, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(client);
         if (role == RotationRole.Follower)
@@ -40,7 +41,7 @@ internal static class CiUsageTrigger
             return Result<CiUsageReport, string>.Failure("no instance is running on this side; start it first");
         }
 
-        using HttpRequestMessage request = new(HttpMethod.Post, new Uri(url.TrimEnd('/') + Route));
+        using HttpRequestMessage request = new(HttpMethod.Post, new Uri(url.TrimEnd('/') + Route + (allAccounts ? "&all=true" : string.Empty)));
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         request.Headers.Add(SameOriginMutationFilter.HeaderName, "1");
         try
@@ -85,17 +86,17 @@ internal static class CiUsageTrigger
     }
 
     /// <summary>
-    /// One line per CI-role account: its roster index, its role prefixes, how
+    /// One line per account in the report, the CI-role ones unless every account was asked for: its roster index, its role prefixes, how
     /// its turn in the pass went, and each window as its card shows it. The
     /// e-mail column is there only when asked for, so the default output can be
     /// pasted into a CI log or an issue.
     /// </summary>
-    public static string Format(CiUsageReport report, bool emails)
+    public static string Format(CiUsageReport report, bool emails, bool allAccounts = false)
     {
         ArgumentNullException.ThrowIfNull(report);
         if (report.Accounts.Count == 0)
         {
-            return "No account on the roster backs a CI role.";
+            return allAccounts ? "The roster has no accounts." : "No account on the roster backs a CI role.";
         }
 
         List<string[]> rows = [emails ? ["#", "Roles", "Email", "Read", "Usage"] : ["#", "Roles", "Read", "Usage"]];
@@ -103,7 +104,7 @@ internal static class CiUsageTrigger
         {
             string usage = string.Join(", ", row.Usage.Limits.Select(Limit));
             string index = row.Index.ToString(CultureInfo.InvariantCulture);
-            string roles = string.Join(",", row.Roles);
+            string roles = row.Roles.Count == 0 ? "-" : string.Join(",", row.Roles);
             rows.Add(emails ? [index, roles, row.Email, row.Refresh.State, usage] : [index, roles, row.Refresh.State, usage]);
         }
 

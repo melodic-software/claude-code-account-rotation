@@ -50,7 +50,7 @@ public sealed class CiUsageTriggerTests
         using RecordingHandler handler = new(RecordingHandler.Json(HttpStatusCode.OK, Finished));
         using HttpClient client = new(handler);
 
-        CiUsageReport report = (await CiUsageTrigger.PostAsync(client, RotationRole.Leader, ("http://127.0.0.1:48211", "secret-token"), TestContext.Current.CancellationToken)).Value;
+        CiUsageReport report = (await CiUsageTrigger.PostAsync(client, RotationRole.Leader, ("http://127.0.0.1:48211", "secret-token"), allAccounts: false, TestContext.Current.CancellationToken)).Value;
 
         HttpRequestMessage sent = handler.Requests.Single();
         sent.Method.ShouldBe(HttpMethod.Post);
@@ -68,7 +68,7 @@ public sealed class CiUsageTriggerTests
     {
         using RecordingHandler handler = new(RecordingHandler.Json(HttpStatusCode.OK, Finished));
         using HttpClient client = new(handler);
-        CiUsageReport report = (await CiUsageTrigger.PostAsync(client, RotationRole.Leader, ("http://127.0.0.1:48211", "t"), TestContext.Current.CancellationToken)).Value;
+        CiUsageReport report = (await CiUsageTrigger.PostAsync(client, RotationRole.Leader, ("http://127.0.0.1:48211", "t"), allAccounts: false, TestContext.Current.CancellationToken)).Value;
 
         string table = CiUsageTrigger.Format(report, emails: false);
 
@@ -84,11 +84,38 @@ public sealed class CiUsageTriggerTests
     {
         using RecordingHandler handler = new(RecordingHandler.Json(HttpStatusCode.OK, Finished));
         using HttpClient client = new(handler);
-        CiUsageReport report = (await CiUsageTrigger.PostAsync(client, RotationRole.Leader, ("http://127.0.0.1:48211", "t"), TestContext.Current.CancellationToken)).Value;
+        CiUsageReport report = (await CiUsageTrigger.PostAsync(client, RotationRole.Leader, ("http://127.0.0.1:48211", "t"), allAccounts: false, TestContext.Current.CancellationToken)).Value;
 
         CiUsageTrigger.Format(report, emails: true).ShouldBe(
             "#  Roles               Email           Read  Usage" + Environment.NewLine
             + "2  AUTOMATIONS,REVIEW  ci@example.com  read  5-hour 42.5% resets 2026-10-27 14:30Z, 7-day reset, scoped unknown");
+    }
+
+    [Fact]
+    public async Task AllAccountsAsksForEveryRosterRow()
+    {
+        using RecordingHandler handler = new(RecordingHandler.Json(HttpStatusCode.OK, Finished));
+        using HttpClient client = new(handler);
+
+        (await CiUsageTrigger.PostAsync(client, RotationRole.Leader, ("http://127.0.0.1:48211", "t"), allAccounts: true, TestContext.Current.CancellationToken)).IsSuccess.ShouldBeTrue();
+
+        handler.Requests.Single().RequestUri.ShouldBe(new Uri("http://127.0.0.1:48211/api/refresh/ci-roles?wait=true&all=true"));
+    }
+
+    [Fact]
+    public void AnAccountBackingNoRoleShowsADashForItsRoles()
+    {
+        CiUsageReport report = new(Finished: true, [new CiUsageRow(3, [], "x@example.com", new RefreshStateView("read", "Read just now.", null), new UsageView("refresh", null, [], null))]);
+
+        CiUsageTrigger.Format(report, emails: false).ShouldBe(
+            "#  Roles  Read  Usage" + Environment.NewLine
+            + "3  -      read");
+    }
+
+    [Fact]
+    public void AnEmptyRosterSaysSoWhenEveryAccountWasAskedFor()
+    {
+        CiUsageTrigger.Format(new CiUsageReport(Finished: true, []), emails: false, allAccounts: true).ShouldBe("The roster has no accounts.");
     }
 
     [Fact]
@@ -103,7 +130,7 @@ public sealed class CiUsageTriggerTests
         using RecordingHandler handler = new(RecordingHandler.Json(HttpStatusCode.Accepted, """{"finished":false,"accounts":[]}"""));
         using HttpClient client = new(handler);
 
-        (await CiUsageTrigger.PostAsync(client, RotationRole.Leader, ("http://127.0.0.1:48211", "t"), TestContext.Current.CancellationToken)).Error
+        (await CiUsageTrigger.PostAsync(client, RotationRole.Leader, ("http://127.0.0.1:48211", "t"), allAccounts: false, TestContext.Current.CancellationToken)).Error
             .ShouldBe("the read started but had not finished after 3 minutes; it is still running, and the dashboard shows each account as it lands");
     }
 
@@ -114,7 +141,7 @@ public sealed class CiUsageTriggerTests
         using RecordingHandler handler = new(RecordingHandler.Json(HttpStatusCode.Accepted, """{"started":true}"""));
         using HttpClient client = new(handler);
 
-        (await CiUsageTrigger.PostAsync(client, RotationRole.Leader, ("http://127.0.0.1:48211", "t"), TestContext.Current.CancellationToken)).Error
+        (await CiUsageTrigger.PostAsync(client, RotationRole.Leader, ("http://127.0.0.1:48211", "t"), allAccounts: false, TestContext.Current.CancellationToken)).Error
             .ShouldBe("the instance started the read but does not wait for it; upgrade it to this release to get the table");
     }
 
@@ -124,7 +151,7 @@ public sealed class CiUsageTriggerTests
         using RecordingHandler handler = new(RecordingHandler.Json(HttpStatusCode.Conflict, """{"refusal":"RefreshInProgress","message":"A refresh is already running"}"""));
         using HttpClient client = new(handler);
 
-        (await CiUsageTrigger.PostAsync(client, RotationRole.Leader, ("http://127.0.0.1:48211", "t"), TestContext.Current.CancellationToken)).Error
+        (await CiUsageTrigger.PostAsync(client, RotationRole.Leader, ("http://127.0.0.1:48211", "t"), allAccounts: false, TestContext.Current.CancellationToken)).Error
             .ShouldBe("the instance refused the read (409): A refresh is already running");
     }
 
@@ -134,7 +161,7 @@ public sealed class CiUsageTriggerTests
         using RecordingHandler handler = new();
         using HttpClient client = new(handler);
 
-        (await CiUsageTrigger.PostAsync(client, RotationRole.Leader, null, TestContext.Current.CancellationToken)).IsFailure.ShouldBeTrue();
+        (await CiUsageTrigger.PostAsync(client, RotationRole.Leader, null, allAccounts: false, TestContext.Current.CancellationToken)).IsFailure.ShouldBeTrue();
         handler.Requests.ShouldBeEmpty();
     }
 
@@ -144,7 +171,7 @@ public sealed class CiUsageTriggerTests
         using RecordingHandler handler = new(new HttpResponseMessage(HttpStatusCode.NotFound));
         using HttpClient client = new(handler);
 
-        (await CiUsageTrigger.PostAsync(client, RotationRole.Follower, ("http://127.0.0.1:48212", "t"), TestContext.Current.CancellationToken)).Error
+        (await CiUsageTrigger.PostAsync(client, RotationRole.Follower, ("http://127.0.0.1:48212", "t"), allAccounts: false, TestContext.Current.CancellationToken)).Error
             .ShouldBe("this is the follower, which runs no usage read; run --read-ci-usage with the leader's executable");
         handler.Requests.ShouldBeEmpty();
     }
