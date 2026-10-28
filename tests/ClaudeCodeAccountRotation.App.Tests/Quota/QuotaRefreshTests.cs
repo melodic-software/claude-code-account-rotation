@@ -741,7 +741,7 @@ public sealed class QuotaRefreshTests
         outcome.Kind.ShouldBe(RefreshOutcomeKind.LoginDead);
         outcome.Message.ShouldBe(RefreshMessages.LoginDead);
         CredentialPair parked = (await harness.Store.ReadParkedAsync(folder, Token))!;
-        harness.State.IsLoginDead(RefreshHarness.Email("a@example.com"), parked.Fingerprint).ShouldBeTrue();
+        harness.State.IsLoginDead(RefreshHarness.Email("a@example.com"), parked.Fingerprint, harness.Clock.GetUtcNow()).ShouldBeTrue();
         harness.RefreshLog.Lines.ShouldContain(line => line.Contains("a@example.com", StringComparison.Ordinal) && line.Contains("is dead", StringComparison.Ordinal));
         harness.RefreshLog.Lines.ShouldAllBe(line => !line.Contains("refresh-a", StringComparison.Ordinal));
 
@@ -769,13 +769,85 @@ public sealed class QuotaRefreshTests
 
             bool last = pass == QuotaRefresh.BadRequestsBeforeDead;
             harness.OutcomeFor("a@example.com")!.Kind.ShouldBe(last ? RefreshOutcomeKind.LoginDead : RefreshOutcomeKind.TokenRefreshFailed);
-            harness.State.IsLoginDead(RefreshHarness.Email("a@example.com"), parked.Fingerprint).ShouldBe(last);
+            harness.State.IsLoginDead(RefreshHarness.Email("a@example.com"), parked.Fingerprint, harness.Clock.GetUtcNow()).ShouldBe(last);
+            harness.State.IsLoginRejected(RefreshHarness.Email("a@example.com"), parked.Fingerprint).ShouldBeFalse();
             harness.RefreshLog.Lines.ShouldContain(line => line.Contains("(" + pass + " of 3 in a row", StringComparison.Ordinal));
         }
 
         await harness.Engine.RunAsync(RefreshRequest.All, Token);
 
         harness.Tokens.Calls.ShouldBe(QuotaRefresh.BadRequestsBeforeDead);
+    }
+
+    [Fact]
+    public async Task AMarkFromUnexplainedBadRequestsLapsesAfterSixHours()
+    {
+        // The run may have been the endpoint's fault, so its mark is not for
+        // good: once it lapses the pair is tried again, and a fourth 400 marks
+        // it for another six hours.
+        using RefreshHarness harness = new();
+        string folder = await harness.ParkAsync("a@example.com", "refresh-a", harness.Expired, Token);
+        CredentialPair parked = (await harness.Store.ReadParkedAsync(folder, Token))!;
+        for (int pass = 0; pass < QuotaRefresh.BadRequestsBeforeDead; pass++)
+        {
+            harness.Tokens.Answers.Enqueue(ScriptedTokens.Failed(UsageReadFailureKind.RefreshBadRequest));
+            await harness.Engine.RunAsync(RefreshRequest.All, Token);
+            harness.Clock.Advance(TimeSpan.FromMinutes(5));
+        }
+
+        harness.Clock.Advance(QuotaRefresh.BadRequestMarkLifetime - TimeSpan.FromMinutes(10));
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+        harness.Tokens.Calls.ShouldBe(3);
+
+        harness.Clock.Advance(TimeSpan.FromMinutes(10));
+        harness.State.IsLoginDead(RefreshHarness.Email("a@example.com"), parked.Fingerprint, harness.Clock.GetUtcNow()).ShouldBeFalse();
+        harness.Tokens.Answers.Enqueue(ScriptedTokens.Failed(UsageReadFailureKind.RefreshBadRequest));
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.Tokens.Calls.ShouldBe(4);
+        harness.OutcomeFor("a@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.LoginDead);
+        harness.State.IsLoginDead(RefreshHarness.Email("a@example.com"), parked.Fingerprint, harness.Clock.GetUtcNow()).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task APassInWhichEveryRefreshGotAnUnexplainedBadRequestCountsAgainstNoLogin()
+    {
+        // Every account refused at once is the endpoint, not ten logins dying
+        // together (issue 377's shape), so no pair's run grows.
+        using RefreshHarness harness = new();
+        await harness.ParkAsync("a@example.com", "refresh-a", harness.Expired, Token);
+        await harness.ParkAsync("b@example.com", "refresh-b", harness.Expired, Token);
+        harness.Tokens.AnswerAt = static _ => ScriptedTokens.Failed(UsageReadFailureKind.RefreshBadRequest);
+        for (int pass = 0; pass < QuotaRefresh.BadRequestsBeforeDead + 1; pass++)
+        {
+            await harness.Engine.RunAsync(RefreshRequest.All, Token);
+            harness.Clock.Advance(TimeSpan.FromMinutes(5));
+        }
+
+        harness.Tokens.Calls.ShouldBe(2 * (QuotaRefresh.BadRequestsBeforeDead + 1));
+        harness.OutcomeFor("a@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.TokenRefreshFailed);
+        harness.OutcomeFor("b@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.TokenRefreshFailed);
+        harness.RefreshLog.Lines.Count(line => line.Contains("token endpoint is treated as at fault", StringComparison.Ordinal))
+            .ShouldBe(QuotaRefresh.BadRequestsBeforeDead + 1);
+        harness.RefreshLog.Lines.ShouldAllBe(line => !line.Contains("in a row before", StringComparison.Ordinal));
+        harness.State.RecordRefreshBadRequest(RefreshHarness.Email("a@example.com"), CredentialFiles.Pair("refresh-a").Fingerprint).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task AnUnexplainedBadRequestBesideASuccessfulRefreshIsCounted()
+    {
+        using RefreshHarness harness = new();
+        await harness.ParkAsync("a@example.com", "refresh-a", harness.Expired, Token);
+        await harness.ParkAsync("b@example.com", "refresh-b", harness.Expired, Token);
+        harness.Tokens.AnswerAt = _ => harness.Tokens.RefreshTokens[^1] == "refresh-a"
+            ? ScriptedTokens.Failed(UsageReadFailureKind.RefreshBadRequest)
+            : ScriptedTokens.Rotated("b2", harness.Valid, harness.Clock.GetUtcNow().AddDays(28));
+        harness.Usage.Answers.Enqueue(ScriptedUsage.Ok());
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.RefreshLog.Lines.ShouldContain(line => line.Contains("a@example.com", StringComparison.Ordinal) && line.Contains("(1 of 3 in a row", StringComparison.Ordinal));
+        harness.State.RecordRefreshBadRequest(RefreshHarness.Email("a@example.com"), CredentialFiles.Pair("refresh-a").Fingerprint).ShouldBe(2);
     }
 
     [Fact]
@@ -798,7 +870,7 @@ public sealed class QuotaRefreshTests
         harness.OutcomeFor("a@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.Read);
         // The run ended with the success: the same pair would start again at one.
         RefreshTokenFingerprint original = CredentialFiles.Pair("refresh-a").Fingerprint;
-        harness.State.IsLoginDead(RefreshHarness.Email("a@example.com"), original).ShouldBeFalse();
+        harness.State.IsLoginDead(RefreshHarness.Email("a@example.com"), original, harness.Clock.GetUtcNow()).ShouldBeFalse();
         harness.State.RecordRefreshBadRequest(RefreshHarness.Email("a@example.com"), original).ShouldBe(1);
     }
 

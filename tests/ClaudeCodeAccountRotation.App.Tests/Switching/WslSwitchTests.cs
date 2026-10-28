@@ -595,7 +595,7 @@ public sealed class WslSwitchTests
 
         reconciled.Outcome.ShouldContain("finished from " + nameof(WslSwitchStep.Imported));
         // Everything the park needs was in the journal, so no round trip was made.
-        harness.Side.Calls.ShouldNotContain("Import");
+        harness.Side.Calls.ShouldBeEmpty();
         (await FingerprintAtAsync(harness.PairPath(Outgoing))).ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
         File.Exists(Path.Combine(harness.FolderFor(Outgoing), ProfileFolderStore.ProfileFileName)).ShouldBeTrue();
         File.Exists(harness.JournalPath).ShouldBeFalse();
@@ -619,7 +619,7 @@ public sealed class WslSwitchTests
         WslReconciliation reconciled = await coordinator.ReconcileAsync(Token);
 
         reconciled.Outcome.ShouldContain("finished from " + nameof(WslSwitchStep.Parked));
-        harness.Side.Calls.ShouldNotContain("Import");
+        harness.Side.Calls.ShouldBeEmpty();
         File.Exists(harness.JournalPath).ShouldBeFalse();
         (await FingerprintAtAsync(harness.PairPath(Outgoing))).ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
         (await HolderRecordFile.ReadAsync(harness.FolderFor(Incoming), Token))!.Side.ShouldBe(SideName.Wsl);
@@ -681,7 +681,7 @@ public sealed class WslSwitchTests
             await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), quarantineForeignFamily: false, Token);
 
         result.Error.ShouldBe(SwitchRefusal.SideOffline);
-        harness.Side.Calls.ShouldNotContain("Import");
+        harness.Side.Calls.ShouldBeEmpty();
         (await FingerprintAtAsync(harness.PairPath(Incoming))).ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
     }
 
@@ -787,7 +787,8 @@ public sealed class WslSwitchTests
         result.Error.ShouldBe(SwitchRefusal.TargetLoginExpired);
         (await FingerprintAtAsync(harness.PairPath(Incoming))).ShouldBe(incoming);
         File.Exists(harness.JournalPath).ShouldBeFalse();
-        harness.Side.Calls.ShouldNotContain("Import");
+        // The plan reads that side's dashboard to learn who is live there, and asks nothing more.
+        harness.Side.Calls.ShouldBe(["Dashboard"]);
     }
 
     [Fact]
@@ -815,6 +816,47 @@ public sealed class WslSwitchTests
             FileSystemCredentialPairStore.FileName);
         (await FingerprintAtAsync(quarantined)).ShouldBe(dead);
         File.Exists(harness.JournalPath).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task APairMarkedOnlyByUnexplainedBadRequestsIsNotSetAside()
+    {
+        // A run of unexplained 400s may be the endpoint's own fault, so that
+        // mark never moves a pair out of its slot: only invalid_grant or a 401
+        // does. The refusal stands exactly as before.
+        using WslSwitchHarness harness = new();
+        await SetUpAsync(harness);
+        RefreshTokenFingerprint parked = await harness.ParkedSlotAsync(Outgoing, "refresh-maybe", Token);
+        harness.Quota.RecordLoginDead(WslSwitchHarness.Email(Outgoing), parked, harness.Clock.GetUtcNow().AddHours(6));
+        harness.Side.OutgoingRefreshToken = "refresh-relogin";
+        using WslSwitch coordinator = harness.Coordinator();
+
+        Result<WslSwitchOutcome, SwitchRefusal> result =
+            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), quarantineForeignFamily: false, Token);
+
+        result.Error.ShouldBe(SwitchRefusal.SideLiveAccountAmbiguous);
+        (await FingerprintAtAsync(harness.PairPath(Outgoing))).ShouldBe(parked);
+        Directory.Exists(harness.Options.SupersededQuarantineDirectory).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task ASwitchToAPairMarkedByUnexplainedBadRequestsIsRefusedUntilTheMarkLapses()
+    {
+        using WslSwitchHarness harness = new();
+        RefreshTokenFingerprint incoming = await SetUpAsync(harness);
+        harness.Quota.RecordLoginDead(WslSwitchHarness.Email(Incoming), incoming, harness.Clock.GetUtcNow().AddHours(6));
+        using WslSwitch coordinator = harness.Coordinator();
+
+        Result<WslSwitchOutcome, SwitchRefusal> refused =
+            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), quarantineForeignFamily: false, Token);
+
+        refused.Error.ShouldBe(SwitchRefusal.TargetLoginExpired);
+
+        harness.Clock.Advance(TimeSpan.FromHours(6));
+        Result<WslSwitchOutcome, SwitchRefusal> allowed =
+            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), quarantineForeignFamily: false, Token);
+
+        allowed.IsSuccess.ShouldBeTrue(allowed.IsFailure ? allowed.Error.ToString() : string.Empty);
     }
 
     [Fact]

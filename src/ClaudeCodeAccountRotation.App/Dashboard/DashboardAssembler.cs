@@ -214,7 +214,7 @@ internal sealed partial class DashboardAssembler(
                 await SlotAsync(profile.Email, profile.FolderPath, profile.HasCredentials, hold, warnings, cancellationToken),
                 sides,
                 cliLoggedOut,
-                loginDead: quota.IsLoginDead(profile.Email, parkedPair?.Fingerprint)));
+                loginDead: quota.IsLoginDead(profile.Email, parkedPair?.Fingerprint, capturedAt)));
         }
 
         // A roster entry the operator added but has not logged in yet owns no

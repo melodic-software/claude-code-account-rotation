@@ -29,7 +29,7 @@ internal sealed class QuotaState
     private readonly Dictionary<AccountEmail, UsageSnapshot> _latest = [];
     private readonly Dictionary<AccountEmail, UsageSnapshot> _observed = [];
     private readonly Dictionary<AccountEmail, RefreshOutcome> _outcomes = [];
-    private readonly Dictionary<AccountEmail, RefreshTokenFingerprint> _deadLogins = [];
+    private readonly Dictionary<AccountEmail, (RefreshTokenFingerprint Fingerprint, DateTimeOffset? Until)> _deadLogins = [];
     private readonly Dictionary<AccountEmail, (RefreshTokenFingerprint Fingerprint, int Count)> _badRequests = [];
     private readonly Dictionary<string, string> _recoveryWarnings =
         new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
@@ -281,24 +281,45 @@ internal sealed class QuotaState
     /// <summary>
     /// Records that the token endpoint refused this account's parked refresh
     /// token. Keyed by the pair's fingerprint, so a new login, which writes a
-    /// new pair, ends it without anything having to clear it. A restart forgets
-    /// it like everything else here, and the next pass's one refusal records it
-    /// again.
+    /// new pair, ends it without anything having to clear it. With no
+    /// <paramref name="until"/> the refusal was <c>invalid_grant</c> or a 401
+    /// and the mark stands; with one it came from a run of unexplained 400s and
+    /// lapses then, so the pair is tried again. A restart forgets either, and
+    /// the next pass's refusal records it again.
     /// </summary>
-    public void RecordLoginDead(AccountEmail account, RefreshTokenFingerprint fingerprint)
+    public void RecordLoginDead(AccountEmail account, RefreshTokenFingerprint fingerprint, DateTimeOffset? until = null)
     {
         lock (_mutex)
         {
-            _deadLogins[account] = fingerprint;
+            _deadLogins[account] = (fingerprint, until);
         }
     }
 
-    /// <summary>Whether <paramref name="fingerprint"/> is the parked pair the token endpoint last refused for this account.</summary>
-    public bool IsLoginDead(AccountEmail account, RefreshTokenFingerprint? fingerprint)
+    /// <summary>Whether <paramref name="fingerprint"/> is the parked pair the token endpoint last refused for this account, and the mark has not lapsed by <paramref name="now"/>.</summary>
+    public bool IsLoginDead(AccountEmail account, RefreshTokenFingerprint? fingerprint, DateTimeOffset now)
     {
         lock (_mutex)
         {
-            return fingerprint is not null && _deadLogins.TryGetValue(account, out RefreshTokenFingerprint dead) && dead == fingerprint;
+            return fingerprint is not null
+                && _deadLogins.TryGetValue(account, out (RefreshTokenFingerprint Fingerprint, DateTimeOffset? Until) mark)
+                && mark.Fingerprint == fingerprint
+                && (mark.Until is null || now < mark.Until);
+        }
+    }
+
+    /// <summary>
+    /// Whether the token endpoint refused this pair outright, with
+    /// <c>invalid_grant</c> or a 401. Only such a pair may be moved out of its
+    /// slot: a mark from unexplained 400s may be an endpoint fault.
+    /// </summary>
+    public bool IsLoginRejected(AccountEmail account, RefreshTokenFingerprint? fingerprint)
+    {
+        lock (_mutex)
+        {
+            return fingerprint is not null
+                && _deadLogins.TryGetValue(account, out (RefreshTokenFingerprint Fingerprint, DateTimeOffset? Until) mark)
+                && mark.Fingerprint == fingerprint
+                && mark.Until is null;
         }
     }
 

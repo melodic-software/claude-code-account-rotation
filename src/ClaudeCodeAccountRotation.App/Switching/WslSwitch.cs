@@ -912,7 +912,7 @@ internal sealed partial class WslSwitch : IDisposable
             // A login the token endpoint refused is as dead as an expired one,
             // and handing it over is what leaves that side asking for /login.
             if ((pair.LoginExpiresAt is DateTimeOffset expiry && expiry <= _timeProvider.GetUtcNow())
-                || _quota.IsLoginDead(arriving, pair.Fingerprint))
+                || _quota.IsLoginDead(arriving, pair.Fingerprint, _timeProvider.GetUtcNow()))
             {
                 return Refuse(SwitchRefusal.TargetLoginExpired);
             }
@@ -1494,7 +1494,9 @@ internal sealed partial class WslSwitch : IDisposable
 
     /// <summary>
     /// The pair parked in the outgoing account's slot when the token endpoint
-    /// has refused its refresh token and it is not the pair that side reports,
+    /// has refused its refresh token outright (<c>invalid_grant</c> or a 401,
+    /// never a run of unexplained 400s, which may be the endpoint's own fault)
+    /// and it is not the pair that side reports,
     /// or null when it is alive, unknown, unreadable, the side's own lineage, or
     /// a login is writing the folder.
     /// </summary>
@@ -1519,7 +1521,7 @@ internal sealed partial class WslSwitch : IDisposable
             return null;
         }
 
-        return parked is not null && parked.Fingerprint != sideFingerprint && _quota.IsLoginDead(outgoing, parked.Fingerprint)
+        return parked is not null && parked.Fingerprint != sideFingerprint && _quota.IsLoginRejected(outgoing, parked.Fingerprint)
             ? parked
             : null;
     }

@@ -21,12 +21,13 @@ All notable changes to this project are documented in this file. The format foll
   The refusal is now its own outcome: the log names the OAuth error code, the card reads "login
   expired" and offers Log in again, no refresh is sent for that pair again until a new login
   replaces it, and a switch to it on either side is refused with `TargetLoginExpired`. Any other
-  400 is retried and logged with its code and a count, and the third in a row on one pair counts
-  as rejected too. The mark is held in memory; after a restart the next pass's refusal sets it
-  again.
+  400 is retried and logged with its code and a count. The third in a row on one pair marks its
+  login dead for 6 hours, after which it is tried again; a pass in which every refresh got such a
+  400 is logged once as an endpoint fault and counted against no pair. The marks are held in
+  memory; after a restart the next refusal sets them again.
 - **A dead parked pair no longer blocks a switch of the other side.** When that side is live on an
   account through a login made there, and the pair still parked in that account's slot is one the
-  token endpoint rejected, the switch moves the dead pair to the superseded quarantine and parks
+  token endpoint rejected with `invalid_grant` or a 401, the switch moves the dead pair to the superseded quarantine and parks
   that side's pair in its place, instead of refusing with `SideLiveAccountAmbiguous`. A parked pair
   nothing has rejected is still refused as before. While an online side is live on an account,
   that account's card here offers no login, which would put a second live family beside that

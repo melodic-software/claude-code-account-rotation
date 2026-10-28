@@ -96,6 +96,7 @@ internal static class RefreshMessages
     public const string Read = "read just now";
     public const string TokenRefreshFailed = "the token endpoint did not answer with new credentials";
     public const string LoginDead = "Anthropic rejected this login; click Log in again";
+    public const string LoginPresumedDead = "the token endpoint refused this login 3 times in a row; click Log in again, or it is tried again in 6 h";
     public const string Stranded = "credentials stranded in recovery";
     public const string Lost = "credentials lost; log in again";
     public const string ReadFailedTransport = "the usage endpoint could not be read";
