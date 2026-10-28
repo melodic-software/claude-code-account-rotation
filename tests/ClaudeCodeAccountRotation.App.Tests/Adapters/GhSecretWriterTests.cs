@@ -160,8 +160,8 @@ public sealed class GhSecretWriterTests : IDisposable
     public async Task FourSetsInARowStartAtLeastOneSecondAfterTheLastEnded()
     {
         string log = Path.Combine(_root, "calls");
-        // Each call logs when it started and when it ended, in nanoseconds.
-        string gh = Script("echo \"start $(date +%s%N)\" >> '" + log + "'\ncat > /dev/null\necho \"end $(date +%s%N)\" >> '" + log + "'\n");
+        // Each call logs when it started and when it ended, in nanoseconds on the monotonic clock.
+        string gh = Script("echo \"start " + StandInScripts.MonotonicNanoseconds + "\" >> '" + log + "'\ncat > /dev/null\necho \"end " + StandInScripts.MonotonicNanoseconds + "\" >> '" + log + "'\n");
         GhSecretWriter writer = new(gh, TimeSpan.FromSeconds(30), _gate);
 
         foreach (string name in new[] { "A_CLAUDE_CODE_OAUTH_TOKEN", "A_CLAUDE_API_KEY", "B_CLAUDE_CODE_OAUTH_TOKEN", "B_CLAUDE_API_KEY" })
