@@ -380,12 +380,15 @@ internal sealed partial class FollowerImport : IDisposable, IStaleIdentityRepair
     /// lock as a commit, so an import cannot swap it between the ownership check
     /// and the read, and the lock is released before the request goes out.
     /// Nothing here refreshes a token: an expired or rejected access token is
-    /// the session's to renew, and the answer says so.
+    /// the session's to renew, and the answer says so. The read goes through
+    /// this side's CLI first (<paramref name="cli"/>), and through the usage
+    /// endpoint when the CLI gives no fresh answer.
     /// </summary>
     public async Task<PeerUsageRead> ReadUsageAsync(
         AccountEmail email,
         RefreshTokenFingerprint? expected,
         IUsageEndpointClient usage,
+        ILiveUsageReader? cli,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(usage);
@@ -432,7 +435,14 @@ internal sealed partial class FollowerImport : IDisposable, IStaleIdentityRepair
             return new PeerUsageRead(PeerUsageOutcome.SessionWillRefresh, null, null, "the live access token has expired");
         }
 
-        Result<JsonDocument, UsageReadFailure> read = await usage.ReadUsageAsync(live.AccessToken, cancellationToken);
+        Result<JsonDocument, UsageReadFailure> read = (await Quota.LiveUsageRead.ReadAsync(
+            cli,
+            usage,
+            live.AccessToken,
+            email,
+            async token => (await _stateFile.ReadAccountBlockAsync(token))?.Email,
+            _logger,
+            cancellationToken)).Read;
         if (read.IsSuccess)
         {
             using JsonDocument body = read.Value;

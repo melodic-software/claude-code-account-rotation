@@ -251,6 +251,7 @@ internal static class AppComposition
             OperatingSystem.IsWindows(),
             Environment.SystemDirectory);
         AddCli(services, cli);
+        AddLiveUsageReader(services, cli, configuration);
         // The login child factory: a real process, or a start that reports why no
         // CLI could be resolved rather than throwing at the first login.
         LoginChildFactory loginChild = cli.IsSuccess
@@ -556,6 +557,10 @@ internal static class AppComposition
         // POSTs a refresh token, so nothing here could rotate one.
         services.AddSingleton(new RateLimitGuardTeeFileReader(configuration.StatuslineTeePath));
         AddUsageClient(services, AnthropicEndpoints.UserAgent(configuration.UserAgentProductToken, Version));
+        AddLiveUsageReader(
+            services,
+            ClaudeExecutableLocator.Locate(configuration.ClaudeExecutable, Environment.GetEnvironmentVariable("PATH"), OperatingSystem.IsWindows(), Environment.SystemDirectory),
+            configuration);
         services.AddSingleton(new ImportJournal(configuration.AppDataDirectory));
         services.AddSingleton(provider => new StagedImportCredentialPairStore(
             configuration.LiveConfigDirectory,
@@ -708,6 +713,36 @@ internal static class AppComposition
             provider.GetRequiredService<ILogger<ClaudeCliProcessAuthStatus>>()));
         services.AddSingleton<IClaudeCliAuthStatus>(static provider => provider.GetRequiredService<ClaudeCliProcessAuthStatus>());
         services.AddSingleton<IClaudeCliLogout>(static provider => provider.GetRequiredService<ClaudeCliProcessAuthStatus>());
+    }
+
+    /// <summary>
+    /// The live account's usage read through the CLI, on either side, under
+    /// this side's own live directory and from a folder of the tool's own. With
+    /// no CLI it reports why, and every live read goes to the usage endpoint.
+    /// </summary>
+    private static void AddLiveUsageReader(IServiceCollection services, Result<ClaudeExecutable, string> located, ClaudeCodeAccountRotationConfiguration configuration)
+    {
+        if (located.IsFailure)
+        {
+            services.AddSingleton<ILiveUsageReader>(new UnavailableLiveUsageReader(located.Error));
+            return;
+        }
+
+        ClaudeExecutable executable = located.Value;
+        services.AddSingleton<ILiveUsageReader>(provider => new ClaudeCliUsageReader(
+            executable,
+            configuration.LiveConfigDirectory,
+            configuration.StateFilePath,
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            Path.Combine(configuration.AppDataDirectory, "cli-usage"),
+            ClaudeCliUsageReader.Bound,
+            provider.GetRequiredService<TimeProvider>()));
+    }
+
+    private sealed class UnavailableLiveUsageReader(string reason) : ILiveUsageReader
+    {
+        public Task<Result<LiveUsageAnswer, string>> ReadAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(Result<LiveUsageAnswer, string>.Failure(reason));
     }
 
     /// <summary>Stands in when no CLI could be resolved: every call reports why.</summary>

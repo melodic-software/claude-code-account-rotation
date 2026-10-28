@@ -88,7 +88,8 @@ internal sealed class RefreshHarness : IDisposable
             // the gate against a pass asserts the refusal, not the patience, and
             // the two seconds would be two seconds of a test suite's life.
             GateWait,
-            _peers = side is null ? null : new PeerRegistry([new Peer(side, null, ProfilesRoot)]));
+            _peers = side is null ? null : new PeerRegistry([new Peer(side, null, ProfilesRoot)]),
+            liveUsage: LiveUsage);
     }
 
     /// <summary>How long this harness's engine waits for the mutation gate before it gives the turn up.</summary>
@@ -110,6 +111,8 @@ internal sealed class RefreshHarness : IDisposable
     public TestClock Clock { get; } = new(new DateTimeOffset(2026, 9, 7, 12, 0, 0, TimeSpan.Zero));
 
     public ScriptedUsage Usage { get; } = new();
+
+    public ScriptedLiveUsage LiveUsage { get; } = new();
 
     public ScriptedTokens Tokens { get; } = new();
 

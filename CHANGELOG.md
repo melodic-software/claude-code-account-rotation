@@ -25,6 +25,12 @@ All notable changes to this project are documented in this file. The format foll
   another credential change or an unanswering endpoint stops the retry, the switch is refused with
   `LoginRetryNotSent` and a sentence naming those. A login refused outright is still refused with
   no request sent.
+- **The live account's usage is read through the `claude` binary.** On each side, the live
+  account is read with the binary's `get_usage` control request, in safe mode and with
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` removed, from an empty folder in the app data. An
+  answer older than the run is refused. Parked accounts, and any live read the binary cannot
+  answer, still go to the usage endpoint, and the log says why
+  ([#220](https://github.com/melodic-software/claude-code-account-rotation/issues/220)).
 
 ### Fixed
 

@@ -67,6 +67,43 @@ internal sealed class ScriptedUsage : IUsageEndpointClient
     }
 }
 
+/// <summary>
+/// The CLI's live usage read as a script. With nothing queued it answers as a
+/// machine with no CLI does, so every live read falls back to the endpoint
+/// double exactly as it did before the CLI read existed.
+/// </summary>
+internal sealed class ScriptedLiveUsage : ILiveUsageReader
+{
+    public const string NoCli = "no CLI in this test";
+
+    public Queue<Result<LiveUsageAnswer, string>> Answers { get; } = new();
+
+    /// <summary>Runs inside the read, before it answers: the seam a test uses to switch the live account mid-run.</summary>
+    public Action? BeforeAnswer { get; set; }
+
+    public int Calls { get; private set; }
+
+    public static Result<LiveUsageAnswer, string> Ok(DateTimeOffset capturedAt, double percent = 61) =>
+        Result<LiveUsageAnswer, string>.Success(new LiveUsageAnswer(
+            (System.Text.Json.Nodes.JsonObject)System.Text.Json.Nodes.JsonNode.Parse("{\"limits\":[{\"kind\":\"session\",\"percent\":" + percent.ToString(System.Globalization.CultureInfo.InvariantCulture) + ",\"is_active\":true}]}")!,
+            capturedAt));
+
+    /// <summary>When set, the read throws it instead of answering.</summary>
+    public Exception? Throws { get; set; }
+
+    public Task<Result<LiveUsageAnswer, string>> ReadAsync(CancellationToken cancellationToken)
+    {
+        Calls++;
+        BeforeAnswer?.Invoke();
+        if (Throws is not null)
+        {
+            throw Throws;
+        }
+
+        return Task.FromResult(Answers.Count > 0 ? Answers.Dequeue() : Result<LiveUsageAnswer, string>.Failure(NoCli));
+    }
+}
+
 /// <summary>The token endpoint as a script, keeping every refresh token it was asked to rotate.</summary>
 internal sealed class ScriptedTokens : ITokenRefreshClient
 {

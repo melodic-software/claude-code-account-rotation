@@ -110,6 +110,8 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
 
     public CannedCli Cli { get; } = new();
 
+    public Quota.ScriptedLiveUsage LiveUsage { get; } = new();
+
     /// <summary>Moved by hand, so the ten-minute login expiry is asserted without a sleep.</summary>
     public TestClock Clock { get; } = new(new DateTimeOffset(2026, 9, 7, 12, 0, 0, TimeSpan.Zero));
 
@@ -265,6 +267,8 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
             // it seeded would otherwise get a read it never scripted.
             services.Replace(ServiceDescriptor.Singleton<UsageResetDelay>(static (_, cancellationToken) => Task.Delay(Timeout.Infinite, cancellationToken)));
             services.Replace(ServiceDescriptor.Singleton<IClaudeCliAuthStatus>(Cli));
+            // Never the CLI on this machine: a live read falls back to the stub.
+            services.Replace(ServiceDescriptor.Singleton<ILiveUsageReader>(LiveUsage));
             // Both ports, or a removal would resolve the real CLI on this machine.
             services.Replace(ServiceDescriptor.Singleton<IClaudeCliLogout>(Cli));
             services.Replace(ServiceDescriptor.Singleton<IBrowserLauncher>(Browser));
