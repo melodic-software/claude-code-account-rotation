@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **The live account's usage is read through the `claude` binary.** On each side, the live
+  account is read with the binary's `get_usage` control request, in safe mode and with
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` removed, from an empty folder in the app data. An
+  answer older than the run is refused. Parked accounts, and any live read the binary cannot
+  answer, still go to the usage endpoint, and the log says why
+  ([#220](https://github.com/melodic-software/claude-code-account-rotation/issues/220)).
+
 ## [2.13.0] - 2026-10-28
 
 ### Changed

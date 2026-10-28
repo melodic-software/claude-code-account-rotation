@@ -39,8 +39,22 @@ Status: a tagged release exists.
 - Every switch is a human click; nothing rotates on its own. [Usage alerts](#usage-alerts) never
   act: they only say that an account backing a CI role is near the end of a usage window.
 - The tool never calls the model API.
-- It reads the undocumented usage endpoint with its own User-Agent, which the research rates GRAY
-  (no Anthropic statement either way), not ALLOWED. It reads when the dashboard is opened,
+- The live account on each side (Windows, and a WSL follower) is read through the unmodified
+  `claude` binary: one `get_usage` control request over `--input-format stream-json`, which makes
+  no model call, run under that side's own live config directory, from an empty folder in the
+  tool's app data, in `--safe-mode` so none of your hooks, plugins or MCP servers start for it.
+  The tool removes `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` from that child's environment,
+  because with it set the binary answers with its last saved figures as if they were current
+  ([#220](https://github.com/melodic-software/claude-code-account-rotation/issues/220)). Without
+  that flag the binary may also send its own telemetry and check for updates, on every live read,
+  the CI-role timer's included. An answer captured more than a minute before the run started, or
+  carrying no capture time, is refused. A parked account is never handed to the binary: its
+  folder holds the only copy of its refresh token, and only the tool refreshes it.
+- Every other read, and a live read the binary could not answer (no CLI, a CLI too old for the
+  request, a refused or stale answer, or a live account that changed while it ran, each logged
+  with the reason), goes to the undocumented usage endpoint with the tool's own User-Agent, which
+  the research rates GRAY (no Anthropic statement either way), not ALLOWED. A binary that sent
+  its own request and then failed makes that turn two requests. It reads when the dashboard is opened,
   Refresh is pressed, the rate-limit stop hook fires, `--read-ci-usage` asks, every 15 minutes
   for the accounts that back a CI role (owner decision, 2026-10-25), and once for any roster
   account just after a usage window its last read was captured in resets (issue #373), at most
@@ -163,7 +177,7 @@ its terms at any time.
 | Proxy between `claude` and Anthropic | No | [Posture](#posture), first bullet |
 | Background timer for reads, refreshes or switches | Reads only: every 15 minutes, of the accounts that back a CI role, and once per roster account after each of its usage windows resets; either can refresh a parked one's token as below. No timer refreshes or switches anything else | [Posture](#posture), switch and read bullets; [`CiUsageSchedule.cs`](src/ClaudeCodeAccountRotation.App/Quota/CiUsageSchedule.cs), [`UsageResetSchedule.cs`](src/ClaudeCodeAccountRotation.App/Quota/UsageResetSchedule.cs) |
 | Refreshes a parked token | Only during a read (requested, the CI-role accounts' 15-minute one, or a reset read): when its recorded expiry has passed, or once when the usage endpoint answers 401, followed by one retried read. Done under the tool's own write gate; a switch holds Claude Code's own refresh lock | [`QuotaRefresh.cs`](src/ClaudeCodeAccountRotation.App/Quota/QuotaRefresh.cs), [`OAuthRefreshLock.cs`](src/ClaudeCodeAccountRotation.App/Adapters/FileSystem/OAuthRefreshLock.cs) |
-| Usage reads | Bounded: at most once a minute per account; on request, every 15 minutes for CI-role accounts, and once per account after each window reset | [Posture](#posture), read bullet; [`RefreshBudget.cs`](src/ClaudeCodeAccountRotation.Core/Quota/RefreshBudget.cs) |
+| Usage reads | Bounded: at most once a minute per account; on request, every 15 minutes for CI-role accounts, and once per account after each window reset. The live account's through the unmodified `claude` binary, every other account's through the usage endpoint | [Posture](#posture), read bullets; [`RefreshBudget.cs`](src/ClaudeCodeAccountRotation.Core/Quota/RefreshBudget.cs), [`ClaudeCliUsageReader.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Process/ClaudeCliUsageReader.cs) |
 | Usage alerts | Information only, never an action: a line on the page and a desktop notification | [Usage alerts](#usage-alerts) |
 | User-Agent | Its own on every Anthropic request; GitHub reads and writes go through `gh`, with gh's own | [`AnthropicEndpoints.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Http/AnthropicEndpoints.cs), [`GhProcess.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Process/GhProcess.cs) |
 | Admin API reads | Only on Check API key, with a stored Admin key: the organization's key list, metadata only, never a model call | [Posture](#posture); [`AnthropicAdminKeysClient.cs`](src/ClaudeCodeAccountRotation.App/Adapters/Http/AnthropicAdminKeysClient.cs) |
@@ -174,7 +188,8 @@ its terms at any time.
 
 Two points are gray:
 
-- The usage endpoint is undocumented. No Anthropic statement allows or forbids reading it.
+- The usage endpoint is undocumented. No Anthropic statement allows or forbids reading it. Only
+  parked accounts, and a live read the binary could not answer, use it.
 - The [legal page](https://code.claude.com/docs/en/legal-and-compliance) says "developers may not
   collect, store, or intermediate Claude.ai credentials or session tokens". The tool stores and
   moves your own tokens between your own folders, and refreshes parked ones with Claude Code's

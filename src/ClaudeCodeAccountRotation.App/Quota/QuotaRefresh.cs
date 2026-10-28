@@ -105,6 +105,7 @@ internal sealed partial class QuotaRefresh
     private readonly TimeSpan _gateWait;
     private readonly PeerRegistry? _peers;
     private readonly UsageAlertNotifier? _notifier;
+    private readonly ILiveUsageReader? _liveUsage;
 
     public QuotaRefresh(
         ICredentialPairStore pairs,
@@ -126,9 +127,11 @@ internal sealed partial class QuotaRefresh
         ILogger<QuotaRefresh> logger,
         TimeSpan? gateWait = null,
         PeerRegistry? peers = null,
-        UsageAlertNotifier? notifier = null)
+        UsageAlertNotifier? notifier = null,
+        ILiveUsageReader? liveUsage = null)
     {
         _peers = peers;
+        _liveUsage = liveUsage;
         _notifier = notifier;
         _pairs = pairs;
         _profiles = profiles;
@@ -506,7 +509,12 @@ internal sealed partial class QuotaRefresh
             }
         }
 
-        Result<JsonDocument, UsageReadFailure> read = await _usage().ReadUsageAsync(pair.AccessToken, stopping);
+        // The live pair's usage goes through the CLI first; a parked pair is never
+        // handed to it, since that would put a second process on its lineage.
+        LiveRead? live = candidate.IsLive
+            ? await LiveUsageRead.ReadAsync(_liveUsage, _usage(), pair.AccessToken, candidate.Email, LiveAccountAsync, _logger, stopping)
+            : null;
+        Result<JsonDocument, UsageReadFailure> read = live?.Read ?? await _usage().ReadUsageAsync(pair.AccessToken, stopping);
         if (read.IsFailure)
         {
             return await FailedReadAsync(candidate, read.Error, retried, stopping);
@@ -522,7 +530,7 @@ internal sealed partial class QuotaRefresh
 
         UsageSnapshot snapshot = new(
             candidate.Email,
-            _timeProvider.GetUtcNow(),
+            live?.CapturedAt ?? _timeProvider.GetUtcNow(),
             QuotaSource.OnDemandRefresh,
             limits.Value,
             UsageResponseParser.ParseExtraUsage(body.RootElement));
@@ -530,6 +538,10 @@ internal sealed partial class QuotaRefresh
         await _cache.SaveAsync(candidate.Email, snapshot);
         return new Turn(Outcome(RefreshOutcomeKind.Read, RefreshMessages.Read), SentRead: true);
     }
+
+    /// <summary>The account this side's state file names as live, which is whose figures the CLI reads.</summary>
+    private async Task<AccountEmail?> LiveAccountAsync(CancellationToken cancellationToken) =>
+        (await _stateFile.ReadAccountBlockAsync(cancellationToken))?.Email;
 
     /// <summary>
     /// The read of a pair another side holds, made by that side with its own

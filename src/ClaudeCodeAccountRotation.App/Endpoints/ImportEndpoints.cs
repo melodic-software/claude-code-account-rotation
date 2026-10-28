@@ -113,6 +113,7 @@ internal static class ImportEndpoints
             UsageReadBody body,
             FollowerImport import,
             IUsageEndpointClient usage,
+            ILiveUsageReader cli,
             CancellationToken cancellationToken) =>
         {
             Result<AccountEmail, string> email = AccountEmail.Parse(body?.Email ?? string.Empty);
@@ -122,7 +123,7 @@ internal static class ImportEndpoints
             }
 
             RefreshTokenFingerprint? expected = string.IsNullOrWhiteSpace(body!.Fingerprint) ? null : new RefreshTokenFingerprint(body.Fingerprint);
-            PeerUsageRead read = await import.ReadUsageAsync(email.Value, expected, usage, cancellationToken);
+            PeerUsageRead read = await import.ReadUsageAsync(email.Value, expected, usage, cli, cancellationToken);
             return Results.Ok(new UsageReadView(read.Outcome.ToString(), read.Body, read.RetryAfter?.TotalSeconds, read.Detail));
         });
 

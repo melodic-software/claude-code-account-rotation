@@ -38,6 +38,8 @@ internal sealed class FollowerAppFactory : WebApplicationFactory<Program>
     /// <summary>The usage endpoint this side reads through when the leader asks, scripted so nothing reaches the network.</summary>
     public ScriptedUsage Usage { get; } = new();
 
+    public ScriptedLiveUsage LiveUsage { get; } = new();
+
     public HttpClient CreateMutatingClient()
     {
         HttpClient client = CreateClient();
@@ -75,6 +77,7 @@ internal sealed class FollowerAppFactory : WebApplicationFactory<Program>
 
             services.Replace(ServiceDescriptor.Singleton<TimeProvider>(Roots.Clock));
             services.Replace(ServiceDescriptor.Singleton<IUsageEndpointClient>(Usage));
+            services.Replace(ServiceDescriptor.Singleton<ILiveUsageReader>(LiveUsage));
         });
     }
 

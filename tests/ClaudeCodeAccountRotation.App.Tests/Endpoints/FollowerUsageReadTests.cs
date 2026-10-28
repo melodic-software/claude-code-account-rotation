@@ -49,6 +49,24 @@ public sealed class FollowerUsageReadTests : IAsyncDisposable
     }
 
     /// <summary>
+    /// That side's CLI reads its own live account, and a fresh answer is what
+    /// the leader gets, in the endpoint's shape and with no request of the
+    /// tool's own.
+    /// </summary>
+    [Fact]
+    public async Task ItAnswersWithItsCliReadWhenTheCliAnswersFresh()
+    {
+        RefreshTokenFingerprint live = await _factory.Roots.WriteLiveAsync(Email, "refresh-a", Token);
+        _factory.LiveUsage.Answers.Enqueue(ScriptedLiveUsage.Ok(_factory.Roots.Clock.GetUtcNow(), percent: 61));
+
+        Result<PeerUsageRead, string> read = await Side().ReadUsageAsync(Account(Email), live, Token);
+
+        read.Value.Outcome.ShouldBe(PeerUsageOutcome.Read);
+        read.Value.Body!["limits"]![0]!["percent"]!.GetValue<double>().ShouldBe(61);
+        _factory.Usage.Calls.ShouldBe(0);
+    }
+
+    /// <summary>
     /// The CLI on that side rotates the pair on its first refresh after a
     /// hand-off, so the leader's record names an older fingerprint. That side's
     /// own record of the live pair's owner is what still names the account.
