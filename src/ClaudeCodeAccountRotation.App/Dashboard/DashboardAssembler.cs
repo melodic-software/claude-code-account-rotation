@@ -287,6 +287,12 @@ internal sealed partial class DashboardAssembler(
 
         UsageAlertSnapshot? alerts = quota.Alerts;
 
+        // The figures the alerts and the notification's best spare come from
+        // (QuotaRefresh.LimitsFor), read now, so a pause or a role moved since
+        // the pass is already reflected.
+        IReadOnlyList<UsageLimit> Limits(AccountEmail email) =>
+            quota.MergedFor(email)?.Rows.Select(static row => row.Limit).ToList() ?? [];
+
         return new DashboardView(
             new LiveAccountView(liveEmail?.Value, livePair is not null, livePair?.Fingerprint.Sha256Hex[..12]),
             cards,
@@ -295,7 +301,13 @@ internal sealed partial class DashboardAssembler(
             warnings,
             capturedAt,
             Pass(capturedAt),
-            [.. (alerts?.Alerts ?? []).Select(static alert => new AlertView(alert.Account.Value, Wire(alert.Level), alert.Percent, alert.Threshold, alert.Window))],
+            [.. (alerts?.Alerts ?? []).Select(alert => new AlertView(
+                alert.Account.Value,
+                Wire(alert.Level),
+                alert.Percent,
+                alert.Threshold,
+                alert.Window,
+                UsageAlerts.BestSpare(roster, alert.Account, Limits, capturedAt)?.Value))],
             alerts?.ComputedAt,
             UsageAlerts.For(LimitKind.WeeklyAll).Ascending,
             TokenOnlyPrefixes(laneCatalog.Snapshot.Catalog),

@@ -45,6 +45,7 @@
     module.exports.ciPanelChecked = ciPanelChecked;
     module.exports.meterTicks = meterTicks;
     module.exports.alertLines = alertLines;
+    module.exports.bestSpareActions = bestSpareActions;
     module.exports.apiKeyBody = apiKeyBody;
     module.exports.apiKeyBadge = apiKeyBadge;
     module.exports.keptKeyToast = keptKeyToast;
@@ -1463,6 +1464,16 @@
     picker.focus();
   }
 
+  // The alert strip's Assign to best spare: the click is the approval, so it
+  // posts Assign to role at once. No limit-stop question: the account the role
+  // moves off is the alerted one, and the alert line is that notice.
+  function assignToBestSpare(action) {
+    return mutate(accountPath(action.spare, "/assign"), "POST", action.body, function (result) {
+      showToast(result.ok ? result.body.message : refused(result.body), result.ok ? (result.body.failed ? "warn" : "ok") : "error");
+      return null;
+    });
+  }
+
   function clearApiKey(email, admin) {
     var key = keyKind(admin);
     if (!window.confirm("Delete " + email + "'s " + key.title + " from this machine's OS store?")) {
@@ -2182,7 +2193,8 @@
   }
 
   // The alert strip's lines, worst first as the server sent them. An alert
-  // only says how close an account is; nothing on the page acts on it.
+  // only says how close an account is; it acts on nothing by itself (see
+  // bestSpareActions for the one button it carries).
   function alertLines(alerts, accounts) {
     return (alerts || []).map(function (alert) {
       var account = (accounts || []).filter(function (candidate) { return candidate.email === alert.account; })[0];
@@ -2191,6 +2203,35 @@
         kind: alert.level === "critical" ? "crit" : "warn",
         text: name + ": " + alert.window + " usage at " + percentText(alert.percent) + ", past " + percentText(alert.threshold)
       };
+    });
+  }
+
+  // Assign to best spare, per alert line: one action for each role whose
+  // token half the alerted account holds now, sending that token half to the
+  // best spare the server named, through Assign to role. Only the token: the
+  // alerted windows are the subscription's, which the CI token spends, and a
+  // key half would need the cost questions. Only on the account's first (worst)
+  // line, and none when no spare qualifies or the spare stores no CI token,
+  // since Assign to role would refuse it. The roles come from the current
+  // roster, so a role already moved drops its button on the next render.
+  function bestSpareActions(alerts, accounts) {
+    var seen = {};
+    return (alerts || []).map(function (alert) {
+      if (seen[alert.account]) { return []; }
+      seen[alert.account] = true;
+      var find = function (email) { return (accounts || []).filter(function (candidate) { return candidate.email === email; })[0]; };
+      var alerted = find(alert.account);
+      var spare = alert.bestSpare ? find(alert.bestSpare) : null;
+      if (!alerted || !spare || !(spare.roster && spare.roster.ciTokenStoredOn)) { return []; }
+      return ((alerted.roster && alerted.roster.ciRoles) || []).filter(function (role) { return role.tokenSetOn; }).map(function (role) {
+        var item = { tokenSecret: role.tokenSecret };
+        item[role.repository ? "repository" : "organization"] = role.repository || role.organization;
+        return {
+          spare: spare.email,
+          body: { role: item, halves: "token" },
+          label: "Assign " + ciRoleLabel(role) + " to best spare " + uniqueName(spare, accounts)
+        };
+      });
     });
   }
 
@@ -2934,7 +2975,15 @@
     var alerts = alertLines(dashboard.alerts, dashboard.accounts);
     alertStrip.replaceChildren();
     alertStrip.hidden = alerts.length === 0;
-    alerts.forEach(function (alert) { alertStrip.appendChild(element("li", alert.kind, alert.text)); });
+    var spareActions = bestSpareActions(dashboard.alerts, dashboard.accounts);
+    alerts.forEach(function (alert, index) {
+      var line = element("li", alert.kind, alert.text);
+      spareActions[index].forEach(function (action) {
+        line.appendChild(document.createTextNode(" "));
+        line.appendChild(actionButton(action.label, "sm", function () { assignToBestSpare(action); }));
+      });
+      alertStrip.appendChild(line);
+    });
     if (alerts.length && dashboard.alertsComputedAt) {
       alertStrip.appendChild(element("li", "asof", "as of the last refresh, " + new Date(dashboard.alertsComputedAt).toLocaleTimeString()));
     }

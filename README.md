@@ -37,7 +37,8 @@ Status: a tagged release exists.
   clear` removes only unlocked items).
 - The tool identifies itself honestly on every request it makes.
 - Every switch is a human click; nothing rotates on its own. [Usage alerts](#usage-alerts) never
-  act: they only say that an account backing a CI role is near the end of a usage window.
+  act: they only say that an account backing a CI role is near the end of a usage window. Their
+  Assign to best spare button moves a role only when you click it.
 - The tool never calls the model API.
 - It reads the undocumented usage endpoint with its own User-Agent, which the research rates GRAY
   (no Anthropic statement either way), not ALLOWED. It reads when the dashboard is opened,
@@ -45,8 +46,8 @@ Status: a tagged release exists.
   for the accounts that back a CI role (owner decision, 2026-10-25), and once for any roster
   account just after a usage window its last read was captured in resets (issue #373), at most
   once a minute per account. No other account is read on a timer. It reads GitHub only through `gh api`, with gh's
-  own User-Agent and sign-in, and only when you click Check roles, Generate CI token, Push API
-  key, or a kill switch's Stop or Start: those read secret names, dates and visibility, never a secret's value, and the kill
+  own User-Agent and sign-in, and only when you click Check roles, Generate CI token, Assign to role (or
+  an alert's Assign to best spare), Push API key, or a kill switch's Stop or Start: those read secret names, dates and visibility, never a secret's value, and the kill
   switches' values. Stop or Start reads the variable's visibility first and reads the switch back
   after the write. The limit-stop check before a role moves makes no GitHub call. The first
   rate-limit answer stops what was clicked, and nothing retries it. Writes go one at a time, at least a second
@@ -403,6 +404,15 @@ PowerShell under its own Start entry, since a desktop app's toast needs a Start 
 AppUserModelID; on Linux it is `notify-send` when that is on PATH. A notification that cannot be
 shown is logged, and the line on the page still shows.
 
+When the best spare has a CI token stored on this machine, the account's first alert line carries
+an Assign to best spare button for each role whose token half the account holds. A click runs
+[Assign to role](#assign-to-role) on the spare for that role with `halves` set to `token`: the
+alerted windows are the subscription's, which the CI token spends, and a key half would need the
+cost questions. The click is the approval, so it does not ask the limit-stop question; the alert
+line already names the figure. The spare is picked again from the figures the cards show on
+every dashboard poll, so a spare paused since the pass is not offered. With no spare, or a spare
+with no stored CI token, the line has no button.
+
 Each CI-role account's 7-day meter carries a tick at each threshold, and its card has a Re-issue
 token button beside the meters. The button opens the Generate CI token panel with that account's
 roles already ticked. To move a role off the account instead, open Generate CI token on the
@@ -412,7 +422,7 @@ The alerts are computed at the end of a full refresh pass (page open, Refresh al
 CI-role pass. The 10-second poll only shows the last result and its time, and a card's own
 Refresh usage leaves the alerts as they were. They use the figures the cards show, so a window
 that has reset since it was read raises nothing. No alert switches an account, moves a role, or
-sends anything off this machine.
+sends anything off this machine by itself; only a click on Assign to best spare moves a role.
 
 ## Remote Control after a switch
 

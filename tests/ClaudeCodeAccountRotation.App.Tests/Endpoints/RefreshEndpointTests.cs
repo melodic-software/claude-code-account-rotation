@@ -414,6 +414,33 @@ public sealed class RefreshEndpointTests
     }
 
     [Fact]
+    public async Task AnAlertNamesTheBestSpareFromTheRosterAsItStandsNow()
+    {
+        await using AppFactory factory = await LiveAndParkedAsync(TestContext.Current.CancellationToken, liveExpired: false);
+        RosterFile rosterFile = factory.Services.GetRequiredService<RosterFile>();
+        await rosterFile.UpdateAsync(static roster => roster.With(new RosterEntry(new AccountEmail(LiveEmail))), TestContext.Current.CancellationToken);
+        await BackACiRoleAsync(factory);
+        Script(factory, Usage(weekly: 75));
+        Script(factory, Usage(weekly: 75));
+        using HttpClient client = factory.CreateMutatingClient();
+
+        (await client.PostAsync(AllUri, content: null, TestContext.Current.CancellationToken)).Dispose();
+        await factory.Services.GetRequiredService<QuotaState>().CurrentRun;
+
+        JsonNode alert = (await DashboardAsync(client))["alerts"]!.AsArray().Single()!;
+        alert["account"]!.GetValue<string>().ShouldBe(ParkedEmail);
+        alert["bestSpare"]!.GetValue<string>().ShouldBe(LiveEmail);
+
+        // Paused after the pass: the alert stays, and no spare is named.
+        await rosterFile.UpdateAsync(
+            static roster => roster.With(roster.Find(new AccountEmail(LiveEmail))! with { Paused = true }),
+            TestContext.Current.CancellationToken);
+        JsonNode paused = (await DashboardAsync(client))["alerts"]!.AsArray().Single()!;
+        paused["account"]!.GetValue<string>().ShouldBe(ParkedEmail);
+        paused["bestSpare"].ShouldBeNull();
+    }
+
+    [Fact]
     public async Task TheCiRolePassReadsOnlyTheAccountsBackingARoleAndNotifiesOnce()
     {
         // The live pair is not expired here, so a pass over every account would

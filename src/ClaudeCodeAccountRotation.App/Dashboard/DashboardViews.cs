@@ -89,9 +89,12 @@ internal sealed record LaneCatalogRoleView(
 /// or <c>critical</c>, and <c>Threshold</c> the percentage that level stands
 /// for. <c>AlertsComputedAt</c> on the dashboard says when the list was
 /// computed, null before it ever was; <c>AlertThresholds</c> are where a CI-role
-/// account's 7-day meter marks them.
+/// account's 7-day meter marks them. <c>BestSpare</c> is the account
+/// <see cref="UsageAlerts.BestSpare"/> names, the one the desktop notification
+/// names, from the figures the cards show now; null when none qualifies. The
+/// page offers Assign to best spare for it.
 /// </summary>
-internal sealed record AlertView(string Account, string Level, decimal Percent, decimal Threshold, string Window);
+internal sealed record AlertView(string Account, string Level, decimal Percent, decimal Threshold, string Window, string? BestSpare);
 
 internal sealed record LiveAccountView(string? Email, bool HasCredentials, string? Fingerprint);
 
