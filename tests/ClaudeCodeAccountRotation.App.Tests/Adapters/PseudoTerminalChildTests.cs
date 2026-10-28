@@ -31,18 +31,39 @@ public sealed class PseudoTerminalChildTests : IDisposable
         process.stdin.setRawMode(true);
         process.stdout.write("\x1b[?2004h\x1b[1mWelcome\x1b[22m\n\n https://claude.com/cai/oauth/authorize?code=true&scope=user%3Ainference&code_challenge=probe&state=probe\n\n Paste code here if prompted > ");
         let code = "";
+        let pasting = false;
+        let pending = "";
         process.stdin.on("data", (chunk) => {
-          let text = chunk.toString("utf8");
-          if (!text.includes("\x1b[200~") && text.length >= 64) {
+          let text = pending + chunk.toString("utf8");
+          pending = "";
+          if (!pasting && !text.includes("\x1b[") && text.length >= 64) {
             code += text.replace(/[\r\n]/g, "");
             process.stdout.write("*".repeat(text.length));
             return;
           }
-          text = text.replace(/\x1b\[200~([\s\S]*?)\x1b\[201~/g, (_, pasted) => {
-            code += pasted;
-            process.stdout.write("*".repeat(pasted.length));
-            return "";
-          });
+          // The paste markers, matched across reads: a marker cut at the end of
+          // one read waits for the rest of it in the next.
+          while (text.length > 0) {
+            const marker = pasting ? "\x1b[201~" : "\x1b[200~";
+            const at = text.indexOf(marker);
+            const plain = at < 0 ? text : text.slice(0, at);
+            let cut = 0;
+            for (let n = marker.length - 1; at < 0 && n > 0 && cut === 0; n--) {
+              if (plain.endsWith(marker.slice(0, n))) cut = n;
+            }
+            pending = plain.slice(plain.length - cut);
+            take(plain.slice(0, plain.length - cut));
+            if (at < 0) break;
+            pasting = !pasting;
+            text = text.slice(at + marker.length);
+          }
+        });
+        function take(text) {
+          if (pasting) {
+            code += text;
+            process.stdout.write("*".repeat(text.length));
+            return;
+          }
           for (const ch of text) {
             if (ch === "\r" || ch === "\n") {
               if (code === "bad") {
@@ -56,7 +77,7 @@ public sealed class PseudoTerminalChildTests : IDisposable
               process.stdout.write("*");
             }
           }
-        });
+        }
         """;
 
     /// <summary>
