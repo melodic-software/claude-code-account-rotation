@@ -8,6 +8,7 @@ using ClaudeCodeAccountRotation.App.Dashboard;
 using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.App.Tests.Adapters;
+using ClaudeCodeAccountRotation.App.Tests.Quota;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Configuration;
 using ClaudeCodeAccountRotation.Core.Identity;
@@ -496,6 +497,51 @@ public sealed class SwitchEndpointTests
 
         response.StatusCode.ShouldBe(HttpStatusCode.Conflict);
         (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["refusal"]!.GetValue<string>().ShouldBe("RefreshLockPresent");
+    }
+
+    /// <summary>
+    /// A paused login (the lapsing mark a run of unexplained 400s leaves) is
+    /// retried once before the switch; a rotated pair clears the mark and the
+    /// switch moves the rotated pair live.
+    /// </summary>
+    [Fact]
+    public async Task ASwitchToAPausedLoginRetriesItFirstAndProceedsOnSuccess()
+    {
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        ScriptedTokens tokens = new();
+        tokens.Answers.Enqueue(ScriptedTokens.Rotated("b2", factory.Clock.GetUtcNow().AddHours(8), factory.Clock.GetUtcNow().AddDays(28)));
+        factory.Overrides = services => services.Replace(ServiceDescriptor.Singleton<Func<ITokenRefreshClient>>(() => tokens));
+        using HttpClient client = factory.CreateMutatingClient();
+        QuotaState quota = factory.Services.GetRequiredService<QuotaState>();
+        AccountEmail paused = AccountEmail.Parse("b@example.com").Value;
+        RefreshTokenFingerprint marked = CredentialFiles.Pair("refresh-b").Fingerprint;
+        quota.RecordLoginDead(paused, marked, factory.Clock.GetUtcNow().AddHours(6));
+
+        using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        tokens.RefreshTokens.ShouldBe(["refresh-b"]);
+        (await CredentialFiles.FingerprintAsync(factory.LiveDirectory, TestContext.Current.CancellationToken))
+            .ShouldBe(CredentialFiles.Pair("refresh-b2").Fingerprint);
+        quota.IsLoginDead(paused, marked, factory.Clock.GetUtcNow()).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task ASwitchToALoginRejectedOutrightIsRefusedWithoutARequest()
+    {
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        ScriptedTokens tokens = new();
+        factory.Overrides = services => services.Replace(ServiceDescriptor.Singleton<Func<ITokenRefreshClient>>(() => tokens));
+        using HttpClient client = factory.CreateMutatingClient();
+        factory.Services.GetRequiredService<QuotaState>().RecordLoginDead(
+            AccountEmail.Parse("b@example.com").Value,
+            CredentialFiles.Pair("refresh-b").Fingerprint);
+
+        using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["refusal"]!.GetValue<string>().ShouldBe("TargetLoginExpired");
+        tokens.Calls.ShouldBe(0);
     }
 
     [Fact]

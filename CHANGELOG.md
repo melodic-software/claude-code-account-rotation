@@ -6,14 +6,37 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Added
+
+- **Assign to best spare on a usage alert.** A CI-role account's alert line carries a button per
+  role whose token half it holds; a click runs Assign to role on the best spare the notification
+  names, token half only. No button when no spare qualifies or the spare stores no CI token.
+  Nothing assigns without the click (#255).
+
 ### Changed
 
+- **Switch retries a paused login first.** A parked login the token endpoint refused with three
+  unexplained 400s in a row is paused for 6 hours rather than dead, and its card now reads
+  "login paused" and keeps Switch, on this side and the other. Switch, from either side, first
+  retries that pair's refresh once, before it takes the mutation gate and through the same request
+  budget, lockouts and write-back a refresh pass uses. A rotated pair clears the pause and the
+  switch goes on. Another refusal refuses the switch with `TargetLoginExpired`: `invalid_grant` or
+  a 401 makes the mark permanent, and another 400 renews the pause. When the budget, a lockout,
+  another credential change or an unanswering endpoint stops the retry, the switch is refused with
+  `LoginRetryNotSent` and a sentence naming those. A login refused outright is still refused with
+  no request sent.
 - **The live account's usage is read through the `claude` binary.** On each side, the live
   account is read with the binary's `get_usage` control request, in safe mode and with
   `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` removed, from an empty folder in the app data. An
   answer older than the run is refused. Parked accounts, and any live read the binary cannot
   answer, still go to the usage endpoint, and the log says why
   ([#220](https://github.com/melodic-software/claude-code-account-rotation/issues/220)).
+
+### Fixed
+
+- **Generate CI token submits a real sign-in code.** `claude setup-token` took a code of 63
+  characters or more, typed with its Enter in one burst, as pasted text and never submitted it;
+  every real code is about 130 characters. The code now goes in as a bracketed paste, then Enter.
 
 ## [2.13.0] - 2026-10-28
 

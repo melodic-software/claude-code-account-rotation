@@ -20,8 +20,7 @@ namespace ClaudeCodeAccountRotation.App.Adapters.Process;
 /// <see cref="Columns"/> wide. Output must be the terminal too, not a pipe: the
 /// child's screen lays itself out to its output's width, and on a pipe it falls
 /// back to 80 columns and wraps the sign-in URL and the token across rows. The
-/// code is typed in ending with a carriage return, which is the Enter key in
-/// the raw mode the child's screen puts the terminal in.
+/// code goes in as <see cref="CodeKeys"/>: a bracketed paste, then Enter.
 /// </para>
 /// </summary>
 internal static class PseudoTerminalChild
@@ -33,6 +32,18 @@ internal static class PseudoTerminalChild
     public const short Columns = 1000;
 
     public const short Rows = 50;
+
+    /// <summary>
+    /// What typing <paramref name="code"/> and pressing Enter sends: the code as
+    /// a bracketed paste, which the child's screen turns on, then a carriage
+    /// return, the Enter key in the raw mode that screen puts the terminal in.
+    /// Sent bare, a burst of 64 characters or more reaches <c>setup-token</c>
+    /// as one read that it takes for pasted text, Enter included, so a code as
+    /// long as a real one (about 130 characters) was never submitted (#334).
+    /// The runner refuses a code holding any control character, so no code can
+    /// end the paste early.
+    /// </summary>
+    public static byte[] CodeKeys(string code) => Encoding.UTF8.GetBytes("\u001b[200~" + code + "\u001b[201~\r");
 
     /// <summary>The factory the app runs with: a terminal-backed child, or the reason none could be started.</summary>
     public static LoginChildFactory Factory(ClaudeExecutable executable)
@@ -153,7 +164,7 @@ internal sealed partial class UnixPseudoTerminalChild : ILoginChild
 
     public async Task WriteCodeAsync(string code, CancellationToken cancellationToken)
     {
-        byte[] keys = Encoding.UTF8.GetBytes(code + "\r");
+        byte[] keys = PseudoTerminalChild.CodeKeys(code);
         await _controller.WriteAsync(keys, cancellationToken);
         await _controller.FlushAsync(cancellationToken);
     }

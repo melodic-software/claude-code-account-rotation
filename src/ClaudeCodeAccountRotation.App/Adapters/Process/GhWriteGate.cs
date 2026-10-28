@@ -21,7 +21,9 @@ internal sealed class GhWriteGate(TimeProvider clock) : IDisposable
         await _writes.WaitAsync(cancellationToken);
         try
         {
-            if (_lastWriteEnded is long ended && Spacing - clock.GetElapsedTime(ended) is { Ticks: > 0 } wait)
+            // A loop, not one wait: a timer can fire up to a millisecond before
+            // its span has passed on the clock that measures it.
+            while (_lastWriteEnded is long ended && Spacing - clock.GetElapsedTime(ended) is { Ticks: > 0 } wait)
             {
                 await Task.Delay(wait, clock, cancellationToken);
             }
