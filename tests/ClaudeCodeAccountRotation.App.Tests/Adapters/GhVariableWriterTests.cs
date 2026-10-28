@@ -139,11 +139,11 @@ public sealed class GhVariableWriterTests : IDisposable
     [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public async Task TwoWritesRunOneAtATimeAtLeastASecondApart()
     {
-        // Each run stamps its start and end in nanoseconds; the second must
-        // start at least a second after the first ended.
+        // Each run stamps its start and end in nanoseconds on the monotonic
+        // clock; the second must start at least a second after the first ended.
         string calls = Path.Combine(_root, "calls");
         string stamps = Path.Combine(_root, "stamps");
-        string gh = await StandInAsync(calls, "date +%s%N >> '" + stamps + "'\nsleep 0.2\ndate +%s%N >> '" + stamps + "'\nexit 0\n");
+        string gh = await StandInAsync(calls, "echo \"" + StandInScripts.MonotonicNanoseconds + "\" >> '" + stamps + "'\nsleep 0.2\necho \"" + StandInScripts.MonotonicNanoseconds + "\" >> '" + stamps + "'\nexit 0\n");
         GhVariableWriter writer = new(gh, TimeSpan.FromSeconds(30), _gate);
 
         Result<Unit, GhApiFailure>[] both = await Task.WhenAll(
@@ -175,7 +175,7 @@ public sealed class GhVariableWriterTests : IDisposable
     {
         string calls = Path.Combine(_root, "calls");
         string stamps = Path.Combine(_root, "stamps");
-        string gh = await StandInAsync(calls, "date +%s%N >> '" + stamps + "'\ncat > /dev/null\ndate +%s%N >> '" + stamps + "'\nexit 0\n");
+        string gh = await StandInAsync(calls, "echo \"" + StandInScripts.MonotonicNanoseconds + "\" >> '" + stamps + "'\ncat > /dev/null\necho \"" + StandInScripts.MonotonicNanoseconds + "\" >> '" + stamps + "'\nexit 0\n");
         GhSecretWriter secrets = new(gh, TimeSpan.FromSeconds(30), _gate);
         GhVariableWriter variables = new(gh, TimeSpan.FromSeconds(30), _gate);
 
