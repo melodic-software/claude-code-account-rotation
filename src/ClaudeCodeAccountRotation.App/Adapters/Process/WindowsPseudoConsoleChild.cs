@@ -193,9 +193,8 @@ internal sealed partial class WindowsPseudoConsoleChild : ILoginChild
 
     public async Task WriteCodeAsync(string code, CancellationToken cancellationToken)
     {
-        // A carriage return is the Enter key at a console; the pseudoconsole
-        // turns these bytes into the key presses the child reads.
-        byte[] keys = Encoding.UTF8.GetBytes(code + "\r");
+        // The pseudoconsole turns these bytes into the key presses the child reads.
+        byte[] keys = PseudoTerminalChild.CodeKeys(code);
         await Task.Run(() => { _input.Write(keys); _input.Flush(); }, cancellationToken);
     }
 
