@@ -121,6 +121,20 @@ public sealed class ClaudeCliUsageAnswerTests
         Parse(usage).Error.ShouldContain("no usage window");
     }
 
+    /// <summary>
+    /// The leader waits for a read through the other side at least as long as
+    /// that side's CLI read and its endpoint fallback together can take, or a
+    /// fallback still under way is reported as an unreachable side.
+    /// </summary>
+    [Fact]
+    public void TheLeadersDeadlineCoversTheCliReadAndTheEndpointFallback()
+    {
+        using HttpClient http = new();
+        App.Adapters.Peers.HttpPeerRotationInstance peer = new(Core.Switching.SideName.Wsl, http);
+
+        peer.UsageReadTimeout.ShouldBeGreaterThan(ClaudeCliUsageReader.Bound + App.Adapters.Http.AnthropicEndpoints.RequestTimeout);
+    }
+
     [Fact]
     public void TheDefaultLayoutLeavesTheConfigDirectoryUnset()
     {

@@ -1,6 +1,8 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ClaudeCodeAccountRotation.App.Adapters.Http;
+using ClaudeCodeAccountRotation.App.Adapters.Process;
 using ClaudeCodeAccountRotation.App.Endpoints;
 using ClaudeCodeAccountRotation.App.Security;
 using ClaudeCodeAccountRotation.Core;
@@ -130,10 +132,14 @@ internal sealed class HttpPeerRotationInstance : IPeerRotationInstance
 
     /// <summary>
     /// What a usage read through that side may cost. Longer than a dashboard
-    /// read, because that side makes its own call to the usage endpoint
-    /// (20 s at worst, the adapter's bound) before it answers.
+    /// read, because that side reads through its CLI first and, when the CLI
+    /// gives no fresh answer, through the usage endpoint, each at its own
+    /// bound, before it answers; ten seconds more covers that side's
+    /// reconciliation and lock. Cut shorter, the leader would give up on a
+    /// fallback still under way and report the side unreachable.
     /// </summary>
-    public TimeSpan UsageReadTimeout { get; init; } = TimeSpan.FromSeconds(30);
+    public TimeSpan UsageReadTimeout { get; init; } =
+        ClaudeCliUsageReader.Bound + AnthropicEndpoints.RequestTimeout + TimeSpan.FromSeconds(10);
 
     public async Task<Result<PeerUsageRead, string>> ReadUsageAsync(AccountEmail email, RefreshTokenFingerprint? expected, CancellationToken cancellationToken)
     {

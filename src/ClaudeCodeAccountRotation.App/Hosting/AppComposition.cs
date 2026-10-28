@@ -735,7 +735,7 @@ internal static class AppComposition
             configuration.StateFilePath,
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             Path.Combine(configuration.AppDataDirectory, "cli-usage"),
-            _cliTimeout,
+            ClaudeCliUsageReader.Bound,
             provider.GetRequiredService<TimeProvider>()));
     }
 

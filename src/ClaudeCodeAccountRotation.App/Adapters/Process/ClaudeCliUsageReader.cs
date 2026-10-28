@@ -39,6 +39,15 @@ internal sealed class ClaudeCliUsageReader : ILiveUsageReader
     /// </summary>
     internal static readonly TimeSpan FreshnessTolerance = TimeSpan.FromSeconds(60);
 
+    /// <summary>
+    /// How long one read may take before the child is killed and the endpoint
+    /// is read instead. A safe-mode read measured about 1.6 s on 2.1.312. Kept
+    /// short because the fallback runs after it inside the same bounds: the
+    /// leader's deadline for a read through the other side, and the host's
+    /// 45 s shutdown drain.
+    /// </summary>
+    internal static readonly TimeSpan Bound = TimeSpan.FromSeconds(15);
+
     /// <summary>How long the child gets to exit once its answer is in and its input is closed, before it is killed.</summary>
     private static readonly TimeSpan _exitGrace = TimeSpan.FromSeconds(5);
 
