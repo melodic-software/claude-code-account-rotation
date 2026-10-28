@@ -810,10 +810,11 @@ public sealed class QuotaRefreshTests
     }
 
     [Fact]
-    public async Task APassInWhichEveryRefreshGotAnUnexplainedBadRequestCountsAgainstNoLogin()
+    public async Task APassInWhichEveryRefreshGetsAnUnexplainedBadRequestEndsInLapsingMarksOnly()
     {
-        // Every account refused at once is the endpoint, not ten logins dying
-        // together (issue 377's shape), so no pair's run grows.
+        // Issue 377's shape: every account refused at once. That may be the
+        // endpoint, so each pair ends in the six-hour mark, never the permanent
+        // one that lets a switch quarantine it, and the POSTs stop until it lapses.
         using RefreshHarness harness = new();
         await harness.ParkAsync("a@example.com", "refresh-a", harness.Expired, Token);
         await harness.ParkAsync("b@example.com", "refresh-b", harness.Expired, Token);
@@ -824,13 +825,16 @@ public sealed class QuotaRefreshTests
             harness.Clock.Advance(TimeSpan.FromMinutes(5));
         }
 
-        harness.Tokens.Calls.ShouldBe(2 * (QuotaRefresh.BadRequestsBeforeDead + 1));
-        harness.OutcomeFor("a@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.TokenRefreshFailed);
-        harness.OutcomeFor("b@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.TokenRefreshFailed);
-        harness.RefreshLog.Lines.Count(line => line.Contains("token endpoint is treated as at fault", StringComparison.Ordinal))
-            .ShouldBe(QuotaRefresh.BadRequestsBeforeDead + 1);
-        harness.RefreshLog.Lines.ShouldAllBe(line => !line.Contains("in a row before", StringComparison.Ordinal));
-        harness.State.RecordRefreshBadRequest(RefreshHarness.Email("a@example.com"), CredentialFiles.Pair("refresh-a").Fingerprint).ShouldBe(1);
+        harness.Tokens.Calls.ShouldBe(2 * QuotaRefresh.BadRequestsBeforeDead);
+        foreach ((string email, string token) in new[] { ("a@example.com", "refresh-a"), ("b@example.com", "refresh-b") })
+        {
+            RefreshTokenFingerprint pair = CredentialFiles.Pair(token).Fingerprint;
+            harness.OutcomeFor(email)!.Kind.ShouldBe(RefreshOutcomeKind.LoginDead);
+            harness.OutcomeFor(email)!.Message.ShouldBe(RefreshMessages.LoginPresumedDead);
+            harness.State.IsLoginDead(RefreshHarness.Email(email), pair, harness.Clock.GetUtcNow()).ShouldBeTrue();
+            harness.State.IsLoginDead(RefreshHarness.Email(email), pair, harness.Clock.GetUtcNow() + QuotaRefresh.BadRequestMarkLifetime).ShouldBeFalse();
+            harness.State.IsLoginRejected(RefreshHarness.Email(email), pair).ShouldBeFalse();
+        }
     }
 
     [Fact]

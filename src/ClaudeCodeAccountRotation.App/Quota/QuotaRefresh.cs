@@ -106,14 +106,6 @@ internal sealed partial class QuotaRefresh
     private readonly PeerRegistry? _peers;
     private readonly UsageAlertNotifier? _notifier;
 
-    /// <summary>
-    /// The token refreshes the running pass sent, and the unexplained 400s
-    /// among them. A field rather than a parameter threaded through every turn,
-    /// because passes never overlap: the worker starts one only after
-    /// <see cref="QuotaState.TryBeginRun"/>.
-    /// </summary>
-    private PassTally _tally = new();
-
     public QuotaRefresh(
         ICredentialPairStore pairs,
         ProfileFolderStore profiles,
@@ -172,7 +164,6 @@ internal sealed partial class QuotaRefresh
     {
         ArgumentNullException.ThrowIfNull(request);
         Dictionary<RefreshOutcomeKind, int> summary = [];
-        _tally = new PassTally();
         try
         {
             (IReadOnlyList<Candidate> candidates, Roster roster) = await CandidatesAsync(request, summary, stopping);
@@ -190,8 +181,6 @@ internal sealed partial class QuotaRefresh
                 ended |= turn.EndsPass;
                 sentRead |= turn.SentRead;
             }
-
-            SettleBadRequests(summary);
 
             // Only a full pass (page open, Refresh all), a CI-role pass (the
             // fifteen-minute read, or one asked for at once) or a reset read
@@ -776,7 +765,6 @@ internal sealed partial class QuotaRefresh
                 return Refused(RefreshOutcomeKind.Skipped, RefreshMessages.PairChanged);
             }
 
-            _tally.Attempts++;
             Result<RefreshedTokens, UsageReadFailure> refreshed = await _tokens().RefreshAsync(current.RefreshToken, CancellationToken.None);
             if (refreshed.IsSuccess)
             {
@@ -816,10 +804,20 @@ internal sealed partial class QuotaRefresh
 
             if (refreshed.Error.Kind == UsageReadFailureKind.RefreshBadRequest)
             {
-                // Counted once the pass is over, when it can be told apart from
-                // a token endpoint refusing every account at once.
-                _tally.BadRequests.Add(new BadRequest(account, current.Fingerprint, FolderName(folder), refreshed.Error.Detail));
-                return Refused(RefreshOutcomeKind.TokenRefreshFailed, RefreshMessages.TokenRefreshFailed);
+                // Retried, but not for ever. The run is counted per pair even when
+                // every account gets the same 400, because the mark it ends in
+                // lapses and never lets a switch quarantine the pair: an endpoint
+                // fault costs a retry every six hours, not a login.
+                int run = _state.RecordRefreshBadRequest(account, current.Fingerprint);
+                LogRefreshBadRequest(account.Value, FolderName(folder), refreshed.Error.Detail, run, BadRequestsBeforeDead);
+                if (run < BadRequestsBeforeDead)
+                {
+                    return Refused(RefreshOutcomeKind.TokenRefreshFailed, RefreshMessages.TokenRefreshFailed);
+                }
+
+                _state.RecordLoginDead(account, current.Fingerprint, _timeProvider.GetUtcNow() + BadRequestMarkLifetime);
+                LogLoginPresumedDead(account.Value, FolderName(folder), run, (int)BadRequestMarkLifetime.TotalHours);
+                return Refused(RefreshOutcomeKind.LoginDead, RefreshMessages.LoginPresumedDead);
             }
 
             if (refreshed.Error.Kind == UsageReadFailureKind.LoginRejected)
@@ -837,42 +835,6 @@ internal sealed partial class QuotaRefresh
         finally
         {
             permit?.Dispose();
-        }
-    }
-
-    /// <summary>
-    /// Counts this pass's unexplained 400s against their pairs. When every
-    /// refresh the pass sent got one, and it sent more than one, the token
-    /// endpoint is refusing everyone, which says nothing about any one login:
-    /// that is logged once and counted against no pair. Otherwise the third in
-    /// a row on one pair marks its login dead for
-    /// <see cref="BadRequestMarkLifetime"/>, and its card says so.
-    /// </summary>
-    private void SettleBadRequests(Dictionary<RefreshOutcomeKind, int> summary)
-    {
-        if (_tally.BadRequests.Count == 0)
-        {
-            return;
-        }
-
-        if (_tally.Attempts >= 2 && _tally.BadRequests.Count == _tally.Attempts)
-        {
-            LogEndpointFault(_tally.Attempts, _tally.BadRequests[0].Detail);
-            return;
-        }
-
-        DateTimeOffset until = _timeProvider.GetUtcNow() + BadRequestMarkLifetime;
-        foreach (BadRequest refused in _tally.BadRequests)
-        {
-            int run = _state.RecordRefreshBadRequest(refused.Account, refused.Fingerprint);
-            LogRefreshBadRequest(refused.Account.Value, refused.Folder, refused.Detail, run, BadRequestsBeforeDead);
-            if (run >= BadRequestsBeforeDead)
-            {
-                _state.RecordLoginDead(refused.Account, refused.Fingerprint, until);
-                LogLoginPresumedDead(refused.Account.Value, refused.Folder, run, (int)BadRequestMarkLifetime.TotalHours);
-                summary[RefreshOutcomeKind.TokenRefreshFailed] = summary.GetValueOrDefault(RefreshOutcomeKind.TokenRefreshFailed) - 1;
-                Record(refused.Account, Outcome(RefreshOutcomeKind.LoginDead, RefreshMessages.LoginPresumedDead), summary);
-            }
         }
     }
 
@@ -1037,17 +999,6 @@ internal sealed partial class QuotaRefresh
     /// <summary>How one account's turn ended, and what it cost the pass.</summary>
     private sealed record Turn(RefreshOutcome Outcome, bool EndsPass = false, bool SentRead = false);
 
-    /// <summary>One unexplained 400 this pass's refresh of a pair got, held until the pass is over.</summary>
-    private sealed record BadRequest(AccountEmail Account, RefreshTokenFingerprint Fingerprint, string Folder, string Detail);
-
-    /// <summary>What the running pass sent to the token endpoint, and the unexplained 400s it got back.</summary>
-    private sealed class PassTally
-    {
-        public int Attempts { get; set; }
-
-        public List<BadRequest> BadRequests { get; } = [];
-    }
-
     /// <summary>Either a rotated pair to read with, or the outcome that stopped the unit.</summary>
     private sealed record GatedRefresh(RefreshOutcome? Outcome, CredentialPair? Pair, bool EndsPass = false);
 
@@ -1096,9 +1047,6 @@ internal sealed partial class QuotaRefresh
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "the token refresh of {Account} in {Folder} was refused without invalid_grant: {Detail} ({Count} of {Limit} in a row before the login is treated as dead)")]
     private partial void LogRefreshBadRequest(string account, string folder, string detail, int count, int limit);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "every one of the {Attempts} token refreshes this pass sent got a 400 without invalid_grant ({Detail}); the token endpoint is treated as at fault and no login is counted against")]
-    private partial void LogEndpointFault(int attempts, string detail);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "the login of {Account} in {Folder} is treated as dead after {Count} unexplained 400s in a row; its pair is tried again in {Hours} h unless it is logged in again first")]
     private partial void LogLoginPresumedDead(string account, string folder, int count, int hours);

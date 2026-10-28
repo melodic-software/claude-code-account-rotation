@@ -22,9 +22,8 @@ All notable changes to this project are documented in this file. The format foll
   expired" and offers Log in again, no refresh is sent for that pair again until a new login
   replaces it, and a switch to it on either side is refused with `TargetLoginExpired`. Any other
   400 is retried and logged with its code and a count. The third in a row on one pair marks its
-  login dead for 6 hours, after which it is tried again; a pass in which every refresh got such a
-  400 is logged once as an endpoint fault and counted against no pair. The marks are held in
-  memory; after a restart the next refusal sets them again.
+  login dead for 6 hours, after which it is tried again, even when every account gets the same
+  400. The marks are held in memory; after a restart the next refusal sets them again.
 - **A dead parked pair no longer blocks a switch of the other side.** When that side is live on an
   account through a login made there, and the pair still parked in that account's slot is one the
   token endpoint rejected with `invalid_grant` or a 401, the switch moves the dead pair to the superseded quarantine and parks
