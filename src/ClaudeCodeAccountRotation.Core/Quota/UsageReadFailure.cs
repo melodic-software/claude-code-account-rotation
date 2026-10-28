@@ -5,7 +5,8 @@ public enum UsageReadFailureKind
 {
     /// <summary>
     /// The network, DNS, TLS, the 20-second timeout, or any status other than
-    /// 401 and 429 (and, from the token refresh, 400): from the caller's side an
+    /// 401 and 429 (and, from the token refresh, a 400 that is not
+    /// <c>invalid_grant</c>): from the caller's side an
     /// unreachable endpoint and a 503 are the same thing, something to report on
     /// the card and try again later.
     /// </summary>
@@ -21,8 +22,8 @@ public enum UsageReadFailureKind
     MalformedBody,
 
     /// <summary>
-    /// The token endpoint refused the refresh token itself: a 400 or 401 to the
-    /// refresh grant, <c>invalid_grant</c> among them. The login behind the pair
+    /// The token endpoint refused the refresh token itself: a 400 whose OAuth
+    /// error is <c>invalid_grant</c>, or a 401, to the refresh grant. The login behind the pair
     /// is dead, and no retry with the same refresh token can revive it; only a
     /// new login can. Only the token refresh reports it.
     /// </summary>

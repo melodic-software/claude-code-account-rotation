@@ -183,19 +183,25 @@ public sealed class ClaudeOAuthTokenRefreshClientTests
     }
 
     [Theory]
-    [InlineData("not json")]
-    [InlineData("""{"error":"Invalid Grant: refresh-old"}""")]
-    [InlineData("""{"error":42}""")]
-    public async Task ARejectionWhoseErrorIsNotAnOAuthCodeSaysUnknown(string body)
+    [InlineData("""{"error":"invalid_client"}""", "the token endpoint answered 400 invalid_client")]
+    [InlineData("""{"error":"invalid_request","error_description":"refresh-old"}""", "the token endpoint answered 400 invalid_request")]
+    [InlineData("<html>blocked</html>", "the token endpoint answered 400 unknown error")]
+    [InlineData("""{"error":"Invalid Grant: refresh-old"}""", "the token endpoint answered 400 unknown error")]
+    [InlineData("""{"error":42}""", "the token endpoint answered 400 unknown error")]
+    public async Task ABadRequestThatIsNotInvalidGrantSaysNothingAboutTheLoginAndIsTransport(string body, string detail)
     {
+        // invalid_client, invalid_request, or a proxy's page: the client or the
+        // path is wrong, not the login. Marking it dead would quarantine a
+        // healthy pair, so it is retried like any other transport failure, and
+        // only the sanitized error code is kept.
         using RecordingHandler handler = new(RecordingHandler.Json(HttpStatusCode.BadRequest, body));
         using HttpClient http = new(handler);
         ClaudeOAuthTokenRefreshClient client = new(http, UserAgent, new FixedClock(_now));
 
         Result<RefreshedTokens, UsageReadFailure> refreshed = await client.RefreshAsync("refresh-old", TestContext.Current.CancellationToken);
 
-        refreshed.Error.Kind.ShouldBe(UsageReadFailureKind.LoginRejected);
-        refreshed.Error.Detail.ShouldBe("the token endpoint rejected the refresh token (400 unknown error)");
+        refreshed.Error.Kind.ShouldBe(UsageReadFailureKind.Transport);
+        refreshed.Error.Detail.ShouldBe(detail);
     }
 
     [Fact]

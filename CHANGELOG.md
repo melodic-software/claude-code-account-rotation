@@ -8,11 +8,11 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
-- **A login the token endpoint rejects is marked dead instead of handed out.** A 400 or 401 to a
-  parked pair's token refresh (`invalid_grant` among them) was reported as a transport failure and
+- **A login the token endpoint rejects is marked dead instead of handed out.** A 400
+  `invalid_grant` or a 401 to a parked pair's token refresh was reported as a transport failure and
   retried on every pass, and a switch could still move that pair live, leaving the other side at
   "Login expired · Please run /login". The refusal is now its own outcome: the log names the OAuth
-  error code, the card reads "login expired" and offers Log in again, no refresh is sent for that
+  error code (any other 400 stays a transport failure, logged with its code), the card reads "login expired" and offers Log in again, no refresh is sent for that
   pair again until a new login replaces it, and a switch to it on either side is refused with
   `TargetLoginExpired`. The mark is held in memory; after a restart the next pass's one refusal
   sets it again.

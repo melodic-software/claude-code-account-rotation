@@ -93,6 +93,34 @@ public sealed class LiveDirectorySwitchTests : IDisposable
     }
 
     [Fact]
+    public async Task ASwitchToALoginTheTokenEndpointRejectedIsRefusedAsExpired()
+    {
+        // Issue 377 on this side: the parked pair's recorded expiry is weeks
+        // away, but Anthropic refused its refresh token, so moving it live would
+        // hand the CLI a login that asks for /login. A mark for another pair of
+        // the same account refuses nothing.
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        await ParkedProfileAsync("b@example.com", "refresh-b");
+        _cli.Email = "b@example.com";
+        _quota.RecordLoginDead(Email("b@example.com"), CredentialFiles.Pair("refresh-b").Fingerprint);
+
+        Result<SwitchOutcome, SwitchRefusal> refused = await Switch().SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken);
+
+        refused.Error.ShouldBe(SwitchRefusal.TargetLoginExpired);
+        (await CredentialFiles.FingerprintAsync(_liveDirectory, TestContext.Current.CancellationToken))
+            .ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
+        (await CredentialFiles.FingerprintAsync(Path.Combine(_profilesRoot, "b@example.com"), TestContext.Current.CancellationToken))
+            .ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
+
+        _quota.RecordLoginDead(Email("b@example.com"), CredentialFiles.Pair("refresh-b-older").Fingerprint);
+
+        Result<SwitchOutcome, SwitchRefusal> allowed = await Switch().SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken);
+
+        allowed.IsSuccess.ShouldBeTrue(allowed.IsFailure ? allowed.Error.ToString() : "");
+    }
+
+    [Fact]
     public async Task SwitchParksTheLivePairUnparksTheTargetAndPatchesTheStateFile()
     {
         await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);

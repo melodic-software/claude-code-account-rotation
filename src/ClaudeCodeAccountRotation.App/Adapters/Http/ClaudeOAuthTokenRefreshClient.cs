@@ -66,14 +66,16 @@ internal sealed class ClaudeOAuthTokenRefreshClient : ITokenRefreshClient
         {
             if (response.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized)
             {
-                // The refresh grant itself was refused: invalid_grant for a
-                // revoked or expired login, or a 401. Not Transport, which the
-                // caller would retry on every pass for ever.
-                return Failure(
-                    UsageReadFailureKind.LoginRejected,
-                    "the token endpoint rejected the refresh token ("
-                        + ((int)response.StatusCode).ToString(CultureInfo.InvariantCulture)
-                        + " " + await OAuthErrorAsync(response, cancellationToken) + ")");
+                // Only invalid_grant (RFC 6749 section 5.2) or a 401 says the
+                // refresh token itself is dead. Any other 400, invalid_client or
+                // invalid_request or a proxy's HTML page, says nothing about the
+                // login, and marking it dead would quarantine a healthy pair, so
+                // it stays Transport and is tried again.
+                string status = ((int)response.StatusCode).ToString(CultureInfo.InvariantCulture);
+                string error = await OAuthErrorAsync(response, cancellationToken);
+                return response.StatusCode == HttpStatusCode.Unauthorized || error == "invalid_grant"
+                    ? Failure(UsageReadFailureKind.LoginRejected, "the token endpoint rejected the refresh token (" + status + " " + error + ")")
+                    : Failure(UsageReadFailureKind.Transport, "the token endpoint answered " + status + " " + error);
             }
 
             if (!response.IsSuccessStatusCode)
