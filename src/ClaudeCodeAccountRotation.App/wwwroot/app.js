@@ -36,6 +36,8 @@
       changedCiTokenDate: changedCiTokenDate,
       ciTag: ciTag,
       ciSecretBody: ciSecretBody,
+      repairOffers: repairOffers,
+      repairSecrets: repairSecrets,
       remoteControlQuestion: remoteControlQuestion,
       switchedToast: switchedToast,
       historyLines: historyLines,
@@ -1635,13 +1637,35 @@
       labeled(form, "Backs " + role.name + " in " + roleWhere(role), box);
       return box;
     });
-    // A role to add by its token secret's name, set on the date above. By hand
-    // it repairs a card whose secret was set but whose roster write failed, so
-    // it sits folded away; inside the form, so Save still reads it.
+    // Roles to add by their token secrets, all set on the date above. It
+    // records tokens set by hand, or a card whose roster write failed, so it
+    // sits folded away; inside the form, so Save still reads it. The roles the
+    // last Check roles found unclaimed are offered, read when it opens, and
+    // none is ticked: the tool cannot tell whose token a secret holds.
     var repair = element("details", "repair");
     repair.appendChild(element("summary", null, "Repair a role record"));
     repair.appendChild(element("p", "muted",
-      "Use this only when a CI token secret was set but this card does not show its role: name the token secret and where it is, and Save records it with the date above."));
+      "Use this only when a CI token secret was set but this card does not show its role: tick each role this account's token is in, or name a secret below, and Save records them with the date above."));
+    var offered = element("div");
+    var offerBoxes = [];
+    repair.appendChild(offered);
+    repair.addEventListener("toggle", function () {
+      if (!repair.open) { return; }
+      // Redrawn on each open; a tick made before it was folded stays.
+      var kept = offerBoxes.filter(function (offer) { return offer.box.checked; }).map(function (offer) { return offer.secret.name + "@" + offer.secret.organization; });
+      offered.replaceChildren();
+      var offers = repairOffers(lastRoleCheck, lastAccounts);
+      if (!offers.length) {
+        offered.appendChild(element("p", "muted", lastRoleCheck ? "The last Check roles found no unclaimed token." : "Run Check roles to list the unclaimed roles here."));
+      }
+      offerBoxes = offers.map(function (offer) {
+        var box = element("input");
+        box.type = "checkbox";
+        box.checked = kept.indexOf(offer.secret.name + "@" + offer.secret.organization) >= 0;
+        labeled(offered, offer.label, box);
+        return { box: box, secret: offer.secret };
+      });
+    });
     var ciSecretName = element("input");
     ciSecretName.type = "text";
     ciSecretName.placeholder = "CLAUDE_CODE_OAUTH_TOKEN";
@@ -1670,7 +1694,9 @@
       if (date !== undefined) { body.ciTokenGeneratedOn = date; }
       var removed = removedCiRoles(ciRoles, ciKeep.map(function (box) { return box.checked; }));
       if (removed) { body.removeCiRoles = removed; }
-      body.ciTokenSecret = ciSecretBody(ciSecretName.value, ciSecretWhere.value);
+      var ticked = offerBoxes.filter(function (offer) { return offer.box.checked; }).map(function (offer) { return offer.secret; });
+      var secrets = repairSecrets(ticked, ciSecretBody(ciSecretName.value, ciSecretWhere.value));
+      if (secrets) { body.ciTokenSecrets = secrets; }
       mutate(accountPath(account.email), "PATCH", body, function (result) {
         showToast(result.ok ? account.email + " updated" : refused(result.body), result.ok ? "ok" : "error");
       });
@@ -2036,6 +2062,36 @@
     return trimmedWhere.indexOf("/") >= 0
       ? { name: trimmedName, repository: trimmedWhere }
       : { name: trimmedName, organization: trimmedWhere };
+  }
+
+  // The roles Edit's repair offers: each whose token secret the last Check
+  // roles found with no account backing it and no account on the current
+  // dashboard backs since, named as the PATCH names a secret. Only the token
+  // half: the repair records no key.
+  function repairOffers(check, accounts) {
+    var held = {};
+    (accounts || []).forEach(function (account) {
+      ((account.roster && account.roster.ciRoles) || []).forEach(function (role) {
+        held[(role.tokenSecret + "@" + (role.repository || role.organization)).toLowerCase()] = true;
+      });
+    });
+    return ((check && check.roles) || []).filter(function (role) {
+      return role.token === "unclaimed" && !held[(role.tokenSecret + "@" + role.organization).toLowerCase()];
+    }).map(function (role) {
+      return {
+        label: "Record " + (role.prefix ? role.name.toLowerCase() : role.name) + " in org " + role.organization + " (" + role.tokenSecret + ")",
+        secret: { name: role.tokenSecret, organization: role.organization }
+      };
+    });
+  }
+
+  // The secrets one repair save sends: the ticked offers, then the one typed
+  // when it names another, or null when there are none.
+  function repairSecrets(ticked, typed) {
+    var secrets = ticked.slice();
+    var key = function (secret) { return (secret.name + "@" + (secret.repository || secret.organization)).toLowerCase(); };
+    if (typed && !secrets.some(function (secret) { return key(secret) === key(typed); })) { secrets.push(typed); }
+    return secrets.length ? secrets : null;
   }
 
   // The CI panel's words: what happens after Start, before anything does. A

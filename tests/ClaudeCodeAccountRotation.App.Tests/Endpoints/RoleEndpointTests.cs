@@ -170,6 +170,66 @@ public sealed class RoleEndpointTests
             ]);
     }
 
+    // Issue #386: tokens set by hand show as unclaimed; one Edit save records
+    // them all on the card the operator picks, and a second check names it.
+    [Fact]
+    public async Task TheUnclaimedRolesCheckRolesFindsAreRecordedOnACardInOneSave()
+    {
+        (AppFactory factory, SpyReader reader) = await StartAsync(TestContext.Current.CancellationToken);
+        await using AppFactory _ = factory;
+        using HttpClient client = factory.CreateMutatingClient();
+        await HoldAsync(factory);
+        JsonObject listing = Page(
+            3,
+            ("REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", "2026-10-01T12:00:00Z"),
+            ("ISSUE_LANE_CLAUDE_CODE_OAUTH_TOKEN", "2026-10-01T12:00:00Z"),
+            ("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", "2026-10-01T12:00:00Z"));
+        reader.Answers.Enqueue(Result<JsonNode, GhApiFailure>.Success(listing.DeepClone()));
+
+        using HttpResponseMessage first = await client.PostAsJsonAsync(_check, new { organization = "octo" }, TestContext.Current.CancellationToken);
+        JsonArray unclaimed = (await first.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["roles"]!.AsArray();
+        unclaimed.Select(static role => (role!["name"]!.GetValue<string>(), role["token"]?.GetValue<string>())).ShouldBe([
+            ("AUTOMATIONS", "unclaimed"),
+            ("ISSUE_LANE", "unclaimed"),
+            ("REVIEWS", "unclaimed"),
+        ]);
+
+        // What the page sends for every offered role ticked: each by its token secret and organization.
+        JsonObject repair = new()
+        {
+            ["ciTokenGeneratedOn"] = "2026-10-01",
+            ["ciTokenSecrets"] = new JsonArray([.. unclaimed.Select(static role => (JsonNode)new JsonObject
+            {
+                ["name"] = role!["tokenSecret"]!.GetValue<string>(),
+                ["organization"] = role["organization"]!.GetValue<string>(),
+            })]),
+        };
+        using HttpResponseMessage saved = await client.PatchAsJsonAsync(new Uri("/api/accounts/" + Uri.EscapeDataString(HolderEmail), UriKind.Relative), repair, TestContext.Current.CancellationToken);
+
+        saved.StatusCode.ShouldBe(HttpStatusCode.OK);
+        JsonObject dashboard = (await client.GetFromJsonAsync<JsonObject>(new Uri("/api/dashboard", UriKind.Relative), TestContext.Current.CancellationToken))!;
+        dashboard["accounts"]!.AsArray().Single(card => card!["email"]!.GetValue<string>() == HolderEmail)!["roster"]!["ciRoles"]!.AsArray()
+            .Select(static role => (role!["tokenSecret"]!.GetValue<string>(), role["tokenSetOn"]!.GetValue<string>()))
+            .OrderBy(static role => role.Item1, StringComparer.Ordinal)
+            .ShouldBe([
+                ("AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", "2026-10-01"),
+                ("ISSUE_LANE_CLAUDE_CODE_OAUTH_TOKEN", "2026-10-01"),
+                ("REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", "2026-10-01"),
+            ]);
+        JsonArray history = (await client.GetFromJsonAsync<JsonArray>(new Uri("/api/lane-history", UriKind.Relative), TestContext.Current.CancellationToken))!;
+        history.Select(static line => ((string?)line!["account"], (string?)line["via"])).ShouldBe([(HolderEmail, "edit"), (HolderEmail, "edit"), (HolderEmail, "edit")]);
+
+        reader.Answers.Enqueue(Result<JsonNode, GhApiFailure>.Success(listing));
+        using HttpResponseMessage second = await client.PostAsJsonAsync(_check, new { organization = "octo" }, TestContext.Current.CancellationToken);
+        (await second.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["roles"]!.AsArray()
+            .Select(static role => (role!["name"]!.GetValue<string>(), role["holder"]?.GetValue<string>(), role["token"]?.GetValue<string>()))
+            .ShouldBe([
+                ("AUTOMATIONS", HolderEmail, "unknown"),
+                ("ISSUE_LANE", HolderEmail, "unknown"),
+                ("REVIEWS", HolderEmail, "unknown"),
+            ]);
+    }
+
     [Fact]
     public async Task AnUnknownHalfCarriesItsReason()
     {
