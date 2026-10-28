@@ -412,6 +412,15 @@ test("repairOffers offers each role whose token Check roles found unclaimed, and
   assert.deepStrictEqual(repairOffers(null), []);
 });
 
+test("repairOffers drops an unclaimed role an account on the dashboard has recorded since the check", () => {
+  const check = { roles: [
+    { name: "REVIEWS", prefix: "REVIEWS", organization: "octo", tokenSecret: "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", token: "unclaimed", key: null },
+    { name: "ISSUE_LANE", prefix: "ISSUE_LANE", organization: "octo", tokenSecret: "ISSUE_LANE_CLAUDE_CODE_OAUTH_TOKEN", token: "unclaimed", key: null }
+  ] };
+  const accounts = [{ email: "a@example.com", roster: { ciRoles: [{ tokenSecret: "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", repository: null, organization: "OCTO" }] } }];
+  assert.deepStrictEqual(repairOffers(check, accounts).map((offer) => offer.secret.name), ["ISSUE_LANE_CLAUDE_CODE_OAUTH_TOKEN"]);
+});
+
 test("repairSecrets sends the ticked offers and a typed secret once, or nothing", () => {
   const automations = { name: "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", organization: "octo" };
   const reviews = { name: "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", organization: "octo" };

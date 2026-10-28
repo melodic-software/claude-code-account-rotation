@@ -1652,7 +1652,7 @@
     repair.addEventListener("toggle", function () {
       if (!repair.open) { return; }
       offered.replaceChildren();
-      var offers = repairOffers(lastRoleCheck);
+      var offers = repairOffers(lastRoleCheck, lastAccounts);
       if (!offers.length) {
         offered.appendChild(element("p", "muted", lastRoleCheck ? "The last Check roles found no unclaimed token." : "Run Check roles to list the unclaimed roles here."));
       }
@@ -2062,10 +2062,19 @@
   }
 
   // The roles Edit's repair offers: each whose token secret the last Check
-  // roles found with no account backing it, named as the PATCH names a secret.
-  // Only the token half: the repair records no key.
-  function repairOffers(check) {
-    return ((check && check.roles) || []).filter(function (role) { return role.token === "unclaimed"; }).map(function (role) {
+  // roles found with no account backing it and no account on the current
+  // dashboard backs since, named as the PATCH names a secret. Only the token
+  // half: the repair records no key.
+  function repairOffers(check, accounts) {
+    var held = {};
+    (accounts || []).forEach(function (account) {
+      ((account.roster && account.roster.ciRoles) || []).forEach(function (role) {
+        held[(role.tokenSecret + "@" + (role.repository || role.organization)).toLowerCase()] = true;
+      });
+    });
+    return ((check && check.roles) || []).filter(function (role) {
+      return role.token === "unclaimed" && !held[(role.tokenSecret + "@" + role.organization).toLowerCase()];
+    }).map(function (role) {
       return {
         label: "Record " + (role.prefix ? role.name.toLowerCase() : role.name) + " in org " + role.organization + " (" + role.tokenSecret + ")",
         secret: { name: role.tokenSecret, organization: role.organization }

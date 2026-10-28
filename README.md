@@ -699,7 +699,7 @@ the move starts at once.
 To mark an account by hand instead (for a token made outside the tool, or when the tool set the
 secret but could not update the roster), open Edit and set "CI token generated on". Optionally
 also open "Repair a role record", folded under the role list. It lists each role whose token the
-last Check roles found `unclaimed`, unticked: GitHub never shows a secret's value, so the tool
+last Check roles found `unclaimed` and no card has recorded since, unticked: GitHub never shows a secret's value, so the tool
 cannot tell which account's token a secret holds, and you tick the ones this account's token is
 in. You can also set "CI secret name" and "CI secret in" (`owner/repository`, or an
 organization) for a secret Check roles did not list. Save then adds every role named, in one
