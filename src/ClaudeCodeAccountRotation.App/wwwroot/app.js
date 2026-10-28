@@ -1651,6 +1651,8 @@
     repair.appendChild(offered);
     repair.addEventListener("toggle", function () {
       if (!repair.open) { return; }
+      // Redrawn on each open; a tick made before it was folded stays.
+      var kept = offerBoxes.filter(function (offer) { return offer.box.checked; }).map(function (offer) { return offer.secret.name + "@" + offer.secret.organization; });
       offered.replaceChildren();
       var offers = repairOffers(lastRoleCheck, lastAccounts);
       if (!offers.length) {
@@ -1659,6 +1661,7 @@
       offerBoxes = offers.map(function (offer) {
         var box = element("input");
         box.type = "checkbox";
+        box.checked = kept.indexOf(offer.secret.name + "@" + offer.secret.organization) >= 0;
         labeled(offered, offer.label, box);
         return { box: box, secret: offer.secret };
       });
