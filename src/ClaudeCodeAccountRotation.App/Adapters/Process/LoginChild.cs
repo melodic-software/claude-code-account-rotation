@@ -15,7 +15,7 @@ internal interface ILoginChild : IDisposable
     /// <summary>The next piece of the child's output, or null once it has ended and exited.</summary>
     Task<string?> ReadAsync(CancellationToken cancellationToken);
 
-    /// <summary>Writes the one-time code and a newline to the child's standard input.</summary>
+    /// <summary>Types the one-time code into the child, then Enter, in whatever form its input reads as one submitted line.</summary>
     Task WriteCodeAsync(string code, CancellationToken cancellationToken);
 
     void Kill();

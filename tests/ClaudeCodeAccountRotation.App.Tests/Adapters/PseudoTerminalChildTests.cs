@@ -22,15 +22,49 @@ public sealed class PseudoTerminalChildTests : IDisposable
     private const string RequireVariable = "CCAR_REQUIRE_REAL_CLI_TESTS";
 
     // Stands in for setup-token: no terminal on stdin, no screen. Under one, it
-    // goes raw, prints a sign-in URL, masks what is typed, and on Enter prints
-    // either the retry screen (for "bad") or a token built from the code.
+    // goes raw, turns on bracketed paste, prints a sign-in URL, masks what is
+    // typed, and on Enter prints either the retry screen (for "bad") or a token
+    // built from the code. Like the real CLI, it takes one unbracketed read of
+    // 64 characters or more as pasted text, Enter included, and does not submit.
     private const string Probe = """
         if (!process.stdin.isTTY) { process.stdout.write("stdin is not a terminal\n"); process.exit(3); }
         process.stdin.setRawMode(true);
-        process.stdout.write("\x1b[1mWelcome\x1b[22m\n\n https://claude.com/cai/oauth/authorize?code=true&scope=user%3Ainference&code_challenge=probe&state=probe\n\n Paste code here if prompted > ");
+        process.stdout.write("\x1b[?2004h\x1b[1mWelcome\x1b[22m\n\n https://claude.com/cai/oauth/authorize?code=true&scope=user%3Ainference&code_challenge=probe&state=probe\n\n Paste code here if prompted > ");
         let code = "";
+        let pasting = false;
+        let pending = "";
         process.stdin.on("data", (chunk) => {
-          for (const ch of chunk.toString("utf8")) {
+          let text = pending + chunk.toString("utf8");
+          pending = "";
+          if (!pasting && !text.includes("\x1b[") && text.length >= 64) {
+            code += text.replace(/[\r\n]/g, "");
+            process.stdout.write("*".repeat(text.length));
+            return;
+          }
+          // The paste markers, matched across reads: a marker cut at the end of
+          // one read waits for the rest of it in the next.
+          while (text.length > 0) {
+            const marker = pasting ? "\x1b[201~" : "\x1b[200~";
+            const at = text.indexOf(marker);
+            const plain = at < 0 ? text : text.slice(0, at);
+            let cut = 0;
+            for (let n = marker.length - 1; at < 0 && n > 0 && cut === 0; n--) {
+              if (plain.endsWith(marker.slice(0, n))) cut = n;
+            }
+            pending = plain.slice(plain.length - cut);
+            take(plain.slice(0, plain.length - cut));
+            if (at < 0) break;
+            pasting = !pasting;
+            text = text.slice(at + marker.length);
+          }
+        });
+        function take(text) {
+          if (pasting) {
+            code += text;
+            process.stdout.write("*".repeat(text.length));
+            return;
+          }
+          for (const ch of text) {
             if (ch === "\r" || ch === "\n") {
               if (code === "bad") {
                 process.stdout.write("\n OAuth error: Request failed with status code 400\n\n Press Enter to retry.\n");
@@ -43,8 +77,14 @@ public sealed class PseudoTerminalChildTests : IDisposable
               process.stdout.write("*");
             }
           }
-        });
+        }
         """;
+
+    /// <summary>
+    /// The shape and length of a real sign-in code: 86 characters, <c>#</c>, then
+    /// the 43-character state. Made up, so it can never sign anything in.
+    /// </summary>
+    private const string RealLengthCode = "ccar-not-a-real-code-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx#ccar-state-yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy";
 
     private readonly string _root = Path.Combine(Path.GetTempPath(), "claude-code-account-rotation-tests", Guid.NewGuid().ToString("N"));
 
@@ -136,6 +176,23 @@ public sealed class PseudoTerminalChildTests : IDisposable
         answer.ShouldNotContain("code-42#state");
     }
 
+    /// <summary>
+    /// A code as long as a real one (#334): typed as one burst ending in Enter,
+    /// the CLI takes the whole burst for pasted text and never submits it.
+    /// </summary>
+    [Fact]
+    public async Task ACodeAsLongAsARealOneIsSubmitted()
+    {
+        LoginChildFactory start = PseudoTerminalChild.Factory(ProbeExecutable());
+        using ILoginChild child = start(["setup-token"], _root).Value;
+        _ = await ReadUntilAsync(child, static text => text.Contains("Paste code", StringComparison.Ordinal), TimeSpan.FromSeconds(30));
+
+        await child.WriteCodeAsync(RealLengthCode, TestContext.Current.CancellationToken);
+        string answer = await ReadUntilAsync(child, static text => text.Contains("securely", StringComparison.Ordinal), TimeSpan.FromSeconds(30));
+
+        ClaudeCliSetupTokenRunner.ExtractTokens(answer).ShouldBe([SetupTokenScript.TokenPrefix + new string('Q', 60) + RealLengthCode.Replace("#", string.Empty, StringComparison.Ordinal) + "AA"]);
+    }
+
     [Fact]
     public async Task TheRunnerDeliversTheTokenThroughARealTerminal()
     {
@@ -224,7 +281,9 @@ public sealed class PseudoTerminalChildTests : IDisposable
     /// dashboard drives it: a made-up code is typed into the real
     /// <c>claude setup-token</c>, which sends it to Anthropic's token endpoint
     /// and draws its own refusal (today "OAuth error: Request failed with status
-    /// code 400"). Any refusal the CLI draws after the code proves the code
+    /// code 400"). The code is as long as a real one: a shorter one passed here
+    /// while every real code was taken for pasted text and never submitted
+    /// (#334). Any refusal the CLI draws after the code proves the code
     /// arrived and was submitted, whatever the endpoint answered (a 400, a rate
     /// limit, a network error), so the exact status is not asserted; a code the
     /// CLI never received ends instead in "did not answer the code", with the
@@ -243,7 +302,7 @@ public sealed class PseudoTerminalChildTests : IDisposable
 
         Result<LoginSession, string> started = await runner.StartAsync(new CiTokenRequest(AccountEmail.Parse("ci@example.com").Value, secret, OrgSecretVisibility.Private, []), TestContext.Current.CancellationToken);
         started.IsSuccess.ShouldBeTrue(started.IsFailure ? started.Error : null);
-        LoginSession answered = (await runner.SubmitCodeAsync(started.Value.Id, "ccar-contract-test-not-a-real-code#ccar-contract-test-state", TestContext.Current.CancellationToken)).Value;
+        LoginSession answered = (await runner.SubmitCodeAsync(started.Value.Id, RealLengthCode, TestContext.Current.CancellationToken)).Value;
         await runner.FinishedAsync(started.Value.Id);
 
         answered.State.ShouldBe(LoginSessionState.Failed, answered.Message);

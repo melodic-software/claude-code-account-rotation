@@ -26,6 +26,12 @@ All notable changes to this project are documented in this file. The format foll
   `LoginRetryNotSent` and a sentence naming those. A login refused outright is still refused with
   no request sent.
 
+### Fixed
+
+- **Generate CI token submits a real sign-in code.** `claude setup-token` took a code of 63
+  characters or more, typed with its Enter in one burst, as pasted text and never submitted it;
+  every real code is about 130 characters. The code now goes in as a bracketed paste, then Enter.
+
 ## [2.13.0] - 2026-10-28
 
 ### Changed
