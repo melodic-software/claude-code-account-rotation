@@ -448,8 +448,17 @@ internal sealed partial class DashboardAssembler(
                 : null;
         }
 
+        // An online side live on this account through a login made there: a
+        // login here would put a second live family beside that one, which no
+        // hand-off can clear. A dead pair parked here is set aside by the next
+        // hand-off instead, so the card says that rather than offering Login.
+        string? liveOn = isLive ? null : sides.FirstOrDefault(side => side.Online && side.LiveAccount == email)?.Side.Value;
         RosterEntry? entry = roster.Find(email);
         RefreshStateView refresh = Refresh(email, folder);
+        if (liveOn is not null && refresh.State == Kebab(RefreshOutcomeKind.LoginDead))
+        {
+            refresh = refresh with { Message = RefreshMessages.LoginDeadLiveOn(liveOn) };
+        }
         // Whether this pair can be made live at all, on either side: the planner
         // both sides go through refuses a stranded folder and an expired login
         // whichever side asked, so the two controls below share one verdict
@@ -479,6 +488,7 @@ internal sealed partial class DashboardAssembler(
                 LoginExpiresAt: loginExpiresAt,
                 LoggedInAt: loggedInAt,
                 LoginDead: loginDead,
+                LiveOn: liveOn,
                 Slot: Word(slot),
                 Chip: Chip(slot, holder),
                 CanSwitchHere: usable && !isLive && !heldAway,

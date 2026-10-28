@@ -70,6 +70,7 @@
     module.exports.ciTokenValueBody = ciTokenValueBody;
     module.exports.stateChip = stateChip;
     module.exports.loginLine = loginLine;
+    module.exports.loginOffered = loginOffered;
     return;
   }
 
@@ -1726,6 +1727,14 @@
     return parts.length ? parts.join(" \u00b7 ") : null;
   }
 
+  // Whether the card offers a login here. Not for a slot the other side holds,
+  // and not while an online side is live on this account: a login here would
+  // be a second live family, and a dead pair parked here is set aside by the
+  // next hand-off instead.
+  function loginOffered(account, at) {
+    return !account.heldAway && !account.liveOn && (!account.hasCredentials || loginSoon(account, at));
+  }
+
   // The credential axis in one word: whether the operator can switch to this
   // account at all. The standing line under the usage rows is the quota axis,
   // so a card reading "ready" with "usable in 2 h" beneath it states two facts.
@@ -2822,7 +2831,7 @@
     // A slot the other side holds is empty for a reason, and logging into it
     // would put a second token family on the machine. The route refuses it
     // anyway; the button goes so the operator is not sent at a 409.
-    var needsLogin = !account.heldAway && (!account.hasCredentials || loginSoon(account, at));
+    var needsLogin = loginOffered(account, at);
     if (roster && !account.isLive && needsLogin) {
       act.appendChild(actionButton(account.hasCredentials ? "Log in again" : "Login", "primary sm", function () { startLogin(account.email); }));
     }

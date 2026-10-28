@@ -123,6 +123,14 @@ internal static class RefreshMessages
     /// <summary>The other side's live access token is expired or was rejected; its session renews it.</summary>
     public static string SessionWillRefreshOn(SideName side) => "the session on " + side.Value + " will refresh; refresh again after it does";
 
+    /// <summary>
+    /// A rejected login parked here for an account the named side is live on
+    /// through a login made there: no login is offered here, and the next
+    /// hand-off sets the rejected pair aside.
+    /// </summary>
+    public static string LoginDeadLiveOn(string side) =>
+        "Anthropic rejected the login parked here; " + side + " is live on this account, and its next switch sets this pair aside";
+
     /// <summary>The side the holder record names did not answer.</summary>
     public static string SideUnreachable(SideName side) => "in use by " + side.Value + ", which did not answer; start it and refresh again";
 

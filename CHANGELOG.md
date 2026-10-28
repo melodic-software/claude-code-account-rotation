@@ -20,7 +20,9 @@ All notable changes to this project are documented in this file. The format foll
   account through a login made there, and the pair still parked in that account's slot is one the
   token endpoint rejected, the switch moves the dead pair to the superseded quarantine and parks
   that side's pair in its place, instead of refusing with `SideLiveAccountAmbiguous`. A parked pair
-  nothing has rejected is still refused as before.
+  nothing has rejected is still refused as before. While an online side is live on an account, that
+  account's card here offers no login, which would put a second live family beside that side's;
+  a rejected pair parked here says the next switch sets it aside.
 
 ## [2.12.0] - 2026-10-28
 

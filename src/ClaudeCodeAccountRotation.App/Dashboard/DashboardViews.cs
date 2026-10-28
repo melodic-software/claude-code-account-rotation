@@ -117,6 +117,10 @@ internal sealed record LiveAccountView(string? Email, bool HasCredentials, strin
 /// <c>LoginDead</c> says the token endpoint refused this card's parked refresh
 /// token whatever <c>LoginExpiresAt</c> says, so the page treats the login as
 /// expired: no Switch, and the login offered.
+/// <c>LiveOn</c> names an online side that reports this parked account as its
+/// live one, or null. The page then offers no login here: that side holds a
+/// live family of the account, and a second one here is the duplicate the
+/// store refuses. A dead pair parked here is set aside by the next hand-off.
 /// </para>
 /// <para>
 /// <c>Slot</c> is what this account's slot in the shared store holds, as one
@@ -178,7 +182,8 @@ internal sealed record AccountCardView(
     string? CliLoggedOut = null,
     string? LoggedOutOn = null,
     string? LimitedModel = null,
-    bool LoginDead = false);
+    bool LoginDead = false,
+    string? LiveOn = null);
 
 /// <summary>
 /// The roster entry behind a card, or null when the account is on the machine

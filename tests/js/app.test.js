@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const { stateChip, loginLine, takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, promptWording, uniqueName, renameLabel, nearestLimit, tier, asOf, usageAge, sentence, ciRoleBadges, removedCiRoles, changedCiTokenDate, ciTag, ciSecretBody, remoteControlQuestion, switchedToast, historyLines, historyReadLines, assignableRoles, newRoleItem, ciPanelWords, catalogNotice } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+const { stateChip, loginLine, loginOffered, takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, promptWording, uniqueName, renameLabel, nearestLimit, tier, asOf, usageAge, sentence, ciRoleBadges, removedCiRoles, changedCiTokenDate, ciTag, ciSecretBody, remoteControlQuestion, switchedToast, historyLines, historyReadLines, assignableRoles, newRoleItem, ciPanelWords, catalogNotice } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
 
 function limit(kind, percent, fields) {
   return Object.assign({ kind, percent, known: true, windowReset: false }, fields);
@@ -1047,4 +1047,12 @@ test("a login the token endpoint rejected reads as expired whatever its recorded
   assert.strictEqual(loginLine(Object.assign({}, dead, { loginExpiresAt: null }), NOW), "login expired");
   const alive = Object.assign({}, dead, { loginDead: false, refresh: { state: "read" } });
   assert.strictEqual(stateChip(alive, NOW), "ready");
+});
+
+test("no login is offered here for an account an online side is live on", () => {
+  const dead = { isLive: false, hasCredentials: true, loginDead: true, loginExpiresAt: null, refresh: { state: "login-dead" } };
+  assert.strictEqual(loginOffered(dead, NOW), true);
+  assert.strictEqual(loginOffered(Object.assign({}, dead, { liveOn: "wsl" }), NOW), false);
+  assert.strictEqual(loginOffered(Object.assign({}, dead, { heldAway: true }), NOW), false);
+  assert.strictEqual(loginOffered({ isLive: false, hasCredentials: false, refresh: { state: "idle" } }, NOW), true);
 });
