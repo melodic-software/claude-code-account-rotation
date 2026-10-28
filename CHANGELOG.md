@@ -190,7 +190,7 @@ Org usage from an Admin key's Cost Report is not in this release; it is deferred
   repository and the `calls` it made, and a check that stopped early names, for each repository
   it did not finish, "checked in part, covered back to <time>" or "not reached".
 - **The limit-stop check reads the lane-outcome JSON record.** It reads the record after
-  `lane-outcome ` in an annotation, and the legacy `class=` and `credential=` tokens from older
+  `lane-outcome` and a space in an annotation, and the legacy `class=` and `credential=` tokens from older
   ci-workflows. `credit-stop` counts as a limit stop beside `rate-limit`.
 - **Usage alerts for CI-role accounts.** When an account that backs a CI role reaches 70% of its
   7-day window, a line above the cards says so, and from 90% the line is red. Alerts never act.
@@ -634,7 +634,7 @@ Org usage from an Admin key's Cost Report is not in this release; it is deferred
   headroom (both windows run to 100%) and a one-click switch to the next account, over a
   ledger of every account with one-click switch buttons per side and a menu for Edit,
   Refresh, Pause and Remove. The side picker is replaced by those buttons, and the #148
-  "switch now" prompt sits in its side's strip. Usage is coloured in the statusline's
+  "switch now" prompt sits in its side's strip. Usage is colored in the statusline's
   tiers (50/75/90%) in the Anthropic palette, with Poppins and Lora served from the app
   under the OFL; `GET /fonts/*` answers without the instance token, like the stylesheet.
 

@@ -650,7 +650,7 @@ The same click reads the lane kill switches: the organization variables `CLAUDE_
 (`["owner/name", ...]`; absent means none). `CLAUDE_LANES_DISABLED` and
 `CLAUDE_LANES_REPO_DISABLED` show running only when exactly `false`, and stopped on any other
 value or when the variable does not exist. The two review switches show stopped only when exactly
-`true`. Values compare exactly, so `False` or ` false` is not `false`. Each organization switch
+`true`. Values compare exactly, so `False`, or `false` with a leading space, is not `false`. Each organization switch
 has a Stop or Start button that asks first. It then reads the variable's visibility (and, when it
 is `selected`, the ids of its repositories), runs `gh api --method PATCH
 orgs/<org>/actions/variables/<name> -f value=<true|false> -f visibility=<as read>` (plus
