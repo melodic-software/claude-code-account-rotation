@@ -57,6 +57,20 @@ public sealed class LiveUsageReadTests
     }
 
     [Fact]
+    public async Task ACliReadThatThrowsStillFallsBackToTheEndpoint()
+    {
+        using RefreshHarness harness = await LiveAsync();
+        harness.LiveUsage.Throws = new IOException("broken pipe");
+        harness.Usage.Answers.Enqueue(ScriptedUsage.Ok());
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.OutcomeFor("live@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.Read);
+        harness.Usage.AccessTokens.ShouldBe(["access-refresh-live"]);
+        harness.RefreshLog.Lines.ShouldContain(line => line.Contains("failed unexpectedly (IOException)", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task AnAnswerFromAnotherLiveAccountIsDiscarded()
     {
         // The CLI reads whatever is live when it runs. A switch that lands

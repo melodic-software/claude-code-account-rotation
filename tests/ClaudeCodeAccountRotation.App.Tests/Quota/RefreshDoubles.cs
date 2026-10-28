@@ -88,10 +88,18 @@ internal sealed class ScriptedLiveUsage : ILiveUsageReader
             (System.Text.Json.Nodes.JsonObject)System.Text.Json.Nodes.JsonNode.Parse("{\"limits\":[{\"kind\":\"session\",\"percent\":" + percent.ToString(System.Globalization.CultureInfo.InvariantCulture) + ",\"is_active\":true}]}")!,
             capturedAt));
 
+    /// <summary>When set, the read throws it instead of answering.</summary>
+    public Exception? Throws { get; set; }
+
     public Task<Result<LiveUsageAnswer, string>> ReadAsync(CancellationToken cancellationToken)
     {
         Calls++;
         BeforeAnswer?.Invoke();
+        if (Throws is not null)
+        {
+            throw Throws;
+        }
+
         return Task.FromResult(Answers.Count > 0 ? Answers.Dequeue() : Result<LiveUsageAnswer, string>.Failure(NoCli));
     }
 }

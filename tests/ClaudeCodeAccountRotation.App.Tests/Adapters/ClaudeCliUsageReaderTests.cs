@@ -174,7 +174,10 @@ public sealed class ClaudeCliUsageReaderTests : IDisposable
 
         JsonObject record = Record();
         record["args"]!.AsArray().Select(static arg => arg!.GetValue<string>()).ShouldBe(ClaudeCliUsageReader.Arguments);
-        Path.GetFullPath(record["cwd"]!.GetValue<string>()).ShouldBe(Path.GetFullPath(WorkingDirectory));
+        // By name rather than whole: a Windows runner's temp path may come back in its long or short form.
+        string cwd = Path.TrimEndingDirectorySeparator(record["cwd"]!.GetValue<string>());
+        Path.GetFileName(cwd).ShouldBe("cli-usage");
+        Path.GetFileName(Path.GetDirectoryName(cwd)).ShouldBe(Path.GetFileName(_root));
         record["configDir"]!.GetValue<string>().ShouldBe(Path.GetFullPath(LiveDirectory));
         record["flag"].ShouldBeNull();
         record["oauth"].ShouldBeNull();

@@ -240,6 +240,27 @@ public sealed class RefreshEndpointTests
         card["refresh"]!["state"]!.GetValue<string>().ShouldBe("session-will-refresh");
     }
 
+    /// <summary>
+    /// The live account's card is filled from the CLI's answer when it gives a
+    /// fresh one, and nothing of the tool's own reaches the usage endpoint (#220).
+    /// </summary>
+    [Fact]
+    public async Task ARefreshOfTheLiveAccountIsReadThroughTheCli()
+    {
+        await using AppFactory factory = await LiveAndParkedAsync(TestContext.Current.CancellationToken, liveExpired: false);
+        factory.LiveUsage.Answers.Enqueue(Quota.ScriptedLiveUsage.Ok(factory.Clock.GetUtcNow(), percent: 61));
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(OneUri(LiveEmail), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.Accepted);
+        await factory.Services.GetRequiredService<QuotaState>().CurrentRun;
+        factory.Outbound.Requests.ShouldBeEmpty();
+        JsonNode card = await CardAsync(client, LiveEmail);
+        card["refresh"]!["state"]!.GetValue<string>().ShouldBe("read");
+        card["usage"]!["limits"]![0]!["percent"]!.GetValue<double>().ShouldBe(61);
+    }
+
     [Fact]
     public async Task NothingReachesEitherEndpointWithoutATrigger()
     {

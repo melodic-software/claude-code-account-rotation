@@ -197,7 +197,16 @@ internal sealed class ClaudeCliUsageReader : ILiveUsageReader
                 answer = null;
             }
 
-            process.StandardInput.Close();
+            try
+            {
+                // End of input is the CLI's cue to exit.
+                process.StandardInput.Close();
+            }
+            catch (IOException)
+            {
+                // It has already gone; the pipe was closed under the flush.
+            }
+
             if (answer is null)
             {
                 await process.WaitForExitAsync(budget.Token);
@@ -213,24 +222,42 @@ internal sealed class ClaudeCliUsageReader : ILiveUsageReader
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
                 // The answer is in; a child slow to exit costs nothing but its kill.
-                ChildProcess.TryKill(process);
+                await KillAndReapAsync(process);
             }
 
             return Parse(answer, requestId, startedAt, _timeProvider.GetUtcNow());
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            ChildProcess.TryKill(process);
+            await KillAndReapAsync(process);
             return Failure("the CLI did not answer within " + _timeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture) + " s and was killed");
         }
         catch (OperationCanceledException)
         {
-            ChildProcess.TryKill(process);
+            await KillAndReapAsync(process);
             throw;
         }
         finally
         {
             Observe(standardError);
+        }
+    }
+
+    /// <summary>
+    /// Kills the child and waits, briefly and on a fresh bound, for it to be
+    /// gone: until it is, Windows holds its working directory open.
+    /// </summary>
+    private static async Task KillAndReapAsync(System.Diagnostics.Process process)
+    {
+        ChildProcess.TryKill(process);
+        using CancellationTokenSource bound = new(_exitGrace);
+        try
+        {
+            await process.WaitForExitAsync(bound.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Not gone within the bound; nothing more to do for it here.
         }
     }
 

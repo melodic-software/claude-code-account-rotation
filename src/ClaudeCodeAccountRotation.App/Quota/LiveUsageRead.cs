@@ -46,7 +46,20 @@ internal static partial class LiveUsageRead
             }
             else
             {
-                Result<LiveUsageAnswer, string> answer = await cli.ReadAsync(cancellationToken);
+                Result<LiveUsageAnswer, string> answer;
+                try
+                {
+                    answer = await cli.ReadAsync(cancellationToken);
+                }
+#pragma warning disable CA1031 // Do not catch general exception types
+                catch (Exception exception) when (exception is not OperationCanceledException)
+#pragma warning restore CA1031
+                {
+                    // A CLI read that throws costs the CLI its turn, not the read:
+                    // the endpoint still answers for the account.
+                    answer = Result<LiveUsageAnswer, string>.Failure("the CLI read failed unexpectedly (" + exception.GetType().Name + ")");
+                }
+
                 if (answer.IsFailure)
                 {
                     reason = answer.Error;
