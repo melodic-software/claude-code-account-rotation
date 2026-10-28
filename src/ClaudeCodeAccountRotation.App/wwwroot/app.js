@@ -2980,7 +2980,8 @@
       var line = element("li", alert.kind, alert.text);
       spareActions[index].forEach(function (action) {
         line.appendChild(document.createTextNode(" "));
-        line.appendChild(actionButton(action.label, "sm", function () { assignToBestSpare(action); }));
+        // Rebuilt by every poll, so it takes the running mutation's lock as it is drawn.
+        line.appendChild(blockable(actionButton(action.label, "sm", function () { assignToBestSpare(action); }), false));
       });
       alertStrip.appendChild(line);
     });
