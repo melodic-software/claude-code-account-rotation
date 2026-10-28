@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Outbound HTTP request lines are logged from Warning.** The `System.Net.Http.HttpClient`
+  categories default to Warning, so routine peer polls no longer write a start and an end line
+  each to the leader's log.
+
 ## [2.12.0] - 2026-10-28
 
 ### Added
