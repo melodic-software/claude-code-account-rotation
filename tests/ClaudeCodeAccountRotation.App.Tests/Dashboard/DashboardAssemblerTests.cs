@@ -927,12 +927,26 @@ public sealed class DashboardAssemblerTests
         OfferedTo(card).ShouldBeEmpty();
     }
 
+    /// <summary>
+    /// Recovery, not a login, is what a stranded folder needs, so its own state
+    /// and sentence outrank every login sentence: paused, roster-paused, and
+    /// either one for an account an online side is live on.
+    /// </summary>
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task APausedLoginStrandedInRecoveryStaysStrandedAndUnswitchable(bool rosterPaused)
+    [InlineData(false, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    public async Task ALoginMarkOnAFolderStrandedInRecoveryLeavesItStrandedAndUnswitchable(bool permanent, bool rosterPaused, bool liveOnSide)
     {
-        await using AppFactory factory = await SharedStoreAsync(Side());
+        FakePeerRotationInstance side = Side();
+        if (liveOnSide)
+        {
+            side.OutgoingEmail = ExpiredEmail;
+            side.OutgoingRefreshToken = "refresh-relogin";
+        }
+
+        await using AppFactory factory = await SharedStoreAsync(side);
         string folder = await factory.ParkedProfileAsync(ExpiredEmail, "refresh-b", TestContext.Current.CancellationToken);
         if (rosterPaused)
         {
@@ -944,12 +958,13 @@ public sealed class DashboardAssemblerTests
         factory.Services.GetRequiredService<QuotaState>().RecordLoginDead(
             AccountEmail.Parse(ExpiredEmail).Value,
             CredentialFiles.Pair("refresh-b").Fingerprint,
-            factory.Clock.GetUtcNow().AddHours(6));
+            permanent ? null : factory.Clock.GetUtcNow().AddHours(6));
         await StrandAsync(factory, folder);
 
         JsonElement card = await CardAsync(factory, ExpiredEmail);
 
         card.GetProperty("refresh").GetProperty("state").GetString().ShouldBe("stranded");
+        card.GetProperty("refresh").GetProperty("message").GetString().ShouldBe(RefreshMessages.Stranded);
         card.GetProperty("canSwitchHere").GetBoolean().ShouldBeFalse();
         OfferedTo(card).ShouldBeEmpty();
     }
