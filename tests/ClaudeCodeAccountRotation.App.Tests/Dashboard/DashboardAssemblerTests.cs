@@ -927,11 +927,20 @@ public sealed class DashboardAssemblerTests
         OfferedTo(card).ShouldBeEmpty();
     }
 
-    [Fact]
-    public async Task APausedLoginStrandedInRecoveryStaysStrandedAndUnswitchable()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task APausedLoginStrandedInRecoveryStaysStrandedAndUnswitchable(bool rosterPaused)
     {
         await using AppFactory factory = await SharedStoreAsync(Side());
         string folder = await factory.ParkedProfileAsync(ExpiredEmail, "refresh-b", TestContext.Current.CancellationToken);
+        if (rosterPaused)
+        {
+            await factory.Services.GetRequiredService<RosterFile>().UpdateAsync(
+                roster => roster.With(new RosterEntry(AccountEmail.Parse(ExpiredEmail).Value, null, null, null, Paused: true, null)),
+                TestContext.Current.CancellationToken);
+        }
+
         factory.Services.GetRequiredService<QuotaState>().RecordLoginDead(
             AccountEmail.Parse(ExpiredEmail).Value,
             CredentialFiles.Pair("refresh-b").Fingerprint,

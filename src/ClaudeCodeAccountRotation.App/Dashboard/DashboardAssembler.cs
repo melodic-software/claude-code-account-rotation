@@ -458,7 +458,13 @@ internal sealed partial class DashboardAssembler(
         string? liveOn = isLive ? null : sides.FirstOrDefault(side => side.Online && side.LiveAccount == email)?.Side.Value;
         RosterEntry? entry = roster.Find(email);
         RefreshStateView refresh = Refresh(email, folder);
-        if (liveOn is not null && loginDead)
+        bool stranded = refresh.State == Kebab(RefreshOutcomeKind.Stranded);
+        if (stranded)
+        {
+            // Recovery, not a login, is what a stranded folder needs, so no
+            // sentence about the login replaces its own.
+        }
+        else if (liveOn is not null && loginDead)
         {
             refresh = refresh with { Message = RefreshMessages.LoginDeadLiveOn(liveOn) };
         }
@@ -466,17 +472,17 @@ internal sealed partial class DashboardAssembler(
         {
             refresh = refresh with { Message = RefreshMessages.LoginPausedLiveOn(liveOn) };
         }
-        else if (loginPaused && entry is { Paused: true })
-        {
-            // A roster pause stops the retry too, so Switch would only be refused.
-            refresh = new RefreshStateView(Kebab(RefreshOutcomeKind.LoginDead), RefreshMessages.LoginPausedOnRoster, RetryAt: null);
-        }
-        else if (loginPaused && refresh.State != Kebab(RefreshOutcomeKind.Stranded))
+        else if (loginPaused)
         {
             // The pause is the mark, not the last outcome: a later turn that
-            // sent nothing still reports it, and Switch is what retries it.
-            refresh = new RefreshStateView(Kebab(RefreshOutcomeKind.LoginDead), RefreshMessages.LoginPresumedDead, RetryAt: null);
+            // sent nothing still reports it, and Switch is what retries it. A
+            // roster pause stops that retry, so that card says so instead.
+            refresh = new RefreshStateView(
+                Kebab(RefreshOutcomeKind.LoginDead),
+                entry is { Paused: true } ? RefreshMessages.LoginPausedOnRoster : RefreshMessages.LoginPresumedDead,
+                RetryAt: null);
         }
+
         // Whether this pair can be made live at all, on either side: the planner
         // both sides go through refuses a stranded folder and an expired login
         // whichever side asked, so the two controls below share one verdict
@@ -486,7 +492,7 @@ internal sealed partial class DashboardAssembler(
         // it stands. Refresh and Pause stay as they are.
         bool usable = hasCredentials
             && !cliLoggedOut
-            && refresh.State != Kebab(RefreshOutcomeKind.Stranded)
+            && !stranded
             && !(loginExpiresAt <= capturedAt)
             && !loginDead
             && !(loginPaused && entry is { Paused: true });
