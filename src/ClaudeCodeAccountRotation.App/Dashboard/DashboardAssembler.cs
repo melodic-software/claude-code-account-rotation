@@ -714,7 +714,7 @@ internal sealed partial class DashboardAssembler(
             .Order(StringComparer.Ordinal)
             .Select(static path => Path.GetFileName(Path.GetDirectoryName(path) ?? string.Empty).EndsWith(WslSwitch.DeadLoginSuffix, StringComparison.Ordinal)
                 ? "A parked login the token endpoint rejected was quarantined at " + path
-                    + " when a new login of that account was parked in its place. It cannot be used again; delete it yourself."
+                    + " when a new login of that account was parked in its place. It is never used here; delete it yourself once the new login works."
                 : "A superseded token family is quarantined at " + path
                     + ". It is never used and never deleted here; delete it yourself once that account has been logged out on the side that held it.");
     }
