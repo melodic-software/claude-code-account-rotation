@@ -883,6 +883,116 @@ public sealed class DashboardAssemblerTests
     }
 
     /// <summary>
+    /// A paused login keeps Switch on both sides, because the switch retries
+    /// it first, and the card says so.
+    /// </summary>
+    [Fact]
+    public async Task APausedParkedLoginStaysSwitchableAndSaysSwitchRetriesItFirst()
+    {
+        await using AppFactory factory = await SharedStoreAsync(Side());
+        _ = await factory.ParkedProfileAsync(ExpiredEmail, "refresh-paused", TestContext.Current.CancellationToken);
+        factory.Services.GetRequiredService<QuotaState>().RecordLoginDead(
+            AccountEmail.Parse(ExpiredEmail).Value,
+            CredentialFiles.Pair("refresh-paused").Fingerprint,
+            factory.Clock.GetUtcNow().AddHours(6));
+
+        JsonElement card = await CardAsync(factory, ExpiredEmail);
+
+        card.GetProperty("loginPaused").GetBoolean().ShouldBeTrue();
+        card.GetProperty("loginDead").GetBoolean().ShouldBeFalse();
+        card.GetProperty("canSwitchHere").GetBoolean().ShouldBeTrue();
+        OfferedTo(card).ShouldBe(["wsl"]);
+        card.GetProperty("refresh").GetProperty("message").GetString().ShouldBe(RefreshMessages.LoginPresumedDead);
+    }
+
+    [Fact]
+    public async Task APausedLoginOnARosterPausedAccountIsNotOfferedSwitchAndSaysWhy()
+    {
+        // The retry sends nothing for a roster-paused account, so the card does
+        // not promise one.
+        await using AppFactory factory = await SharedStoreAsync(Side());
+        _ = await factory.ParkedProfileAsync(ExpiredEmail, "refresh-paused", TestContext.Current.CancellationToken);
+        await factory.Services.GetRequiredService<RosterFile>().UpdateAsync(
+            roster => roster.With(new RosterEntry(AccountEmail.Parse(ExpiredEmail).Value, null, null, null, Paused: true, null)),
+            TestContext.Current.CancellationToken);
+        factory.Services.GetRequiredService<QuotaState>().RecordLoginDead(
+            AccountEmail.Parse(ExpiredEmail).Value,
+            CredentialFiles.Pair("refresh-paused").Fingerprint,
+            factory.Clock.GetUtcNow().AddHours(6));
+
+        JsonElement card = await CardAsync(factory, ExpiredEmail);
+
+        card.GetProperty("refresh").GetProperty("message").GetString().ShouldBe(RefreshMessages.LoginPausedOnRoster);
+        card.GetProperty("canSwitchHere").GetBoolean().ShouldBeFalse();
+        OfferedTo(card).ShouldBeEmpty();
+    }
+
+    /// <summary>
+    /// Recovery, not a login, is what a stranded folder needs, so its own state
+    /// and sentence outrank every login sentence: paused, roster-paused, and
+    /// either one for an account an online side is live on.
+    /// </summary>
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    public async Task ALoginMarkOnAFolderStrandedInRecoveryLeavesItStrandedAndUnswitchable(bool permanent, bool rosterPaused, bool liveOnSide)
+    {
+        FakePeerRotationInstance side = Side();
+        if (liveOnSide)
+        {
+            side.OutgoingEmail = ExpiredEmail;
+            side.OutgoingRefreshToken = "refresh-relogin";
+        }
+
+        await using AppFactory factory = await SharedStoreAsync(side);
+        string folder = await factory.ParkedProfileAsync(ExpiredEmail, "refresh-b", TestContext.Current.CancellationToken);
+        if (rosterPaused)
+        {
+            await factory.Services.GetRequiredService<RosterFile>().UpdateAsync(
+                roster => roster.With(new RosterEntry(AccountEmail.Parse(ExpiredEmail).Value, null, null, null, Paused: true, null)),
+                TestContext.Current.CancellationToken);
+        }
+
+        factory.Services.GetRequiredService<QuotaState>().RecordLoginDead(
+            AccountEmail.Parse(ExpiredEmail).Value,
+            CredentialFiles.Pair("refresh-b").Fingerprint,
+            permanent ? null : factory.Clock.GetUtcNow().AddHours(6));
+        await StrandAsync(factory, folder);
+
+        JsonElement card = await CardAsync(factory, ExpiredEmail);
+
+        card.GetProperty("refresh").GetProperty("state").GetString().ShouldBe("stranded");
+        card.GetProperty("refresh").GetProperty("message").GetString().ShouldBe(RefreshMessages.Stranded);
+        card.GetProperty("canSwitchHere").GetBoolean().ShouldBeFalse();
+        OfferedTo(card).ShouldBeEmpty();
+        // The flags the page reads for its chip and its login offer stay clear,
+        // so it says "error" and offers recovery's own path, not a login.
+        card.GetProperty("loginPaused").GetBoolean().ShouldBeFalse();
+        card.GetProperty("loginDead").GetBoolean().ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task APausedLoginForAnAccountLiveOnAnOnlineSideSaysNoLoginIsOfferedHere()
+    {
+        FakePeerRotationInstance side = Side();
+        side.OutgoingEmail = ExpiredEmail;
+        side.OutgoingRefreshToken = "refresh-relogin";
+        await using AppFactory factory = await SharedStoreAsync(side);
+        _ = await factory.ParkedProfileAsync(ExpiredEmail, "refresh-paused", TestContext.Current.CancellationToken);
+        factory.Services.GetRequiredService<QuotaState>().RecordLoginDead(
+            AccountEmail.Parse(ExpiredEmail).Value,
+            CredentialFiles.Pair("refresh-paused").Fingerprint,
+            factory.Clock.GetUtcNow().AddHours(6));
+
+        JsonElement card = await CardAsync(factory, ExpiredEmail);
+
+        card.GetProperty("liveOn").GetString().ShouldBe("wsl");
+        card.GetProperty("refresh").GetProperty("message").GetString().ShouldBe(RefreshMessages.LoginPausedLiveOn("wsl"));
+    }
+
+    /// <summary>
     /// The card R6 is about: the pair is in the other side's live directory, so
     /// neither this side's Switch nor that side's may take it until that side
     /// parks it back.

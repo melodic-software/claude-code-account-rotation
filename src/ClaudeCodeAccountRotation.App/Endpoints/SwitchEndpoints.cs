@@ -51,6 +51,7 @@ internal static class SwitchEndpoints
             RateLimitGuardTeeFileReader tee,
             DashboardState state,
             QuotaRefreshWorker worker,
+            QuotaRefresh refresh,
             IRemoteControlTask remoteControl,
             RemoteControlRestartLock restartLock,
             CancellationToken cancellationToken) =>
@@ -62,6 +63,14 @@ internal static class SwitchEndpoints
             }
 
             await worker.YieldAsync(cancellationToken);
+
+            // A paused login is retried once before the switch takes the gate,
+            // so a run of 400s that was the endpoint's fault costs one click.
+            Result<Unit, SwitchRefusal> retried = await refresh.RetryPausedLoginAsync(target.Value, cancellationToken);
+            if (retried.IsFailure)
+            {
+                return Results.Json(SwitchRefusalView.Of(retried.Error), statusCode: StatusCodes.Status409Conflict);
+            }
 
             // From the running-state read through the restart, one switch at a
             // time: the switch's own gate is released before the restart, and a

@@ -96,7 +96,8 @@ internal static class RefreshMessages
     public const string Read = "read just now";
     public const string TokenRefreshFailed = "the token endpoint did not answer with new credentials";
     public const string LoginDead = "Anthropic rejected this login; click Log in again";
-    public const string LoginPresumedDead = "the token endpoint refused this login 3 times in a row; click Log in again, or it is tried again in 6 h";
+    public const string LoginPausedOnRoster = "the token endpoint refused this login 3 times in a row, and this account is paused, so Switch does not retry it; resume it or click Log in again";
+    public const string LoginPresumedDead = "the token endpoint refused this login 3 times in a row; Switch retries the login first, or click Log in again";
     public const string Stranded = "credentials stranded in recovery";
     public const string Lost = "credentials lost; log in again";
     public const string ReadFailedTransport = "the usage endpoint could not be read";
@@ -131,6 +132,14 @@ internal static class RefreshMessages
     /// </summary>
     public static string LoginDeadLiveOn(string side) =>
         "Anthropic rejected the login parked here; " + side + " is live on this account, and its next switch sets this pair aside";
+
+    /// <summary>
+    /// A paused login parked here for an account the named side is live on: no
+    /// login is offered here, and the pause is not a rejection, so no hand-off
+    /// sets the pair aside either.
+    /// </summary>
+    public static string LoginPausedLiveOn(string side) =>
+        "the token endpoint refused the login parked here 3 times in a row; " + side + " is live on this account, so no login is offered here";
 
     /// <summary>The side the holder record names did not answer.</summary>
     public static string SideUnreachable(SideName side) => "in use by " + side.Value + ", which did not answer; start it and refresh again";

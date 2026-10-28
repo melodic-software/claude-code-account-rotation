@@ -1089,3 +1089,16 @@ test("no login is offered here for an account an online side is live on", () => 
   assert.strictEqual(loginOffered(Object.assign({}, dead, { heldAway: true }), NOW), false);
   assert.strictEqual(loginOffered({ isLive: false, hasCredentials: false, refresh: { state: "idle" } }, NOW), true);
 });
+
+test("a paused login keeps Switch, offers the login, and says it is paused", () => {
+  const paused = { isLive: false, hasCredentials: true, loginPaused: true, loginExpiresAt: null, refresh: { state: "login-dead" } };
+  assert.strictEqual(stateChip(paused, NOW), "login paused");
+  assert.strictEqual(loginOffered(paused, NOW), true);
+  assert.strictEqual(loginOffered(Object.assign({}, paused, { liveOn: "wsl" }), NOW), false);
+});
+
+test("a stranded card without login flags reads error and offers no login", () => {
+  const stranded = { isLive: false, hasCredentials: true, loginPaused: false, loginDead: false, loginExpiresAt: null, refresh: { state: "stranded" } };
+  assert.strictEqual(stateChip(stranded, NOW), "error");
+  assert.strictEqual(loginOffered(stranded, NOW), false);
+});

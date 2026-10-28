@@ -1743,7 +1743,7 @@
   // be a second live family, and a dead pair parked here is set aside by the
   // next hand-off instead.
   function loginOffered(account, at) {
-    return !account.heldAway && !account.liveOn && (!account.hasCredentials || loginSoon(account, at));
+    return !account.heldAway && !account.liveOn && (!account.hasCredentials || !!account.loginPaused || loginSoon(account, at));
   }
 
   // The credential axis in one word: whether the operator can switch to this
@@ -1762,6 +1762,8 @@
     if (account.heldAway) { return null; }
     if (!account.hasCredentials) { return "needs login"; }
     if (loginExpired(account, at)) { return "login expired"; }
+    // Switch is still offered: it retries the paused login before it moves anything.
+    if (account.loginPaused) { return "login paused"; }
     if (account.refresh.state === "stranded") { return "error"; }
     return "ready";
   }

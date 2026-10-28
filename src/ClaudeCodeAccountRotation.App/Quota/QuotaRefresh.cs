@@ -222,6 +222,106 @@ internal sealed partial class QuotaRefresh
     }
 
     /// <summary>
+    /// The one retry a switch makes of a target whose login is paused: its
+    /// parked pair holds the lapsing mark a run of unexplained 400s leaves. Run
+    /// before the switch takes the mutation gate, through the same gated token
+    /// unit and write-back a pass uses, and under the same rules: no pass may be
+    /// running, no lockout may stand, and the account's request budget must
+    /// allow it. A pair with no mark, or with the permanent one, sends nothing:
+    /// the planner decides those. So does every folder a pass would not refresh
+    /// from its own pair: one the roster pauses, one stranded in recovery (its
+    /// file holds a refresh token already spent), the live account's, and a slot
+    /// the other side holds or one in transit.
+    /// </summary>
+    /// <returns>
+    /// Success when the switch may go on: nothing to retry, or the retry rotated
+    /// the pair and the mark is gone. <see cref="SwitchRefusal.TargetLoginExpired"/>
+    /// when the endpoint refused it again, and
+    /// <see cref="SwitchRefusal.LoginRetryNotSent"/> when no answer was had.
+    /// </returns>
+    public async Task<Result<Unit, SwitchRefusal>> RetryPausedLoginAsync(AccountEmail account, CancellationToken cancellationToken)
+    {
+        if ((await _profiles.ListAsync(cancellationToken)).FirstOrDefault(profile => profile.Email == account) is not { HasCredentials: true } profile)
+        {
+            return Result<Unit, SwitchRefusal>.Success(Unit.Value);
+        }
+
+        CredentialPair? pair;
+        try
+        {
+            pair = await _pairs.ReadParkedAsync(profile.FolderPath, cancellationToken);
+        }
+        catch (Exception exception) when (exception is InvalidDataException or JsonException or IOException or UnauthorizedAccessException)
+        {
+            // Unreadable is the planner's to refuse, with its own reason.
+            return Result<Unit, SwitchRefusal>.Success(Unit.Value);
+        }
+
+        DateTimeOffset now = _timeProvider.GetUtcNow();
+        if (pair is null || !_state.IsLoginDead(account, pair.Fingerprint, now) || _state.IsLoginRejected(account, pair.Fingerprint))
+        {
+            return Result<Unit, SwitchRefusal>.Success(Unit.Value);
+        }
+
+        // The guards a pass applies before it refreshes a parked folder, so a
+        // click never sends what a pass would not.
+        AccountEmail? liveEmail = (await _stateFile.ReadAccountBlockAsync(cancellationToken))?.Email;
+        if (liveEmail == account
+            || _recovery.HasRecoveryFor(profile.FolderPath)
+            || (await _rosterFile.ReadAsync(cancellationToken)).Find(account) is { Paused: true }
+            || await _slots.ReadAsync(account, profile.FolderPath, profile.HasCredentials, new WindowsHold(liveEmail, await LiveFingerprintAsync(cancellationToken)), cancellationToken)
+                is { State: SlotState.HeldElsewhere or SlotState.InTransit })
+        {
+            return Result<Unit, SwitchRefusal>.Success(Unit.Value);
+        }
+
+        if (!_state.TryBeginRun())
+        {
+            return Result<Unit, SwitchRefusal>.Failure(SwitchRefusal.RefreshInProgress);
+        }
+
+        try
+        {
+            if (_state.LockedUntil(now) is not null || !_budget.TryReserve(account))
+            {
+                LogPausedRetryNotSent(account.Value, "the request budget or a rate-limit lockout refused it");
+                return Result<Unit, SwitchRefusal>.Failure(SwitchRefusal.LoginRetryNotSent);
+            }
+
+            GatedRefresh refreshed = await RefreshUnderGateAsync(account, profile.FolderPath, pair);
+            if (refreshed.Outcome is null)
+            {
+                _state.ClearLoginDead(account);
+                LogPausedRetrySucceeded(account.Value);
+                return Result<Unit, SwitchRefusal>.Success(Unit.Value);
+            }
+
+            RefreshOutcome outcome = refreshed.Outcome;
+            if (outcome.Kind == RefreshOutcomeKind.Skipped)
+            {
+                _budget.Release(account);
+            }
+
+            _state.RecordOutcome(account, outcome);
+            switch (outcome.Kind)
+            {
+                case RefreshOutcomeKind.LoginDead:
+                case RefreshOutcomeKind.Lost:
+                    return Result<Unit, SwitchRefusal>.Failure(SwitchRefusal.TargetLoginExpired);
+                case RefreshOutcomeKind.Stranded:
+                    return Result<Unit, SwitchRefusal>.Failure(SwitchRefusal.TargetStrandedInRecovery);
+                default:
+                    LogPausedRetryNotSent(account.Value, outcome.Message);
+                    return Result<Unit, SwitchRefusal>.Failure(SwitchRefusal.LoginRetryNotSent);
+            }
+        }
+        finally
+        {
+            _state.EndRun();
+        }
+    }
+
+    /// <summary>
     /// Who this pass reads, in order, and the outcome of everyone it decided not
     /// to read before it started. The live account is whatever the state file
     /// says after a stale-identity repair; a repair that could not run leaves the
@@ -1050,6 +1150,12 @@ internal sealed partial class QuotaRefresh
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "the login of {Account} in {Folder} is treated as dead after {Count} unexplained 400s in a row; its pair is tried again in {Hours} h unless it is logged in again first")]
     private partial void LogLoginPresumedDead(string account, string folder, int count, int hours);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "the paused login of {Account} was retried before a switch and its refresh succeeded")]
+    private partial void LogPausedRetrySucceeded(string account);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the paused login of {Account} could not be retried before a switch: {Reason}")]
+    private partial void LogPausedRetryNotSent(string account, string reason);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "the login of {Account} in {Folder} is dead: {Detail}; no refresh is sent for it until it is logged in again")]
     private partial void LogLoginRejected(string account, string folder, string detail);

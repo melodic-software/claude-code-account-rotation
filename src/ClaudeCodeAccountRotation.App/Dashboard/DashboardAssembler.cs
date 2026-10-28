@@ -214,7 +214,9 @@ internal sealed partial class DashboardAssembler(
                 await SlotAsync(profile.Email, profile.FolderPath, profile.HasCredentials, hold, warnings, cancellationToken),
                 sides,
                 cliLoggedOut,
-                loginDead: quota.IsLoginDead(profile.Email, parkedPair?.Fingerprint, capturedAt)));
+                loginDead: quota.IsLoginRejected(profile.Email, parkedPair?.Fingerprint),
+                loginPaused: quota.IsLoginDead(profile.Email, parkedPair?.Fingerprint, capturedAt)
+                    && !quota.IsLoginRejected(profile.Email, parkedPair?.Fingerprint)));
         }
 
         // A roster entry the operator added but has not logged in yet owns no
@@ -434,7 +436,8 @@ internal sealed partial class DashboardAssembler(
         IReadOnlyList<WslSideState> sides,
         bool cliLoggedOut = false,
         string? cliLoggedOutSentence = null,
-        bool loginDead = false)
+        bool loginDead = false,
+        bool loginPaused = false)
     {
         WslSideState? holder = Holder(slot, sides);
         bool heldAway = slot?.State is SlotState.HeldElsewhere or SlotState.InTransit;
@@ -467,10 +470,31 @@ internal sealed partial class DashboardAssembler(
         string? liveOn = isLive ? null : sides.FirstOrDefault(side => side.Online && side.LiveAccount == email)?.Side.Value;
         RosterEntry? entry = roster.Find(email);
         RefreshStateView refresh = Refresh(email, folder);
-        if (liveOn is not null && refresh.State == Kebab(RefreshOutcomeKind.LoginDead))
+        bool stranded = refresh.State == Kebab(RefreshOutcomeKind.Stranded);
+        if (stranded)
+        {
+            // Recovery, not a login, is what a stranded folder needs, so no
+            // sentence about the login replaces its own.
+        }
+        else if (liveOn is not null && loginDead)
         {
             refresh = refresh with { Message = RefreshMessages.LoginDeadLiveOn(liveOn) };
         }
+        else if (liveOn is not null && loginPaused)
+        {
+            refresh = refresh with { Message = RefreshMessages.LoginPausedLiveOn(liveOn) };
+        }
+        else if (loginPaused)
+        {
+            // The pause is the mark, not the last outcome: a later turn that
+            // sent nothing still reports it, and Switch is what retries it. A
+            // roster pause stops that retry, so that card says so instead.
+            refresh = new RefreshStateView(
+                Kebab(RefreshOutcomeKind.LoginDead),
+                entry is { Paused: true } ? RefreshMessages.LoginPausedOnRoster : RefreshMessages.LoginPresumedDead,
+                RetryAt: null);
+        }
+
         // Whether this pair can be made live at all, on either side: the planner
         // both sides go through refuses a stranded folder and an expired login
         // whichever side asked, so the two controls below share one verdict
@@ -480,9 +504,10 @@ internal sealed partial class DashboardAssembler(
         // it stands. Refresh and Pause stay as they are.
         bool usable = hasCredentials
             && !cliLoggedOut
-            && refresh.State != Kebab(RefreshOutcomeKind.Stranded)
+            && !stranded
             && !(loginExpiresAt <= capturedAt)
-            && !loginDead;
+            && !loginDead
+            && !(loginPaused && entry is { Paused: true });
         // The side holding this account answers that its CLI logged out of it.
         string? loggedOutOn = slot?.State == SlotState.HeldElsewhere && holder is { Online: true, LiveLoginDead: true } && holder.LiveAccount == email
             ? holder.Side.Value
@@ -499,7 +524,11 @@ internal sealed partial class DashboardAssembler(
                 View(entry, laneCatalog.IsKeyedNow),
                 LoginExpiresAt: loginExpiresAt,
                 LoggedInAt: loggedInAt,
-                LoginDead: loginDead,
+                // Not on a stranded card: the mark names the spent pair still in
+                // the folder, and the page would read it as a login to renew
+                // when recovery is what the card needs.
+                LoginDead: loginDead && !stranded,
+                LoginPaused: loginPaused && !stranded,
                 LiveOn: liveOn,
                 Slot: Word(slot),
                 Chip: Chip(slot, holder),

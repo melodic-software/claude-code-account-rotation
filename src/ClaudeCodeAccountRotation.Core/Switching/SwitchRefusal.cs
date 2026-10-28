@@ -153,4 +153,13 @@ public enum SwitchRefusal
     /// name the side gave would put it in a slot that already holds a family.
     /// </summary>
     SideLiveAccountAmbiguous,
+
+    /// <summary>
+    /// The target's login is paused after a run of unexplained 400s, so the
+    /// switch retries its refresh first, and that retry could not be sent: the
+    /// request budget refused it, a rate-limit lockout stands, another
+    /// credential change held the folder, or the token endpoint did not answer.
+    /// The pause stands and nothing moved.
+    /// </summary>
+    LoginRetryNotSent,
 }
