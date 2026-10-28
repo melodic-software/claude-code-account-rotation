@@ -132,6 +132,14 @@ internal static class RefreshMessages
     public static string LoginDeadLiveOn(string side) =>
         "Anthropic rejected the login parked here; " + side + " is live on this account, and its next switch sets this pair aside";
 
+    /// <summary>
+    /// A paused login parked here for an account the named side is live on: no
+    /// login is offered here, and the pause is not a rejection, so no hand-off
+    /// sets the pair aside either.
+    /// </summary>
+    public static string LoginPausedLiveOn(string side) =>
+        "the token endpoint refused the login parked here 3 times in a row; " + side + " is live on this account, so no login is offered here";
+
     /// <summary>The side the holder record names did not answer.</summary>
     public static string SideUnreachable(SideName side) => "in use by " + side.Value + ", which did not answer; start it and refresh again";
 

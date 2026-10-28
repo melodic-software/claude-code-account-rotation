@@ -462,7 +462,11 @@ internal sealed partial class DashboardAssembler(
         {
             refresh = refresh with { Message = RefreshMessages.LoginDeadLiveOn(liveOn) };
         }
-        else if (loginPaused)
+        else if (liveOn is not null && loginPaused)
+        {
+            refresh = refresh with { Message = RefreshMessages.LoginPausedLiveOn(liveOn) };
+        }
+        else if (loginPaused && refresh.State != Kebab(RefreshOutcomeKind.Stranded))
         {
             // The pause is the mark, not the last outcome: a later turn that
             // sent nothing still reports it, and Switch is what retries it.

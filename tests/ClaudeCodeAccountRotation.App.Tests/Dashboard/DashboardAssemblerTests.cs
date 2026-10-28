@@ -905,6 +905,43 @@ public sealed class DashboardAssemblerTests
         card.GetProperty("refresh").GetProperty("message").GetString().ShouldBe(RefreshMessages.LoginPresumedDead);
     }
 
+    [Fact]
+    public async Task APausedLoginStrandedInRecoveryStaysStrandedAndUnswitchable()
+    {
+        await using AppFactory factory = await SharedStoreAsync(Side());
+        string folder = await factory.ParkedProfileAsync(ExpiredEmail, "refresh-b", TestContext.Current.CancellationToken);
+        factory.Services.GetRequiredService<QuotaState>().RecordLoginDead(
+            AccountEmail.Parse(ExpiredEmail).Value,
+            CredentialFiles.Pair("refresh-b").Fingerprint,
+            factory.Clock.GetUtcNow().AddHours(6));
+        await StrandAsync(factory, folder);
+
+        JsonElement card = await CardAsync(factory, ExpiredEmail);
+
+        card.GetProperty("refresh").GetProperty("state").GetString().ShouldBe("stranded");
+        card.GetProperty("canSwitchHere").GetBoolean().ShouldBeFalse();
+        OfferedTo(card).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task APausedLoginForAnAccountLiveOnAnOnlineSideSaysNoLoginIsOfferedHere()
+    {
+        FakePeerRotationInstance side = Side();
+        side.OutgoingEmail = ExpiredEmail;
+        side.OutgoingRefreshToken = "refresh-relogin";
+        await using AppFactory factory = await SharedStoreAsync(side);
+        _ = await factory.ParkedProfileAsync(ExpiredEmail, "refresh-paused", TestContext.Current.CancellationToken);
+        factory.Services.GetRequiredService<QuotaState>().RecordLoginDead(
+            AccountEmail.Parse(ExpiredEmail).Value,
+            CredentialFiles.Pair("refresh-paused").Fingerprint,
+            factory.Clock.GetUtcNow().AddHours(6));
+
+        JsonElement card = await CardAsync(factory, ExpiredEmail);
+
+        card.GetProperty("liveOn").GetString().ShouldBe("wsl");
+        card.GetProperty("refresh").GetProperty("message").GetString().ShouldBe(RefreshMessages.LoginPausedLiveOn("wsl"));
+    }
+
     /// <summary>
     /// The card R6 is about: the pair is in the other side's live directory, so
     /// neither this side's Switch nor that side's may take it until that side

@@ -228,7 +228,10 @@ internal sealed partial class QuotaRefresh
     /// unit and write-back a pass uses, and under the same rules: no pass may be
     /// running, no lockout may stand, and the account's request budget must
     /// allow it. A pair with no mark, or with the permanent one, sends nothing:
-    /// the planner decides those.
+    /// the planner decides those. So does every folder a pass would not refresh
+    /// from its own pair: one the roster pauses, one stranded in recovery (its
+    /// file holds a refresh token already spent), the live account's, and a slot
+    /// the other side holds or one in transit.
     /// </summary>
     /// <returns>
     /// Success when the switch may go on: nothing to retry, or the retry rotated
@@ -256,6 +259,18 @@ internal sealed partial class QuotaRefresh
 
         DateTimeOffset now = _timeProvider.GetUtcNow();
         if (pair is null || !_state.IsLoginDead(account, pair.Fingerprint, now) || _state.IsLoginRejected(account, pair.Fingerprint))
+        {
+            return Result<Unit, SwitchRefusal>.Success(Unit.Value);
+        }
+
+        // The guards a pass applies before it refreshes a parked folder, so a
+        // click never sends what a pass would not.
+        AccountEmail? liveEmail = (await _stateFile.ReadAccountBlockAsync(cancellationToken))?.Email;
+        if (liveEmail == account
+            || _recovery.HasRecoveryFor(profile.FolderPath)
+            || (await _rosterFile.ReadAsync(cancellationToken)).Find(account) is { Paused: true }
+            || await _slots.ReadAsync(account, profile.FolderPath, profile.HasCredentials, new WindowsHold(liveEmail, await LiveFingerprintAsync(cancellationToken)), cancellationToken)
+                is { State: SlotState.HeldElsewhere or SlotState.InTransit })
         {
             return Result<Unit, SwitchRefusal>.Success(Unit.Value);
         }

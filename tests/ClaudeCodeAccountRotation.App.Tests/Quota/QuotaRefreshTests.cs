@@ -946,6 +946,37 @@ public sealed class QuotaRefreshTests
         harness.Tokens.Calls.ShouldBe(0);
     }
 
+    [Theory]
+    [InlineData("stranded")]
+    [InlineData("roster-paused")]
+    [InlineData("live")]
+    public async Task ASwitchRetrySendsNothingForAFolderAPassWouldNotRefresh(string why)
+    {
+        // A stranded folder's file holds a spent refresh token, a roster pause
+        // stops every request, and the live pair is the session's; the planner
+        // decides each with its own reason.
+        (RefreshHarness harness, RefreshTokenFingerprint marked) = await PausedAsync();
+        using RefreshHarness owned = harness;
+        switch (why)
+        {
+            case "stranded":
+                (await harness.Recovery.WriteAsync(harness.FolderFor("a@example.com"), marked, CredentialFiles.Pair("refresh-a2"), Token)).ShouldBeTrue();
+                break;
+            case "roster-paused":
+                await harness.PauseAsync("a@example.com", Token);
+                break;
+            default:
+                await harness.WriteLiveIdentityAsync("a@example.com", Token);
+                break;
+        }
+
+        Result<Unit, SwitchRefusal> retried = await harness.Engine.RetryPausedLoginAsync(RefreshHarness.Email("a@example.com"), Token);
+
+        retried.IsSuccess.ShouldBeTrue();
+        harness.Tokens.Calls.ShouldBe(0);
+        harness.State.IsLoginDead(RefreshHarness.Email("a@example.com"), marked, harness.Clock.GetUtcNow()).ShouldBeTrue();
+    }
+
     [Fact]
     public async Task ASwitchRetryTheBudgetRefusesSendsNothingAndRefusesTheSwitch()
     {
