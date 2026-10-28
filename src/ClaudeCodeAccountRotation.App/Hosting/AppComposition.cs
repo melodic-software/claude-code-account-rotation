@@ -86,6 +86,9 @@ internal static class AppComposition
         // The hosting diagnostics log every request's full URL, query string
         // included, at Information, so a key pasted into a URL would land in a log.
         builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
+        // The HTTP factory logs a start and an end line per request at Information,
+        // and the peer polls make those most of the leader's log.
+        builder.Logging.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning);
 
         ClaudeCodeAccountRotationConfiguration defaults = ConfigurationDefaults.ForCurrentUser();
         string configPath = arguments.ConfigPath
