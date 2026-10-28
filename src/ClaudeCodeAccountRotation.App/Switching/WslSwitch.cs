@@ -909,7 +909,10 @@ internal sealed partial class WslSwitch : IDisposable
                 return Refuse(SwitchRefusal.TargetHasNoCredentials);
             }
 
-            if (pair.LoginExpiresAt is DateTimeOffset expiry && expiry <= _timeProvider.GetUtcNow())
+            // A login the token endpoint refused is as dead as an expired one,
+            // and handing it over is what leaves that side asking for /login.
+            if ((pair.LoginExpiresAt is DateTimeOffset expiry && expiry <= _timeProvider.GetUtcNow())
+                || _quota.IsLoginDead(arriving, pair.Fingerprint))
             {
                 return Refuse(SwitchRefusal.TargetLoginExpired);
             }
@@ -954,11 +957,19 @@ internal sealed partial class WslSwitch : IDisposable
             // whole design refuses, and no click overrides it. A stale name whose
             // pair a holder record accounts for was already resolved above, so
             // this is a side naming a parked account beside a pair nothing here
-            // recognizes.
+            // recognizes. One explanation is allowed: the parked pair is a login
+            // the token endpoint refused, and that side's pair is the new login
+            // made over there after it died. A dead pair is not a family, so it
+            // is set aside below and the side's pair is parked in its place.
+            CredentialPair? deadParked = null;
             if (outgoingSlotHoldsPair && !foreign)
             {
-                LogSideLiveAccountAmbiguous(peer.Side.Value, outgoing.Value, remote.LiveFingerprint?.Sha256Hex[..12] ?? "none");
-                return Refuse(SwitchRefusal.SideLiveAccountAmbiguous);
+                deadParked = await DeadParkedPairAsync(outgoing, outgoingFolder, remote.LiveFingerprint, cancellationToken);
+                if (deadParked is null)
+                {
+                    LogSideLiveAccountAmbiguous(peer.Side.Value, outgoing.Value, remote.LiveFingerprint?.Sha256Hex[..12] ?? "none");
+                    return Refuse(SwitchRefusal.SideLiveAccountAmbiguous);
+                }
             }
 
             if (_slots.HasTransitFile(outgoingFolder))
@@ -971,6 +982,15 @@ internal sealed partial class WslSwitch : IDisposable
                 // The side names an account but cannot name the pair under it,
                 // so nothing could verify an export of it at L3b.
                 return Refuse(SwitchRefusal.LiveIdentityUnverified);
+            }
+
+            // Last, so no later guard can refuse after the move. Under the
+            // mutation gate, before the journal: a crash after the move leaves
+            // an empty slot, which is the ordinary state for an account live on
+            // that side.
+            if (deadParked is not null && !await SetAsideDeadLoginAsync(peer.Side, outgoing, outgoingFolder, deadParked.Fingerprint, cancellationToken))
+            {
+                return Refuse(SwitchRefusal.SideLiveAccountAmbiguous);
             }
         }
 
@@ -1473,6 +1493,76 @@ internal sealed partial class WslSwitch : IDisposable
     }
 
     /// <summary>
+    /// The pair parked in the outgoing account's slot when the token endpoint
+    /// has refused its refresh token and it is not the pair that side reports,
+    /// or null when it is alive, unknown, unreadable, the side's own lineage, or
+    /// a login is writing the folder.
+    /// </summary>
+    private async Task<CredentialPair?> DeadParkedPairAsync(
+        AccountEmail outgoing,
+        string folder,
+        RefreshTokenFingerprint? sideFingerprint,
+        CancellationToken cancellationToken)
+    {
+        if (_logins.IsRunningAgainst(folder))
+        {
+            return null;
+        }
+
+        CredentialPair? parked;
+        try
+        {
+            parked = await _pairs.ReadParkedAsync(folder, cancellationToken);
+        }
+        catch (Exception exception) when (exception is InvalidDataException or System.Text.Json.JsonException or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+
+        return parked is not null && parked.Fingerprint != sideFingerprint && _quota.IsLoginDead(outgoing, parked.Fingerprint)
+            ? parked
+            : null;
+    }
+
+    /// <summary>
+    /// Moves a dead parked pair into the superseded quarantine, named after the
+    /// slot and the lineage with a suffix that says why, where the page names it
+    /// and nothing uses it. False when the quarantine could not take it, and
+    /// nothing has moved then.
+    /// </summary>
+    private async Task<bool> SetAsideDeadLoginAsync(
+        SideName side,
+        AccountEmail outgoing,
+        string folder,
+        RefreshTokenFingerprint fingerprint,
+        CancellationToken cancellationToken)
+    {
+        string lineage = fingerprint.Sha256Hex[..12];
+        string destination = Path.Combine(
+            _options.SupersededQuarantineDirectory,
+            Path.GetFileName(Path.TrimEndingDirectorySeparator(folder)) + "-" + lineage + DeadLoginSuffix);
+        try
+        {
+            await _pairs.MoveParkedToQuarantineAsync(folder, destination, CancellationToken.None);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            LogDeadLoginNotSetAside(side.Value, outgoing.Value, lineage, exception.Message);
+            return false;
+        }
+
+        LogDeadLoginSetAside(side.Value, outgoing.Value, lineage, destination);
+        return true;
+    }
+
+    /// <summary>
+    /// The suffix on a quarantine directory holding a pair whose login the
+    /// token endpoint refused, so the page can say it is dead rather than a
+    /// second family.
+    /// </summary>
+    internal const string DeadLoginSuffix = "-login-rejected";
+
+    /// <summary>
     /// Where a superseded family of this account ends up, named after the slot
     /// and the lineage rather than the moment. Deterministic on purpose: it is
     /// what lets a crash between the move and the journal write be seen
@@ -1675,6 +1765,12 @@ internal sealed partial class WslSwitch : IDisposable
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "a superseded family of {Outgoing} came back from {Side} and was quarantined at {Destination}; it is never promoted and never deleted")]
     private partial void LogFamilyQuarantined(string side, string outgoing, string destination);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "{Side} is live on {Outgoing} with a pair this store never handed out, and the pair parked here ({Lineage}) is a login the token endpoint refused; it was quarantined at {Destination} and the pair on {Side} is parked in its place")]
+    private partial void LogDeadLoginSetAside(string side, string outgoing, string lineage, string destination);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "{Side} is live on {Outgoing} and the dead login parked here ({Lineage}) could not be quarantined: {Reason}")]
+    private partial void LogDeadLoginNotSetAside(string side, string outgoing, string lineage, string reason);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "the superseded family of {Outgoing} is already quarantined at {Destination}; only the journal was left to finish")]
     private partial void LogQuarantineAlreadyDone(string outgoing, string destination);

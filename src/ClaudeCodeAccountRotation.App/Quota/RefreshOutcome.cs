@@ -8,7 +8,8 @@ namespace ClaudeCodeAccountRotation.App.Quota;
 /// What one account's turn in a refresh pass came to. Ordered as the pass
 /// decides them: the two that mean numbers landed or are about to, the three
 /// refusals that cost the endpoint nothing, then the four ways a credential
-/// operation ended badly and the read failure that is none of those.
+/// operation ended badly and the read failure that is none of those, and last
+/// the login the token endpoint refused.
 /// </summary>
 internal enum RefreshOutcomeKind
 {
@@ -56,6 +57,13 @@ internal enum RefreshOutcomeKind
 
     /// <summary>The usage endpoint did not answer with numbers this build could read.</summary>
     ReadFailed,
+
+    /// <summary>
+    /// The token endpoint refused the parked pair's refresh token, so the login
+    /// behind it is dead. Nothing is sent for that pair again until a new login
+    /// replaces it; the card offers the login.
+    /// </summary>
+    LoginDead,
 }
 
 /// <summary>
@@ -87,6 +95,7 @@ internal static class RefreshMessages
     public const string InTransit = "a hand-off is in flight; refresh again when it lands";
     public const string Read = "read just now";
     public const string TokenRefreshFailed = "the token endpoint did not answer with new credentials";
+    public const string LoginDead = "Anthropic rejected this login; click Log in again";
     public const string Stranded = "credentials stranded in recovery";
     public const string Lost = "credentials lost; log in again";
     public const string ReadFailedTransport = "the usage endpoint could not be read";

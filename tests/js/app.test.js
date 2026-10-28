@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const { takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, promptWording, uniqueName, renameLabel, nearestLimit, tier, asOf, usageAge, sentence, ciRoleBadges, removedCiRoles, changedCiTokenDate, ciTag, ciSecretBody, remoteControlQuestion, switchedToast, historyLines, historyReadLines, assignableRoles, newRoleItem, ciPanelWords, catalogNotice } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+const { stateChip, loginLine, takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, promptWording, uniqueName, renameLabel, nearestLimit, tier, asOf, usageAge, sentence, ciRoleBadges, removedCiRoles, changedCiTokenDate, ciTag, ciSecretBody, remoteControlQuestion, switchedToast, historyLines, historyReadLines, assignableRoles, newRoleItem, ciPanelWords, catalogNotice } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
 
 function limit(kind, percent, fields) {
   return Object.assign({ kind, percent, known: true, windowReset: false }, fields);
@@ -1037,4 +1037,14 @@ test("an extra token secret in the catalog is offered under its own name, token 
   assert.deepStrictEqual(roles[0].item, { tokenSecret: "FALLBACK_CLAUDE_CODE_OAUTH_TOKEN", organization: "octo" });
   assert.strictEqual(roles[0].keyed, false);
   assert.match(roles[0].label, /^FALLBACK_CLAUDE_CODE_OAUTH_TOKEN in org octo · token only/);
+});
+
+test("a login the token endpoint rejected reads as expired whatever its recorded expiry says", () => {
+  const future = new Date(NOW + 20 * 86400000).toISOString();
+  const dead = { isLive: false, hasCredentials: true, loginDead: true, loginExpiresAt: future, refresh: { state: "login-dead" } };
+  assert.strictEqual(stateChip(dead, NOW), "login expired");
+  assert.strictEqual(loginLine(dead, NOW), "login expired");
+  assert.strictEqual(loginLine(Object.assign({}, dead, { loginExpiresAt: null }), NOW), "login expired");
+  const alive = Object.assign({}, dead, { loginDead: false, refresh: { state: "read" } });
+  assert.strictEqual(stateChip(alive, NOW), "ready");
 });

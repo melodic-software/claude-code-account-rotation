@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -63,6 +64,18 @@ internal sealed class ClaudeOAuthTokenRefreshClient : ITokenRefreshClient
 
         using (response)
         {
+            if (response.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized)
+            {
+                // The refresh grant itself was refused: invalid_grant for a
+                // revoked or expired login, or a 401. Not Transport, which the
+                // caller would retry on every pass for ever.
+                return Failure(
+                    UsageReadFailureKind.LoginRejected,
+                    "the token endpoint rejected the refresh token ("
+                        + ((int)response.StatusCode).ToString(CultureInfo.InvariantCulture)
+                        + " " + await OAuthErrorAsync(response, cancellationToken) + ")");
+            }
+
             if (!response.IsSuccessStatusCode)
             {
                 return Result<RefreshedTokens, UsageReadFailure>.Failure(AnthropicEndpoints.Failure(response, _timeProvider));
@@ -101,6 +114,30 @@ internal sealed class ClaudeOAuthTokenRefreshClient : ITokenRefreshClient
             now + TimeSpan.FromSeconds(Number(body, "expires_in") ?? 0),
             Number(body, "refresh_token_expires_in") is double loginSeconds ? now + TimeSpan.FromSeconds(loginSeconds) : null,
             Text(body, "scope")?.Split(' ', StringSplitOptions.RemoveEmptyEntries) ?? []));
+    }
+
+    /// <summary>
+    /// The OAuth <c>error</c> code of a refusal (RFC 6749 section 5.2), and only
+    /// that: <c>error_description</c> is free text the tool does not control, so
+    /// it never reaches a log. The code is kept only when it is the short
+    /// lower-case token the RFC allows, else it reads as unknown.
+    /// </summary>
+    private static async Task<string> OAuthErrorAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var body = JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(cancellationToken));
+            return body.RootElement.ValueKind == JsonValueKind.Object
+                && Text(body.RootElement, "error") is string error
+                && error.Length is > 0 and <= 40
+                && error.All(static letter => letter is (>= 'a' and <= 'z') or '_')
+                ? error
+                : "unknown error";
+        }
+        catch (JsonException)
+        {
+            return "unknown error";
+        }
     }
 
     private static Result<RefreshedTokens, UsageReadFailure> Failure(UsageReadFailureKind kind, string detail) =>

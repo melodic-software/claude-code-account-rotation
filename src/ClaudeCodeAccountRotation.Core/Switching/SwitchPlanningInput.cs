@@ -39,6 +39,11 @@ namespace ClaudeCodeAccountRotation.Core.Switching;
 /// can set aside. A login made in the CLI itself puts an account there, live
 /// with one family while its slot keeps another.
 /// </para>
+/// <para>
+/// <paramref name="TargetLoginDead"/> says the token endpoint refused the
+/// target pair's refresh token, so its login is dead whatever its recorded
+/// expiry says, and moving it to live would hand the CLI a login it cannot use.
+/// </para>
 /// </summary>
 public sealed record SwitchPlanningInput(
     LiveAccountState Live,
@@ -53,4 +58,5 @@ public sealed record SwitchPlanningInput(
     bool TargetHasRecoveryFile = false,
     SlotState TargetSlot = SlotState.Parked,
     bool OutgoingSlotInTransit = false,
-    bool OutgoingSlotHoldsPair = false);
+    bool OutgoingSlotHoldsPair = false,
+    bool TargetLoginDead = false);

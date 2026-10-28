@@ -195,6 +195,20 @@ public sealed class SwitchPlannerTests
     }
 
     [Fact]
+    public void RefusesWhenTheTokenEndpointRejectedTheTargetLogin()
+    {
+        // A login Anthropic refused is dead though its recorded expiry is weeks
+        // away; moving it to live hands the CLI a pair that asks for /login.
+        SwitchPlanningInput input = Baseline() with
+        {
+            TargetCredentials = Pair("refresh-b", loginExpiresAt: _now.AddDays(20)),
+            TargetLoginDead = true,
+        };
+
+        SwitchPlanner.Plan(input).Error.ShouldBe(SwitchRefusal.TargetLoginExpired);
+    }
+
+    [Fact]
     public void RefusesUnderADeviceManagedLoginPolicy()
     {
         SwitchPlanningInput input = Baseline();

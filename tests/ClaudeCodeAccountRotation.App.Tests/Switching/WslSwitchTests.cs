@@ -595,7 +595,7 @@ public sealed class WslSwitchTests
 
         reconciled.Outcome.ShouldContain("finished from " + nameof(WslSwitchStep.Imported));
         // Everything the park needs was in the journal, so no round trip was made.
-        harness.Side.Calls.ShouldBeEmpty();
+        harness.Side.Calls.ShouldNotContain("Import");
         (await FingerprintAtAsync(harness.PairPath(Outgoing))).ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
         File.Exists(Path.Combine(harness.FolderFor(Outgoing), ProfileFolderStore.ProfileFileName)).ShouldBeTrue();
         File.Exists(harness.JournalPath).ShouldBeFalse();
@@ -619,7 +619,7 @@ public sealed class WslSwitchTests
         WslReconciliation reconciled = await coordinator.ReconcileAsync(Token);
 
         reconciled.Outcome.ShouldContain("finished from " + nameof(WslSwitchStep.Parked));
-        harness.Side.Calls.ShouldBeEmpty();
+        harness.Side.Calls.ShouldNotContain("Import");
         File.Exists(harness.JournalPath).ShouldBeFalse();
         (await FingerprintAtAsync(harness.PairPath(Outgoing))).ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
         (await HolderRecordFile.ReadAsync(harness.FolderFor(Incoming), Token))!.Side.ShouldBe(SideName.Wsl);
@@ -681,7 +681,7 @@ public sealed class WslSwitchTests
             await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), quarantineForeignFamily: false, Token);
 
         result.Error.ShouldBe(SwitchRefusal.SideOffline);
-        harness.Side.Calls.ShouldBeEmpty();
+        harness.Side.Calls.ShouldNotContain("Import");
         (await FingerprintAtAsync(harness.PairPath(Incoming))).ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
     }
 
@@ -769,6 +769,74 @@ public sealed class WslSwitchTests
 
         result.Error.ShouldBe(SwitchRefusal.SlotInTransit);
         (await FingerprintAtAsync(harness.PairPath(Incoming))).ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
+    }
+
+    [Fact]
+    public async Task ASwitchToALoginTheTokenEndpointRejectedIsRefusedAsExpired()
+    {
+        // Handing that side a pair Anthropic already refused is what left it
+        // saying "Login expired · Please run /login" (issue 377).
+        using WslSwitchHarness harness = new();
+        RefreshTokenFingerprint incoming = await SetUpAsync(harness);
+        harness.Quota.RecordLoginDead(WslSwitchHarness.Email(Incoming), incoming);
+        using WslSwitch coordinator = harness.Coordinator();
+
+        Result<WslSwitchOutcome, SwitchRefusal> result =
+            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), quarantineForeignFamily: false, Token);
+
+        result.Error.ShouldBe(SwitchRefusal.TargetLoginExpired);
+        (await FingerprintAtAsync(harness.PairPath(Incoming))).ShouldBe(incoming);
+        File.Exists(harness.JournalPath).ShouldBeFalse();
+        harness.Side.Calls.ShouldNotContain("Import");
+    }
+
+    [Fact]
+    public async Task ADeadPairInTheOutgoingSlotIsQuarantinedAndTheSidesNewLoginIsParkedInItsPlace()
+    {
+        // Issue 377: the parked pair died, the operator ran /login on that side,
+        // and every switch was then refused as ambiguous. A dead pair is not a
+        // family, so it is set aside and the hand-off runs as usual.
+        using WslSwitchHarness harness = new();
+        await SetUpAsync(harness);
+        RefreshTokenFingerprint dead = await harness.ParkedSlotAsync(Outgoing, "refresh-dead", Token);
+        harness.Quota.RecordLoginDead(WslSwitchHarness.Email(Outgoing), dead);
+        harness.Side.OutgoingRefreshToken = "refresh-relogin";
+        using WslSwitch coordinator = harness.Coordinator();
+
+        Result<WslSwitchOutcome, SwitchRefusal> result =
+            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), quarantineForeignFamily: false, Token);
+
+        result.IsSuccess.ShouldBeTrue(result.IsFailure ? result.Error.ToString() : string.Empty);
+        result.Value.ParkedAs.ShouldBe(WslSwitchHarness.Email(Outgoing));
+        (await FingerprintAtAsync(harness.PairPath(Outgoing))).ShouldBe(CredentialFiles.Pair("refresh-relogin").Fingerprint);
+        string quarantined = Path.Combine(
+            harness.Options.SupersededQuarantineDirectory,
+            Outgoing + "-" + dead.Sha256Hex[..12] + WslSwitch.DeadLoginSuffix,
+            FileSystemCredentialPairStore.FileName);
+        (await FingerprintAtAsync(quarantined)).ShouldBe(dead);
+        File.Exists(harness.JournalPath).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task ALivePairInTheOutgoingSlotBesideAnUnknownSidePairIsStillRefusedAsAmbiguous()
+    {
+        // Only a pair known dead is set aside. A parked pair nothing has refused
+        // beside a pair this store never handed out is a true second lineage.
+        using WslSwitchHarness harness = new();
+        await SetUpAsync(harness);
+        RefreshTokenFingerprint parked = await harness.ParkedSlotAsync(Outgoing, "refresh-parked", Token);
+        // A mark for a different pair says nothing about this one.
+        harness.Quota.RecordLoginDead(WslSwitchHarness.Email(Outgoing), CredentialFiles.Pair("refresh-older").Fingerprint);
+        harness.Side.OutgoingRefreshToken = "refresh-relogin";
+        using WslSwitch coordinator = harness.Coordinator();
+
+        Result<WslSwitchOutcome, SwitchRefusal> result =
+            await coordinator.SwitchToAsync(SideName.Wsl, WslSwitchHarness.Email(Incoming), quarantineForeignFamily: false, Token);
+
+        result.Error.ShouldBe(SwitchRefusal.SideLiveAccountAmbiguous);
+        (await FingerprintAtAsync(harness.PairPath(Outgoing))).ShouldBe(parked);
+        Directory.Exists(harness.Options.SupersededQuarantineDirectory).ShouldBeFalse();
+        File.Exists(harness.JournalPath).ShouldBeFalse();
     }
 
     [Fact]

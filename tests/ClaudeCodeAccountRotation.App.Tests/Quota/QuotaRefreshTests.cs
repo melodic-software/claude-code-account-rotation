@@ -724,6 +724,56 @@ public sealed class QuotaRefreshTests
     }
 
     [Fact]
+    public async Task ARejectedRefreshTokenMarksTheLoginDeadAndIsNotSentAgain()
+    {
+        // The token endpoint answering 400 invalid_grant means the login is gone.
+        // Retrying it every pass only repeats the refusal; the card says to log
+        // in again, and nothing is sent until a new login changes the pair.
+        using RefreshHarness harness = new();
+        string folder = await harness.ParkAsync("a@example.com", "refresh-a", harness.Expired, Token);
+        harness.Tokens.Answers.Enqueue(ScriptedTokens.Failed(UsageReadFailureKind.LoginRejected));
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.Tokens.Calls.ShouldBe(1);
+        harness.Usage.Calls.ShouldBe(0);
+        RefreshOutcome outcome = harness.OutcomeFor("a@example.com")!;
+        outcome.Kind.ShouldBe(RefreshOutcomeKind.LoginDead);
+        outcome.Message.ShouldBe(RefreshMessages.LoginDead);
+        CredentialPair parked = (await harness.Store.ReadParkedAsync(folder, Token))!;
+        harness.State.IsLoginDead(RefreshHarness.Email("a@example.com"), parked.Fingerprint).ShouldBeTrue();
+        harness.RefreshLog.Lines.ShouldContain(line => line.Contains("a@example.com", StringComparison.Ordinal) && line.Contains("is dead", StringComparison.Ordinal));
+        harness.RefreshLog.Lines.ShouldAllBe(line => !line.Contains("refresh-a", StringComparison.Ordinal));
+
+        // Past the budget's gap: only the dead mark can stop the second POST.
+        harness.Clock.Advance(TimeSpan.FromMinutes(5));
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.Tokens.Calls.ShouldBe(1);
+        harness.OutcomeFor("a@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.LoginDead);
+    }
+
+    [Fact]
+    public async Task ANewLoginEndsTheDeadMark()
+    {
+        // The mark is keyed by the refused pair, so the pair a new login writes
+        // is refreshed like any other.
+        using RefreshHarness harness = new();
+        await harness.ParkAsync("a@example.com", "refresh-a", harness.Expired, Token);
+        harness.Tokens.Answers.Enqueue(ScriptedTokens.Failed(UsageReadFailureKind.LoginRejected));
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.Clock.Advance(TimeSpan.FromMinutes(5));
+        await harness.ParkAsync("a@example.com", "refresh-b", harness.Expired, Token);
+        harness.Tokens.Answers.Enqueue(ScriptedTokens.Rotated("b2", harness.Valid, harness.Clock.GetUtcNow().AddDays(28)));
+        harness.Usage.Answers.Enqueue(ScriptedUsage.Ok());
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.Tokens.Calls.ShouldBe(2);
+        harness.OutcomeFor("a@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.Read);
+    }
+
+    [Fact]
     public async Task AnUnparsableBodyReportsReadFailed()
     {
         // A 200 whose body this build cannot read is the one failure the card must

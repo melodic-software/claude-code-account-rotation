@@ -22,13 +22,14 @@ namespace ClaudeCodeAccountRotation.App.Quota;
 /// </summary>
 internal sealed class QuotaState
 {
-    // ponytail: one lock over five small dictionaries. Ten accounts read a few
+    // ponytail: one lock over six small dictionaries. Ten accounts read a few
     // times an hour; finer-grained locking would buy nothing measurable and the
     // page's read must see one consistent picture anyway.
     private readonly Lock _mutex = new();
     private readonly Dictionary<AccountEmail, UsageSnapshot> _latest = [];
     private readonly Dictionary<AccountEmail, UsageSnapshot> _observed = [];
     private readonly Dictionary<AccountEmail, RefreshOutcome> _outcomes = [];
+    private readonly Dictionary<AccountEmail, RefreshTokenFingerprint> _deadLogins = [];
     private readonly Dictionary<string, string> _recoveryWarnings =
         new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 
@@ -273,6 +274,30 @@ internal sealed class QuotaState
         lock (_mutex)
         {
             _outcomes[account] = outcome;
+        }
+    }
+
+    /// <summary>
+    /// Records that the token endpoint refused this account's parked refresh
+    /// token. Keyed by the pair's fingerprint, so a new login, which writes a
+    /// new pair, ends it without anything having to clear it. A restart forgets
+    /// it like everything else here, and the next pass's one refusal records it
+    /// again.
+    /// </summary>
+    public void RecordLoginDead(AccountEmail account, RefreshTokenFingerprint fingerprint)
+    {
+        lock (_mutex)
+        {
+            _deadLogins[account] = fingerprint;
+        }
+    }
+
+    /// <summary>Whether <paramref name="fingerprint"/> is the parked pair the token endpoint last refused for this account.</summary>
+    public bool IsLoginDead(AccountEmail account, RefreshTokenFingerprint? fingerprint)
+    {
+        lock (_mutex)
+        {
+            return fingerprint is not null && _deadLogins.TryGetValue(account, out RefreshTokenFingerprint dead) && dead == fingerprint;
         }
     }
 

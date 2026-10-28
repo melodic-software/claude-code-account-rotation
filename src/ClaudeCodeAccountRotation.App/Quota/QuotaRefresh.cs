@@ -404,6 +404,14 @@ internal sealed partial class QuotaRefresh
                 return new Turn(Outcome(RefreshOutcomeKind.NeedsLogin, RefreshMessages.NeedsLogin));
             }
 
+            // A login the token endpoint already refused gets nothing sent for
+            // it until a new login replaces the pair, which changes the
+            // fingerprint this is keyed on.
+            if (!candidate.IsLive && _state.IsLoginDead(candidate.Email, pair.Fingerprint))
+            {
+                return new Turn(Outcome(RefreshOutcomeKind.LoginDead, RefreshMessages.LoginDead));
+            }
+
             if (pair.AccessTokenExpiresAt <= now)
             {
                 if (candidate.IsLive)
@@ -420,7 +428,7 @@ internal sealed partial class QuotaRefresh
                     return new Turn(BudgetRefused(candidate.Email));
                 }
 
-                GatedRefresh refreshed = await RefreshUnderGateAsync(candidate.FolderPath!, pair);
+                GatedRefresh refreshed = await RefreshUnderGateAsync(candidate.Email, candidate.FolderPath!, pair);
                 if (refreshed.Outcome is RefreshOutcome refused)
                 {
                     if (refused.Kind == RefreshOutcomeKind.Skipped)
@@ -620,7 +628,7 @@ internal sealed partial class QuotaRefresh
                         return new Turn(Outcome(RefreshOutcomeKind.NeedsLogin, RefreshMessages.NeedsLogin), SentRead: true);
                     }
 
-                    GatedRefresh refreshed = await RefreshUnderGateAsync(candidate.FolderPath!, current);
+                    GatedRefresh refreshed = await RefreshUnderGateAsync(candidate.Email, candidate.FolderPath!, current);
                     return refreshed.Outcome is RefreshOutcome refused
                         ? new Turn(refused, refreshed.EndsPass, SentRead: true)
                         : await ReadAsync(candidate, refreshed.Pair!, sentRead: false, retried: true, stopping, reserved: true);
@@ -708,7 +716,7 @@ internal sealed partial class QuotaRefresh
     /// only working lineage. Everything the unit decides on is read under the
     /// gate, never before it.
     /// </summary>
-    private async Task<GatedRefresh> RefreshUnderGateAsync(string folder, CredentialPair before)
+    private async Task<GatedRefresh> RefreshUnderGateAsync(AccountEmail account, string folder, CredentialPair before)
     {
         IDisposable? permit = null;
         try
@@ -773,6 +781,15 @@ internal sealed partial class QuotaRefresh
                     Outcome(RefreshOutcomeKind.RateLimited, RefreshMessages.RateLimited(retryAfter), until),
                     Pair: null,
                     EndsPass: true);
+            }
+
+            if (refreshed.Error.Kind == UsageReadFailureKind.LoginRejected)
+            {
+                // Nothing was rotated: the refusal leaves the file as it was, and
+                // the fingerprint marks it so no pass sends that token again.
+                _state.RecordLoginDead(account, current.Fingerprint);
+                LogLoginRejected(account.Value, FolderName(folder), refreshed.Error.Detail);
+                return Refused(RefreshOutcomeKind.LoginDead, RefreshMessages.LoginDead);
             }
 
             LogTokenRefreshFailed(FolderName(folder), refreshed.Error.Kind.ToString(), refreshed.Error.Detail);
@@ -990,6 +1007,9 @@ internal sealed partial class QuotaRefresh
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "the token refresh for {Folder} failed ({Kind}): {Detail}")]
     private partial void LogTokenRefreshFailed(string folder, string kind, string detail);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the login of {Account} in {Folder} is dead: {Detail}; no refresh is sent for it until it is logged in again")]
+    private partial void LogLoginRejected(string account, string folder, string detail);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "the token host is rate limiting; no refresh for {Seconds} s")]
     private partial void LogTokenHostRateLimited(int seconds);

@@ -4,6 +4,24 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A login the token endpoint rejects is marked dead instead of handed out.** A 400 or 401 to a
+  parked pair's token refresh (`invalid_grant` among them) was reported as a transport failure and
+  retried on every pass, and a switch could still move that pair live, leaving the other side at
+  "Login expired · Please run /login". The refusal is now its own outcome: the log names the OAuth
+  error code, the card reads "login expired" and offers Log in again, no refresh is sent for that
+  pair again until a new login replaces it, and a switch to it on either side is refused with
+  `TargetLoginExpired`. The mark is held in memory; after a restart the next pass's one refusal
+  sets it again.
+- **A dead parked pair no longer blocks a switch of the other side.** When that side is live on an
+  account through a login made there, and the pair still parked in that account's slot is one the
+  token endpoint rejected, the switch moves the dead pair to the superseded quarantine and parks
+  that side's pair in its place, instead of refusing with `SideLiveAccountAmbiguous`. A parked pair
+  nothing has rejected is still refused as before.
+
 ## [2.12.0] - 2026-10-28
 
 ### Added
