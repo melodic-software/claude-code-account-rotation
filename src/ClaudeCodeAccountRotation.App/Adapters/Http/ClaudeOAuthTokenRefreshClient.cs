@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -63,6 +64,20 @@ internal sealed class ClaudeOAuthTokenRefreshClient : ITokenRefreshClient
 
         using (response)
         {
+            if (response.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized)
+            {
+                // Only invalid_grant (RFC 6749 section 5.2) or a 401 says the
+                // refresh token itself is dead. Any other 400, invalid_client or
+                // invalid_request or a proxy's HTML page, says nothing certain
+                // about the login, so it is its own kind: the caller retries it
+                // and marks the login dead only after several in a row.
+                string status = ((int)response.StatusCode).ToString(CultureInfo.InvariantCulture);
+                string error = await OAuthErrorAsync(response, cancellationToken);
+                return response.StatusCode == HttpStatusCode.Unauthorized || error == "invalid_grant"
+                    ? Failure(UsageReadFailureKind.LoginRejected, "the token endpoint rejected the refresh token (" + status + " " + error + ")")
+                    : Failure(UsageReadFailureKind.RefreshBadRequest, "the token endpoint answered " + status + " " + error);
+            }
+
             if (!response.IsSuccessStatusCode)
             {
                 return Result<RefreshedTokens, UsageReadFailure>.Failure(AnthropicEndpoints.Failure(response, _timeProvider));
@@ -101,6 +116,34 @@ internal sealed class ClaudeOAuthTokenRefreshClient : ITokenRefreshClient
             now + TimeSpan.FromSeconds(Number(body, "expires_in") ?? 0),
             Number(body, "refresh_token_expires_in") is double loginSeconds ? now + TimeSpan.FromSeconds(loginSeconds) : null,
             Text(body, "scope")?.Split(' ', StringSplitOptions.RemoveEmptyEntries) ?? []));
+    }
+
+    /// <summary>
+    /// The OAuth <c>error</c> code of a refusal (RFC 6749 section 5.2), or the
+    /// <c>error.type</c> of Anthropic's API error envelope, and only that:
+    /// <c>error_description</c> and <c>error.message</c> are free text the tool does not control, so
+    /// it never reaches a log. The code is kept only when it is the short
+    /// lower-case token the RFC allows, else it reads as unknown.
+    /// </summary>
+    private static async Task<string> OAuthErrorAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var body = JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(cancellationToken));
+            // Flat OAuth (`"error":"invalid_grant"`) or Anthropic's API envelope
+            // (`"error":{"type":"invalid_grant"}`); the code is read from either.
+            return body.RootElement.ValueKind == JsonValueKind.Object
+                && body.RootElement.TryGetProperty("error", out JsonElement field)
+                && (field.ValueKind == JsonValueKind.Object ? Text(field, "type") : Text(body.RootElement, "error")) is string error
+                && error.Length is > 0 and <= 40
+                && error.All(static letter => letter is (>= 'a' and <= 'z') or '_')
+                ? error
+                : "unknown error";
+        }
+        catch (JsonException)
+        {
+            return "unknown error";
+        }
     }
 
     private static Result<RefreshedTokens, UsageReadFailure> Failure(UsageReadFailureKind kind, string detail) =>

@@ -348,7 +348,8 @@ internal sealed partial class LiveDirectorySwitch : IStaleIdentityRepair
 
         Result<SwitchPlan, SwitchRefusal> planned = SwitchPlanner.Plan(new SwitchPlanningInput(
             live, targetProfile, liveCredentials, targetCredentials, policy, journalOpen, liveOwner, _options.ProfilesRoot, now, targetStranded,
-            targetSlot?.State ?? SlotState.Parked, outgoingInTransit, outgoingSlotHoldsPair));
+            targetSlot?.State ?? SlotState.Parked, outgoingInTransit, outgoingSlotHoldsPair,
+            TargetLoginDead: _quota.IsLoginDead(target, targetCredentials?.Fingerprint, now)));
         if (planned.IsFailure)
         {
             LogRefused(target.Value, planned.Error);

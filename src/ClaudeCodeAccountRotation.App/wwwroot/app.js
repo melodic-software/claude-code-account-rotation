@@ -68,6 +68,9 @@
     module.exports.ciTokenBadge = ciTokenBadge;
     module.exports.assignHalves = assignHalves;
     module.exports.ciTokenValueBody = ciTokenValueBody;
+    module.exports.stateChip = stateChip;
+    module.exports.loginLine = loginLine;
+    module.exports.loginOffered = loginOffered;
     return;
   }
 
@@ -1703,12 +1706,14 @@
   // One reading of the refresh token's life, shared by the chip, the Switch
   // guard, the standing line, and the expiry line, measured from the payload's
   // own instant like every other countdown on the page.
+  // A login the token endpoint refused is expired whatever its recorded
+  // expiry says.
   function loginExpired(account, at) {
-    return !!account.loginExpiresAt && new Date(account.loginExpiresAt).getTime() <= at;
+    return !!account.loginDead || (!!account.loginExpiresAt && new Date(account.loginExpiresAt).getTime() <= at);
   }
 
   function loginSoon(account, at) {
-    return !!account.loginExpiresAt && secondsUntil(account.loginExpiresAt, at) <= LOGIN_WARN_SECONDS;
+    return loginExpired(account, at) || (!!account.loginExpiresAt && secondsUntil(account.loginExpiresAt, at) <= LOGIN_WARN_SECONDS);
   }
 
   // How old the login is and how long it has left, in one line: either half is
@@ -1716,10 +1721,18 @@
   function loginLine(account, at) {
     var parts = [];
     if (account.loggedInAt) { parts.push("logged in " + ago(account.loggedInAt, at)); }
-    if (account.loginExpiresAt) {
+    if (account.loginExpiresAt || account.loginDead) {
       parts.push(loginExpired(account, at) ? "login expired" : "login expires " + relative(account.loginExpiresAt, at));
     }
     return parts.length ? parts.join(" \u00b7 ") : null;
+  }
+
+  // Whether the card offers a login here. Not for a slot the other side holds,
+  // and not while an online side is live on this account: a login here would
+  // be a second live family, and a dead pair parked here is set aside by the
+  // next hand-off instead.
+  function loginOffered(account, at) {
+    return !account.heldAway && !account.liveOn && (!account.hasCredentials || loginSoon(account, at));
   }
 
   // The credential axis in one word: whether the operator can switch to this
@@ -2818,7 +2831,7 @@
     // A slot the other side holds is empty for a reason, and logging into it
     // would put a second token family on the machine. The route refuses it
     // anyway; the button goes so the operator is not sent at a 409.
-    var needsLogin = !account.heldAway && (!account.hasCredentials || loginSoon(account, at));
+    var needsLogin = loginOffered(account, at);
     if (roster && !account.isLive && needsLogin) {
       act.appendChild(actionButton(account.hasCredentials ? "Log in again" : "Login", "primary sm", function () { startLogin(account.email); }));
     }

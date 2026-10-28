@@ -152,7 +152,7 @@ public sealed class ClaudeOAuthTokenRefreshClientTests
     }
 
     [Fact]
-    public async Task ARefusedRefreshTokenIsUnauthorized()
+    public async Task ARefusedRefreshTokenIsARejectedLogin()
     {
         using RecordingHandler handler = new(new HttpResponseMessage(HttpStatusCode.Unauthorized));
         using HttpClient http = new(handler);
@@ -160,7 +160,65 @@ public sealed class ClaudeOAuthTokenRefreshClientTests
 
         Result<RefreshedTokens, UsageReadFailure> refreshed = await client.RefreshAsync("refresh-old", TestContext.Current.CancellationToken);
 
-        refreshed.Error.Kind.ShouldBe(UsageReadFailureKind.Unauthorized);
+        refreshed.Error.Kind.ShouldBe(UsageReadFailureKind.LoginRejected);
+        refreshed.Error.Detail.ShouldBe("the token endpoint rejected the refresh token (401 unknown error)");
+    }
+
+    [Fact]
+    public async Task AnInvalidGrantIsARejectedLoginNamingOnlyTheOAuthError()
+    {
+        // The 400 a revoked or expired login gets. The free-text description is
+        // the endpoint's, not the tool's, so only the error code is kept.
+        using RecordingHandler handler = new(RecordingHandler.Json(
+            HttpStatusCode.BadRequest,
+            """{"error":"invalid_grant","error_description":"Refresh token refresh-old not found"}"""));
+        using HttpClient http = new(handler);
+        ClaudeOAuthTokenRefreshClient client = new(http, UserAgent, new FixedClock(_now));
+
+        Result<RefreshedTokens, UsageReadFailure> refreshed = await client.RefreshAsync("refresh-old", TestContext.Current.CancellationToken);
+
+        refreshed.Error.Kind.ShouldBe(UsageReadFailureKind.LoginRejected);
+        refreshed.Error.Detail.ShouldBe("the token endpoint rejected the refresh token (400 invalid_grant)");
+        handler.Requests.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task AnInvalidGrantInsideAnthropicsErrorEnvelopeIsARejectedLogin()
+    {
+        // The API's own envelope carries the code in error.type; the message
+        // beside it is free text and is dropped.
+        using RecordingHandler handler = new(RecordingHandler.Json(
+            HttpStatusCode.BadRequest,
+            """{"type":"error","error":{"type":"invalid_grant","message":"Refresh token refresh-old not found"}}"""));
+        using HttpClient http = new(handler);
+        ClaudeOAuthTokenRefreshClient client = new(http, UserAgent, new FixedClock(_now));
+
+        Result<RefreshedTokens, UsageReadFailure> refreshed = await client.RefreshAsync("refresh-old", TestContext.Current.CancellationToken);
+
+        refreshed.Error.Kind.ShouldBe(UsageReadFailureKind.LoginRejected);
+        refreshed.Error.Detail.ShouldBe("the token endpoint rejected the refresh token (400 invalid_grant)");
+    }
+
+    [Theory]
+    [InlineData("""{"error":"invalid_client"}""", "the token endpoint answered 400 invalid_client")]
+    [InlineData("""{"error":"invalid_request","error_description":"refresh-old"}""", "the token endpoint answered 400 invalid_request")]
+    [InlineData("<html>blocked</html>", "the token endpoint answered 400 unknown error")]
+    [InlineData("""{"error":"Invalid Grant: refresh-old"}""", "the token endpoint answered 400 unknown error")]
+    [InlineData("""{"error":42}""", "the token endpoint answered 400 unknown error")]
+    [InlineData("""{"type":"error","error":{"type":"invalid_request_error","message":"refresh-old"}}""", "the token endpoint answered 400 invalid_request_error")]
+    public async Task ABadRequestThatIsNotInvalidGrantIsItsOwnKindNamingOnlyTheCode(string body, string detail)
+    {
+        // invalid_client, invalid_request, or a proxy's page: nothing certain
+        // about the login. The caller retries it and counts a run of them, and
+        // only the sanitized error code is kept.
+        using RecordingHandler handler = new(RecordingHandler.Json(HttpStatusCode.BadRequest, body));
+        using HttpClient http = new(handler);
+        ClaudeOAuthTokenRefreshClient client = new(http, UserAgent, new FixedClock(_now));
+
+        Result<RefreshedTokens, UsageReadFailure> refreshed = await client.RefreshAsync("refresh-old", TestContext.Current.CancellationToken);
+
+        refreshed.Error.Kind.ShouldBe(UsageReadFailureKind.RefreshBadRequest);
+        refreshed.Error.Detail.ShouldBe(detail);
     }
 
     [Fact]

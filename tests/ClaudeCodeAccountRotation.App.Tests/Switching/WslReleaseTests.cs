@@ -205,6 +205,34 @@ public sealed class WslReleaseTests
     }
 
     /// <summary>
+    /// The same slot, when the pair in it is a login the token endpoint refused
+    /// and that side is live on a new login: the dead pair is set aside and the
+    /// release parks that side's pair in its place.
+    /// </summary>
+    [Fact]
+    public async Task AReleaseSetsADeadParkedPairAsideAndParksTheSidesNewLogin()
+    {
+        using WslSwitchHarness harness = new();
+        await SetUpAsync(harness);
+        await File.WriteAllTextAsync(harness.PairPath(Held), CredentialFiles.Shape("refresh-dead").ToJsonString(), Token);
+        RefreshTokenFingerprint dead = CredentialFiles.Pair("refresh-dead").Fingerprint;
+        harness.Quota.RecordLoginDead(WslSwitchHarness.Email(Held), dead);
+        harness.Side.OutgoingRefreshToken = "refresh-relogin";
+        using WslSwitch coordinator = harness.Coordinator();
+
+        Result<WslSwitchOutcome, SwitchRefusal> result =
+            await coordinator.ReleaseAsync(SideName.Wsl, quarantineForeignFamily: false, Token);
+
+        result.IsSuccess.ShouldBeTrue(result.IsFailure ? result.Error.ToString() : string.Empty);
+        result.Value.ParkedAs.ShouldBe(WslSwitchHarness.Email(Held));
+        (await FingerprintAtAsync(harness.PairPath(Held))).ShouldBe(CredentialFiles.Pair("refresh-relogin").Fingerprint);
+        (await FingerprintAtAsync(Path.Combine(
+            harness.Options.SupersededQuarantineDirectory,
+            Held + "-" + dead.Sha256Hex[..12] + WslSwitch.DeadLoginSuffix,
+            FileSystemCredentialPairStore.FileName))).ShouldBe(dead);
+    }
+
+    /// <summary>
     /// Phase 7's in-transit state, from the release side: a mailbox file naming
     /// the account this hand-off would park refuses it, and clears nothing.
     /// </summary>

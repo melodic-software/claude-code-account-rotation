@@ -102,7 +102,8 @@ public static class SwitchPlanner
             return Refuse(SwitchRefusal.TargetStrandedInRecovery);
         }
 
-        if (input.TargetCredentials.LoginExpiresAt is DateTimeOffset loginExpiresAt && loginExpiresAt <= input.Now)
+        if (input.TargetLoginDead
+            || (input.TargetCredentials.LoginExpiresAt is DateTimeOffset loginExpiresAt && loginExpiresAt <= input.Now))
         {
             return Refuse(SwitchRefusal.TargetLoginExpired);
         }

@@ -806,6 +806,83 @@ public sealed class DashboardAssemblerTests
     }
 
     /// <summary>
+    /// A parked login the token endpoint refused reads as expired though its
+    /// recorded expiry is weeks away: no Switch on either side, and the flag the
+    /// page reads to offer the login. A new login's pair clears it.
+    /// </summary>
+    [Fact]
+    public async Task AParkedLoginTheTokenEndpointRejectedIsDeadAndOfferedToNoSide()
+    {
+        await using AppFactory factory = await SharedStoreAsync(Side());
+        string folder = await factory.ParkedProfileAsync(
+            ExpiredEmail,
+            "refresh-dead",
+            TestContext.Current.CancellationToken,
+            loginExpiresAt: factory.Clock.GetUtcNow().AddDays(20));
+        factory.Services.GetRequiredService<QuotaState>().RecordLoginDead(
+            AccountEmail.Parse(ExpiredEmail).Value,
+            CredentialFiles.Pair("refresh-dead").Fingerprint);
+
+        JsonElement card = await CardAsync(factory, ExpiredEmail);
+
+        card.GetProperty("loginDead").GetBoolean().ShouldBeTrue();
+        card.GetProperty("canSwitchHere").GetBoolean().ShouldBeFalse();
+        OfferedTo(card).ShouldBeEmpty();
+
+        await File.WriteAllTextAsync(
+            Path.Combine(folder, CredentialFiles.FileName),
+            CredentialFiles.Shape("refresh-new", loginExpiresAt: factory.Clock.GetUtcNow().AddDays(28)).ToJsonString(),
+            TestContext.Current.CancellationToken);
+
+        card = await CardAsync(factory, ExpiredEmail);
+
+        card.GetProperty("loginDead").GetBoolean().ShouldBeFalse();
+        card.GetProperty("canSwitchHere").GetBoolean().ShouldBeTrue();
+    }
+
+    /// <summary>
+    /// Issue 377's second half: the side is live on the account through a login
+    /// made there while the rejected pair is still parked here. A login here
+    /// would be a second live family the self-heal cannot clear, so the card
+    /// names the side and says the next hand-off sets the pair aside.
+    /// </summary>
+    [Fact]
+    public async Task ADeadParkedLoginForAnAccountLiveOnAnOnlineSideOffersNoLoginHere()
+    {
+        FakePeerRotationInstance side = Side();
+        side.OutgoingEmail = ExpiredEmail;
+        side.OutgoingRefreshToken = "refresh-relogin";
+        await using AppFactory factory = await SharedStoreAsync(side);
+        _ = await factory.ParkedProfileAsync(
+            ExpiredEmail,
+            "refresh-dead",
+            TestContext.Current.CancellationToken,
+            loginExpiresAt: factory.Clock.GetUtcNow().AddDays(20));
+        AccountEmail email = AccountEmail.Parse(ExpiredEmail).Value;
+        QuotaState quota = factory.Services.GetRequiredService<QuotaState>();
+        quota.RecordLoginDead(email, CredentialFiles.Pair("refresh-dead").Fingerprint);
+        quota.RecordOutcome(email, new RefreshOutcome(RefreshOutcomeKind.LoginDead, RefreshMessages.LoginDead, null, factory.Clock.GetUtcNow()));
+
+        JsonElement card = await CardAsync(factory, ExpiredEmail);
+
+        card.GetProperty("liveOn").GetString().ShouldBe("wsl");
+        card.GetProperty("loginDead").GetBoolean().ShouldBeTrue();
+        card.GetProperty("canSwitchHere").GetBoolean().ShouldBeFalse();
+        card.GetProperty("refresh").GetProperty("message").GetString().ShouldBe(RefreshMessages.LoginDeadLiveOn("wsl"));
+    }
+
+    [Fact]
+    public async Task AParkedCardNoSideIsLiveOnNamesNoSide()
+    {
+        await using AppFactory factory = await SharedStoreAsync(Side());
+        _ = await factory.ParkedProfileAsync(ExpiredEmail, "refresh-x", TestContext.Current.CancellationToken);
+
+        JsonElement card = await CardAsync(factory, ExpiredEmail);
+
+        card.GetProperty("liveOn").ValueKind.ShouldBe(JsonValueKind.Null);
+    }
+
+    /// <summary>
     /// The card R6 is about: the pair is in the other side's live directory, so
     /// neither this side's Switch nor that side's may take it until that side
     /// parks it back.

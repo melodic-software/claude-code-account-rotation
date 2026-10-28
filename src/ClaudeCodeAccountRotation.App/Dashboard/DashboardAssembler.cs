@@ -199,6 +199,7 @@ internal sealed partial class DashboardAssembler(
         // sits inside the credential file and only the file can answer for it.
         foreach (ParkedProfile profile in parked.Where(candidate => candidate.Email != liveEmail))
         {
+            CredentialPair? parkedPair = await ReadParkedPairAsync(profile, cancellationToken);
             built.Add(Card(
                 profile.Email,
                 isLive: false,
@@ -208,11 +209,12 @@ internal sealed partial class DashboardAssembler(
                 note: null,
                 roster,
                 capturedAt,
-                await ReadLoginExpiryAsync(profile, cancellationToken),
+                parkedPair?.LoginExpiresAt,
                 profile.Account?.ProfileFetchedAt,
                 await SlotAsync(profile.Email, profile.FolderPath, profile.HasCredentials, hold, warnings, cancellationToken),
                 sides,
-                cliLoggedOut));
+                cliLoggedOut,
+                loginDead: quota.IsLoginDead(profile.Email, parkedPair?.Fingerprint, capturedAt)));
         }
 
         // A roster entry the operator added but has not logged in yet owns no
@@ -419,7 +421,8 @@ internal sealed partial class DashboardAssembler(
         SlotSnapshot? slot,
         IReadOnlyList<WslSideState> sides,
         bool cliLoggedOut = false,
-        string? cliLoggedOutSentence = null)
+        string? cliLoggedOutSentence = null,
+        bool loginDead = false)
     {
         WslSideState? holder = Holder(slot, sides);
         bool heldAway = slot?.State is SlotState.HeldElsewhere or SlotState.InTransit;
@@ -445,8 +448,17 @@ internal sealed partial class DashboardAssembler(
                 : null;
         }
 
+        // An online side live on this account through a login made there: a
+        // login here would put a second live family beside that one, which no
+        // hand-off can clear. A dead pair parked here is set aside by the next
+        // hand-off instead, so the card says that rather than offering Login.
+        string? liveOn = isLive ? null : sides.FirstOrDefault(side => side.Online && side.LiveAccount == email)?.Side.Value;
         RosterEntry? entry = roster.Find(email);
         RefreshStateView refresh = Refresh(email, folder);
+        if (liveOn is not null && refresh.State == Kebab(RefreshOutcomeKind.LoginDead))
+        {
+            refresh = refresh with { Message = RefreshMessages.LoginDeadLiveOn(liveOn) };
+        }
         // Whether this pair can be made live at all, on either side: the planner
         // both sides go through refuses a stranded folder and an expired login
         // whichever side asked, so the two controls below share one verdict
@@ -457,7 +469,8 @@ internal sealed partial class DashboardAssembler(
         bool usable = hasCredentials
             && !cliLoggedOut
             && refresh.State != Kebab(RefreshOutcomeKind.Stranded)
-            && !(loginExpiresAt <= capturedAt);
+            && !(loginExpiresAt <= capturedAt)
+            && !loginDead;
         // The side holding this account answers that its CLI logged out of it.
         string? loggedOutOn = slot?.State == SlotState.HeldElsewhere && holder is { Online: true, LiveLoginDead: true } && holder.LiveAccount == email
             ? holder.Side.Value
@@ -474,6 +487,8 @@ internal sealed partial class DashboardAssembler(
                 View(entry, laneCatalog.IsKeyedNow),
                 LoginExpiresAt: loginExpiresAt,
                 LoggedInAt: loggedInAt,
+                LoginDead: loginDead,
+                LiveOn: liveOn,
                 Slot: Word(slot),
                 Chip: Chip(slot, holder),
                 CanSwitchHere: usable && !isLive && !heldAway,
@@ -610,7 +625,7 @@ internal sealed partial class DashboardAssembler(
     /// on every poll.
     /// </para>
     /// </summary>
-    private async Task<DateTimeOffset?> ReadLoginExpiryAsync(ParkedProfile profile, CancellationToken cancellationToken)
+    private async Task<CredentialPair?> ReadParkedPairAsync(ParkedProfile profile, CancellationToken cancellationToken)
     {
         if (!profile.HasCredentials)
         {
@@ -619,9 +634,9 @@ internal sealed partial class DashboardAssembler(
 
         try
         {
-            DateTimeOffset? expiry = (await pairs.ReadParkedAsync(profile.FolderPath, cancellationToken))?.LoginExpiresAt;
+            CredentialPair? pair = await pairs.ReadParkedAsync(profile.FolderPath, cancellationToken);
             ForgetUnreadable(profile.FolderPath);
-            return expiry;
+            return pair;
         }
 #pragma warning disable CA1031 // Do not catch general exception types
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -707,8 +722,11 @@ internal sealed partial class DashboardAssembler(
 
         return Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
             .Order(StringComparer.Ordinal)
-            .Select(static path => "A superseded token family is quarantined at " + path
-                + ". It is never used and never deleted here; delete it yourself once that account has been logged out on the side that held it.");
+            .Select(static path => Path.GetFileName(Path.GetDirectoryName(path) ?? string.Empty).EndsWith(WslSwitch.DeadLoginSuffix, StringComparison.Ordinal)
+                ? "A parked login the token endpoint rejected was quarantined at " + path
+                    + " when a new login of that account was parked in its place. It is never used here; delete it yourself once the new login works."
+                : "A superseded token family is quarantined at " + path
+                    + ". It is never used and never deleted here; delete it yourself once that account has been logged out on the side that held it.");
     }
 
     private static string FolderName(string folderPath) =>

@@ -114,6 +114,13 @@ internal sealed record LiveAccountView(string? Email, bool HasCredentials, strin
 /// state file for the live account and from <c>profile.json</c> for a parked
 /// one. Either is null when its source is absent, carries no such instant, or
 /// cannot be read, and the page leaves that half of its line off.
+/// <c>LoginDead</c> says the token endpoint refused this card's parked refresh
+/// token whatever <c>LoginExpiresAt</c> says, so the page treats the login as
+/// expired: no Switch, and the login offered.
+/// <c>LiveOn</c> names an online side that reports this parked account as its
+/// live one, or null. The page then offers no login here: that side holds a
+/// live family of the account, and a second one here is the duplicate the
+/// store refuses. A dead pair parked here is set aside by the next hand-off.
 /// </para>
 /// <para>
 /// <c>Slot</c> is what this account's slot in the shared store holds, as one
@@ -174,7 +181,9 @@ internal sealed record AccountCardView(
     IReadOnlyList<string>? OfferedTo = null,
     string? CliLoggedOut = null,
     string? LoggedOutOn = null,
-    string? LimitedModel = null);
+    string? LimitedModel = null,
+    bool LoginDead = false,
+    string? LiveOn = null);
 
 /// <summary>
 /// The roster entry behind a card, or null when the account is on the machine
@@ -403,7 +412,7 @@ internal sealed record SwitchRefusalView(string Refusal, string Message)
         SwitchRefusal.SharesLiveRefreshToken => "That parked pair is the live pair's own lineage; a second holder is never created.",
         SwitchRefusal.RefreshLockPresent => "A session is refreshing its token right now; try again in a moment.",
         SwitchRefusal.TargetStrandedInRecovery => "This account's credentials are stranded in recovery after a failed refresh; a restart or a per-card refresh restores them.",
-        SwitchRefusal.TargetLoginExpired => "That account's login has expired; log in again.",
+        SwitchRefusal.TargetLoginExpired => "That account's login has expired or Anthropic rejected it; click Log in again on its card.",
         SwitchRefusal.SwitchingBlockedByManagedPolicy => "A device-managed login policy pins this machine to one organization.",
         SwitchRefusal.ManagedPolicyUnreadable => "A device-managed login policy exists but could not be read; switching stays off until it can be.",
         SwitchRefusal.LiveIdentityUnverified => "The live identity could not be verified; see the banner.",

@@ -8,7 +8,8 @@ namespace ClaudeCodeAccountRotation.App.Quota;
 /// What one account's turn in a refresh pass came to. Ordered as the pass
 /// decides them: the two that mean numbers landed or are about to, the three
 /// refusals that cost the endpoint nothing, then the four ways a credential
-/// operation ended badly and the read failure that is none of those.
+/// operation ended badly and the read failure that is none of those, and last
+/// the login the token endpoint refused.
 /// </summary>
 internal enum RefreshOutcomeKind
 {
@@ -56,6 +57,13 @@ internal enum RefreshOutcomeKind
 
     /// <summary>The usage endpoint did not answer with numbers this build could read.</summary>
     ReadFailed,
+
+    /// <summary>
+    /// The token endpoint refused the parked pair's refresh token, so the login
+    /// behind it is dead. Nothing is sent for that pair again until a new login
+    /// replaces it; the card offers the login.
+    /// </summary>
+    LoginDead,
 }
 
 /// <summary>
@@ -87,6 +95,8 @@ internal static class RefreshMessages
     public const string InTransit = "a hand-off is in flight; refresh again when it lands";
     public const string Read = "read just now";
     public const string TokenRefreshFailed = "the token endpoint did not answer with new credentials";
+    public const string LoginDead = "Anthropic rejected this login; click Log in again";
+    public const string LoginPresumedDead = "the token endpoint refused this login 3 times in a row; click Log in again, or it is tried again in 6 h";
     public const string Stranded = "credentials stranded in recovery";
     public const string Lost = "credentials lost; log in again";
     public const string ReadFailedTransport = "the usage endpoint could not be read";
@@ -113,6 +123,14 @@ internal static class RefreshMessages
 
     /// <summary>The other side's live access token is expired or was rejected; its session renews it.</summary>
     public static string SessionWillRefreshOn(SideName side) => "the session on " + side.Value + " will refresh; refresh again after it does";
+
+    /// <summary>
+    /// A rejected login parked here for an account the named side is live on
+    /// through a login made there: no login is offered here, and the next
+    /// hand-off sets the rejected pair aside.
+    /// </summary>
+    public static string LoginDeadLiveOn(string side) =>
+        "Anthropic rejected the login parked here; " + side + " is live on this account, and its next switch sets this pair aside";
 
     /// <summary>The side the holder record names did not answer.</summary>
     public static string SideUnreachable(SideName side) => "in use by " + side.Value + ", which did not answer; start it and refresh again";
