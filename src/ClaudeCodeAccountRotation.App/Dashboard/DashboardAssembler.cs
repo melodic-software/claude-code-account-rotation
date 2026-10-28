@@ -214,7 +214,9 @@ internal sealed partial class DashboardAssembler(
                 await SlotAsync(profile.Email, profile.FolderPath, profile.HasCredentials, hold, warnings, cancellationToken),
                 sides,
                 cliLoggedOut,
-                loginDead: quota.IsLoginDead(profile.Email, parkedPair?.Fingerprint, capturedAt)));
+                loginDead: quota.IsLoginRejected(profile.Email, parkedPair?.Fingerprint),
+                loginPaused: quota.IsLoginDead(profile.Email, parkedPair?.Fingerprint, capturedAt)
+                    && !quota.IsLoginRejected(profile.Email, parkedPair?.Fingerprint)));
         }
 
         // A roster entry the operator added but has not logged in yet owns no
@@ -422,7 +424,8 @@ internal sealed partial class DashboardAssembler(
         IReadOnlyList<WslSideState> sides,
         bool cliLoggedOut = false,
         string? cliLoggedOutSentence = null,
-        bool loginDead = false)
+        bool loginDead = false,
+        bool loginPaused = false)
     {
         WslSideState? holder = Holder(slot, sides);
         bool heldAway = slot?.State is SlotState.HeldElsewhere or SlotState.InTransit;
@@ -455,9 +458,15 @@ internal sealed partial class DashboardAssembler(
         string? liveOn = isLive ? null : sides.FirstOrDefault(side => side.Online && side.LiveAccount == email)?.Side.Value;
         RosterEntry? entry = roster.Find(email);
         RefreshStateView refresh = Refresh(email, folder);
-        if (liveOn is not null && refresh.State == Kebab(RefreshOutcomeKind.LoginDead))
+        if (liveOn is not null && loginDead)
         {
             refresh = refresh with { Message = RefreshMessages.LoginDeadLiveOn(liveOn) };
+        }
+        else if (loginPaused)
+        {
+            // The pause is the mark, not the last outcome: a later turn that
+            // sent nothing still reports it, and Switch is what retries it.
+            refresh = new RefreshStateView(Kebab(RefreshOutcomeKind.LoginDead), RefreshMessages.LoginPresumedDead, RetryAt: null);
         }
         // Whether this pair can be made live at all, on either side: the planner
         // both sides go through refuses a stranded folder and an expired login
@@ -488,6 +497,7 @@ internal sealed partial class DashboardAssembler(
                 LoginExpiresAt: loginExpiresAt,
                 LoggedInAt: loggedInAt,
                 LoginDead: loginDead,
+                LoginPaused: loginPaused,
                 LiveOn: liveOn,
                 Slot: Word(slot),
                 Chip: Chip(slot, holder),

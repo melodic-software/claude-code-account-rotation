@@ -883,6 +883,29 @@ public sealed class DashboardAssemblerTests
     }
 
     /// <summary>
+    /// A paused login keeps Switch on both sides, because the switch retries
+    /// it first, and the card says so.
+    /// </summary>
+    [Fact]
+    public async Task APausedParkedLoginStaysSwitchableAndSaysSwitchRetriesItFirst()
+    {
+        await using AppFactory factory = await SharedStoreAsync(Side());
+        _ = await factory.ParkedProfileAsync(ExpiredEmail, "refresh-paused", TestContext.Current.CancellationToken);
+        factory.Services.GetRequiredService<QuotaState>().RecordLoginDead(
+            AccountEmail.Parse(ExpiredEmail).Value,
+            CredentialFiles.Pair("refresh-paused").Fingerprint,
+            factory.Clock.GetUtcNow().AddHours(6));
+
+        JsonElement card = await CardAsync(factory, ExpiredEmail);
+
+        card.GetProperty("loginPaused").GetBoolean().ShouldBeTrue();
+        card.GetProperty("loginDead").GetBoolean().ShouldBeFalse();
+        card.GetProperty("canSwitchHere").GetBoolean().ShouldBeTrue();
+        OfferedTo(card).ShouldBe(["wsl"]);
+        card.GetProperty("refresh").GetProperty("message").GetString().ShouldBe(RefreshMessages.LoginPresumedDead);
+    }
+
+    /// <summary>
     /// The card R6 is about: the pair is in the other side's live directory, so
     /// neither this side's Switch nor that side's may take it until that side
     /// parks it back.

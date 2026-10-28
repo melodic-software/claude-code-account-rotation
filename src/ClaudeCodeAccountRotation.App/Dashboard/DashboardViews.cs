@@ -117,6 +117,9 @@ internal sealed record LiveAccountView(string? Email, bool HasCredentials, strin
 /// <c>LoginDead</c> says the token endpoint refused this card's parked refresh
 /// token whatever <c>LoginExpiresAt</c> says, so the page treats the login as
 /// expired: no Switch, and the login offered.
+/// <c>LoginPaused</c> says the pair holds the lapsing mark a run of
+/// unexplained 400s leaves: Switch stays offered, because the switch retries
+/// the login first, and the login is offered beside it.
 /// <c>LiveOn</c> names an online side that reports this parked account as its
 /// live one, or null. The page then offers no login here: that side holds a
 /// live family of the account, and a second one here is the duplicate the
@@ -183,7 +186,8 @@ internal sealed record AccountCardView(
     string? LoggedOutOn = null,
     string? LimitedModel = null,
     bool LoginDead = false,
-    string? LiveOn = null);
+    string? LiveOn = null,
+    bool LoginPaused = false);
 
 /// <summary>
 /// The roster entry behind a card, or null when the account is on the machine
@@ -413,6 +417,7 @@ internal sealed record SwitchRefusalView(string Refusal, string Message)
         SwitchRefusal.RefreshLockPresent => "A session is refreshing its token right now; try again in a moment.",
         SwitchRefusal.TargetStrandedInRecovery => "This account's credentials are stranded in recovery after a failed refresh; a restart or a per-card refresh restores them.",
         SwitchRefusal.TargetLoginExpired => "That account's login has expired or Anthropic rejected it; click Log in again on its card.",
+        SwitchRefusal.LoginRetryNotSent => "That account's login is paused, and Switch could not retry it now: the request budget, a rate-limit lockout, another credential change, or the token endpoint not answering. Try again in a minute, or click Log in again on its card.",
         SwitchRefusal.SwitchingBlockedByManagedPolicy => "A device-managed login policy pins this machine to one organization.",
         SwitchRefusal.ManagedPolicyUnreadable => "A device-managed login policy exists but could not be read; switching stays off until it can be.",
         SwitchRefusal.LiveIdentityUnverified => "The live identity could not be verified; see the banner.",
