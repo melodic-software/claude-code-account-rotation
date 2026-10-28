@@ -253,6 +253,23 @@ public sealed class CredentialAuditLogTests
     }
 
     [Fact]
+    public async Task OutboundRequestLinesAreLoggedOnlyFromWarning()
+    {
+        await using AppFactory factory = new();
+        ILoggerFactory loggers = factory.Services.GetRequiredService<ILoggerFactory>();
+
+        foreach (string handler in new[] { "LogicalHandler", "ClientHandler" })
+        {
+            ILogger outbound = loggers.CreateLogger("System.Net.Http.HttpClient.peer-wsl." + handler);
+            outbound.IsEnabled(LogLevel.Information).ShouldBeFalse();
+            outbound.IsEnabled(LogLevel.Warning).ShouldBeTrue();
+        }
+
+        // Without this, a host that raised the global minimum would pass the lines above.
+        loggers.CreateLogger(typeof(AppComposition).FullName!).IsEnabled(LogLevel.Information).ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task TheConsoleFormatterStampsEveryLineInUtc()
     {
         await using AppFactory factory = new();
