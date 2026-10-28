@@ -193,7 +193,6 @@ public sealed class PseudoTerminalChildTests : IDisposable
         ClaudeCliSetupTokenRunner.ExtractTokens(answer).ShouldBe([SetupTokenScript.TokenPrefix + new string('Q', 60) + RealLengthCode.Replace("#", string.Empty, StringComparison.Ordinal) + "AA"]);
     }
 
-
     [Fact]
     public async Task TheRunnerDeliversTheTokenThroughARealTerminal()
     {
