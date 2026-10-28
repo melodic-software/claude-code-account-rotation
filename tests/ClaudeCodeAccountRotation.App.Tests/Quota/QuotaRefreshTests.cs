@@ -1,8 +1,11 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ClaudeCodeAccountRotation.App.Dashboard;
 using ClaudeCodeAccountRotation.App.Quota;
+using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Quota;
+using ClaudeCodeAccountRotation.Core.Switching;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Quota;
 
@@ -876,6 +879,118 @@ public sealed class QuotaRefreshTests
         RefreshTokenFingerprint original = CredentialFiles.Pair("refresh-a").Fingerprint;
         harness.State.IsLoginDead(RefreshHarness.Email("a@example.com"), original, harness.Clock.GetUtcNow()).ShouldBeFalse();
         harness.State.RecordRefreshBadRequest(RefreshHarness.Email("a@example.com"), original).ShouldBe(1);
+    }
+
+    private static async Task<(RefreshHarness Harness, RefreshTokenFingerprint Marked)> PausedAsync()
+    {
+        RefreshHarness harness = new();
+        await harness.ParkAsync("a@example.com", "refresh-a", harness.Expired, Token);
+        RefreshTokenFingerprint marked = CredentialFiles.Pair("refresh-a").Fingerprint;
+        for (int run = 0; run < QuotaRefresh.BadRequestsBeforeDead; run++)
+        {
+            harness.State.RecordRefreshBadRequest(RefreshHarness.Email("a@example.com"), marked);
+        }
+
+        harness.State.RecordLoginDead(RefreshHarness.Email("a@example.com"), marked, harness.Clock.GetUtcNow() + QuotaRefresh.BadRequestMarkLifetime);
+        return (harness, marked);
+    }
+
+    [Fact]
+    public async Task ASwitchRetryOfAPausedLoginThatRotatesClearsTheMark()
+    {
+        (RefreshHarness harness, RefreshTokenFingerprint marked) = await PausedAsync();
+        using RefreshHarness owned = harness;
+        harness.Tokens.Answers.Enqueue(ScriptedTokens.Rotated("a2", harness.Valid, harness.Clock.GetUtcNow().AddDays(28)));
+
+        Result<Unit, SwitchRefusal> retried = await harness.Engine.RetryPausedLoginAsync(RefreshHarness.Email("a@example.com"), Token);
+
+        retried.IsSuccess.ShouldBeTrue();
+        harness.Tokens.Calls.ShouldBe(1);
+        harness.State.IsLoginDead(RefreshHarness.Email("a@example.com"), marked, harness.Clock.GetUtcNow()).ShouldBeFalse();
+        (await RefreshHarness.ParkedOAuthAsync(harness.FolderFor("a@example.com"), Token))["refreshToken"]!.GetValue<string>().ShouldBe("refresh-a2");
+        harness.OutcomeFor("a@example.com").ShouldBeNull();
+        harness.State.InProgress.ShouldBeFalse();
+    }
+
+    [Theory]
+    [InlineData(UsageReadFailureKind.LoginRejected, true)]
+    [InlineData(UsageReadFailureKind.RefreshBadRequest, false)]
+    public async Task ASwitchRetryTheEndpointRefusesAgainRefusesTheSwitch(UsageReadFailureKind kind, bool permanent)
+    {
+        // invalid_grant or a 401 makes the mark permanent; another unexplained
+        // 400 renews the lapsing one for a further six hours.
+        (RefreshHarness harness, RefreshTokenFingerprint marked) = await PausedAsync();
+        using RefreshHarness owned = harness;
+        harness.Tokens.Answers.Enqueue(ScriptedTokens.Failed(kind));
+        harness.Clock.Advance(TimeSpan.FromHours(1));
+
+        Result<Unit, SwitchRefusal> retried = await harness.Engine.RetryPausedLoginAsync(RefreshHarness.Email("a@example.com"), Token);
+
+        retried.Error.ShouldBe(SwitchRefusal.TargetLoginExpired);
+        harness.Tokens.Calls.ShouldBe(1);
+        harness.State.IsLoginRejected(RefreshHarness.Email("a@example.com"), marked).ShouldBe(permanent);
+        harness.State.IsLoginDead(RefreshHarness.Email("a@example.com"), marked, harness.Clock.GetUtcNow() + QuotaRefresh.BadRequestMarkLifetime - TimeSpan.FromMinutes(1)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task ASwitchRetryOfAPermanentlyRejectedLoginSendsNothing()
+    {
+        using RefreshHarness harness = new();
+        await harness.ParkAsync("a@example.com", "refresh-a", harness.Expired, Token);
+        harness.State.RecordLoginDead(RefreshHarness.Email("a@example.com"), CredentialFiles.Pair("refresh-a").Fingerprint);
+
+        Result<Unit, SwitchRefusal> retried = await harness.Engine.RetryPausedLoginAsync(RefreshHarness.Email("a@example.com"), Token);
+
+        // Nothing to retry: the planner refuses it with TargetLoginExpired.
+        retried.IsSuccess.ShouldBeTrue();
+        harness.Tokens.Calls.ShouldBe(0);
+    }
+
+    [Theory]
+    [InlineData("stranded")]
+    [InlineData("roster-paused")]
+    [InlineData("live")]
+    public async Task ASwitchRetrySendsNothingForAFolderAPassWouldNotRefresh(string why)
+    {
+        // A stranded folder's file holds a spent refresh token, a roster pause
+        // stops every request, and the live pair is the session's; the planner
+        // decides each with its own reason.
+        (RefreshHarness harness, RefreshTokenFingerprint marked) = await PausedAsync();
+        using RefreshHarness owned = harness;
+        switch (why)
+        {
+            case "stranded":
+                (await harness.Recovery.WriteAsync(harness.FolderFor("a@example.com"), marked, CredentialFiles.Pair("refresh-a2"), Token)).ShouldBeTrue();
+                break;
+            case "roster-paused":
+                await harness.PauseAsync("a@example.com", Token);
+                break;
+            default:
+                await harness.WriteLiveIdentityAsync("a@example.com", Token);
+                break;
+        }
+
+        Result<Unit, SwitchRefusal> retried = await harness.Engine.RetryPausedLoginAsync(RefreshHarness.Email("a@example.com"), Token);
+
+        retried.IsSuccess.ShouldBeTrue();
+        harness.Tokens.Calls.ShouldBe(0);
+        harness.State.IsLoginDead(RefreshHarness.Email("a@example.com"), marked, harness.Clock.GetUtcNow()).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task ASwitchRetryTheBudgetRefusesSendsNothingAndRefusesTheSwitch()
+    {
+        (RefreshHarness harness, RefreshTokenFingerprint marked) = await PausedAsync();
+        using RefreshHarness owned = harness;
+        harness.Budget.TryReserve(RefreshHarness.Email("a@example.com")).ShouldBeTrue();
+
+        Result<Unit, SwitchRefusal> retried = await harness.Engine.RetryPausedLoginAsync(RefreshHarness.Email("a@example.com"), Token);
+
+        retried.Error.ShouldBe(SwitchRefusal.LoginRetryNotSent);
+        SwitchRefusalView.Of(retried.Error).Message.ShouldContain("request budget");
+        harness.Tokens.Calls.ShouldBe(0);
+        harness.State.IsLoginDead(RefreshHarness.Email("a@example.com"), marked, harness.Clock.GetUtcNow()).ShouldBeTrue();
+        harness.State.InProgress.ShouldBeFalse();
     }
 
     [Fact]

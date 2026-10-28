@@ -470,6 +470,7 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
                 // Before a code the pump's own settle says how it ended.
                 if (last is not null)
                 {
+                    session.Child.Kill();
                     Settle(session, LoginSessionState.Failed, EndedSentence + Said(last) + ManualFallback);
                 }
 
@@ -541,6 +542,9 @@ internal sealed partial class ClaudeCliSetupTokenRunner : ICiTokenSessionRunner,
                     said = ScreenTail(visible, session.Code);
                 }
 
+                // Killed before the settle wakes the code's caller, so a session
+                // it reads as ended has no child left running.
+                session.Child.Kill();
                 Settle(session, LoginSessionState.Failed, "That code was rejected; claude setup-token said: \"" + said + "\". Start again and paste the whole code from the browser." + ManualFallback);
                 return;
             }

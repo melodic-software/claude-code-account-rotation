@@ -43,6 +43,7 @@ internal static class SideEndpoints
             bool? quarantineForeignFamily,
             WslSwitch coordinator,
             QuotaRefreshWorker worker,
+            QuotaRefresh refresh,
             DashboardState state,
             CancellationToken cancellationToken) =>
         {
@@ -53,6 +54,13 @@ internal static class SideEndpoints
             }
 
             await worker.YieldAsync(cancellationToken);
+
+            // The Windows switch's rule: a paused login is retried once first.
+            Result<Unit, SwitchRefusal> retried = await refresh.RetryPausedLoginAsync(target.Value, cancellationToken);
+            if (retried.IsFailure)
+            {
+                return View(Result<WslSwitchOutcome, SwitchRefusal>.Failure(retried.Error));
+            }
 
             // That side's windows before the swap, for the same reason the
             // Windows switch keeps its own: a session there mid-turn writes the

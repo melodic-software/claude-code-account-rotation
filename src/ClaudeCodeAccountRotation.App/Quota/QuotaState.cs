@@ -308,6 +308,23 @@ internal sealed class QuotaState
     }
 
     /// <summary>
+    /// Drops this account's dead mark, and the outcome that reported it: a
+    /// retried refresh of the marked pair succeeded, so the card has nothing
+    /// left to say about the login.
+    /// </summary>
+    public void ClearLoginDead(AccountEmail account)
+    {
+        lock (_mutex)
+        {
+            _deadLogins.Remove(account);
+            if (_outcomes.GetValueOrDefault(account) is { Kind: RefreshOutcomeKind.LoginDead })
+            {
+                _outcomes.Remove(account);
+            }
+        }
+    }
+
+    /// <summary>
     /// Whether the token endpoint refused this pair outright, with
     /// <c>invalid_grant</c> or a 401. Only such a pair may be moved out of its
     /// slot: a mark from unexplained 400s may be an endpoint fault.

@@ -6,6 +6,26 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Added
+
+- **Assign to best spare on a usage alert.** A CI-role account's alert line carries a button per
+  role whose token half it holds; a click runs Assign to role on the best spare the notification
+  names, token half only. No button when no spare qualifies or the spare stores no CI token.
+  Nothing assigns without the click (#255).
+
+### Changed
+
+- **Switch retries a paused login first.** A parked login the token endpoint refused with three
+  unexplained 400s in a row is paused for 6 hours rather than dead, and its card now reads
+  "login paused" and keeps Switch, on this side and the other. Switch, from either side, first
+  retries that pair's refresh once, before it takes the mutation gate and through the same request
+  budget, lockouts and write-back a refresh pass uses. A rotated pair clears the pause and the
+  switch goes on. Another refusal refuses the switch with `TargetLoginExpired`: `invalid_grant` or
+  a 401 makes the mark permanent, and another 400 renews the pause. When the budget, a lockout,
+  another credential change or an unanswering endpoint stops the retry, the switch is refused with
+  `LoginRetryNotSent` and a sentence naming those. A login refused outright is still refused with
+  no request sent.
+
 ### Fixed
 
 - **Generate CI token submits a real sign-in code.** `claude setup-token` took a code of 63

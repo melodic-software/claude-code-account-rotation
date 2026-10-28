@@ -13,4 +13,12 @@ namespace ClaudeCodeAccountRotation.App.Tests;
 public sealed class StandInScripts
 {
     public const string Name = "stand-in scripts";
+
+    /// <summary>
+    /// A shell expression for the monotonic clock in nanoseconds, the clock the
+    /// write gate spaces by. <c>date +%s%N</c> reads the wall clock, which time
+    /// sync can step back between two stamps.
+    /// </summary>
+    public const string MonotonicNanoseconds =
+        "$(perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e 'printf \"%.0f\", clock_gettime(CLOCK_MONOTONIC) * 1e9')";
 }
