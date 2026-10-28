@@ -1096,3 +1096,9 @@ test("a paused login keeps Switch, offers the login, and says it is paused", () 
   assert.strictEqual(loginOffered(paused, NOW), true);
   assert.strictEqual(loginOffered(Object.assign({}, paused, { liveOn: "wsl" }), NOW), false);
 });
+
+test("a stranded card without login flags reads error and offers no login", () => {
+  const stranded = { isLive: false, hasCredentials: true, loginPaused: false, loginDead: false, loginExpiresAt: null, refresh: { state: "stranded" } };
+  assert.strictEqual(stateChip(stranded, NOW), "error");
+  assert.strictEqual(loginOffered(stranded, NOW), false);
+});

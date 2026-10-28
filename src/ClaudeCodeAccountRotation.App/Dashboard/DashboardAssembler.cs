@@ -524,8 +524,11 @@ internal sealed partial class DashboardAssembler(
                 View(entry, laneCatalog.IsKeyedNow),
                 LoginExpiresAt: loginExpiresAt,
                 LoggedInAt: loggedInAt,
-                LoginDead: loginDead,
-                LoginPaused: loginPaused,
+                // Not on a stranded card: the mark names the spent pair still in
+                // the folder, and the page would read it as a login to renew
+                // when recovery is what the card needs.
+                LoginDead: loginDead && !stranded,
+                LoginPaused: loginPaused && !stranded,
                 LiveOn: liveOn,
                 Slot: Word(slot),
                 Chip: Chip(slot, holder),

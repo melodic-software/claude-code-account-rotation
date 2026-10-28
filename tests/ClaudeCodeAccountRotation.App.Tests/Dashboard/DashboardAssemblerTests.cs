@@ -967,6 +967,10 @@ public sealed class DashboardAssemblerTests
         card.GetProperty("refresh").GetProperty("message").GetString().ShouldBe(RefreshMessages.Stranded);
         card.GetProperty("canSwitchHere").GetBoolean().ShouldBeFalse();
         OfferedTo(card).ShouldBeEmpty();
+        // The flags the page reads for its chip and its login offer stay clear,
+        // so it says "error" and offers recovery's own path, not a login.
+        card.GetProperty("loginPaused").GetBoolean().ShouldBeFalse();
+        card.GetProperty("loginDead").GetBoolean().ShouldBeFalse();
     }
 
     [Fact]
