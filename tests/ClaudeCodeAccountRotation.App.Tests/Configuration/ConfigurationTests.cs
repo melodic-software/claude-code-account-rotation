@@ -444,7 +444,7 @@ public sealed class ConfigurationTests : IDisposable
     [InlineData("\\Folder\\claude-remote-control")]
     [InlineData("Folder/claude-remote-control")]
     [InlineData("claude-*")]
-    [InlineData("claude-remote-contro?")]
+    [InlineData("claude-remote-c?ntrol")]
     [InlineData("claude-[r]emote-control")]
     [InlineData("claude-remote-control]")]
     public void ARemoteControlTaskWithAPathOrWildcardIsRefused(string task)
