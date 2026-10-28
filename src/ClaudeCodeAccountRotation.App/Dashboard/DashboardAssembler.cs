@@ -466,6 +466,11 @@ internal sealed partial class DashboardAssembler(
         {
             refresh = refresh with { Message = RefreshMessages.LoginPausedLiveOn(liveOn) };
         }
+        else if (loginPaused && entry is { Paused: true })
+        {
+            // A roster pause stops the retry too, so Switch would only be refused.
+            refresh = new RefreshStateView(Kebab(RefreshOutcomeKind.LoginDead), RefreshMessages.LoginPausedOnRoster, RetryAt: null);
+        }
         else if (loginPaused && refresh.State != Kebab(RefreshOutcomeKind.Stranded))
         {
             // The pause is the mark, not the last outcome: a later turn that
@@ -483,7 +488,8 @@ internal sealed partial class DashboardAssembler(
             && !cliLoggedOut
             && refresh.State != Kebab(RefreshOutcomeKind.Stranded)
             && !(loginExpiresAt <= capturedAt)
-            && !loginDead;
+            && !loginDead
+            && !(loginPaused && entry is { Paused: true });
         // The side holding this account answers that its CLI logged out of it.
         string? loggedOutOn = slot?.State == SlotState.HeldElsewhere && holder is { Online: true, LiveLoginDead: true } && holder.LiveAccount == email
             ? holder.Side.Value

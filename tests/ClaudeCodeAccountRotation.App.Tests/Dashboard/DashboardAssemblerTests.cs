@@ -906,6 +906,28 @@ public sealed class DashboardAssemblerTests
     }
 
     [Fact]
+    public async Task APausedLoginOnARosterPausedAccountIsNotOfferedSwitchAndSaysWhy()
+    {
+        // The retry sends nothing for a roster-paused account, so the card does
+        // not promise one.
+        await using AppFactory factory = await SharedStoreAsync(Side());
+        _ = await factory.ParkedProfileAsync(ExpiredEmail, "refresh-paused", TestContext.Current.CancellationToken);
+        await factory.Services.GetRequiredService<RosterFile>().UpdateAsync(
+            roster => roster.With(new RosterEntry(AccountEmail.Parse(ExpiredEmail).Value, null, null, null, Paused: true, null)),
+            TestContext.Current.CancellationToken);
+        factory.Services.GetRequiredService<QuotaState>().RecordLoginDead(
+            AccountEmail.Parse(ExpiredEmail).Value,
+            CredentialFiles.Pair("refresh-paused").Fingerprint,
+            factory.Clock.GetUtcNow().AddHours(6));
+
+        JsonElement card = await CardAsync(factory, ExpiredEmail);
+
+        card.GetProperty("refresh").GetProperty("message").GetString().ShouldBe(RefreshMessages.LoginPausedOnRoster);
+        card.GetProperty("canSwitchHere").GetBoolean().ShouldBeFalse();
+        OfferedTo(card).ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task APausedLoginStrandedInRecoveryStaysStrandedAndUnswitchable()
     {
         await using AppFactory factory = await SharedStoreAsync(Side());
