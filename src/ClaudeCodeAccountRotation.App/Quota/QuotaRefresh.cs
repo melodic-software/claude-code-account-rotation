@@ -61,6 +61,14 @@ internal sealed partial class QuotaRefresh
     private static readonly TimeSpan _spacing = TimeSpan.FromSeconds(1);
 
     /// <summary>
+    /// How many 400s in a row without <c>invalid_grant</c> one parked pair's
+    /// refresh may get before its login is treated as dead. A 400 whose body
+    /// this build cannot read as a refusal is retried, but not for ever: three
+    /// passes of the same answer is a login the card should send to Log in again.
+    /// </summary>
+    internal const int BadRequestsBeforeDead = 3;
+
+    /// <summary>
     /// Three write-back attempts and the wait after each, jittered. The wait
     /// after the last attempt is counted too: 1.75 s of pacing is what the host's
     /// shutdown budget is computed from, so the drain covers the unit's worst
@@ -750,6 +758,7 @@ internal sealed partial class QuotaRefresh
             Result<RefreshedTokens, UsageReadFailure> refreshed = await _tokens().RefreshAsync(current.RefreshToken, CancellationToken.None);
             if (refreshed.IsSuccess)
             {
+                _state.ClearRefreshBadRequests(account);
                 CredentialPair rotated = Rotate(current, refreshed.Value);
                 try
                 {
@@ -783,7 +792,17 @@ internal sealed partial class QuotaRefresh
                     EndsPass: true);
             }
 
-            if (refreshed.Error.Kind == UsageReadFailureKind.LoginRejected)
+            if (refreshed.Error.Kind == UsageReadFailureKind.RefreshBadRequest)
+            {
+                int run = _state.RecordRefreshBadRequest(account, current.Fingerprint);
+                LogRefreshBadRequest(account.Value, FolderName(folder), refreshed.Error.Detail, run, BadRequestsBeforeDead);
+                if (run < BadRequestsBeforeDead)
+                {
+                    return Refused(RefreshOutcomeKind.TokenRefreshFailed, RefreshMessages.TokenRefreshFailed);
+                }
+            }
+
+            if (refreshed.Error.Kind is UsageReadFailureKind.LoginRejected or UsageReadFailureKind.RefreshBadRequest)
             {
                 // Nothing was rotated: the refusal leaves the file as it was, and
                 // the fingerprint marks it so no pass sends that token again.
@@ -1007,6 +1026,9 @@ internal sealed partial class QuotaRefresh
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "the token refresh for {Folder} failed ({Kind}): {Detail}")]
     private partial void LogTokenRefreshFailed(string folder, string kind, string detail);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the token refresh of {Account} in {Folder} was refused without invalid_grant: {Detail} ({Count} of {Limit} in a row before the login is treated as dead)")]
+    private partial void LogRefreshBadRequest(string account, string folder, string detail, int count, int limit);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "the login of {Account} in {Folder} is dead: {Detail}; no refresh is sent for it until it is logged in again")]
     private partial void LogLoginRejected(string account, string folder, string detail);

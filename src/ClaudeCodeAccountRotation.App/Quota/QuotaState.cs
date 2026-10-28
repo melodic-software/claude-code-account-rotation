@@ -22,7 +22,7 @@ namespace ClaudeCodeAccountRotation.App.Quota;
 /// </summary>
 internal sealed class QuotaState
 {
-    // ponytail: one lock over six small dictionaries. Ten accounts read a few
+    // ponytail: one lock over seven small dictionaries. Ten accounts read a few
     // times an hour; finer-grained locking would buy nothing measurable and the
     // page's read must see one consistent picture anyway.
     private readonly Lock _mutex = new();
@@ -30,6 +30,7 @@ internal sealed class QuotaState
     private readonly Dictionary<AccountEmail, UsageSnapshot> _observed = [];
     private readonly Dictionary<AccountEmail, RefreshOutcome> _outcomes = [];
     private readonly Dictionary<AccountEmail, RefreshTokenFingerprint> _deadLogins = [];
+    private readonly Dictionary<AccountEmail, (RefreshTokenFingerprint Fingerprint, int Count)> _badRequests = [];
     private readonly Dictionary<string, string> _recoveryWarnings =
         new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 
@@ -298,6 +299,32 @@ internal sealed class QuotaState
         lock (_mutex)
         {
             return fingerprint is not null && _deadLogins.TryGetValue(account, out RefreshTokenFingerprint dead) && dead == fingerprint;
+        }
+    }
+
+    /// <summary>
+    /// Counts one more 400 the token endpoint gave this account's parked pair
+    /// without saying <c>invalid_grant</c>, and returns the run so far. A
+    /// different pair starts the run again at one, so a new login resets it.
+    /// </summary>
+    public int RecordRefreshBadRequest(AccountEmail account, RefreshTokenFingerprint fingerprint)
+    {
+        lock (_mutex)
+        {
+            int count = _badRequests.TryGetValue(account, out (RefreshTokenFingerprint Fingerprint, int Count) run) && run.Fingerprint == fingerprint
+                ? run.Count + 1
+                : 1;
+            _badRequests[account] = (fingerprint, count);
+            return count;
+        }
+    }
+
+    /// <summary>Ends an account's run of unexplained 400s: its refresh succeeded.</summary>
+    public void ClearRefreshBadRequests(AccountEmail account)
+    {
+        lock (_mutex)
+        {
+            _badRequests.Remove(account);
         }
     }
 

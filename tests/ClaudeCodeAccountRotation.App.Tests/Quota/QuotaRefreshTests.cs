@@ -754,6 +754,55 @@ public sealed class QuotaRefreshTests
     }
 
     [Fact]
+    public async Task ThreeUnexplainedBadRequestsInARowMarkTheLoginDead()
+    {
+        // A 400 without invalid_grant is retried, but a pair that gets it on
+        // three passes running is treated as dead rather than retried for ever.
+        using RefreshHarness harness = new();
+        string folder = await harness.ParkAsync("a@example.com", "refresh-a", harness.Expired, Token);
+        CredentialPair parked = (await harness.Store.ReadParkedAsync(folder, Token))!;
+        for (int pass = 1; pass <= QuotaRefresh.BadRequestsBeforeDead; pass++)
+        {
+            harness.Tokens.Answers.Enqueue(ScriptedTokens.Failed(UsageReadFailureKind.RefreshBadRequest));
+            await harness.Engine.RunAsync(RefreshRequest.All, Token);
+            harness.Clock.Advance(TimeSpan.FromMinutes(5));
+
+            bool last = pass == QuotaRefresh.BadRequestsBeforeDead;
+            harness.OutcomeFor("a@example.com")!.Kind.ShouldBe(last ? RefreshOutcomeKind.LoginDead : RefreshOutcomeKind.TokenRefreshFailed);
+            harness.State.IsLoginDead(RefreshHarness.Email("a@example.com"), parked.Fingerprint).ShouldBe(last);
+            harness.RefreshLog.Lines.ShouldContain(line => line.Contains("(" + pass + " of 3 in a row", StringComparison.Ordinal));
+        }
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.Tokens.Calls.ShouldBe(QuotaRefresh.BadRequestsBeforeDead);
+    }
+
+    [Fact]
+    public async Task TwoBadRequestsThenASuccessDoNotMarkTheLoginDead()
+    {
+        using RefreshHarness harness = new();
+        await harness.ParkAsync("a@example.com", "refresh-a", harness.Expired, Token);
+        harness.Tokens.Answers.Enqueue(ScriptedTokens.Failed(UsageReadFailureKind.RefreshBadRequest));
+        harness.Tokens.Answers.Enqueue(ScriptedTokens.Failed(UsageReadFailureKind.RefreshBadRequest));
+        harness.Tokens.Answers.Enqueue(ScriptedTokens.Rotated("a2", harness.Valid, harness.Clock.GetUtcNow().AddDays(28)));
+        harness.Usage.Answers.Enqueue(ScriptedUsage.Ok());
+
+        for (int pass = 0; pass < 3; pass++)
+        {
+            await harness.Engine.RunAsync(RefreshRequest.All, Token);
+            harness.Clock.Advance(TimeSpan.FromMinutes(5));
+        }
+
+        harness.Tokens.Calls.ShouldBe(3);
+        harness.OutcomeFor("a@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.Read);
+        // The run ended with the success: the same pair would start again at one.
+        RefreshTokenFingerprint original = CredentialFiles.Pair("refresh-a").Fingerprint;
+        harness.State.IsLoginDead(RefreshHarness.Email("a@example.com"), original).ShouldBeFalse();
+        harness.State.RecordRefreshBadRequest(RefreshHarness.Email("a@example.com"), original).ShouldBe(1);
+    }
+
+    [Fact]
     public async Task ANewLoginEndsTheDeadMark()
     {
         // The mark is keyed by the refused pair, so the pair a new login writes

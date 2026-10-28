@@ -68,14 +68,14 @@ internal sealed class ClaudeOAuthTokenRefreshClient : ITokenRefreshClient
             {
                 // Only invalid_grant (RFC 6749 section 5.2) or a 401 says the
                 // refresh token itself is dead. Any other 400, invalid_client or
-                // invalid_request or a proxy's HTML page, says nothing about the
-                // login, and marking it dead would quarantine a healthy pair, so
-                // it stays Transport and is tried again.
+                // invalid_request or a proxy's HTML page, says nothing certain
+                // about the login, so it is its own kind: the caller retries it
+                // and marks the login dead only after several in a row.
                 string status = ((int)response.StatusCode).ToString(CultureInfo.InvariantCulture);
                 string error = await OAuthErrorAsync(response, cancellationToken);
                 return response.StatusCode == HttpStatusCode.Unauthorized || error == "invalid_grant"
                     ? Failure(UsageReadFailureKind.LoginRejected, "the token endpoint rejected the refresh token (" + status + " " + error + ")")
-                    : Failure(UsageReadFailureKind.Transport, "the token endpoint answered " + status + " " + error);
+                    : Failure(UsageReadFailureKind.RefreshBadRequest, "the token endpoint answered " + status + " " + error);
             }
 
             if (!response.IsSuccessStatusCode)
@@ -119,8 +119,9 @@ internal sealed class ClaudeOAuthTokenRefreshClient : ITokenRefreshClient
     }
 
     /// <summary>
-    /// The OAuth <c>error</c> code of a refusal (RFC 6749 section 5.2), and only
-    /// that: <c>error_description</c> is free text the tool does not control, so
+    /// The OAuth <c>error</c> code of a refusal (RFC 6749 section 5.2), or the
+    /// <c>error.type</c> of Anthropic's API error envelope, and only that:
+    /// <c>error_description</c> and <c>error.message</c> are free text the tool does not control, so
     /// it never reaches a log. The code is kept only when it is the short
     /// lower-case token the RFC allows, else it reads as unknown.
     /// </summary>
@@ -129,8 +130,11 @@ internal sealed class ClaudeOAuthTokenRefreshClient : ITokenRefreshClient
         try
         {
             using var body = JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(cancellationToken));
+            // Flat OAuth (`"error":"invalid_grant"`) or Anthropic's API envelope
+            // (`"error":{"type":"invalid_grant"}`); the code is read from either.
             return body.RootElement.ValueKind == JsonValueKind.Object
-                && Text(body.RootElement, "error") is string error
+                && body.RootElement.TryGetProperty("error", out JsonElement field)
+                && (field.ValueKind == JsonValueKind.Object ? Text(field, "type") : Text(body.RootElement, "error")) is string error
                 && error.Length is > 0 and <= 40
                 && error.All(static letter => letter is (>= 'a' and <= 'z') or '_')
                 ? error
