@@ -666,8 +666,9 @@ the secret names imply, with the account that backs it, and judges each half the
 tool's write, or, for a half recorded with a date only, on a later day in this machine's time
 zone, where the tool records those dates; `unknown` for such a half updated that same day, or
 one GitHub lists as older than the tool's write or with no readable time; and `missing` when the
-secret is gone. A role whose secrets exist but that no account backs is `unclaimed`. It reads
-only on that click, and the first rate-limit answer ends the check with no retry.
+secret is gone. A role whose secrets exist but that no account backs is `unclaimed`; Edit's
+"Repair a role record" then offers each unclaimed token to record on a card. It reads only on
+that click, and the first rate-limit answer ends the check with no retry.
 
 The same click reads the lane kill switches: the organization variables `CLAUDE_LANES_DISABLED`,
 `CLAUDE_REVIEW_DISABLED` and `CLAUDE_SECURITY_REVIEW_DISABLED` of each organization it read, and
@@ -697,18 +698,23 @@ the move starts at once.
 
 To mark an account by hand instead (for a token made outside the tool, or when the tool set the
 secret but could not update the roster), open Edit and set "CI token generated on". Optionally
-also open "Repair a role record", folded under the role list, and set "CI secret name" and "CI
-secret in" (`owner/repository`, or an organization), then Save; that adds the secret's role with its token set on that date, taking that token half off the
-account that backed it before; the other half stays. That is the only role Edit gives an account,
-and it is refused (409) when another account holds that token half set on a later day, or set
-through the tool on the same day: that half is newer than the token you are recording, so run
-Generate CI token instead.
+also open "Repair a role record", folded under the role list. It lists each role whose token the
+last Check roles found `unclaimed`, unticked: GitHub never shows a secret's value, so the tool
+cannot tell which account's token a secret holds, and you tick the ones this account's token is
+in. You can also set "CI secret name" and "CI secret in" (`owner/repository`, or an
+organization) for a secret Check roles did not list. Save then adds every role named, in one
+roster write, each with its token set on that date, taking that token half off the account that
+backed it before; the other half stays. A key half is never recorded this way. These are the only
+roles Edit gives an account, and the whole save is refused (409), recording none, when another
+account holds any of those token halves set on a later day, or set through the tool on the same
+day: that half is newer than the token you are recording, so run Generate CI token instead.
 Untick a role in Edit to take it off this account only. Edit sends the date only when you change
 it and names only the roles you untick, so a form opened before another account took a role
 cannot take it back. The same writes are `PATCH /api/accounts/{email}`, sent with the headers
 `POST /api/shutdown` takes, with
 `{"ciTokenGeneratedOn":"yyyy-MM-dd","ciTokenSecret":{"name":"...","repository":"owner/name"}}`
-(or `"organization"` in place of `"repository"`) to add one role, and with
+(or `"organization"` in place of `"repository"`) to add one role, `"ciTokenSecrets":[...]`, a
+list of the same objects, to add several (a role named twice is refused with 400), and with
 `"removeCiRoles":[{"prefix":"AUTOMATIONS","organization":"octo"}]` (`tokenSecret` in place of
 `prefix` for a token-only role, `repository` in place of `organization`) to take roles off. The
 older `"ciRoles"`, the account's whole list with each half's `tokenSetOn` and `keySetOn`

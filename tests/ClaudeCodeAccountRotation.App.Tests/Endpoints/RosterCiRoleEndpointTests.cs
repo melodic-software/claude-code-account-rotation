@@ -168,6 +168,66 @@ public sealed class RosterCiRoleEndpointTests
     }
 
     [Fact]
+    public async Task ARepairNamingSeveralRolesRecordsEachInOneWrite()
+    {
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        AccountEmail a = AccountEmail.Parse(NewEmail).Value;
+        await SeedAsync(factory, roster => roster.With(new RosterEntry(a)));
+
+        using HttpResponseMessage response = await PatchAsync(
+            client,
+            """{ "ciTokenGeneratedOn": "2026-10-06", "ciTokenSecret": { "name": "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", "organization": "octo" }, "ciTokenSecrets": [ { "name": "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", "organization": "octo" } ] }""");
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        (await StoredAsync(factory, TestContext.Current.CancellationToken)).CiRoles.ShouldBe([
+            new CiRoleAssignment(_automations, new DateOnly(2026, 10, 6)),
+            new CiRoleAssignment(_reviews, new DateOnly(2026, 10, 6)),
+        ]);
+    }
+
+    [Fact]
+    public async Task ARepairWithOneRefusedRoleRecordsNoneOfThem()
+    {
+        // B was assigned REVIEWS through the tool today; A's save names AUTOMATIONS and REVIEWS.
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        AccountEmail a = AccountEmail.Parse(NewEmail).Value;
+        AccountEmail b = AccountEmail.Parse("other@example.com").Value;
+        DateTimeOffset assignedAt = new(2026, 10, 6, 9, 0, 0, TimeSpan.Zero);
+        await SeedAsync(factory, roster => roster.With(new RosterEntry(a)).With(new RosterEntry(b).ClaimingToken(_reviews, new DateOnly(2026, 10, 6), assignedAt)));
+        string rosterPath = Path.Combine(factory.AppData, RosterFile.FileName);
+        string before = await File.ReadAllTextAsync(rosterPath, TestContext.Current.CancellationToken);
+        string historyPath = Path.Combine(factory.AppData, LaneHistoryFile.FileName);
+        string historyBefore = await File.ReadAllTextAsync(historyPath, TestContext.Current.CancellationToken);
+
+        using HttpResponseMessage response = await PatchAsync(
+            client,
+            """{ "ciTokenGeneratedOn": "2026-10-06", "ciTokenSecrets": [ { "name": "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", "organization": "octo" }, { "name": "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", "organization": "octo" } ] }""");
+
+        response.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["refusal"]!.GetValue<string>().ShouldBe("TokenHalfHeldElsewhere");
+        (await File.ReadAllTextAsync(rosterPath, TestContext.Current.CancellationToken)).ShouldBe(before);
+        (await File.ReadAllTextAsync(historyPath, TestContext.Current.CancellationToken)).ShouldBe(historyBefore);
+    }
+
+    [Theory]
+    [InlineData("""{ "ciTokenGeneratedOn": "2026-10-06", "ciTokenSecrets": { "name": "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", "organization": "octo" } }""")]
+    [InlineData("""{ "ciTokenGeneratedOn": "2026-10-06", "ciTokenSecrets": [ "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN" ] }""")]
+    [InlineData("""{ "ciTokenGeneratedOn": "2026-10-06", "ciTokenSecret": { "name": "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", "organization": "octo" }, "ciTokenSecrets": [ { "name": "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", "organization": "OCTO" } ] }""")]
+    public async Task ARepairListThatIsNotAListOfDistinctSecretsIsRefused(string json)
+    {
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        await SeedAsync(factory, roster => roster.With(new RosterEntry(AccountEmail.Parse(NewEmail).Value)));
+
+        using HttpResponseMessage response = await PatchAsync(client, json);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
+        (await StoredAsync(factory, TestContext.Current.CancellationToken)).CiRoles.ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task AStaleFormThatUnticksOneRoleLeavesTheRoleAnotherAccountTookSinceWithIt()
     {
         // A backs R and S; B is then assigned R; A's form, drawn before that, unticks S.

@@ -184,10 +184,10 @@ internal static partial class RosterEndpoints
                 return Results.BadRequest(new { error = ciTokenGeneratedOn.Error });
             }
 
-            Result<CiTokenSecret?, string> ciTokenSecret = ParseCiTokenSecret(body);
-            if (ciTokenSecret.IsFailure)
+            Result<IReadOnlyList<CiTokenSecret>, string> ciTokenSecrets = ParseCiTokenSecrets(body);
+            if (ciTokenSecrets.IsFailure)
             {
-                return Results.BadRequest(new { error = ciTokenSecret.Error });
+                return Results.BadRequest(new { error = ciTokenSecrets.Error });
             }
 
             Result<IReadOnlyList<CiRoleAssignment>?, string> ciRoles = ParseCiRoles(body);
@@ -215,7 +215,7 @@ internal static partial class RosterEndpoints
                         return roster;
                     }
 
-                    (updated, refusal) = Edited(roster, existing, body, browser.Value, directory.Value, ciTokenGeneratedOn.Value, ciTokenSecret.Value, ciRoles.Value, removeCiRoles.Value);
+                    (updated, refusal) = Edited(roster, existing, body, browser.Value, directory.Value, ciTokenGeneratedOn.Value, ciTokenSecrets.Value, ciRoles.Value, removeCiRoles.Value);
                     return updated is null ? roster : roster.With(updated);
                 },
                 cancellationToken,
@@ -511,14 +511,14 @@ internal static partial class RosterEndpoints
     /// from this entry and touches no other, and <c>ciRoles</c>, the whole list,
     /// may name only halves the entry holds with the same dates, so a list read
     /// before another account took a half cannot take it back. The one claim is
-    /// the repair: a single secret named by hand claims that role's token half,
-    /// for a CI token whose secret was set but whose roster write failed. It is
-    /// dated by the request's <c>ciTokenGeneratedOn</c> or, when the request
-    /// sends none, by the date the entry already holds; with neither it is refused.
-    /// It is refused too when another account holds that token half set on a
-    /// later day, or set through the tool (with an instant) on the same day: that
-    /// half is newer than the token being recorded, so a form drawn before it was
-    /// set must not take it.
+    /// the repair: each secret named claims that role's token half, for a CI
+    /// token whose secret was set by hand or whose roster write failed. Every
+    /// claim is dated by the request's <c>ciTokenGeneratedOn</c> or, when the
+    /// request sends none, by the date the entry already holds; with neither it
+    /// is refused. The whole edit is refused too when another account holds any
+    /// of those token halves set on a later day, or set through the tool (with an
+    /// instant) on the same day: that half is newer than the token being recorded,
+    /// so a form drawn before it was set must not take it.
     /// </para>
     /// </summary>
     private static (RosterEntry? Updated, IResult? Refusal) Edited(
@@ -528,7 +528,7 @@ internal static partial class RosterEndpoints
         BrowserFamily? browser,
         string? directory,
         DateOnly? ciTokenGeneratedOn,
-        CiTokenSecret? ciTokenSecret,
+        IReadOnlyList<CiTokenSecret> ciTokenSecrets,
         IReadOnlyList<CiRoleAssignment>? ciRoles,
         IReadOnlyList<CiRole> removeCiRoles)
     {
@@ -564,14 +564,20 @@ internal static partial class RosterEndpoints
         // The date settles once, on the final list: the newest token half's,
         // or none once the last one goes (see RosterEntry.WithCiRoles).
         RosterEntry updated = edited.WithCiRoles(roles);
-        if (ciTokenSecret is CiTokenSecret secret)
+        if (ciTokenSecrets.Count == 0)
         {
-            if (date is not DateOnly setOn)
-            {
-                return (null, Results.BadRequest(new { error = "a CI secret needs the date its token was generated (ciTokenGeneratedOn)" }));
-            }
+            return (updated, null);
+        }
 
-            var role = CiRole.FromTokenSecret(secret);
+        if (date is not DateOnly setOn)
+        {
+            return (null, Results.BadRequest(new { error = "a CI secret needs the date its token was generated (ciTokenGeneratedOn)" }));
+        }
+
+        // A refusal returns before the roster is handed anything, so one
+        // refused claim records none of them.
+        foreach (CiRole role in ciTokenSecrets.Select(CiRole.FromTokenSecret))
+        {
             if (roster.Entries.FirstOrDefault(other => other.Email != existing.Email && other.CiRoles.Any(held =>
                     held.Role.Equals(role) && (held.TokenSetOn > setOn || (held.TokenSetOn == setOn && held.TokenSetAt is not null)))) is RosterEntry holder)
             {
@@ -638,27 +644,55 @@ internal static partial class RosterEndpoints
     }
 
     /// <summary>
-    /// The CI secret a body names: an object with <c>name</c> and exactly one of
-    /// <c>repository</c> or <c>organization</c>, held to GitHub's rules, or null
-    /// when the key is absent or JSON null. Anything else is refused rather than
+    /// The CI secrets a body names for the repair: the one <c>ciTokenSecret</c>
+    /// object, then each item of the <c>ciTokenSecrets</c> list, every one an
+    /// object with <c>name</c> and exactly one of <c>repository</c> or
+    /// <c>organization</c>, held to GitHub's rules. An absent key or JSON null
+    /// names none. Anything else, or a role named twice, is refused rather than
     /// read as absent, for the same reason <see cref="RequiredString"/> refuses.
     /// </summary>
-    private static Result<CiTokenSecret?, string> ParseCiTokenSecret(JsonObject body)
+    private static Result<IReadOnlyList<CiTokenSecret>, string> ParseCiTokenSecrets(JsonObject body)
     {
-        if (!body.TryGetPropertyValue("ciTokenSecret", out JsonNode? node) || node is null)
+        List<JsonNode?> items = [];
+        if (body.TryGetPropertyValue("ciTokenSecret", out JsonNode? single) && single is not null)
         {
-            return Result<CiTokenSecret?, string>.Success(null);
+            items.Add(single);
         }
 
-        if (node is not JsonObject secret)
+        if (body.TryGetPropertyValue("ciTokenSecrets", out JsonNode? list) && list is not null)
         {
-            return Result<CiTokenSecret?, string>.Failure("ciTokenSecret must be an object with name and repository or organization");
+            if (list is not JsonArray array)
+            {
+                return Result<IReadOnlyList<CiTokenSecret>, string>.Failure("ciTokenSecrets must be a list of secrets");
+            }
+
+            items.AddRange(array);
         }
 
-        Result<CiTokenSecret, string> parsed = CiTokenSecret.Parse(Text(secret, "name"), Text(secret, "repository"), Text(secret, "organization"));
-        return parsed.IsSuccess
-            ? Result<CiTokenSecret?, string>.Success(parsed.Value)
-            : Result<CiTokenSecret?, string>.Failure("ciTokenSecret: " + parsed.Error);
+        List<CiTokenSecret> secrets = [];
+        foreach (JsonNode? item in items)
+        {
+            if (item is not JsonObject secret)
+            {
+                return Result<IReadOnlyList<CiTokenSecret>, string>.Failure("ciTokenSecret must be an object with name and repository or organization");
+            }
+
+            Result<CiTokenSecret, string> parsed = CiTokenSecret.Parse(Text(secret, "name"), Text(secret, "repository"), Text(secret, "organization"));
+            if (parsed.IsFailure)
+            {
+                return Result<IReadOnlyList<CiTokenSecret>, string>.Failure("ciTokenSecret: " + parsed.Error);
+            }
+
+            var role = CiRole.FromTokenSecret(parsed.Value);
+            if (secrets.Exists(named => CiRole.FromTokenSecret(named).Equals(role)))
+            {
+                return Result<IReadOnlyList<CiTokenSecret>, string>.Failure("ciTokenSecrets: " + role + " is named twice");
+            }
+
+            secrets.Add(parsed.Value);
+        }
+
+        return Result<IReadOnlyList<CiTokenSecret>, string>.Success(secrets);
     }
 
     /// <summary>

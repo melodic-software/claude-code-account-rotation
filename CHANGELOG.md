@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Record several role claims in one Edit save.** Edit's "Repair a role record" lists each role
+  whose token the last Check roles found unclaimed, unticked, beside the secret-name fields. Save
+  records every role ticked or named on that card, each with its token set on the date above, in
+  one roster write; one refused role records none. Nothing reads GitHub beyond Check roles, and
+  nothing is recorded without the save. `PATCH /api/accounts/{email}` takes
+  `"ciTokenSecrets":[...]` beside `"ciTokenSecret"` (#386).
+
 ## [2.14.0] - 2026-10-28
 
 ### Added

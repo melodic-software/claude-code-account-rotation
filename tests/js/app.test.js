@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const { stateChip, loginLine, loginOffered, takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, promptWording, uniqueName, renameLabel, nearestLimit, tier, asOf, usageAge, sentence, ciRoleBadges, removedCiRoles, changedCiTokenDate, ciTag, ciSecretBody, remoteControlQuestion, switchedToast, historyLines, historyReadLines, assignableRoles, newRoleItem, ciPanelWords, catalogNotice } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+const { stateChip, loginLine, loginOffered, takeTokenFromHash, switchBlocked, headroom, recommended, switchPrompts, promptWording, uniqueName, renameLabel, nearestLimit, tier, asOf, usageAge, sentence, ciRoleBadges, removedCiRoles, changedCiTokenDate, ciTag, ciSecretBody, repairOffers, repairSecrets, remoteControlQuestion, switchedToast, historyLines, historyReadLines, assignableRoles, newRoleItem, ciPanelWords, catalogNotice } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
 
 function limit(kind, percent, fields) {
   return Object.assign({ kind, percent, known: true, windowReset: false }, fields);
@@ -396,6 +396,29 @@ test("an Edit sends the CI token date only when the operator changed it", () => 
   assert.strictEqual(changedCiTokenDate({ ciTokenGeneratedOn: "2026-01-01" }, "2026-02-01"), "2026-02-01");
   assert.strictEqual(changedCiTokenDate({ ciTokenGeneratedOn: "2026-01-01" }, ""), null);
   assert.strictEqual(changedCiTokenDate({ ciTokenGeneratedOn: null }, "2026-02-01"), "2026-02-01");
+});
+
+test("repairOffers offers each role whose token Check roles found unclaimed, and no other", () => {
+  const check = { roles: [
+    { name: "AUTOMATIONS", prefix: "AUTOMATIONS", organization: "octo", tokenSecret: "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", token: "unclaimed", key: "unclaimed" },
+    { name: "INTAKE", prefix: "INTAKE", organization: "octo", tokenSecret: "INTAKE_CLAUDE_CODE_OAUTH_TOKEN", token: null, key: "unclaimed" },
+    { name: "REVIEWS", prefix: "REVIEWS", organization: "octo", tokenSecret: "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", holder: "a@example.com", token: "ok", key: null },
+    { name: "EXTRA_TOKEN", prefix: "", organization: "octo", tokenSecret: "EXTRA_TOKEN", token: "unclaimed", key: null }
+  ] };
+  assert.deepStrictEqual(repairOffers(check), [
+    { label: "Record automations in org octo (AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN)", secret: { name: "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", organization: "octo" } },
+    { label: "Record EXTRA_TOKEN in org octo (EXTRA_TOKEN)", secret: { name: "EXTRA_TOKEN", organization: "octo" } }
+  ]);
+  assert.deepStrictEqual(repairOffers(null), []);
+});
+
+test("repairSecrets sends the ticked offers and a typed secret once, or nothing", () => {
+  const automations = { name: "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", organization: "octo" };
+  const reviews = { name: "REVIEWS_CLAUDE_CODE_OAUTH_TOKEN", organization: "octo" };
+  assert.deepStrictEqual(repairSecrets([automations], reviews), [automations, reviews]);
+  assert.deepStrictEqual(repairSecrets([automations], { name: "automations_claude_code_oauth_token", organization: "OCTO" }), [automations]);
+  assert.deepStrictEqual(repairSecrets([], reviews), [reviews]);
+  assert.strictEqual(repairSecrets([], null), null);
 });
 
 test("ciSecretBody reads a repository by its slash, an organization without one, and blank as none", () => {
