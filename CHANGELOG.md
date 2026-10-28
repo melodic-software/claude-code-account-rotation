@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Assign to best spare on a usage alert.** A CI-role account's alert line carries a button per
+  role whose token half it holds; a click runs Assign to role on the best spare the notification
+  names, token half only. No button when no spare qualifies or the spare stores no CI token.
+  Nothing assigns without the click (#255).
+
 ## [2.13.0] - 2026-10-28
 
 ### Changed

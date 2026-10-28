@@ -803,6 +803,39 @@ test("alertLines writes the server's percent and threshold the way a card writes
   assert.deepStrictEqual(alertLines(undefined, accounts), []);
 });
 
+const { bestSpareActions } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+
+// The alerted account backs two roles; only AUTOMATIONS's token half is its own.
+const KEY_ONLY = Object.assign({}, LEGACY_LANE_ONE, { tokenSetOn: null, keySetOn: "2026-01-02" });
+const ALERTED = { email: "a@example.com", roster: { backsCiRole: true, ciRoles: [AUTOMATIONS, KEY_ONLY, Object.assign({}, LEGACY_LANE_ONE, { repository: "octo/lane-two" })] } };
+const SPARE = { email: "s@example.com", roster: { alias: "Spare", ciTokenStoredOn: "2026-10-20", ciRoles: [] } };
+const TWO_WINDOWS = [
+  { account: "a@example.com", level: "critical", percent: 80, threshold: 75, window: "5-hour", bestSpare: "s@example.com" },
+  { account: "a@example.com", level: "warning", percent: 72, threshold: 70, window: "7-day", bestSpare: "s@example.com" }
+];
+
+test("bestSpareActions sends each role's token half the alerted account holds to the named spare, on its first line only", () => {
+  const actions = bestSpareActions(TWO_WINDOWS, [ALERTED, SPARE]);
+  assert.deepStrictEqual(actions, [[
+    { spare: "s@example.com", body: { role: { tokenSecret: "AUTOMATIONS_CLAUDE_CODE_OAUTH_TOKEN", organization: "octo" }, halves: "token" }, label: "Assign automations to best spare Spare" },
+    { spare: "s@example.com", body: { role: { tokenSecret: "CLAUDE_CODE_OAUTH_TOKEN", repository: "octo/lane-two" }, halves: "token" }, label: "Assign legacy (review lanes) (lane-two) to best spare Spare" }
+  ], []]);
+});
+
+test("bestSpareActions builds the role item the Assign to role panel sends", () => {
+  const panelItem = assignableRoles([ALERTED], { roles: [] })[0].item;
+  assert.deepStrictEqual(bestSpareActions(TWO_WINDOWS, [ALERTED, SPARE])[0][0].body.role, panelItem);
+});
+
+test("bestSpareActions offers nothing without a spare, or for a spare with no stored CI token", () => {
+  const noSpare = TWO_WINDOWS.map((alert) => Object.assign({}, alert, { bestSpare: null }));
+  assert.deepStrictEqual(bestSpareActions(noSpare, [ALERTED, SPARE]), [[], []]);
+  const tokenless = { email: "s@example.com", roster: { ciTokenStoredOn: null, ciRoles: [] } };
+  assert.deepStrictEqual(bestSpareActions(TWO_WINDOWS, [ALERTED, tokenless]), [[], []]);
+  assert.deepStrictEqual(bestSpareActions(TWO_WINDOWS, [ALERTED]), [[], []]);
+  assert.deepStrictEqual(bestSpareActions(undefined, [ALERTED, SPARE]), []);
+});
+
 const { killSwitchRows, toggleKillSwitch } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
 
 // Kill switches in the shape POST /api/roles/check returns them.
