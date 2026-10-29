@@ -6,7 +6,8 @@ name: release-publish-binaries
 # execs in place of that binary, plus the embedded config.template.json.
 # A push to main that changes CHANGELOG.md publishes the top dated heading's
 # version when it has no published release yet, tagging the pushed commit; a pushed
-# v* tag still publishes as the manual fallback.
+# v* tag still publishes as the manual fallback, but only a commit already on
+# main, so no tag ships a commit that skipped review.
 
 on:
   push:
@@ -31,6 +32,16 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # A tag can point at any commit, so a tag run first proves its commit is
+      # on main. The repository is public, so the fetch needs no credential.
+      - name: Require the tagged commit on main
+        if: github.ref_type == 'tag'
+        run: |
+          git fetch --no-tags --unshallow origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Tag $GITHUB_REF_NAME points at $GITHUB_SHA, which is not on main; only a commit on main publishes."
+            exit 1
+          fi
       # The version is digits only, so it is safe in every later run line.
       # An empty output skips every later step.
       - name: Resolve the version
