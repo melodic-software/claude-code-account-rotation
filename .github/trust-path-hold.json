@@ -1,0 +1,20 @@
+{
+  "paths": [
+    ".github/**",
+    "src/**",
+    "Directory.*",
+    "eng/**",
+    "global.json",
+    "nuget.config",
+    ".globalconfig",
+    ".editorconfig",
+    ".gitattributes",
+    "CHANGELOG.md",
+    "hooks/**",
+    "lefthook.yml",
+    ".lefthook/**",
+    ".claude/**",
+    "AGENTS.md"
+  ],
+  "apps": ["melodic-agent[bot]"]
+}
