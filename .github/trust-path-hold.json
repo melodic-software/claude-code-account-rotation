@@ -16,5 +16,5 @@
     ".claude/**",
     "AGENTS.md"
   ],
-  "apps": ["melodic-agent[bot]"]
+  "apps": ["trust-path-hold-off[bot]"]
 }
