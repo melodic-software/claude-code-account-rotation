@@ -126,6 +126,7 @@ summary::-webkit-details-marker { display: none; }
 .say.warn, .n.warn, .meter .l .pct.warn, .u .pct.warn { color: var(--warn); }
 .say.high, .n.high, .meter .l .pct.high, .u .pct.high { color: var(--high); }
 .say.crit, .n.crit, .meter .l .pct.crit, .u .pct.crit { color: var(--crit); }
+.meter .l .pct.muted, .u .pct.muted { color: var(--muted); }
 .say.paused { color: var(--muted); }
 .bar { position: relative; height: 6px; border-radius: 999px; background: var(--track); overflow: hidden; }
 /* The alert thresholds the server names, on a CI-role account's 7-day bar. */

@@ -813,10 +813,14 @@ internal sealed partial class DashboardAssembler(
             }
         }
 
+        UsageSnapshot? sessionless = merged.SessionlessRead;
+
         return new UsageView(
             Wire(merged.Card.Source),
             merged.Card.CapturedAt,
-            [.. rows.OrderBy(row => Position(row.Limit.Kind)).Select(row => Row(row.Source, row.Limit, merged.Card, capturedAt))],
+            [.. rows.OrderBy(row => Position(row.Limit.Kind)).Select(row => row.Source is null && row.Limit.Kind == LimitKind.Session && sessionless is not null
+                ? NotApplicable(row.Limit, sessionless, merged.Card)
+                : Row(row.Source, row.Limit, merged.Card, capturedAt))],
             Credits(merged.Merged.ExtraUsage));
     }
 
@@ -839,6 +843,21 @@ internal sealed partial class DashboardAssembler(
             own ? null : source.CapturedAt,
             Known: true,
             WindowReset: reset);
+    }
+
+    /// <summary>
+    /// A bucket the account's plan does not have, dated by the full read that
+    /// listed no such window, so the page can tell how current that is.
+    /// </summary>
+    private static UsageLimitView NotApplicable(UsageLimit bucket, UsageSnapshot read, UsageSnapshot card)
+    {
+        bool own = ReferenceEquals(read, card);
+        return UsageLimitView.Unknown(bucket) with
+        {
+            Source = own ? null : Wire(read.Source),
+            CapturedAt = own ? null : read.CapturedAt,
+            NotApplicable = true,
+        };
     }
 
     private static UsageCreditsView? Credits(ExtraUsageState? credits) => credits is null

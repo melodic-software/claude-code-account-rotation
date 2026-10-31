@@ -80,6 +80,18 @@ public sealed class CiUsageTriggerTests
     }
 
     [Fact]
+    public void AFiveHourWindowThePlanDoesNotHavePrintsAsNotApplicable()
+    {
+        // An Ultra account's read lists no 5-hour window; "unknown" would read
+        // as a figure still to fetch.
+        UsageLimitView none = UsageLimitView.Unknown(UsageBuckets.Session) with { NotApplicable = true };
+        UsageLimitView weekly = new("weekly_all", "7-day", 10, ResetsAt: null, Severity: null, Source: null, CapturedAt: null, Known: true, WindowReset: false);
+        CiUsageReport report = new(Finished: true, [new CiUsageRow(0, [], "ultra@example.com", RefreshStateView.Idle, new UsageView("refresh", CapturedAt: null, [none, weekly], Credits: null))]);
+
+        CiUsageTrigger.Format(report, emails: false).ShouldEndWith("0  -      idle  5-hour n/a, 7-day 10%");
+    }
+
+    [Fact]
     public async Task EmailsAddTheEmailColumn()
     {
         using RecordingHandler handler = new(RecordingHandler.Json(HttpStatusCode.OK, Finished));

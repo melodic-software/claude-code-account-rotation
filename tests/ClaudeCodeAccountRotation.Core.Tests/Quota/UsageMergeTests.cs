@@ -91,5 +91,61 @@ public sealed class UsageMergeTests
 
         Row(merged, LimitKind.Session).Percent.ShouldBe(10);
         merged.Card.ShouldBeSameAs(first);
+        merged.SessionlessRead.ShouldBeNull();
+    }
+
+    [Fact]
+    public void AFullReadWithNoFiveHourWindowDropsAnOlderSessionRow()
+    {
+        // An account whose plan has no 5-hour window (Ultra): the endpoint lists
+        // only the weekly rows. A session figure some other source took before
+        // that read must not bring the window back, or the account would be
+        // judged on a window it does not have.
+        UsageSnapshot read = Snapshot(_noon, QuotaSource.OnDemandRefresh, Weekly(0));
+
+        MergedUsage merged = UsageMerge.Merge([Snapshot(_noon.AddMinutes(-10), QuotaSource.StatuslineSnapshot, Session(100)), read]).ShouldNotBeNull();
+
+        merged.Rows.ShouldNotContain(row => row.Limit.Kind == LimitKind.Session);
+        merged.Merged.Limits.ShouldNotContain(limit => limit.Kind == LimitKind.Session);
+        merged.SessionlessRead.ShouldBeSameAs(read);
+    }
+
+    [Fact]
+    public void ACachedReadWithNoFiveHourWindowSaysNothingAboutThePlan()
+    {
+        // The cache file may hold a CLI read from an earlier release that left
+        // out a 5-hour window it could not read, so a cached read without one is
+        // not evidence the plan has none: the window stays unknown, and an older
+        // spent figure stays, until a live read says otherwise.
+        UsageSnapshot statusline = Snapshot(_noon.AddMinutes(-10), QuotaSource.StatuslineSnapshot, Session(100));
+
+        MergedUsage merged = UsageMerge.Merge([statusline, Snapshot(_noon, QuotaSource.Cached, Weekly(0))]).ShouldNotBeNull();
+
+        Row(merged, LimitKind.Session).Percent.ShouldBe(100);
+        merged.Rows.Single(row => row.Limit.Kind == LimitKind.Session).Source.ShouldBeSameAs(statusline);
+        merged.SessionlessRead.ShouldBeNull();
+    }
+
+    [Fact]
+    public void ASessionRowTakenAfterTheSessionlessReadStands()
+    {
+        // A newer source that does carry the 5-hour window is newer evidence
+        // that the window exists, the way every bucket goes to its newest source.
+        UsageSnapshot read = Snapshot(_noon.AddMinutes(-10), QuotaSource.OnDemandRefresh, Weekly(0));
+
+        MergedUsage merged = UsageMerge.Merge([Snapshot(_noon, QuotaSource.StatuslineSnapshot, Session(80)), read]).ShouldNotBeNull();
+
+        Row(merged, LimitKind.Session).Percent.ShouldBe(80);
+        merged.SessionlessRead.ShouldBeNull();
+    }
+
+    [Fact]
+    public void AStatuslineSnapshotWithNoFiveHourWindowSaysNothingAboutThePlan()
+    {
+        // The tee omits a window it has no figure for, so its silence is not
+        // the endpoint saying the window does not exist.
+        MergedUsage merged = UsageMerge.Merge([Snapshot(_noon, QuotaSource.StatuslineSnapshot, Weekly(10))]).ShouldNotBeNull();
+
+        merged.SessionlessRead.ShouldBeNull();
     }
 }

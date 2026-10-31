@@ -377,6 +377,16 @@ internal sealed class ClaudeCliUsageReader : ILiveUsageReader
             {
                 body["limits"] = JsonNode.Parse(generic.GetRawText());
             }
+            else if (limits.TryGetProperty("five_hour", out JsonElement fiveHour)
+                && fiveHour.ValueKind != JsonValueKind.Null
+                && Window("session", "session", fiveHour, scope: null) is null)
+            {
+                // Left out, the window would read as one the plan does not have
+                // (an Ultra plan's answer carries none), so the dashboard would
+                // treat a possibly spent window as not applicable. The endpoint
+                // is read instead.
+                return Failure("the CLI's answer carries a 5-hour window whose figure this build cannot read");
+            }
             else
             {
                 JsonArray windows = Windows(limits);
@@ -402,7 +412,9 @@ internal sealed class ClaudeCliUsageReader : ILiveUsageReader
     /// lacks <c>limits[]</c>: the five-hour and seven-day windows and each
     /// model-scoped one. Every other window, codenamed or new, is ignored, and a
     /// window whose utilization is absent or outside 0 to 100 is left out
-    /// rather than shown as a number nobody measured.
+    /// rather than shown as a number nobody measured. The caller has already
+    /// refused an answer whose 5-hour window is present but unreadable, so a
+    /// missing session row here means the answer carries no 5-hour window.
     /// </summary>
     private static JsonArray Windows(JsonElement limits)
     {

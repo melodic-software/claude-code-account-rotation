@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **An account whose plan has no 5-hour window can be recommended.** An Ultra plan has no 5-hour
+  window, and its usage read lists only the weekly rows. The card showed the 5-hour row as unknown,
+  so the page never recommended the account. When the account's newest usage read since the
+  dashboard started lists no 5-hour window and nothing newer carries one, the row now reads a dimmed "n/a", the card can say
+  "Usable now", and the account can be recommended while that read is under 30 minutes old. A
+  5-hour figure taken before that read no longer counts toward the account's standing. A 5-hour
+  window missing only from the statusline, or from a read restored from the usage cache, still
+  reads unknown and still blocks the recommendation until the next usage read.
+  A CLI answer whose 5-hour window is present but has no readable figure is not taken as a plan
+  without one: the usage endpoint is read instead.
+  `--read-ci-usage` prints the row as `5-hour n/a`.
+
 ## [2.15.0] - 2026-10-28
 
 ### Added

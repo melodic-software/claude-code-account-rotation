@@ -120,6 +120,11 @@ internal static class CiUsageTrigger
 
     private static string Limit(UsageLimitView limit)
     {
+        if (limit.NotApplicable)
+        {
+            return limit.Label + " n/a";
+        }
+
         if (!limit.Known)
         {
             return limit.Label + " unknown";
