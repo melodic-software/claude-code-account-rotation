@@ -108,6 +108,50 @@ public sealed class ClaudeCliUsageAnswerTests
         built[1]!["scope"]!["model"]!["display_name"]!.GetValue<string>().ShouldBe("Fable");
     }
 
+    /// <summary>
+    /// A 5-hour window the answer carries but whose figure cannot be read is a
+    /// refusal, so the endpoint is read instead. Left out of the built array,
+    /// it would read as a plan with no 5-hour window (not applicable) and let
+    /// an account with a spent window be recommended (#188).
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "utilization": null, "resets_at": "2026-10-28T21:30:00+00:00" }""")]
+    [InlineData("""{ "resets_at": "2026-10-28T21:30:00+00:00" }""")]
+    [InlineData("""{ "utilization": "high" }""")]
+    [InlineData("""{ "utilization": 140 }""")]
+    public void AFiveHourWindowWithAnUnreadableFigureIsARefusal(string fiveHour)
+    {
+        JsonObject usage = Fresh();
+        JsonObject limits = usage["rate_limits"]!.AsObject();
+        limits.Remove("limits");
+        limits["five_hour"] = JsonNode.Parse(fiveHour);
+
+        Parse(usage).Error.ShouldContain("5-hour window");
+    }
+
+    /// <summary>An answer with no 5-hour window at all, the shape an Ultra plan gives, is built without one.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AnAbsentFiveHourWindowIsBuiltWithoutASessionRow(bool asNull)
+    {
+        JsonObject usage = Fresh();
+        JsonObject limits = usage["rate_limits"]!.AsObject();
+        limits.Remove("limits");
+        if (asNull)
+        {
+            limits["five_hour"] = null;
+        }
+        else
+        {
+            limits.Remove("five_hour");
+        }
+
+        JsonArray built = Parse(usage).Value.Body["limits"]!.AsArray();
+
+        built.Select(static entry => entry!["kind"]!.GetValue<string>()).ShouldBe(["weekly_all", "weekly_scoped"]);
+    }
+
     [Fact]
     public void AnAnswerWithNoWindowItKnowsIsARefusal()
     {

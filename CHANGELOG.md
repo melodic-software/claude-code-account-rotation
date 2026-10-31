@@ -15,6 +15,8 @@ All notable changes to this project are documented in this file. The format foll
   "Usable now", and the account can be recommended while that read is under 30 minutes old. A
   5-hour figure taken before that read no longer counts toward the account's standing. A 5-hour
   window missing only from the statusline still reads unknown and still blocks the recommendation.
+  A CLI answer whose 5-hour window is present but has no readable figure is not taken as a plan
+  without one: the usage endpoint is read instead.
   `--read-ci-usage` prints the row as `5-hour n/a`.
 
 ## [2.15.0] - 2026-10-28
