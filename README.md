@@ -749,9 +749,9 @@ dotnet test -c Release --no-build
 ## Releasing
 
 A fix pull request that should ship dates its CHANGELOG heading: `## [x.y.z] - YYYY-MM-DD`.
-Ask the operator before dating a heading. When that change reaches `main`, the release workflow
-tags the merge commit `vx.y.z` and publishes the release in the same run. A push to `main` whose
-top dated heading already has a published release publishes nothing. Pushing a `v*` tag by hand
+When that change reaches `main`, the release workflow tags the merge commit `vx.y.z` and publishes
+the release in the same run. A push to `main` whose top dated heading already has a published
+release publishes nothing. Pushing a `v*` tag by hand
 still publishes from that tag, but only when the tagged commit is already on `main`. A tag on any
 other commit fails the run.
 
