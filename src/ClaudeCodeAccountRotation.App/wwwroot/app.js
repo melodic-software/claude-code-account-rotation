@@ -171,10 +171,14 @@
   }
 
   // The label of the first of the 5-hour and 7-day windows no source carried,
-  // or null when both are known.
+  // or null when both are known. A 5-hour row the server marks not applicable
+  // counts as known: the account's latest full usage read lists no such window,
+  // so there is none to spend (an Ultra plan).
   function unknownWindow(account) {
     var missing = [["session", "5-hour"], ["weekly_all", "7-day"]].filter(function (window) {
-      return !account.usage.limits.some(function (limit) { return limit.kind === window[0] && limit.known; });
+      return !account.usage.limits.some(function (limit) {
+        return limit.kind === window[0] && (limit.known || (limit.kind === "session" && limit.notApplicable === true));
+      });
     })[0];
     return missing ? missing[1] : null;
   }
@@ -1824,11 +1828,13 @@
   // fresh 5-hour and 7-day figures can sit beside an old Fable one (#191). A
   // row whose window has reset since counts too: the reset says the
   // old figure no longer applies, not that nothing has used the account since,
-  // so it is only as current as the read (#188). Null when no such row exists.
+  // so it is only as current as the read (#188). A not-applicable row counts
+  // too, dated by the read that listed no such window: that read is only as
+  // current as its age. Null when no such row exists.
   function usageAge(account, from) {
     var oldest = null;
     account.usage.limits.forEach(function (limit) {
-      if ((limit.kind !== "session" && limit.kind !== "weekly_all" && limit.kind !== "weekly_scoped") || !limit.known) { return; }
+      if ((limit.kind !== "session" && limit.kind !== "weekly_all" && limit.kind !== "weekly_scoped") || !(limit.known || limit.notApplicable === true)) { return; }
       var taken = limit.capturedAt || account.usage.capturedAt;
       if (!taken) { return; }
       var age = Math.max(0, Math.round((from - new Date(taken).getTime()) / 1000));
@@ -1837,9 +1843,11 @@
     return oldest;
   }
 
-  // Unknown first: no source carried this bucket at all. Then a window that has
-  // reset since its capture, whose percentage now measures nothing.
+  // Not applicable first: the account's plan has no such window. Then unknown:
+  // no source carried this bucket at all. Then a window that has reset since
+  // its capture, whose percentage now measures nothing.
   function reading(limit) {
+    if (limit.notApplicable === true) { return "n/a"; }
     if (!limit.known) { return "unknown"; }
     if (limit.windowReset) { return "window reset since last read"; }
     return limit.percent === null ? "unknown" : percentText(limit.percent);
@@ -1869,9 +1877,11 @@
     return account.refresh.message || state;
   }
 
-  // Colour carries meaning: healthy, near the limit, at it. The server's own
-  // severity, when a source sent one, can only raise the tone.
+  // Colour carries meaning: healthy, near the limit, at it, and dimmed for a
+  // window the account's plan does not have. The server's own severity, when a
+  // source sent one, can only raise the tone.
   function meterTone(limit) {
+    if (limit.notApplicable === true) { return "muted"; }
     if (!limit.known || limit.windowReset || limit.percent === null) { return ""; }
     return tier(limit.percent);
   }

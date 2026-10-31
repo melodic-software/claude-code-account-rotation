@@ -76,6 +76,38 @@ test("a card with no dated 5-hour or 7-day figure is never recommended", () => {
   assert.strictEqual(recommended([account], () => true, NOW), null);
 });
 
+// An Ultra plan has no 5-hour window: the server marks that row not applicable
+// when a full usage read lists only the weekly rows.
+function ultra(email, minutesOld) {
+  const account = card(email, { hasCredentials: true, roster: null, refresh: { state: "read" } }, null, 0, minutesOld === undefined ? 1 : minutesOld);
+  account.usage.limits[0] = { kind: "session", label: "5-hour", percent: null, known: false, notApplicable: true, windowReset: false };
+  account.usage.limits[2].percent = 0;
+  return account;
+}
+
+test("a card whose plan has no 5-hour window is recommended on current weekly figures and reads Usable now", () => {
+  const account = ultra("ultra@example.com");
+  assert.strictEqual(recommended([account], () => true, NOW).email, "ultra@example.com");
+  assert.deepStrictEqual(sentence(account, NOW), { kind: "ok", text: "Usable now" });
+});
+
+test("a 5-hour row no source carried still blocks the recommendation when it is not marked not applicable (#188)", () => {
+  const account = ultra("partial@example.com");
+  account.usage.limits[0].notApplicable = false;
+  assert.strictEqual(recommended([account], () => true, NOW), null);
+  assert.deepStrictEqual(sentence(account, NOW), { kind: "warn", text: "Not verified: 5-hour figure unknown" });
+});
+
+test("a not-applicable 5-hour row is only as current as the read that said so, and does not stand in for the 7-day row", () => {
+  const old = ultra("old@example.com");
+  old.usage.limits[0].capturedAt = minutesAgo(45);
+  assert.strictEqual(recommended([old], () => true, NOW), null);
+  assert.strictEqual(usageAge(old, NOW), 45 * 60);
+  const noWeekly = ultra("noweekly@example.com");
+  noWeekly.usage.limits[1].known = false;
+  assert.strictEqual(recommended([noWeekly], () => true, NOW), null);
+});
+
 test("a current 5-hour figure with no 7-day figure is unverified: not recommended, not Usable now", () => {
   const account = card("half@x", { hasCredentials: true, roster: null, refresh: { state: "read" } }, 10, null, 1);
   account.usage.limits[1].known = false;

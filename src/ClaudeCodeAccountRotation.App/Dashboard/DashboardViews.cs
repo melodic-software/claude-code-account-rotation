@@ -283,9 +283,14 @@ internal sealed record UsageView(
 /// One bucket on a card: the generic row the page renders whatever the endpoint
 /// calls the window.
 /// <para>
-/// Two flags say what the row knows, and the page reads them in this order.
-/// <see cref="Known"/> false means no source carried this bucket at all, which
-/// renders as "unknown". <see cref="WindowReset"/> true means a source did carry
+/// Three flags say what the row knows, and the page reads them in this order.
+/// <see cref="NotApplicable"/> true means the account's newest full usage read
+/// lists no such window, and nothing newer carries one: the plan has none (an
+/// Ultra plan has no 5-hour window), which renders as "n/a". The row is dated
+/// by that read, and <see cref="Known"/> stays false, so a page that predates
+/// the flag still reads it as unknown. <see cref="Known"/> false otherwise means
+/// no source carried this bucket at all, which renders as "unknown".
+/// <see cref="WindowReset"/> true means a source did carry
 /// it but the window has reset since it was captured, so <see cref="Percent"/>
 /// is null and the card says so rather than showing a figure that now measures
 /// nothing. Otherwise the percentage stands.
@@ -305,7 +310,8 @@ internal sealed record UsageLimitView(
     string? Source,
     DateTimeOffset? CapturedAt,
     bool Known,
-    bool WindowReset)
+    bool WindowReset,
+    bool NotApplicable = false)
 {
     /// <summary>A row for a bucket no source carried: named and ordered, and admittedly unknown.</summary>
     public static UsageLimitView Unknown(UsageLimit bucket)

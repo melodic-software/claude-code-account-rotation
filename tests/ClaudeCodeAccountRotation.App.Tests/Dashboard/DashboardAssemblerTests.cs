@@ -228,6 +228,62 @@ public sealed class DashboardAssemblerTests
     }
 
     [Fact]
+    public async Task AFullReadWithNoFiveHourWindowMarksThatRowNotApplicable()
+    {
+        // An Ultra plan has no 5-hour window, and the usage endpoint lists only
+        // the weekly rows for it. The tee, written before that read, still
+        // carries a spent 5-hour figure; it must not bring the window back on
+        // the card or in the standing the order is keyed on.
+        await using AppFactory factory = new();
+        DateTimeOffset now = factory.Clock.GetUtcNow();
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        await CredentialFiles.WriteAsync(factory.LiveDirectory, "live-token", TestContext.Current.CancellationToken);
+        await WriteTeeAsync(
+            factory,
+            TeeWithSessionPercent(LiveEmail, now.AddMinutes(-10), sessionPercent: 100, now.AddHours(4), weeklyPercent: 43, now.AddDays(2)));
+        Record(factory, LiveEmail, now.AddMinutes(-1), Weekly(0, now.AddDays(7)), Scoped("Fable", 0, now.AddDays(7)));
+
+        JsonElement card = await LiveCardAsync(factory);
+
+        card.GetProperty("standing").GetString().ShouldBe("usable");
+        Limit(card, 0).GetProperty("label").GetString().ShouldBe("5-hour");
+        Limit(card, 0).GetProperty("notApplicable").GetBoolean().ShouldBeTrue();
+        Limit(card, 0).GetProperty("known").GetBoolean().ShouldBeFalse();
+        Limit(card, 0).GetProperty("percent").ValueKind.ShouldBe(JsonValueKind.Null);
+        Limit(card, 1).GetProperty("percent").GetDouble().ShouldBe(0);
+        Limit(card, 1).GetProperty("notApplicable").GetBoolean().ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task ATeeWithNoFiveHourFigureLeavesThatRowUnknown()
+    {
+        // The tee omits a window it has no figure for, so its silence says
+        // nothing about the plan: the row stays unknown and keeps the card from
+        // being recommended (#188).
+        await using AppFactory factory = new();
+        DateTimeOffset now = factory.Clock.GetUtcNow();
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        await CredentialFiles.WriteAsync(factory.LiveDirectory, "live-token", TestContext.Current.CancellationToken);
+        await WriteTeeAsync(factory, new JsonObject
+        {
+            ["captured_at"] = now.AddMinutes(-1).ToString("O"),
+            ["session_id"] = "00000000-0000-4000-8000-000000000003",
+            ["rate_limits"] = new JsonObject
+            {
+                ["seven_day"] = new JsonObject { ["used_percentage"] = 20, ["resets_at"] = now.AddDays(2).ToUnixTimeSeconds() },
+            },
+            ["account"] = new JsonObject { ["email"] = LiveEmail },
+        }.ToJsonString());
+
+        JsonElement card = await LiveCardAsync(factory);
+
+        Limit(card, 1).GetProperty("percent").GetDouble().ShouldBe(20);
+        Limit(card, 0).GetProperty("label").GetString().ShouldBe("5-hour");
+        Limit(card, 0).GetProperty("known").GetBoolean().ShouldBeFalse();
+        Limit(card, 0).GetProperty("notApplicable").GetBoolean().ShouldBeFalse();
+    }
+
+    [Fact]
     public async Task ARowWhoseWindowResetSinceItWasCapturedLosesItsPercentage()
     {
         // A figure from the window before this one measures nothing the operator

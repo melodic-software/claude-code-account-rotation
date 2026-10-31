@@ -502,6 +502,8 @@ without notice.
   or none that can be dated.
 - `accounts[].usage.limits[]` where `kind` is `session` (5-hour) or `weekly_all` (7-day):
   `percent` (null when unknown or the window has reset since the read) and `resetsAt`.
+  `notApplicable` is true on the `session` row when the account's newest full usage read lists no
+  5-hour window and nothing newer carries one (an Ultra plan has none); `known` is then false.
 - `accounts[].isLive`: true for the account this side is logged in as.
 - `accounts[].slot`: where the account's pair is when the store is shared with another side:
   `held-here`, `held-elsewhere`, `parked`, `in-transit`, or `never-logged-in`; null when the store
