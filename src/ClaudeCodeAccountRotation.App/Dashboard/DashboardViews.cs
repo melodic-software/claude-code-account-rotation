@@ -284,8 +284,8 @@ internal sealed record UsageView(
 /// calls the window.
 /// <para>
 /// Three flags say what the row knows, and the page reads them in this order.
-/// <see cref="NotApplicable"/> true means the account's newest full usage read
-/// lists no such window, and nothing newer carries one: the plan has none (an
+/// <see cref="NotApplicable"/> true means the account's newest live usage read
+/// (not one restored from the cache) lists no such window, and nothing newer carries one: the plan has none (an
 /// Ultra plan has no 5-hour window), which renders as "n/a". The row is dated
 /// by that read, and <see cref="Known"/> stays false, so a page that predates
 /// the flag still reads it as unknown. <see cref="Known"/> false otherwise means

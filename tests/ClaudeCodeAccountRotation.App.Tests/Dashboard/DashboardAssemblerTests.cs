@@ -255,6 +255,31 @@ public sealed class DashboardAssemblerTests
     }
 
     [Fact]
+    public async Task ACachedReadWithNoFiveHourWindowLeavesThatRowUnknown()
+    {
+        // The cache may hold a CLI read from an earlier release that left out a
+        // 5-hour window it could not read, so only a live read can say the plan
+        // has none: until one does, the row stays unknown (#188).
+        await using AppFactory factory = new();
+        DateTimeOffset now = factory.Clock.GetUtcNow();
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        await factory.ParkedProfileAsync(OtherEmail, "refresh-b", TestContext.Current.CancellationToken);
+        factory.Services.GetRequiredService<QuotaState>().RecordSnapshot(new UsageSnapshot(
+            AccountEmail.Parse(OtherEmail).Value,
+            now.AddMinutes(-1),
+            QuotaSource.Cached,
+            [Weekly(0, now.AddDays(7))],
+            ExtraUsage: null));
+
+        JsonElement card = await CardAsync(factory, OtherEmail);
+
+        Limit(card, 1).GetProperty("percent").GetDouble().ShouldBe(0);
+        Limit(card, 0).GetProperty("label").GetString().ShouldBe("5-hour");
+        Limit(card, 0).GetProperty("known").GetBoolean().ShouldBeFalse();
+        Limit(card, 0).GetProperty("notApplicable").GetBoolean().ShouldBeFalse();
+    }
+
+    [Fact]
     public async Task ATeeWithNoFiveHourFigureLeavesThatRowUnknown()
     {
         // The tee omits a window it has no figure for, so its silence says

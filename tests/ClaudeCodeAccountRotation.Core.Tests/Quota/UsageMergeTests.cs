@@ -94,22 +94,36 @@ public sealed class UsageMergeTests
         merged.SessionlessRead.ShouldBeNull();
     }
 
-    [Theory]
-    [InlineData(QuotaSource.OnDemandRefresh)]
-    [InlineData(QuotaSource.Cached)]
-    public void AFullReadWithNoFiveHourWindowDropsAnOlderSessionRow(QuotaSource full)
+    [Fact]
+    public void AFullReadWithNoFiveHourWindowDropsAnOlderSessionRow()
     {
         // An account whose plan has no 5-hour window (Ultra): the endpoint lists
         // only the weekly rows. A session figure some other source took before
         // that read must not bring the window back, or the account would be
         // judged on a window it does not have.
-        UsageSnapshot read = Snapshot(_noon, full, Weekly(0));
+        UsageSnapshot read = Snapshot(_noon, QuotaSource.OnDemandRefresh, Weekly(0));
 
         MergedUsage merged = UsageMerge.Merge([Snapshot(_noon.AddMinutes(-10), QuotaSource.StatuslineSnapshot, Session(100)), read]).ShouldNotBeNull();
 
         merged.Rows.ShouldNotContain(row => row.Limit.Kind == LimitKind.Session);
         merged.Merged.Limits.ShouldNotContain(limit => limit.Kind == LimitKind.Session);
         merged.SessionlessRead.ShouldBeSameAs(read);
+    }
+
+    [Fact]
+    public void ACachedReadWithNoFiveHourWindowSaysNothingAboutThePlan()
+    {
+        // The cache file may hold a CLI read from an earlier release that left
+        // out a 5-hour window it could not read, so a cached read without one is
+        // not evidence the plan has none: the window stays unknown, and an older
+        // spent figure stays, until a live read says otherwise.
+        UsageSnapshot statusline = Snapshot(_noon.AddMinutes(-10), QuotaSource.StatuslineSnapshot, Session(100));
+
+        MergedUsage merged = UsageMerge.Merge([statusline, Snapshot(_noon, QuotaSource.Cached, Weekly(0))]).ShouldNotBeNull();
+
+        Row(merged, LimitKind.Session).Percent.ShouldBe(100);
+        merged.Rows.Single(row => row.Limit.Kind == LimitKind.Session).Source.ShouldBeSameAs(statusline);
+        merged.SessionlessRead.ShouldBeNull();
     }
 
     [Fact]

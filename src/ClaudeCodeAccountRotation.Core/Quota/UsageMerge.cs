@@ -14,9 +14,10 @@ public sealed record MergedLimit(UsageLimit Limit, UsageSnapshot Source);
 /// time a card states, and <paramref name="Merged"/> as the single snapshot a
 /// decision about the account keys on. All three come out of one merge, so what
 /// the operator reads and what anything decides cannot disagree.
-/// <paramref name="SessionlessRead"/> is the full usage read that lists no
-/// 5-hour window, when nothing newer carries one: the account's plan has no
-/// such window, so it is not applicable rather than unknown.
+/// <paramref name="SessionlessRead"/> is the live usage read (never one restored
+/// from the cache) that lists no 5-hour window, when nothing newer carries one:
+/// the account's plan has no such window, so it is not applicable rather than
+/// unknown.
 /// </summary>
 public sealed record MergedUsage(
     UsageSnapshot Merged,
@@ -71,14 +72,16 @@ public static class UsageMerge
             }
         }
 
-        // A full read lists every window the account's plan has, so its newest one
+        // A live read lists every window the account's plan has, so its newest one
         // listing no 5-hour window says the plan has none (an Ultra plan). A
         // session figure some source took before that read is from a window that
         // no longer exists and is dropped; one taken after it is newer evidence
-        // that the window does exist, and stands. The tee is not a full read: it
-        // omits a window it has no figure for.
+        // that the window does exist, and stands. Neither the tee nor a cached read
+        // counts: the tee omits a window it has no figure for, and the cache may
+        // hold a CLI read from an earlier release that left out a 5-hour window it
+        // could not read.
         UsageSnapshot? read = sources
-            .Where(static source => source.Source is QuotaSource.OnDemandRefresh or QuotaSource.Cached)
+            .Where(static source => source.Source == QuotaSource.OnDemandRefresh)
             .MaxBy(static source => source.CapturedAt);
         UsageSnapshot? sessionless = null;
         if (read is not null && !read.Limits.Any(static limit => limit.Kind == LimitKind.Session))
