@@ -46,6 +46,7 @@ internal static partial class AssignEndpoints
         RosterFile rosterFile,
         ISecretStore store,
         ICiSecretWriter writer,
+        IGhVariableWriter variables,
         IGhApiReader github,
         TimeProvider clock,
         ILoggerFactory loggers,
@@ -57,6 +58,7 @@ internal static partial class AssignEndpoints
         ArgumentNullException.ThrowIfNull(rosterFile);
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(variables);
         ArgumentNullException.ThrowIfNull(github);
         ArgumentNullException.ThrowIfNull(clock);
         ArgumentNullException.ThrowIfNull(loggers);
@@ -214,6 +216,7 @@ internal static partial class AssignEndpoints
             + (failed.Count == 0 ? string.Empty : " Not set: " + string.Join("; ", failed) + ".");
         RosterEntry? updated = null;
         bool removed = false;
+        string? unrecorded = null;
         try
         {
             await rosterFile.UpdateAsync(
@@ -247,8 +250,21 @@ internal static partial class AssignEndpoints
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
+            unrecorded = exception.GetType().Name;
+        }
+
+        await ApiKeyEndpoints.ResetKeyCreditAsync(
+            sent.Any(static half => half.IsKey) ? [target.KeySecret!] : [],
+            stopped,
+            github,
+            variables,
+            clock,
+            logger);
+
+        if (unrecorded is not null)
+        {
             return Results.Json(
-                new { error = message + " The roster could not record it (" + exception.GetType().Name + "), so the card does not show it yet; assign again to record it." },
+                new { error = message + " The roster could not record it (" + unrecorded + "), so the card does not show it yet; assign again to record it." },
                 statusCode: StatusCodes.Status500InternalServerError);
         }
 

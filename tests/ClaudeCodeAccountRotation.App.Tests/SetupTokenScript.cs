@@ -155,3 +155,18 @@ internal sealed class RecordingSecretWriter : ICiSecretWriter
         return Task.FromResult(failure is string error ? Result<Unit, string>.Failure(error) : Result<Unit, string>.Success(Unit.Value));
     }
 }
+
+/// <summary>Records each organization variable PATCH it is handed, and gives the one scripted answer.</summary>
+internal sealed class RecordingVariableWriter : IGhVariableWriter
+{
+    public List<(string Organization, string Name, string Value, string Visibility)> Calls { get; } = [];
+
+    public Result<Unit, GhApiFailure> Answer { get; set; } = Result<Unit, GhApiFailure>.Success(Unit.Value);
+
+    public Task<Result<Unit, GhApiFailure>> SetOrganizationVariableAsync(string organization, string name, string value, VariableVisibility visibility, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(visibility);
+        Calls.Add((organization, name, value, visibility.Kind));
+        return Task.FromResult(Answer);
+    }
+}

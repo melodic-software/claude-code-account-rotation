@@ -691,6 +691,16 @@ switch is read-only, and no repository or environment variable is ever written. 
 `POST /api/kill-switches` with `{"org", "name", "value"}`; any other name, or a value other than
 `true` or `false`, is refused before `gh` runs.
 
+After Push API key, or Assign to role with the key half, sets at least one organization key
+secret, the tool sets the organization variable `KEY_CREDIT_RESET_AT` to the current UTC time
+(`yyyy-MM-ddTHH:mm:ssZ`) the same way: visibility read just before, one PATCH per organization,
+nothing written when that read fails, never created. CI's key-credit gate (ci-workflows
+`check-key-credit`, input `reset-at`) then drops the key's earlier credit stops, so the next lane
+run tries the new key. An absent variable, or a failed read or PATCH, is logged and the key push
+still succeeds; nothing is sent after a rate limit stopped the push. A key set by hand with
+`gh secret set` writes no stamp, so the lanes wait out the gate's current backoff step, at most
+24 hours.
+
 Before Start sign-in or Save and send moves a role off other accounts, the page checks those
 accounts' usage from the last dashboard, with no request: the 5-hour and 7-day figures the claude
 binary reads for each account. When one of them is at 90% or more (the meters' red tier), the
@@ -774,7 +784,7 @@ schema bump. Do not edit `config.json`, `roster.json`, or `state/live-owner.json
 copy a template over an existing config.
 
 The app calls the GitHub API only through `gh`, for Check roles, CI secret writes, kill-switch
-toggles, and the secret metadata it reads on those clicks, and never
+toggles, the key-credit reset after a key push, and the secret metadata it reads on those clicks, and never
 to look for releases; the dashboard has no "update available" line. Compare
 `claude-code-account-rotation --version` with
 <https://github.com/melodic-software/claude-code-account-rotation/releases/latest>.

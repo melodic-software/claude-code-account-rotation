@@ -205,7 +205,8 @@ internal static partial class ApiKeyEndpoints
     /// fails ends it, before any write. The sets run one at a time; a failed
     /// one does not stop the rest, except a rate limit, which stops every one
     /// after it. The roster records the halves that were set, taking each off
-    /// the account that held it before.
+    /// the account that held it before. Then <see cref="KeyCreditReset"/>
+    /// stamps the organization's KEY_CREDIT_RESET_AT.
     /// </summary>
     private static async Task<IResult> PushAsync(
         string email,
@@ -213,6 +214,7 @@ internal static partial class ApiKeyEndpoints
         RosterFile rosterFile,
         ISecretStore store,
         ICiSecretWriter writer,
+        IGhVariableWriter variables,
         IGhApiReader github,
         TimeProvider clock,
         ILoggerFactory loggers,
@@ -224,6 +226,7 @@ internal static partial class ApiKeyEndpoints
         ArgumentNullException.ThrowIfNull(rosterFile);
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(variables);
         ArgumentNullException.ThrowIfNull(laneCatalog);
         ArgumentNullException.ThrowIfNull(clock);
         ArgumentNullException.ThrowIfNull(loggers);
@@ -350,6 +353,7 @@ internal static partial class ApiKeyEndpoints
         string message = (sent.Count == 0 ? "No key secret was set." : "Set " + string.Join(", ", sent.Select(static half => half.Role.KeySecret!.ToString())) + " from " + target.Value + ".")
             + (failed.Count == 0 ? string.Empty : " Not set: " + string.Join("; ", failed) + ".");
         RosterEntry? updated = null;
+        string? unrecorded = null;
         try
         {
             await rosterFile.UpdateAsync(
@@ -368,12 +372,38 @@ internal static partial class ApiKeyEndpoints
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            // The secrets are set whatever went wrong here, so the answer says which.
-            return Failed(message + " The roster could not record it (" + exception.GetType().Name + "), so the card does not show it yet; push again to record it.");
+            unrecorded = exception.GetType().Name;
         }
 
-        return Results.Ok(new ApiKeyPushView(DashboardAssembler.View(updated, keying.Value), message, failed.Count));
+        await ResetKeyCreditAsync([.. sent.Select(static half => half.Role.KeySecret!)], stopped, github, variables, clock, logger);
+
+        // The secrets are set whatever went wrong with the roster, so the answer says which.
+        return unrecorded is null
+            ? Results.Ok(new ApiKeyPushView(DashboardAssembler.View(updated, keying.Value), message, failed.Count))
+            : Failed(message + " The roster could not record it (" + unrecorded + "), so the card does not show it yet; push again to record it.");
     }
+
+    /// <summary>
+    /// <see cref="KeyCreditReset"/> for each organization a key secret was
+    /// set in. Nothing after a rate limit, and nothing for a repository
+    /// secret, which no organization variable covers. Never changes the
+    /// push's answer.
+    /// </summary>
+    internal static Task ResetKeyCreditAsync(
+        IReadOnlyList<CiTokenSecret> set,
+        bool rateLimited,
+        IGhApiReader github,
+        IGhVariableWriter variables,
+        TimeProvider clock,
+        ILogger logger) =>
+        rateLimited || set.Count == 0
+            ? Task.CompletedTask
+            : KeyCreditReset.MarkAsync(
+                set.Where(static secret => secret.Scope == CiSecretScope.Organization).Select(static secret => secret.Owner),
+                github,
+                variables,
+                clock,
+                logger);
 
     /// <summary>
     /// The owner's answer to the cost gate from a body's <c>costSettings</c>:
