@@ -266,7 +266,7 @@ public sealed class KillSwitchEndpointTests
 
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
         writer.Calls.Count.ShouldBe(1);
-        writer.Calls[0].ShouldBe(("octo", "CLAUDE_LANES_DISABLED", true, "private", ""));
+        writer.Calls[0].ShouldBe(("octo", "CLAUDE_LANES_DISABLED", "true", "private", ""));
         reader.Paths.ShouldBe(["orgs/octo/actions/variables/CLAUDE_LANES_DISABLED", "orgs/octo/actions/variables/CLAUDE_LANES_DISABLED"]);
         JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(Token))!;
         body["state"]!.GetValue<string>().ShouldBe("stopped");
@@ -310,7 +310,7 @@ public sealed class KillSwitchEndpointTests
 
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
         writer.Calls.Count.ShouldBe(1);
-        writer.Calls[0].ShouldBe(("octo", "CLAUDE_REVIEW_DISABLED", true, "selected", "1296269,1296270"));
+        writer.Calls[0].ShouldBe(("octo", "CLAUDE_REVIEW_DISABLED", "true", "selected", "1296269,1296270"));
         reader.Paths[1].ShouldBe("orgs/octo/actions/variables/CLAUDE_REVIEW_DISABLED/repositories?per_page=100&page=1");
     }
 
@@ -426,14 +426,14 @@ public sealed class KillSwitchEndpointTests
     /// <summary>Records every write it is handed, the visibility as its kind and joined ids, and gives the one scripted answer.</summary>
     private sealed class SpyWriter : IGhVariableWriter
     {
-        public List<(string Organization, string Name, bool Value, string Visibility, string Ids)> Calls { get; } = [];
+        public List<(string Organization, string Name, string Value, string Visibility, string Ids)> Calls { get; } = [];
 
         /// <summary>Whether each write's token could have been cancelled.</summary>
         public List<bool> Cancellable { get; } = [];
 
         public Result<Unit, GhApiFailure> Answer { get; set; } = Result<Unit, GhApiFailure>.Success(Unit.Value);
 
-        public Task<Result<Unit, GhApiFailure>> SetOrganizationVariableAsync(string organization, string name, bool value, VariableVisibility visibility, CancellationToken cancellationToken)
+        public Task<Result<Unit, GhApiFailure>> SetOrganizationVariableAsync(string organization, string name, string value, VariableVisibility visibility, CancellationToken cancellationToken)
         {
             Calls.Add((organization, name, value, visibility.Kind, string.Join(',', visibility.SelectedRepositoryIds)));
             Cancellable.Add(cancellationToken.CanBeCanceled);

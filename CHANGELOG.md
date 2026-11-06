@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.16.0] - 2026-11-06
+
+### Added
+
+- **A key push resets CI's key-credit backoff.** After Push API key, or Assign to role with the
+  key half, sets an organization key secret, the tool sets the organization variable
+  `KEY_CREDIT_RESET_AT` to the current UTC time (`yyyy-MM-ddTHH:mm:ssZ`), so CI's key-credit gate
+  (ci-workflows `check-key-credit`, input `reset-at`) drops the key's earlier credit stops and the
+  next lane run tries the new key. It is the kill switches' PATCH: `gh api --method PATCH
+  orgs/<org>/actions/variables/KEY_CREDIT_RESET_AT`, the visibility read just before and sent
+  back, one per organization. Nothing is written when that read fails, and the variable is never
+  created: when it does not exist the tool logs that and the push still succeeds. No failure here
+  changes the push's answer, and nothing is sent after a rate limit stopped the push. A key set by
+  hand with `gh secret set` writes no stamp, so the lanes wait out the gate's current backoff step,
+  at most 24 hours.
+
 ## [2.15.1] - 2026-10-31
 
 ### Fixed

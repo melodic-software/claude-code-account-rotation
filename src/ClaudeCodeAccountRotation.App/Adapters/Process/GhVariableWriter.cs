@@ -21,18 +21,28 @@ internal sealed record VariableVisibility(string Kind, IReadOnlyList<long> Selec
 internal interface IGhVariableWriter
 {
     /// <summary>A 404 comes back as a failure with that status: the variable does not exist and is not created.</summary>
-    Task<Result<Unit, GhApiFailure>> SetOrganizationVariableAsync(string organization, string name, bool value, VariableVisibility visibility, CancellationToken cancellationToken);
+    Task<Result<Unit, GhApiFailure>> SetOrganizationVariableAsync(string organization, string name, string value, VariableVisibility visibility, CancellationToken cancellationToken);
+}
+
+/// <summary>The kill switches' form: a value of exactly <c>true</c> or <c>false</c>.</summary>
+internal static class GhVariableWriterExtensions
+{
+    public static Task<Result<Unit, GhApiFailure>> SetOrganizationVariableAsync(this IGhVariableWriter writer, string organization, string name, bool value, VariableVisibility visibility, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        return writer.SetOrganizationVariableAsync(organization, name, GhVariableWriter.Flag(value), visibility, cancellationToken);
+    }
 }
 
 /// <summary>The writer when no <c>gh</c> could be found: every write fails with the reason.</summary>
 internal sealed class UnavailableGhVariableWriter(string reason) : IGhVariableWriter
 {
-    public Task<Result<Unit, GhApiFailure>> SetOrganizationVariableAsync(string organization, string name, bool value, VariableVisibility visibility, CancellationToken cancellationToken) =>
+    public Task<Result<Unit, GhApiFailure>> SetOrganizationVariableAsync(string organization, string name, string value, VariableVisibility visibility, CancellationToken cancellationToken) =>
         Task.FromResult(Result<Unit, GhApiFailure>.Failure(new GhApiFailure(reason, RateLimited: false)));
 }
 
 /// <summary>
-/// <c>gh api --method PATCH orgs/&lt;org&gt;/actions/variables/&lt;name&gt; -f value=&lt;true|false&gt; -f visibility=&lt;kind&gt;</c>,
+/// <c>gh api --method PATCH orgs/&lt;org&gt;/actions/variables/&lt;name&gt; -f value=&lt;value&gt; -f visibility=&lt;kind&gt;</c>,
 /// plus <c>-F selected_repository_ids[]=&lt;id&gt;</c> per id when the kind is
 /// <c>selected</c>, through the shared <see cref="GhWriteGate"/>: one gh write
 /// at a time, at least a second apart.
@@ -61,10 +71,18 @@ internal sealed partial class GhVariableWriter(string executable, TimeSpan timeo
     /// variable with no repositories sends <c>selected_repository_ids[]</c>
     /// alone, which gh sends as an empty array (<c>gh api --help</c>).
     /// </summary>
-    public static IReadOnlyList<string> Arguments(string organization, string name, bool value, VariableVisibility visibility)
+    public static IReadOnlyList<string> Arguments(string organization, string name, bool value, VariableVisibility visibility) =>
+        Arguments(organization, name, Flag(value), visibility);
+
+    /// <summary>
+    /// The value as one <c>-f</c> field, so gh sends it as a string. It is
+    /// one argument, never parsed by a shell, and the caller builds it from
+    /// a fixed shape (a flag or a timestamp), never from page input.
+    /// </summary>
+    public static IReadOnlyList<string> Arguments(string organization, string name, string value, VariableVisibility visibility)
     {
         ArgumentNullException.ThrowIfNull(visibility);
-        List<string> arguments = ["api", "--method", "PATCH", VariablePath(organization, name), "-f", "value=" + (value ? "true" : "false"), "-f", "visibility=" + visibility.Kind];
+        List<string> arguments = ["api", "--method", "PATCH", VariablePath(organization, name), "-f", "value=" + value, "-f", "visibility=" + visibility.Kind];
         if (visibility.Kind == "selected")
         {
             if (visibility.SelectedRepositoryIds.Count == 0)
@@ -81,7 +99,10 @@ internal sealed partial class GhVariableWriter(string executable, TimeSpan timeo
         return arguments;
     }
 
-    public async Task<Result<Unit, GhApiFailure>> SetOrganizationVariableAsync(string organization, string name, bool value, VariableVisibility visibility, CancellationToken cancellationToken)
+    /// <summary>A kill switch's value as GitHub stores it.</summary>
+    public static string Flag(bool value) => value ? "true" : "false";
+
+    public async Task<Result<Unit, GhApiFailure>> SetOrganizationVariableAsync(string organization, string name, string value, VariableVisibility visibility, CancellationToken cancellationToken)
     {
         IReadOnlyList<string> arguments = Arguments(organization, name, value, visibility);
         Result<GhExit, string> run = await gate.RunAsync(() => GhProcess.RunAsync(executable, arguments, input: null, timeout, cancellationToken), cancellationToken);
