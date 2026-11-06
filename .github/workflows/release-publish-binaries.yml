@@ -6,7 +6,7 @@ name: release-publish-binaries
 # execs in place of that binary, plus the embedded config.template.json.
 # A push to main that changes CHANGELOG.md publishes the top dated heading's
 # version when it has no published release yet, tagging the pushed commit.
-# A ruleset lets only the melodic-plugin-release App create v* tags, so the
+# A ruleset lets only the melodic-release App create v* tags, so the
 # release is created with that App's token; its key is an environment secret
 # the plugin-release environment admits on main only.
 
