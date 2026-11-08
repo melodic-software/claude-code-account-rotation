@@ -82,6 +82,33 @@ public sealed class UsageResponseParserTests
         limit.Kind.ShouldBe(LimitKind.Session);
     }
 
+    [Theory]
+    [InlineData("""{"limits":[{"kind":"session","is_active":true}]}""")]
+    [InlineData("""{"limits":[{"kind":"weekly_all","percent":null,"is_active":true}]}""")]
+    [InlineData("""{"limits":[{"kind":"weekly_scoped","percent":"43","is_active":true}]}""")]
+    public void AKnownLimitWithNoReadablePercentFails(string json)
+    {
+        using var body = JsonDocument.Parse(json);
+
+        Result<IReadOnlyList<UsageLimit>, string> parsed = UsageResponseParser.ParseLimits(body.RootElement);
+
+        parsed.IsFailure.ShouldBeTrue();
+        parsed.Error.ShouldContain("no readable percent");
+    }
+
+    [Fact]
+    public void AnUnknownKindWithNoReadablePercentIsDropped()
+    {
+        using var body = JsonDocument.Parse("""
+            {"limits":[{"kind":"monthly_something_new","is_active":true},{"kind":"session","percent":43,"is_active":true}]}
+            """);
+
+        UsageLimit limit = UsageResponseParser.ParseLimits(body.RootElement).Value.Single();
+
+        limit.Kind.ShouldBe(LimitKind.Session);
+        limit.Percent.ShouldBe(43);
+    }
+
     [Fact]
     public void ABodyWithNoLimitsArrayFails()
     {
