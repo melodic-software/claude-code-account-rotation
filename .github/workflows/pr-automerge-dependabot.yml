@@ -1,4 +1,4 @@
-name: pr-automerge-dependabot
+name: PR Automerge Dependabot
 
 # Thin caller of the org's reusable that arms GitHub auto-merge (squash) on a
 # Dependabot minor or patch pull request under the merge tiers in the standards
