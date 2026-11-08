@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.16.1] - 2026-11-08
+
+### Fixed
+
+- **A usage read with an unreadable percent no longer counts as 0% used.** A 5-hour, 7-day or
+  scoped window whose `percent` is missing or not a number made the read count that window as 0%
+  used, so the dashboard could recommend an account whose window may be spent. Such a read now
+  fails as malformed and the account keeps its last good figures. A window kind this release does
+  not know is skipped when it has no readable percent, so it never blocks a read.
+
 ## [2.16.0] - 2026-11-06
 
 ### Added

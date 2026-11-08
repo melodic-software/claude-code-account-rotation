@@ -33,11 +33,27 @@ public static class UsageResponseParser
             }
 
             string rawKind = Text(entry, "kind") ?? string.Empty;
+            LimitKind kind = KindOf(rawKind);
+            if (Number(entry, "percent") is not double percent)
+            {
+                // Read as 0% it would overstate headroom and recommend an account
+                // whose window may be spent, so a window routing counts refuses
+                // the read and the last good snapshot stands. A bucket this build
+                // does not know decides nothing and is dropped, so a new one
+                // cannot block every read.
+                if (kind == LimitKind.Unknown)
+                {
+                    continue;
+                }
+
+                return Result<IReadOnlyList<UsageLimit>, string>.Failure($"the {rawKind} limit carries no readable percent");
+            }
+
             parsed.Add(new UsageLimit(
                 rawKind,
-                KindOf(rawKind),
+                kind,
                 Text(entry, "group"),
-                Number(entry, "percent") ?? 0,
+                percent,
                 Text(entry, "severity"),
                 JsonInstant.Read(entry, "resets_at"),
                 ScopeDisplayName(entry),
