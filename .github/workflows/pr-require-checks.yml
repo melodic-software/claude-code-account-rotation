@@ -1,4 +1,4 @@
-name: pr-require-checks
+name: PR Require Checks
 
 # Build, test, and gate on every pull request and on main. The org's ci-gate
 # context is the single check `ci-status` below: it aggregates every lane in
