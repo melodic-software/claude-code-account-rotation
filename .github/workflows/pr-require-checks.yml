@@ -156,7 +156,7 @@ jobs:
           config: lychee.toml
 
   ci-status:
-    name: ci-status
+    name: CI Status
     # `always()`, never a success-guard: a lane failure must still run this
     # required aggregate so the aggregation below turns it red, and a skipped
     # required check reports success to branch protection.
@@ -200,8 +200,11 @@ jobs:
         # aggregation: the job still fails on the contract step's exit code, and
         # the `ci-lanes` status is on the SHA for the next contract-only run.
         if: ${{ !cancelled() }}
-        uses: melodic-software/ci-workflows/.github/actions/pr-require-checks/aggregate-results@594987abe8657a40bccc13d301f1f0d5cccb5348 # v0.39.8
+        uses: melodic-software/ci-workflows/.github/actions/pr-require-checks/aggregate-results@ac4d8780de793b20e60a66890e767df579c80d83 # ac4d878 2026-11-11
         with:
+          # report-ci-status mirrors this gate under `ci-status` and runs on
+          # contract-only events too; the run-shape reads must ignore it.
+          alias-jobs: ci-status
           # Derived from the needs graph above — the single source of truth for
           # the lane list. Adding a lane to needs automatically extends this
           # check.
@@ -221,3 +224,18 @@ jobs:
           rerun-contract-only-siblings: 'true'
           carry-forward-wait-seconds: '0'
           token: ${{ github.token }}
+
+  report-ci-status:
+    name: ci-status
+    needs: [ci-status]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions: {}
+    steps:
+      - name: Report the conclusion of `CI Status`
+        env:
+          RESULT: ${{ needs.ci-status.result }}
+        run: |
+          echo "CI Status: $RESULT"
+          [ "$RESULT" = success ]
