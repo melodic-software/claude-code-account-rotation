@@ -1,10 +1,11 @@
 name: PR Require Checks
 
 # Build, test, and gate on every pull request and on main. The org's ci-gate
-# context is the single check `ci-status` below: it aggregates every lane in
-# this file and carries the pull-request contract (title, do-not-merge label,
-# issue linkage) as steps of that one check, through the SHA-pinned
-# ci-workflows composites `check-contract` and `aggregate-results`.
+# context is the single check `CI Status` (job `ci-status`) below: it
+# aggregates every lane in this file and carries the pull-request contract
+# (title, do-not-merge label, issue linkage) as steps of that one check,
+# through the SHA-pinned ci-workflows composites `check-contract` and
+# `aggregate-results`.
 
 on:
   push:
@@ -37,7 +38,7 @@ permissions:
 # can neither be cancelled nor evict anything: eviction of a PENDING run is
 # unconditional in GitHub's queueing and is not governed by
 # `cancel-in-progress`, so a shared group let one event evict another and leave
-# a check suite with no `ci-status` check run at all. The full branch keeps one
+# a check suite with no `CI Status` check run at all. The full branch keeps one
 # group per pull request, so a `synchronize` still cancels the run it
 # supersedes; keying on the number rather than `head_ref` stops same-named fork
 # branches from cancelling each other. Push runs fall back to the unique
@@ -202,9 +203,6 @@ jobs:
         if: ${{ !cancelled() }}
         uses: melodic-software/ci-workflows/.github/actions/pr-require-checks/aggregate-results@ac4d8780de793b20e60a66890e767df579c80d83 # ac4d878 2026-11-11
         with:
-          # report-ci-status mirrors this gate under `ci-status` and runs on
-          # contract-only events too; the run-shape reads must ignore it.
-          alias-jobs: ci-status
           # Derived from the needs graph above — the single source of truth for
           # the lane list. Adding a lane to needs automatically extends this
           # check.
@@ -224,18 +222,3 @@ jobs:
           rerun-contract-only-siblings: 'true'
           carry-forward-wait-seconds: '0'
           token: ${{ github.token }}
-
-  report-ci-status:
-    name: ci-status
-    needs: [ci-status]
-    if: ${{ always() }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 3
-    permissions: {}
-    steps:
-      - name: Report the conclusion of `CI Status`
-        env:
-          RESULT: ${{ needs.ci-status.result }}
-        run: |
-          echo "CI Status: $RESULT"
-          [ "$RESULT" = success ]
