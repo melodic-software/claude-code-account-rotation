@@ -226,7 +226,7 @@ internal static class AppComposition
         services.AddSingleton(provider => new ProfileFolderStore(
             configuration.ProfilesRoot,
             provider.GetRequiredService<ILogger<ProfileFolderStore>>()));
-        services.AddSingleton(new RateLimitGuardTeeFileReader(configuration.StatuslineTeePath));
+        services.AddSingleton(new RateLimitsTeeFileReader(configuration.StatuslineTeePath));
         // Through the factory so the container owns the gate this file disposes.
         services.AddSingleton(provider => new RosterFile(
             configuration.AppDataDirectory,
@@ -555,7 +555,7 @@ internal static class AppComposition
         // holds reads between Refresh clicks, and the usage client a Refresh
         // click reads through (design 12). No token client: this side never
         // POSTs a refresh token, so nothing here could rotate one.
-        services.AddSingleton(new RateLimitGuardTeeFileReader(configuration.StatuslineTeePath));
+        services.AddSingleton(new RateLimitsTeeFileReader(configuration.StatuslineTeePath));
         AddUsageClient(services, AnthropicEndpoints.UserAgent(configuration.UserAgentProductToken, Version));
         AddLiveUsageReader(
             services,

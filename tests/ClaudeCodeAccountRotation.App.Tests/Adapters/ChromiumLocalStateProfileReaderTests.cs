@@ -147,7 +147,7 @@ public sealed class ChromiumLocalStateProfileReaderTests : IDisposable
         await WriteAsync(BrowserFamily.Chrome, LocalState(("Profile 1", "Work", "one@example.com")));
         await WriteAsync(BrowserFamily.Edge, LocalState(("Default", "Other", "two@example.com")));
         string denied = PathFor(BrowserFamily.Edge);
-        RateLimitGuardTeeFileReaderTests.DenyReading(denied);
+        RateLimitsTeeFileReaderTests.DenyReading(denied);
         try
         {
             IReadOnlyList<BrowserProfile> profiles = await Reader().ReadAsync(TestContext.Current.CancellationToken);
@@ -157,7 +157,7 @@ public sealed class ChromiumLocalStateProfileReaderTests : IDisposable
         finally
         {
             // Before Dispose deletes the directory, or the cleanup fails too.
-            RateLimitGuardTeeFileReaderTests.AllowReading(denied);
+            RateLimitsTeeFileReaderTests.AllowReading(denied);
         }
     }
 

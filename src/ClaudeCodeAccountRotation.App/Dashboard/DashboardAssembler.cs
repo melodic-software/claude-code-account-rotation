@@ -32,7 +32,7 @@ internal sealed partial class DashboardAssembler(
     ICredentialPairStore pairs,
     ProfileFolderStore profiles,
     RosterFile rosterFile,
-    RateLimitGuardTeeFileReader tee,
+    RateLimitsTeeFileReader tee,
     LiveDirectorySwitch executor,
     DashboardState state,
     QuotaState quota,

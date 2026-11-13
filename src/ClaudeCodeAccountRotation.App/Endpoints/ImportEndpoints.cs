@@ -146,7 +146,7 @@ internal static class ImportEndpoints
         // facts, because a follower has no roster to report.
         routes.MapGet("/api/dashboard", static async (
             FollowerImport import,
-            RateLimitGuardTeeFileReader tee,
+            RateLimitsTeeFileReader tee,
             CancellationToken cancellationToken) =>
         {
             // One snapshot from the status read, which runs reconciliation first
@@ -269,7 +269,7 @@ internal static class ImportEndpoints
     internal sealed record UsageReadView(string Outcome, JsonObject? Body, double? RetryAfterSeconds, string Detail);
 
     /// <summary>
-    /// This side's rate-limit-guard observation in plain wire types: the account
+    /// This side's rate-limits observation in plain wire types: the account
     /// is the e-mail the tee named, which the other side parses again rather
     /// than trusting, and the two windows are the ones the tee carries.
     /// </summary>

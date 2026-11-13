@@ -53,7 +53,7 @@ public sealed class DashboardAssemblerTests
         await using AppFactory factory = new();
         await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
         await CredentialFiles.WriteAsync(factory.LiveDirectory, "live-token", TestContext.Current.CancellationToken);
-        await WriteTeeAsync(factory, RateLimitGuardTeeFileReaderTests.Tee(LiveEmail));
+        await WriteTeeAsync(factory, RateLimitsTeeFileReaderTests.Tee(LiveEmail));
 
         JsonElement card = await LiveCardAsync(factory);
 
@@ -82,11 +82,11 @@ public sealed class DashboardAssemblerTests
         await using AppFactory factory = new();
         await factory.WriteStateFileAsync(LiveEmail, cancellationToken);
         await CredentialFiles.WriteAsync(factory.LiveDirectory, "live-token", cancellationToken);
-        await WriteTeeAsync(factory, RateLimitGuardTeeFileReaderTests.Tee(LiveEmail));
+        await WriteTeeAsync(factory, RateLimitsTeeFileReaderTests.Tee(LiveEmail));
         _ = await LiveCardAsync(factory);
         _ = await factory.ParkedProfileAsync(LiveEmail, "parked-token", cancellationToken);
         await factory.WriteStateFileAsync(OtherEmail, cancellationToken);
-        await WriteTeeAsync(factory, RateLimitGuardTeeFileReaderTests.Tee(OtherEmail));
+        await WriteTeeAsync(factory, RateLimitsTeeFileReaderTests.Tee(OtherEmail));
 
         JsonElement card = await CardAsync(factory, LiveEmail);
 
@@ -125,7 +125,7 @@ public sealed class DashboardAssemblerTests
     {
         await using AppFactory factory = new();
         await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
-        await WriteTeeAsync(factory, RateLimitGuardTeeFileReaderTests.Tee(email: null));
+        await WriteTeeAsync(factory, RateLimitsTeeFileReaderTests.Tee(email: null));
 
         JsonElement card = await LiveCardAsync(factory);
 
@@ -138,7 +138,7 @@ public sealed class DashboardAssemblerTests
     {
         await using AppFactory factory = new();
         await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
-        await WriteTeeAsync(factory, RateLimitGuardTeeFileReaderTests.Tee(OtherEmail));
+        await WriteTeeAsync(factory, RateLimitsTeeFileReaderTests.Tee(OtherEmail));
 
         JsonElement card = await LiveCardAsync(factory);
 
@@ -176,7 +176,7 @@ public sealed class DashboardAssemblerTests
         var read = DateTimeOffset.Parse("2026-09-07T15:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
         Record(factory, LiveEmail, read, Scoped("Fable", 34, factory.Clock.GetUtcNow().AddDays(2)));
         // Written after that read, and carrying only the two windows the tee knows.
-        await WriteTeeAsync(factory, RateLimitGuardTeeFileReaderTests.Tee(LiveEmail));
+        await WriteTeeAsync(factory, RateLimitsTeeFileReaderTests.Tee(LiveEmail));
 
         JsonElement card = await LiveCardAsync(factory);
 
@@ -410,7 +410,7 @@ public sealed class DashboardAssemblerTests
         await factory.ParkedProfileAsync(LiveEmail, "incoming-token", TestContext.Current.CancellationToken);
         factory.Cli.Email = LiveEmail;
         // The tee as it stood before the switch: the outgoing account's windows.
-        await WriteTeeAsync(factory, RateLimitGuardTeeFileReaderTests.Tee(OtherEmail));
+        await WriteTeeAsync(factory, RateLimitsTeeFileReaderTests.Tee(OtherEmail));
 
         using HttpClient client = factory.CreateMutatingClient();
         using HttpResponseMessage switched = await client.PostAsync(
@@ -421,7 +421,7 @@ public sealed class DashboardAssemblerTests
 
         // A session that was mid-turn at switch time writes the outgoing
         // account's windows back under the incoming account's name.
-        await WriteTeeAsync(factory, RateLimitGuardTeeFileReaderTests.Tee(LiveEmail));
+        await WriteTeeAsync(factory, RateLimitsTeeFileReaderTests.Tee(LiveEmail));
         JsonElement card = await LiveCardAsync(factory, client);
 
         card.GetProperty("email").GetString().ShouldBe(LiveEmail);
@@ -429,7 +429,7 @@ public sealed class DashboardAssemblerTests
         card.GetProperty("usageNote").GetString()!.ShouldContain("Pre-switch windows");
 
         // The first snapshot whose reset times differ is the incoming account's own.
-        await WriteTeeAsync(factory, RateLimitGuardTeeFileReaderTests.Tee(LiveEmail, fiveHourResetsAt: 1788900400, sevenDayResetsAt: 1789415200));
+        await WriteTeeAsync(factory, RateLimitsTeeFileReaderTests.Tee(LiveEmail, fiveHourResetsAt: 1788900400, sevenDayResetsAt: 1789415200));
         JsonElement fresh = await LiveCardAsync(factory, client);
 
         Limit(fresh, 0).GetProperty("percent").GetDouble().ShouldBe(69);
@@ -437,7 +437,7 @@ public sealed class DashboardAssemblerTests
 
         // And the stash is spent, not merely stepped over: the same reset times
         // again are now this account's own, because the windows have moved on once.
-        await WriteTeeAsync(factory, RateLimitGuardTeeFileReaderTests.Tee(LiveEmail));
+        await WriteTeeAsync(factory, RateLimitsTeeFileReaderTests.Tee(LiveEmail));
         JsonElement later = await LiveCardAsync(factory, client);
 
         Limit(later, 1).GetProperty("percent").GetDouble().ShouldBe(43);
@@ -455,18 +455,18 @@ public sealed class DashboardAssemblerTests
         await factory.WriteStateFileAsync(OtherEmail, TestContext.Current.CancellationToken);
         await factory.ParkedProfileAsync(LiveEmail, "incoming-token", TestContext.Current.CancellationToken);
         factory.Cli.Email = LiveEmail;
-        await WriteTeeAsync(factory, RateLimitGuardTeeFileReaderTests.Tee(OtherEmail));
+        await WriteTeeAsync(factory, RateLimitsTeeFileReaderTests.Tee(OtherEmail));
 
         using HttpClient client = factory.CreateMutatingClient();
         await SwitchAsync(client, LiveEmail);
 
         // Back the other way, with the tee gone at switch time.
-        File.Delete(Path.Combine(factory.LiveDirectory, "rate-limit-guard", "rate-limits.json"));
+        File.Delete(Path.Combine(factory.LiveDirectory, "rate-limits", "rate-limits.json"));
         factory.Cli.Email = OtherEmail;
         (await SwitchAsync(client, OtherEmail)).StatusCode.ShouldBe(System.Net.HttpStatusCode.OK);
 
         // The stash is gone, so these windows belong to whoever the tee names.
-        await WriteTeeAsync(factory, RateLimitGuardTeeFileReaderTests.Tee(OtherEmail));
+        await WriteTeeAsync(factory, RateLimitsTeeFileReaderTests.Tee(OtherEmail));
         JsonElement card = await LiveCardAsync(factory, client);
 
         card.GetProperty("email").GetString().ShouldBe(OtherEmail);
@@ -491,7 +491,7 @@ public sealed class DashboardAssemblerTests
         await factory.WriteStateFileAsync(OtherEmail, TestContext.Current.CancellationToken);
         await factory.ParkedProfileAsync(LiveEmail, "incoming-token", TestContext.Current.CancellationToken);
         factory.Cli.Email = LiveEmail;
-        await WriteTeeAsync(factory, RateLimitGuardTeeFileReaderTests.Tee(OtherEmail, fiveHourResetsAt: 1000000000000000000L));
+        await WriteTeeAsync(factory, RateLimitsTeeFileReaderTests.Tee(OtherEmail, fiveHourResetsAt: 1000000000000000000L));
 
         using HttpClient client = factory.CreateMutatingClient();
         using HttpResponseMessage dashboard = await client.GetAsync(new Uri("/api/dashboard", UriKind.Relative), TestContext.Current.CancellationToken);
@@ -1690,7 +1690,7 @@ public sealed class DashboardAssemblerTests
     private static JsonElement Limit(JsonElement card, int index) => Usage(card).GetProperty("limits")[index];
 
     /// <summary>
-    /// The tee file shaped like <see cref="RateLimitGuardTeeFileReaderTests.Tee"/>,
+    /// The tee file shaped like <see cref="RateLimitsTeeFileReaderTests.Tee"/>,
     /// but with a session figure that helper cannot produce: the merge fact needs
     /// a session percentage past the exhaustion line, not the helper's fixed 69.
     /// </summary>
@@ -1716,7 +1716,7 @@ public sealed class DashboardAssemblerTests
 
     private static async Task WriteTeeAsync(AppFactory factory, string content)
     {
-        string path = Path.Combine(factory.LiveDirectory, "rate-limit-guard", "rate-limits.json");
+        string path = Path.Combine(factory.LiveDirectory, "rate-limits", "rate-limits.json");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await File.WriteAllTextAsync(path, content, TestContext.Current.CancellationToken);
     }
