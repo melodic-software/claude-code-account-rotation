@@ -4,7 +4,7 @@ name: PR Automerge Dependabot
 # Dependabot minor or patch pull request under the merge tiers in the standards
 # dependabot-policy (GitHub Actions from tier: auto publishers; npm, pip and
 # NuGet outside review-only-dependencies). Arming never merges: GitHub merges
-# once every required check, `ci-status` included, passes. The caller owns the
+# once every required check, `CI Status` included, passes. The caller owns the
 # trigger, concurrency and the permission grant; a called workflow can only
 # downgrade the caller's grant. Runs on the GitHub-hosted `ubuntu-24.04`
 # runner, which the runner-policy admits on a public repository.
