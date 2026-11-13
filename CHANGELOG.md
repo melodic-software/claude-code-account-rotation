@@ -4,11 +4,12 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.0.0] - 2026-11-13
 
 ### Changed
 
-- **Live-session quota is read from the `rate-limits` plugin's directory.** The tee path is now
+- **Breaking for machines without the `rate-limits` plugin:** live-session quota is read from the
+  `rate-limits` plugin's directory. The tee path is now
   `rate-limits/rate-limits.json` inside the live config directory, where the `rate-limits` plugin
   writes it. Until that plugin runs on a machine, the file is absent there, which the dashboard
   treats as it always has: the live card shows no tee figures and no note, and figures from Refresh
