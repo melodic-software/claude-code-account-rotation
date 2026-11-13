@@ -121,7 +121,7 @@ public sealed record LogOutAnswer(bool LoggedOut, string Detail);
 /// the roster skips and a later switch refuses. No token is in it.
 /// </remarks>
 /// <param name="Tee">
-/// That side's own rate-limit-guard observation, the free tier of the refresh
+/// That side's own rate-limits observation, the free tier of the refresh
 /// contract as its live sessions wrote it. Between Refresh clicks, which read a
 /// held account through <see cref="IPeerRotationInstance.ReadUsageAsync"/>
 /// (design 12), this is where a held account's newest figures on the Windows

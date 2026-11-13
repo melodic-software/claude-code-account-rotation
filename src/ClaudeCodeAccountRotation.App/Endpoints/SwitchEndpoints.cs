@@ -48,7 +48,7 @@ internal static class SwitchEndpoints
         mutations.MapPost("/accounts/{email}/switch", static async (
             string email,
             LiveDirectorySwitch executor,
-            RateLimitGuardTeeFileReader tee,
+            RateLimitsTeeFileReader tee,
             DashboardState state,
             QuotaRefreshWorker worker,
             QuotaRefresh refresh,
@@ -97,7 +97,7 @@ internal static class SwitchEndpoints
     private static async Task<IResult> SwitchAndRestartAsync(
         AccountEmail target,
         LiveDirectorySwitch executor,
-        RateLimitGuardTeeFileReader tee,
+        RateLimitsTeeFileReader tee,
         DashboardState state,
         IRemoteControlTask remoteControl,
         CancellationToken cancellationToken)

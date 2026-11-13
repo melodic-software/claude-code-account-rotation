@@ -228,7 +228,7 @@ public sealed class SideEndpointTests
     /// <summary>
     /// Design 12 across the real wire: the leader reads no usage for a pair the
     /// other side holds, so that card's figures are the follower's own
-    /// rate-limit-guard tee, carried on the follower's dashboard and merged
+    /// rate-limits tee, carried on the follower's dashboard and merged
     /// here with the age it was taken at.
     /// </summary>
     [Fact]
@@ -244,9 +244,9 @@ public sealed class SideEndpointTests
         using HttpClient client = leader.CreateMutatingClient();
         (await client.PostAsync(SwitchUri(Incoming), content: null, Token)).StatusCode.ShouldBe(HttpStatusCode.OK);
         // What a session inside the distribution wrote after it took the pair.
-        string tee = Path.Combine(follower.Roots.LiveDirectory, "rate-limit-guard", "rate-limits.json");
+        string tee = Path.Combine(follower.Roots.LiveDirectory, "rate-limits", "rate-limits.json");
         Directory.CreateDirectory(Path.GetDirectoryName(tee)!);
-        await File.WriteAllTextAsync(tee, RateLimitGuardTeeFileReaderTests.Tee(Incoming), Token);
+        await File.WriteAllTextAsync(tee, RateLimitsTeeFileReaderTests.Tee(Incoming), Token);
 
         JsonObject card = Card((await client.GetFromJsonAsync<JsonObject>(_dashboard, Token))!, Incoming);
 
@@ -310,12 +310,12 @@ public sealed class SideEndpointTests
         await CredentialFiles.WriteAsync(leader.LiveDirectory, "refresh-w", Token);
         await leader.WriteStateFileAsync("w@example.com", Token);
         await leader.ParkedProfileAsync(Incoming, "refresh-b", Token);
-        string tee = Path.Combine(follower.Roots.LiveDirectory, "rate-limit-guard", "rate-limits.json");
+        string tee = Path.Combine(follower.Roots.LiveDirectory, "rate-limits", "rate-limits.json");
         Directory.CreateDirectory(Path.GetDirectoryName(tee)!);
-        await File.WriteAllTextAsync(tee, RateLimitGuardTeeFileReaderTests.Tee(Outgoing), Token);
+        await File.WriteAllTextAsync(tee, RateLimitsTeeFileReaderTests.Tee(Outgoing), Token);
         using HttpClient client = leader.CreateMutatingClient();
         (await client.PostAsync(SwitchUri(Incoming), content: null, Token)).StatusCode.ShouldBe(HttpStatusCode.OK);
-        await File.WriteAllTextAsync(tee, RateLimitGuardTeeFileReaderTests.Tee(Incoming), Token);
+        await File.WriteAllTextAsync(tee, RateLimitsTeeFileReaderTests.Tee(Incoming), Token);
 
         JsonObject card = Card((await client.GetFromJsonAsync<JsonObject>(_dashboard, Token))!, Incoming);
 
@@ -337,16 +337,16 @@ public sealed class SideEndpointTests
         await CredentialFiles.WriteAsync(leader.LiveDirectory, "refresh-w", Token);
         await leader.WriteStateFileAsync("w@example.com", Token);
         await leader.ParkedProfileAsync(Incoming, "refresh-b", Token);
-        string tee = Path.Combine(follower.Roots.LiveDirectory, "rate-limit-guard", "rate-limits.json");
+        string tee = Path.Combine(follower.Roots.LiveDirectory, "rate-limits", "rate-limits.json");
         Directory.CreateDirectory(Path.GetDirectoryName(tee)!);
-        await File.WriteAllTextAsync(tee, RateLimitGuardTeeFileReaderTests.Tee(Outgoing), Token);
+        await File.WriteAllTextAsync(tee, RateLimitsTeeFileReaderTests.Tee(Outgoing), Token);
         using HttpClient client = leader.CreateMutatingClient();
         (await client.PostAsync(SwitchUri(Incoming), content: null, Token)).IsSuccessStatusCode.ShouldBeFalse();
 
         // The link comes back; the next polls finish the hand-off from the journal.
         link.Offline = false;
         link.OfflineFrom = null;
-        await File.WriteAllTextAsync(tee, RateLimitGuardTeeFileReaderTests.Tee(Incoming), Token);
+        await File.WriteAllTextAsync(tee, RateLimitsTeeFileReaderTests.Tee(Incoming), Token);
         JsonObject card = [];
         for (int attempt = 0; attempt < 5; attempt++)
         {

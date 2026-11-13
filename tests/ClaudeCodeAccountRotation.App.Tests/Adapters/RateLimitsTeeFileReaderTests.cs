@@ -4,12 +4,12 @@ using ClaudeCodeAccountRotation.Core.Quota;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Adapters;
 
-public sealed class RateLimitGuardTeeFileReaderTests : IDisposable
+public sealed class RateLimitsTeeFileReaderTests : IDisposable
 {
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "claude-code-account-rotation-tests", Guid.NewGuid().ToString("N"));
     private readonly string _teePath;
 
-    public RateLimitGuardTeeFileReaderTests()
+    public RateLimitsTeeFileReaderTests()
     {
         Directory.CreateDirectory(_directory);
         _teePath = Path.Combine(_directory, "rate-limits.json");
@@ -18,7 +18,7 @@ public sealed class RateLimitGuardTeeFileReaderTests : IDisposable
     [Fact]
     public async Task AMissingFileIsAnAbsentSnapshot()
     {
-        RateLimitGuardTeeFileReader reader = new(_teePath);
+        RateLimitsTeeFileReader reader = new(_teePath);
 
         (await reader.ReadAsync(TestContext.Current.CancellationToken)).ShouldBeNull();
     }
@@ -27,7 +27,7 @@ public sealed class RateLimitGuardTeeFileReaderTests : IDisposable
     public async Task TornJsonIsAnAbsentSnapshot()
     {
         await WriteAsync("""{"captured_at":"2026-09-07T15:33:52Z","rate_limits":{"five_ho""");
-        RateLimitGuardTeeFileReader reader = new(_teePath);
+        RateLimitsTeeFileReader reader = new(_teePath);
 
         (await reader.ReadAsync(TestContext.Current.CancellationToken)).ShouldBeNull();
     }
@@ -36,7 +36,7 @@ public sealed class RateLimitGuardTeeFileReaderTests : IDisposable
     public async Task AFileWithoutRateLimitsIsAnAbsentSnapshot()
     {
         await WriteAsync("""{"captured_at":"2026-09-07T15:33:52Z","session_id":"s-1"}""");
-        RateLimitGuardTeeFileReader reader = new(_teePath);
+        RateLimitsTeeFileReader reader = new(_teePath);
 
         (await reader.ReadAsync(TestContext.Current.CancellationToken)).ShouldBeNull();
     }
@@ -45,7 +45,7 @@ public sealed class RateLimitGuardTeeFileReaderTests : IDisposable
     public async Task ParsesBothWindowsAndTheSessionId()
     {
         await WriteAsync(Tee(email: null));
-        RateLimitGuardTeeFileReader reader = new(_teePath);
+        RateLimitsTeeFileReader reader = new(_teePath);
 
         StatuslineSnapshot snapshot = (await reader.ReadAsync(TestContext.Current.CancellationToken))!;
 
@@ -61,7 +61,7 @@ public sealed class RateLimitGuardTeeFileReaderTests : IDisposable
     public async Task ParsesAccountEmailWhenPresent()
     {
         await WriteAsync(Tee("Dev.A@example.com"));
-        RateLimitGuardTeeFileReader reader = new(_teePath);
+        RateLimitsTeeFileReader reader = new(_teePath);
 
         StatuslineSnapshot snapshot = (await reader.ReadAsync(TestContext.Current.CancellationToken))!;
 
@@ -72,7 +72,7 @@ public sealed class RateLimitGuardTeeFileReaderTests : IDisposable
     public async Task AnOlderWriterWithoutAnAccountKeyLeavesTheSnapshotUnattributed()
     {
         await WriteAsync(Tee(email: null));
-        RateLimitGuardTeeFileReader reader = new(_teePath);
+        RateLimitsTeeFileReader reader = new(_teePath);
 
         (await reader.ReadAsync(TestContext.Current.CancellationToken))!.Account.ShouldBeNull();
     }
@@ -87,7 +87,7 @@ public sealed class RateLimitGuardTeeFileReaderTests : IDisposable
         await WriteAsync("""{"captured_at":"2026-09-07T15:33:52Z","rate_limits":{"five_hour":{"used_percentage":69,"resets_at":1788800400}},"account":"""
             + accountValue
             + "}");
-        RateLimitGuardTeeFileReader reader = new(_teePath);
+        RateLimitsTeeFileReader reader = new(_teePath);
 
         (await reader.ReadAsync(TestContext.Current.CancellationToken))!.Account.ShouldBeNull();
     }
@@ -98,7 +98,7 @@ public sealed class RateLimitGuardTeeFileReaderTests : IDisposable
         await WriteAsync("""
             {"captured_at":"2026-09-07T15:33:52Z","rate_limits":{"five_hour":{"used_percentage":4200,"resets_at":1788800400},"seven_day":{"used_percentage":43,"resets_at":1789315200}}}
             """);
-        RateLimitGuardTeeFileReader reader = new(_teePath);
+        RateLimitsTeeFileReader reader = new(_teePath);
 
         StatuslineSnapshot snapshot = (await reader.ReadAsync(TestContext.Current.CancellationToken))!;
 
@@ -114,7 +114,7 @@ public sealed class RateLimitGuardTeeFileReaderTests : IDisposable
     public async Task AnOutOfRangeResetTimeLeavesThatWindowsInstantUnknown(long absurd)
     {
         await WriteAsync(Tee("dev.a@example.com", fiveHourResetsAt: absurd));
-        RateLimitGuardTeeFileReader reader = new(_teePath);
+        RateLimitsTeeFileReader reader = new(_teePath);
 
         StatuslineSnapshot snapshot = (await reader.ReadAsync(TestContext.Current.CancellationToken))!;
 
@@ -128,7 +128,7 @@ public sealed class RateLimitGuardTeeFileReaderTests : IDisposable
     public async Task AnOutOfRangeCapturedAtIsAnAbsentSnapshot()
     {
         await WriteAsync("""{"captured_at":1000000000000000000,"rate_limits":{"five_hour":{"used_percentage":69}}}""");
-        RateLimitGuardTeeFileReader reader = new(_teePath);
+        RateLimitsTeeFileReader reader = new(_teePath);
 
         (await reader.ReadAsync(TestContext.Current.CancellationToken)).ShouldBeNull();
     }
@@ -146,7 +146,7 @@ public sealed class RateLimitGuardTeeFileReaderTests : IDisposable
             File.Exists(_teePath).ShouldBeTrue();
             // Pinned: this is the exception type the widened catch names.
             Should.Throw<UnauthorizedAccessException>(() => new FileStream(_teePath, FileMode.Open, FileAccess.Read));
-            RateLimitGuardTeeFileReader reader = new(_teePath);
+            RateLimitsTeeFileReader reader = new(_teePath);
 
             (await reader.ReadAsync(TestContext.Current.CancellationToken)).ShouldBeNull();
         }
@@ -202,7 +202,7 @@ public sealed class RateLimitGuardTeeFileReaderTests : IDisposable
         file.SetAccessControl(security);
     }
 
-    /// <summary>The tee file as rate-limit-guard 0.8.0 writes it.</summary>
+    /// <summary>The tee file as rate-limits 0.8.0 writes it.</summary>
     internal static string Tee(string? email, long fiveHourResetsAt = 1788800400, long sevenDayResetsAt = 1789315200)
     {
         JsonObject tee = new()

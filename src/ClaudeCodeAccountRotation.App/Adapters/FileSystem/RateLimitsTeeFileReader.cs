@@ -6,14 +6,14 @@ using ClaudeCodeAccountRotation.Core.Quota;
 namespace ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 
 /// <summary>
-/// Reads the <c>rate-limit-guard</c> tee file that live sessions write, the
+/// Reads the <c>rate-limits</c> tee file that live sessions write, the
 /// free tier of the refresh contract. Every failure mode is an absent snapshot
-/// rather than an error: the file may not exist (no session has run under the
-/// guard), it may be mid-rewrite, it may carry no <c>rate_limits</c> (the
+/// rather than an error: the file may not exist (no session has run with the
+/// rate-limits plugin), it may be mid-rewrite, it may carry no <c>rate_limits</c> (the
 /// session observed no subscription windows), and its values are written by
 /// other processes, so they are parsed and range-checked, never trusted.
 /// </summary>
-internal sealed class RateLimitGuardTeeFileReader(string teeFilePath)
+internal sealed class RateLimitsTeeFileReader(string teeFilePath)
 {
     private readonly string _teeFilePath = Path.GetFullPath(teeFilePath);
 

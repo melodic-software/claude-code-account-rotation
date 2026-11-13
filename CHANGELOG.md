@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Live-session quota is read from the `rate-limits` plugin's directory.** The tee path is now
+  `rate-limits/rate-limits.json` inside the live config directory, where the `rate-limits` plugin
+  writes it. Until that plugin runs on a machine, the file is absent there, which the dashboard
+  treats as it always has: the live card shows no tee figures and no note, and figures from Refresh
+  and the other usage reads still show. The `1.0.0` entry for live-session quota now names the
+  `rate-limits` tee file.
+
 ## [2.16.1] - 2026-11-08
 
 ### Fixed
@@ -1174,7 +1185,7 @@ Org usage from an Admin key's Cost Report is not in this release; it is deferred
 - Quota reads: the usage response's generic `limits[]` array and `extra_usage` block are parsed into
   card-ready types, so the five-hour, weekly all-models, and any weekly scoped bucket render without
   code changes when Anthropic adds or renames one.
-- Live-session quota from the `rate-limit-guard` tee file, the free tier of the refresh contract. A
+- Live-session quota from the `rate-limits` tee file, the free tier of the refresh contract. A
   card shows a snapshot only when the snapshot names that card's account, so the outgoing account's
   windows are never read as the incoming account's after a switch. The tee path is derived from the
   live config directory, so it follows wherever that is set.

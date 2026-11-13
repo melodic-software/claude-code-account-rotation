@@ -198,7 +198,7 @@ internal sealed class FakePeerRotationInstance(string mailbox) : IPeerRotationIn
 
     public string? DashboardError { get; set; }
 
-    /// <summary>What this side's own rate-limit-guard tee holds, which its dashboard carries.</summary>
+    /// <summary>What this side's own rate-limits tee holds, which its dashboard carries.</summary>
     public StatuslineSnapshot? Tee { get; set; }
 
     /// <summary>When the login behind this side's live pair runs out, as its dashboard reports it.</summary>

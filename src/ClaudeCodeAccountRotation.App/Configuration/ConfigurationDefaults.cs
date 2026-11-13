@@ -14,11 +14,11 @@ internal static class ConfigurationDefaults
     public const string ProductToken = "claude-code-account-rotation";
     public const string RemoteControlTask = "claude-remote-control";
 
-    private const string TeeDirectoryName = "rate-limit-guard";
+    private const string TeeDirectoryName = "rate-limits";
     private const string TeeFileName = "rate-limits.json";
 
     /// <summary>
-    /// The rate-limit-guard tee: written by live sessions inside the live config
+    /// The rate-limits tee: written by live sessions inside the live config
     /// directory, so it follows that directory wherever it is set, whether by
     /// <c>CLAUDE_CONFIG_DIR</c> or by the configuration file's own
     /// <c>liveConfigDirectory</c>.
