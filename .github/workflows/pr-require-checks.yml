@@ -60,7 +60,7 @@ concurrency:
 
 jobs:
   build-and-test:
-    name: Build and test (${{ matrix.os }})
+    name: "Build And Test (${{ matrix.os }})"
     # The contract-only gate, verbatim (see the predicate spelled out under
     # `on.pull_request.types`).
     if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (contains(fromJSON('["labeled","unlabeled"]'), github.event.action) || (github.event.action == 'edited' && !github.event.changes.base))) }}
@@ -108,7 +108,7 @@ jobs:
         run: bash eng/smoke-linux-publish.sh
 
   check-repository:
-    name: Repository gates
+    name: Check Repository
     # The contract-only gate, verbatim.
     if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (contains(fromJSON('["labeled","unlabeled"]'), github.event.action) || (github.event.action == 'edited' && !github.event.changes.base))) }}
     runs-on: ubuntu-24.04
@@ -141,7 +141,7 @@ jobs:
         run: node .github/standards/runner-policy/runner-policy.mjs --root .
 
   lychee:
-    name: Offline links
+    name: Lychee
     # The contract-only gate, verbatim.
     if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (contains(fromJSON('["labeled","unlabeled"]'), github.event.action) || (github.event.action == 'edited' && !github.event.changes.base))) }}
     runs-on: ubuntu-24.04
