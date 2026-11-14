@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   publish:
-    name: Publish and upload
+    name: Publish
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: plugin-release
