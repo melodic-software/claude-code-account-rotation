@@ -103,6 +103,13 @@
     module.exports.layoutKey = layoutKey;
     module.exports.reordered = reordered;
     module.exports.fleetSummary = fleetSummary;
+    module.exports.fiveHourShown = fiveHourShown;
+    module.exports.modelLabel = modelLabel;
+    module.exports.ciSummary = ciSummary;
+    module.exports.cellReading = cellReading;
+    module.exports.rowNotices = rowNotices;
+    module.exports.figuresAsOf = figuresAsOf;
+    module.exports.alertRole = alertRole;
     return;
   }
 
@@ -116,6 +123,9 @@
   // any character and a joined key would break on the separator.
   var OTHER = "other";
   var cards = document.getElementById("cards");
+  // The ledger as a whole: its column set and density are classes here, so
+  // the column head and the rows change grid together.
+  var ledger = cards.parentNode;
   var banner = document.getElementById("banner");
   var setup = document.getElementById("setup");
   var warnings = document.getElementById("warnings");
@@ -733,7 +743,7 @@
     // Named in the markup, so a strip whose target changed is never kept for
     // looking the same: renderNow compares markup, not click handlers.
     button.setAttribute("data-target", target.email);
-    button.appendChild(element("span", null, label));
+    button.appendChild(element("span", null, label)).title = label;
     var weekly = target.usage.limits.filter(function (limit) { return limit.kind === "weekly_all"; })[0];
     if (weekly && weekly.known) {
       var reset = resetLine(weekly, at);
@@ -759,8 +769,9 @@
     if (account) {
       // Every strip is headed the same way, the name over the address, so the
       // strips' meters line up whether or not another account shares the name.
-      who.appendChild(element("h2", null, displayName(account)));
+      who.appendChild(element("h2", null, displayName(account))).title = displayName(account);
       var address = element("div", "em");
+      address.title = account.email;
       address.appendChild(wrappableEmail(account.email));
       var tag = ciTag(account.roster);
       if (tag) { address.appendChild(element("span", "tag", tag)); }
@@ -775,7 +786,7 @@
       var room = headroom(account);
       var figure = element("div", "hr");
       figure.appendChild(element("span", "n " + (room === null ? "" : tier(100 - room)), room === null ? "–" : room + "%"));
-      figure.appendChild(element("span", null, "headroom"));
+      figure.appendChild(element("span", null, "left"));
       head.appendChild(figure);
     }
     strip.appendChild(head);
@@ -790,6 +801,11 @@
         }
       });
       strip.appendChild(meters);
+      account.usage.limits.forEach(function (limit) {
+        if (!limit.source) { return; }
+        var source = limit.label + " " + asOf(limit.capturedAt, limit.source, at);
+        strip.appendChild(element("p", "source" + (stale(limit.capturedAt, at) ? " stale" : ""), source)).title = source;
+      });
     }
 
     var go = element("div", "go");
@@ -1968,18 +1984,20 @@
     return limit.resetsAt && !limit.windowReset ? "resets " + resetIn(limit.resetsAt, at) : null;
   }
 
-  // One window: its label and reading, the bar, when it resets, and, only for a
-  // row taken from another source than the account's own, where it came from.
+  // One window in a Now strip: its label and how much of it is used, the bar,
+  // and when it resets. Where a row came from, when not the account's own
+  // source, is said under the meters, so no meter grows a line its neighbours lack.
   function meter(limit, at, ticks) {
     var box = element("div", "meter");
     var line = element("div", "l");
     line.appendChild(element("span", "label", limit.label));
-    line.appendChild(element("span", "pct " + meterTone(limit), reading(limit)));
+    var figure = cellReading(limit);
+    var pct = line.appendChild(element("span", "pct " + meterTone(limit), figure.muted ? figure.text : figure.text + " used"));
+    if (figure.title) { pct.title = figure.title; }
     box.appendChild(line);
     box.appendChild(bar(limit, ticks));
     var reset = resetLine(limit, at);
     if (reset) { box.appendChild(element("small", null, reset)).title = resetTitle(limit.resetsAt); }
-    if (limit.source) { box.appendChild(element("small", stale(limit.capturedAt, at) ? "stale" : null, asOf(limit.capturedAt, limit.source, at))); }
     return box;
   }
 
@@ -2323,9 +2341,16 @@
       var name = account ? uniqueName(account, accounts) : alert.account;
       return {
         kind: alert.level === "critical" ? "crit" : "warn",
-        text: name + ": " + alert.window + " usage at " + percentText(alert.percent) + ", past " + percentText(alert.threshold)
+        text: name + " · " + alert.window + " " + percentText(alert.percent) + ", past " + percentText(alert.threshold)
       };
     });
+  }
+
+  // A best-spare button's short face: the role its full label names, which
+  // stays the button's accessible name and hover text.
+  function alertRole(label) {
+    var end = label.lastIndexOf(" to best spare ");
+    return label.indexOf("Assign ") === 0 && end > 7 ? label.slice(7, end) : label;
   }
 
   // Assign to best spare, per alert line: one action for each role whose
@@ -2837,6 +2862,81 @@
     };
   }
 
+  // Whether the ledger has a 5-hour column at all: not when no account's plan
+  // has the window.
+  function fiveHourShown(accounts) {
+    return accounts.some(function (account) {
+      return account.usage.limits.some(function (limit) { return limit.kind === "session" && limit.notApplicable !== true; });
+    });
+  }
+
+  // The model-weekly column's heading: the one label the known model-scoped
+  // windows share, or a generic name when they differ or none is known.
+  function modelLabel(accounts) {
+    var labels = [];
+    accounts.forEach(function (account) {
+      account.usage.limits.forEach(function (limit) {
+        if (limit.kind === "weekly_scoped" && limit.known && limit.label && labels.indexOf(limit.label) === -1) { labels.push(limit.label); }
+      });
+    });
+    return labels.length === 1 ? labels[0] : "Model weekly";
+  }
+
+  // The compact row's one CI chip in place of a badge per role: the role
+  // count in the worst tone any role badge carries, every badge in its title.
+  // Null for an account that backs no role.
+  function ciSummary(roster, badges) {
+    var count = ((roster && roster.ciRoles) || []).length;
+    if (!count) { return null; }
+    var kind = badges.some(function (badge) { return badge.kind === "crit"; }) ? "crit"
+      : badges.some(function (badge) { return badge.kind === "warn"; }) ? "warn" : "ok";
+    return { kind: kind, text: "CI · " + count + (count === 1 ? " role" : " roles"), title: badges.map(function (badge) { return badge.text; }).join("\n") };
+  }
+
+  // A window's figure in a ledger cell's fixed slot: a percentage, or a short
+  // muted mark with the reading in its title when there is no percentage.
+  function cellReading(limit) {
+    if (!limit || limit.notApplicable === true) { return { text: "–", title: "not on this plan", muted: true }; }
+    if (!limit.known || limit.percent === null) { return { text: "–", title: "unknown", muted: true }; }
+    if (limit.windowReset) { return { text: "reset", title: "window reset since last read", muted: true }; }
+    return { text: percentText(limit.percent), title: null, muted: false };
+  }
+
+  // The warnings a row keeps on its face in either density: a CLI logout, a
+  // stale reading, a refresh that failed, a login that is expiring, expired or
+  // missing, and a CI token expiry. Neutral facts are not among them.
+  function rowNotices(account, dashboard, at, accounts) {
+    var notices = [];
+    if (account.cliLoggedOut) { notices.push(account.cliLoggedOut); }
+    // The same stale test needsAttention makes, said with the source when known.
+    var age = usageAge(account, at);
+    if (age !== null && age > STALE_SECONDS) {
+      var dated = [];
+      if (account.usage.source && stale(account.usage.capturedAt, at)) { dated.push(asOf(account.usage.capturedAt, account.usage.source, at)); }
+      account.usage.limits.forEach(function (limit) {
+        if (limit.source && stale(limit.capturedAt, at)) { dated.push(limit.label + " " + asOf(limit.capturedAt, limit.source, at)); }
+      });
+      Array.prototype.push.apply(notices, dated.length ? dated : ["read " + span(age) + " ago, may be out of date"]);
+    }
+    if (REFRESH_ERRORS.indexOf(account.refresh && account.refresh.state) !== -1) { notices.push(refreshState(account, dashboard)); }
+    if (loginSoon(account, at) && loginLine(account, at)) { notices.push(loginLine(account, at)); }
+    ciTokenExpiries(account.roster, at, accounts, account.email).forEach(function (expiry) { notices.push(ciExpirySentence(expiry)); });
+    return notices;
+  }
+
+  // When most of the ledger's figures were read: the capture instant the most
+  // accounts share, the later one on a tie. Null when nothing was read.
+  function figuresAsOf(accounts) {
+    var counts = {};
+    accounts.forEach(function (account) {
+      var taken = account.usage.capturedAt;
+      if (taken) { counts[taken] = (counts[taken] || 0) + 1; }
+    });
+    return Object.keys(counts).reduce(function (best, taken) {
+      return !best || counts[taken] > counts[best] || (counts[taken] === counts[best] && Date.parse(taken) > Date.parse(best)) ? taken : best;
+    }, null);
+  }
+
   // The window the "near the limit" sentence names: the fuller of the two at
   // orange or red. A tie goes to the 7-day, whose reset is the later one.
   function nearestLimit(limits) {
@@ -2888,16 +2988,33 @@
   }
 
   // One window in a row: the bar, the reading, and when it resets.
-  function cell(limit, at, ticks) {
-    var box = element("div", "u");
-    if (!limit) { return box; }
+  // The bar is left out where there is no figure to fill it, so an empty
+  // track never reads as 0%; the percentage sits in a fixed slot so every bar
+  // in the column has one length.
+  function cell(limit, at, ticks, kind, label) {
+    var box = element("div", "u " + kind);
     // The column header is hidden on narrow screens and from screen readers,
     // so each cell names its own window.
-    box.appendChild(element("span", "cell-label", limit.label));
-    box.appendChild(bar(limit, ticks));
-    box.appendChild(element("span", "pct " + meterTone(limit), reading(limit)));
-    var reset = resetLine(limit, at);
+    box.appendChild(element("span", "cell-label", (limit && limit.known && limit.label) || label));
+    var figure = cellReading(limit);
+    box.appendChild(figure.muted && !(limit && limit.windowReset) ? element("span", "no-bar") : bar(limit, ticks));
+    var pct = box.appendChild(element("span", "pct " + (figure.muted ? "muted" : meterTone(limit)), figure.text));
+    if (figure.title) { pct.title = figure.title; }
+    var reset = limit ? resetLine(limit, at) : null;
     if (reset) { box.appendChild(element("small", null, reset)).title = resetTitle(limit.resetsAt); }
+    return box;
+  }
+
+  // The instant the row is ordered by in its group, as a countdown: the
+  // ledger's spine, end-aligned so the times read down one edge.
+  function resetCell(resetAt, at) {
+    var box = element("div", "rs");
+    box.appendChild(element("span", "cell-label", "Resets"));
+    if (resetAt && Date.parse(resetAt) > at) {
+      box.appendChild(element("span", "when", countdown(secondsUntil(resetAt, at)))).title = resetTitle(resetAt);
+    } else {
+      box.appendChild(element("span", "when muted", "–")).title = "no reset to count down to";
+    }
     return box;
   }
 
@@ -2958,14 +3075,14 @@
   function showDisplayName(heading, account) {
     heading.textContent = "";
     if (!account.roster) {
-      heading.appendChild(document.createTextNode(displayName(account)));
+      heading.appendChild(element("span", "display-name", displayName(account)));
       return;
     }
     var button = element("button", "rename");
     button.type = "button";
     button.title = "Rename this account";
     button.setAttribute("aria-label", renameLabel(account, lastAccounts));
-    button.appendChild(element("span", "display-name", displayName(account)));
+    button.appendChild(element("span", "display-name", displayName(account))).title = displayName(account);
     button.appendChild(element("span", "rename-label", "Rename"));
     button.addEventListener("click", function () {
       // The Edit panel is already changing this account. Focus its display-name
@@ -3069,6 +3186,7 @@
 
   function cardHeading(account) {
     var heading = element("h2");
+    heading.title = displayName(account);
     showDisplayName(heading, account);
     return heading;
   }
@@ -3115,12 +3233,14 @@
     return seg;
   }
 
-  function row(account, dashboard, at, next) {
+  function row(account, dashboard, at, next, resetAt) {
     var roster = account.roster;
     var paused = !!(roster && roster.paused);
     var say = sentence(account, at);
     var tone = say.kind === "ok" && loginSoon(account, at) ? "warn" : say.kind;
-    var card = element("section", "card" + (account.isLive && !account.cliLoggedOut ? " live" : "") + (account.cliLoggedOut ? " logged-out" : "") + (paused ? " paused" : ""));
+    // A row that cannot be used now reads quieter than one that can.
+    var card = element("section", "card" + (account.isLive && !account.cliLoggedOut ? " live" : "") + (account.cliLoggedOut ? " logged-out" : "") + (paused ? " paused" : "")
+      + (account.standing === "usable" ? "" : " quiet") + (next ? " next" : ""));
     var line = element("div", "row");
 
     var who = element("div", "nm");
@@ -3136,25 +3256,32 @@
     // class is fixed rather than derived from the text, since a chip can
     // carry "(offline)".
     var chip = stateChip(account, at);
-    if (account.chip) { badges.appendChild(element("span", "badge store", account.chip)); }
+    // Parked is where nearly every account sits, so the compact row leaves it out.
+    if (account.chip) { badges.appendChild(element("span", "badge store" + (account.chip === "parked" ? " detail-only" : ""), account.chip)); }
     if (chip && (!account.chip || (chip !== "live" && chip !== "ready"))) {
       badges.appendChild(element("span", "badge " + chip.replace(/ /g, "-"), chip));
     }
     if (!roster) { badges.appendChild(element("span", "badge off-roster", "not on roster")); }
-    ciRoleBadges(roster, at, lastAccounts, account.email).forEach(function (ci) {
-      var ciBadge = element("span", "badge ci-token " + ci.kind, ci.text);
+    // In compact, an account that backs roles shows one CI chip in place of a
+    // badge per role, its title naming them and the stored token and key; the
+    // token and key chips are neutral facts, shown in Detailed.
+    var ciBadges = ciRoleBadges(roster, at, lastAccounts, account.email);
+    var tokenBadge = ciTokenBadge(roster);
+    var keyBadge = apiKeyBadge(roster);
+    var ciChip = ciSummary(roster, ciBadges.concat([tokenBadge, keyBadge].filter(Boolean)));
+    ciBadges.forEach(function (ci) {
+      var ciBadge = element("span", "badge ci-token " + ci.kind + (ciChip ? " detail-only" : ""), ci.text);
       ciBadge.title = ci.title;
       badges.appendChild(ciBadge);
     });
-    var tokenBadge = ciTokenBadge(roster);
+    if (ciChip) { badges.appendChild(element("span", "badge ci-token compact-only " + ciChip.kind, ciChip.text)).title = ciChip.title; }
     if (tokenBadge) {
-      var tokenChip = element("span", "badge api-key", tokenBadge.text);
+      var tokenChip = element("span", "badge api-key detail-only", tokenBadge.text);
       tokenChip.title = tokenBadge.title;
       badges.appendChild(tokenChip);
     }
-    var keyBadge = apiKeyBadge(roster);
     if (keyBadge) {
-      var keyChip = element("span", "badge api-key", keyBadge.text);
+      var keyChip = element("span", "badge api-key detail-only", keyBadge.text);
       keyChip.title = keyBadge.title;
       badges.appendChild(keyChip);
     }
@@ -3165,26 +3292,43 @@
     // record hid it only when the heading was the address itself, and a local
     // part is not the address, so this line is what keeps the account identifiable.
     who.appendChild(element("p", "address")).appendChild(wrappableEmail(account.email));
+    who.lastChild.title = account.email;
     line.appendChild(who);
 
+    // One sentence on the row's face, the whole of it on hover; the neutral
+    // lines under it show in Detailed only.
     var status = element("div", "st");
     status.appendChild(sayLine(say, account, at));
+    if (!status.firstChild.title) { status.firstChild.title = say.text; }
     status.appendChild(statusLines(account, dashboard, at));
     ciTokenExpiries(roster, at, lastAccounts, account.email).forEach(function (expiry) {
-      status.appendChild(element("p", "say " + expiry.tone, ciExpirySentence(expiry)));
+      status.appendChild(element("p", "say detail-only " + expiry.tone, ciExpirySentence(expiry)));
     });
     line.appendChild(status);
 
     function limitOf(kind) { return account.usage.limits.filter(function (limit) { return limit.kind === kind; })[0]; }
-    line.appendChild(cell(limitOf("session"), at));
-    line.appendChild(cell(limitOf("weekly_all"), at, meterTicks(account, dashboard.alertThresholds)));
+    line.appendChild(cell(limitOf("weekly_all"), at, meterTicks(account, dashboard.alertThresholds), "d7", "7-day"));
+    line.appendChild(resetCell(resetAt, at));
+    line.appendChild(cell(limitOf("weekly_scoped"), at, [], "mw", "Model weekly"));
+    line.appendChild(cell(limitOf("session"), at, [], "h5", "5-hour"));
+
+    // The warnings stay on the compact row's face as one line under it.
+    var notices = rowNotices(account, dashboard, at, lastAccounts);
+    if (notices.length) {
+      card.className += " has-notice";
+      var notice = element("p", "notice compact-only " + (account.cliLoggedOut || loginExpired(account, at) ? "crit" : "warn"), notices.join(" · "));
+      notice.title = notices.join("\n");
+      line.appendChild(notice);
+    }
 
     var act = element("div", "act");
+    var extra = element("span", "extra");
+    act.appendChild(extra);
     // Beside the meters, so an account near its 7-day limit can have its
     // roles' token re-issued without opening the menu. It opens the same
     // panel as Generate CI token, with this account's roles ticked.
     var reissue = reissueButton(account, openCiTokenPanel);
-    if (reissue) { act.appendChild(actionButton(reissue.label, "secondary sm", reissue.click)); }
+    if (reissue) { extra.appendChild(actionButton(reissue.label, "secondary sm", reissue.click)); }
     // The live account is signed in already; logging it into its parked folder
     // would leave one account holding two logins. A card with a login good for
     // longer than the warning window does not need the button on its face; an
@@ -3194,13 +3338,13 @@
     // anyway; the button goes so the operator is not sent at a 409.
     var needsLogin = loginOffered(account, at);
     if (roster && !account.isLive && needsLogin) {
-      act.appendChild(actionButton(account.hasCredentials ? "Log in again" : "Login", "primary sm", function () { startLogin(account.email); }));
+      extra.appendChild(actionButton(account.hasCredentials ? "Log in again" : "Login", "primary sm", function () { startLogin(account.email); }));
     }
     if (roster && account.loggedOutOn) {
-      act.appendChild(actionButton("Log in again", "primary sm", function () { loginFromSide(account.loggedOutOn, account.email); }));
+      extra.appendChild(actionButton("Log in again", "primary sm", function () { loginFromSide(account.loggedOutOn, account.email); }));
     }
     if (!roster && account.isLive) {
-      act.appendChild(actionButton("Adopt", "secondary sm", function () { adopt(account.email); }));
+      extra.appendChild(actionButton("Adopt", "secondary sm", function () { adopt(account.email); }));
     }
     act.appendChild(switchButtons(account, dashboard));
 
@@ -3287,8 +3431,8 @@
   }
 
   // One choice of a radio group in the view bar, with room for a count.
-  function viewChoice(name, value, text) {
-    var label = element("label", "view-choice");
+  function viewChoice(name, value, text, look) {
+    var label = element("label", "view-choice " + look);
     var input = element("input");
     input.type = "radio";
     input.name = "view-" + name;
@@ -3309,6 +3453,7 @@
   // the mutation lock disables every button on the page.
   function buildViewBar() {
     var bar = element("div", "view-bar");
+    var controls = element("div", "view-controls");
     var orderField = element("label", "view-field");
     orderField.appendChild(element("span", null, "Order"));
     var order = element("select");
@@ -3320,27 +3465,37 @@
     });
     order.addEventListener("change", function () { changeView({ order: order.value }); });
     orderField.appendChild(order);
-    bar.appendChild(orderField);
-    var groupField = element("label", "view-field");
+    controls.appendChild(orderField);
+    var groupField = element("label", "view-field view-check");
     var group = element("input");
     group.type = "checkbox";
     group.name = "view-group";
     group.addEventListener("change", function () { changeView({ group: group.checked }); });
     groupField.appendChild(group);
     groupField.appendChild(element("span", null, "Group by status"));
-    bar.appendChild(groupField);
-    var show = element("fieldset", "view-show");
-    show.appendChild(element("legend", null, "Show"));
+    controls.appendChild(groupField);
+    // Radio groups rather than fieldsets: a legend will not sit on the line.
+    var show = element("div", "view-show");
+    show.setAttribute("role", "radiogroup");
+    show.setAttribute("aria-label", "Show");
+    show.appendChild(element("span", "view-name", "Show"));
     [["all", "All"], ["usable", "Usable"], ["attention", "Needs attention"], ["spent", "Spent"], ["paused", "Paused"]].forEach(function (choice) {
-      show.appendChild(viewChoice("show", choice[0], choice[1]));
+      show.appendChild(viewChoice("show", choice[0], choice[1], "chip"));
     });
-    bar.appendChild(show);
-    var density = element("fieldset", "view-density");
-    density.appendChild(element("legend", null, "Density"));
-    density.appendChild(viewChoice("density", "compact", "Compact"));
-    density.appendChild(viewChoice("density", "detailed", "Detailed"));
-    bar.appendChild(density);
-    bar.appendChild(element("p", "fleet-summary"));
+    controls.appendChild(show);
+    var density = element("div", "view-density");
+    density.setAttribute("role", "radiogroup");
+    density.setAttribute("aria-label", "Density");
+    var segment = element("span", "toggle");
+    segment.appendChild(viewChoice("density", "compact", "Compact", "option"));
+    segment.appendChild(viewChoice("density", "detailed", "Detailed", "option"));
+    density.appendChild(segment);
+    controls.appendChild(density);
+    bar.appendChild(controls);
+    var summary = element("div", "view-summary");
+    summary.appendChild(element("p", "fleet-summary"));
+    summary.appendChild(element("p", "figures-asof"));
+    bar.appendChild(summary);
     var title = document.querySelector(".ledger-title");
     title.parentNode.insertBefore(bar, title.nextSibling);
     syncViewBar(bar);
@@ -3372,20 +3527,28 @@
     var at = new Date(dashboard.capturedAt).getTime();
     var counts = filterCounts(dashboard.accounts, at);
     Array.prototype.forEach.call(viewBar.querySelectorAll("input[name='view-show']"), function (input) {
-      input.parentNode.querySelector(".count").textContent = " " + counts[input.value];
+      input.parentNode.querySelector(".count").textContent = counts[input.value];
     });
     var summary = fleetSummary(dashboard.accounts, at);
     var line = viewBar.querySelector(".fleet-summary");
     line.replaceChildren();
-    var figures = [summary.usable + " of " + summary.total + " usable"];
-    if (summary.weeklyLeft !== null) { figures.push(summary.weeklyLeft.toFixed(1) + " accounts of 7-day quota left"); }
-    figures.forEach(function (text) { line.appendChild(element("span", null, text + " · ")); });
-    [["next reset ", summary.nextReset], ["next back ", summary.nextBack]].forEach(function (figure) {
-      if (!figure[1]) { return; }
-      var text = figure[0] + resetIn(figure[1].resetAt, at) + ", " + uniqueName(figure[1].account, dashboard.accounts);
-      line.appendChild(element("span", null, text + " · ")).title = resetTitle(figure[1].resetAt);
+    // Each figure a bold value and a muted word, the dot separators drawn by CSS.
+    function figure(value, words, title) {
+      var part = line.appendChild(element("span", "figure"));
+      part.appendChild(element("b", null, value));
+      part.appendChild(document.createTextNode(" " + words));
+      if (title) { part.title = title; }
+    }
+    figure(summary.usable + " of " + summary.total, "usable");
+    if (summary.weeklyLeft !== null) { figure(summary.weeklyLeft.toFixed(1), "accounts of 7-day quota left"); }
+    [["Next reset", summary.nextReset], ["Next back", summary.nextBack]].forEach(function (pair) {
+      if (!pair[1]) { return; }
+      figure(pair[0] + " " + resetIn(pair[1].resetAt, at), uniqueName(pair[1].account, dashboard.accounts), resetTitle(pair[1].resetAt));
     });
-    if (line.lastChild) { line.lastChild.textContent = line.lastChild.textContent.slice(0, -3); }
+    var taken = figuresAsOf(dashboard.accounts);
+    var asOfLine = viewBar.querySelector(".figures-asof");
+    asOfLine.textContent = taken ? "Figures as of " + new Date(taken).toLocaleTimeString() : "";
+    asOfLine.title = taken ? "When most rows were read; a row read at another time says so in Detailed, and a stale one on its face" : "";
   }
 
   function render(dashboard, force, viewChanged) {
@@ -3414,21 +3577,34 @@
     warnings.hidden = dashboard.warnings.length === 0;
     dashboard.warnings.forEach(function (warning) { warnings.appendChild(element("li", null, warning)); });
     var alerts = alertLines(dashboard.alerts, dashboard.accounts);
-    alertStrip.replaceChildren();
     alertStrip.hidden = alerts.length === 0;
     var spareActions = bestSpareActions(dashboard.alerts, dashboard.accounts);
+    // Built aside and put in place only when it says something new, so a poll
+    // that changes nothing never moves a button from under the pointer.
+    var fresh = element("ul");
+    if (alerts.length) { fresh.appendChild(element("li", "alerts-head", "Usage alerts · " + alerts.length)); }
     alerts.forEach(function (alert, index) {
-      var line = element("li", alert.kind, alert.text);
-      spareActions[index].forEach(function (action) {
-        line.appendChild(document.createTextNode(" "));
-        // Rebuilt by every poll, so it takes the running mutation's lock as it is drawn.
-        line.appendChild(blockable(actionButton(action.label, "sm", function () { assignToBestSpare(action); }), false));
-      });
-      alertStrip.appendChild(line);
+      var line = element("li", "alert " + alert.kind);
+      line.appendChild(element("p", "alert-text", alert.text));
+      if (spareActions[index].length) {
+        var spare = accountByEmail(spareActions[index][0].spare);
+        line.appendChild(element("p", "spare", "Move to best spare " + (spare ? uniqueName(spare, dashboard.accounts) : spareActions[index][0].spare) + ":"));
+        var roles = element("div", "roles");
+        spareActions[index].forEach(function (action) {
+          // Rebuilt by every poll, so it takes the running mutation's lock as it is drawn.
+          var button = blockable(actionButton(alertRole(action.label), "secondary sm", function () { assignToBestSpare(action); }), false);
+          button.setAttribute("aria-label", action.label);
+          button.title = action.label;
+          roles.appendChild(button);
+        });
+        line.appendChild(roles);
+      }
+      fresh.appendChild(line);
     });
     if (alerts.length && dashboard.alertsComputedAt) {
-      alertStrip.appendChild(element("li", "asof", "as of the last refresh, " + new Date(dashboard.alertsComputedAt).toLocaleTimeString()));
+      fresh.appendChild(element("li", "asof", "as of the last refresh, " + new Date(dashboard.alertsComputedAt).toLocaleTimeString()));
     }
+    if (fresh.innerHTML !== alertStrip.innerHTML) { alertStrip.replaceChildren.apply(alertStrip, Array.prototype.slice.call(fresh.childNodes)); }
     renderNow();
     drawViewCounts(dashboard);
     // Rendering rebuilds every row, so the ten-second poll would otherwise wipe an
@@ -3448,7 +3624,10 @@
     // density, so a re-sort on new figures waits for the pointer too.
     var at = new Date(dashboard.capturedAt).getTime();
     var items = arrange(dashboard.accounts, view, at);
-    var arriving = layoutKey(items, view.density);
+    // The 5-hour column comes and goes with the accounts that have the window,
+    // which moves every column after it, so the guard counts it as a move.
+    var fiveHour = fiveHourShown(dashboard.accounts);
+    var arriving = layoutKey(items, view.density + (fiveHour ? "" : " no-5h"));
     if (!force && !viewChanged && reordered(arriving, renderedOrder) && (cards.matches(":hover") || cards.contains(document.activeElement))) { return; }
 
     // Next up, like every other reader, takes the server's array as it came.
@@ -3460,16 +3639,22 @@
     renderedOrder = arriving;
     renderedSides = sideNames();
     cards.setAttribute("data-density", view.density);
+    ledger.setAttribute("data-density", view.density);
+    ledger.classList.toggle("no-5h", !fiveHour);
+    ledger.querySelector(".h-mw").textContent = ledger.querySelector(".h-mw").title = modelLabel(dashboard.accounts);
     // Every row is built, the filtered ones hidden, so a panel opener always
     // finds its card.
     items.forEach(function (item) {
       if (item.group) {
-        var header = element("div", "group " + item.group.key, item.group.text);
+        var header = element("div", "group " + item.group.key);
+        header.appendChild(element("span", "g-label", item.group.label));
+        header.appendChild(element("span", "g-count", " · " + item.group.count));
+        if (item.group.meaning) { header.appendChild(element("span", "g-meaning", " · " + item.group.meaning)); }
         header.hidden = item.hidden;
         cards.appendChild(header);
         return;
       }
-      var card = row(item.account, dashboard, at, item.account === next);
+      var card = row(item.account, dashboard, at, item.account === next, item.resetAt);
       card.hidden = item.hidden;
       cardNodes[item.account.email] = card;
       cards.appendChild(card);

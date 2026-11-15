@@ -31,15 +31,23 @@
         <button id="stop" type="button" class="btn quiet sm">Stop</button>
       </div>
     </header>
-    <div id="now" class="now"></div>
     <div id="banner" class="banner" role="status" hidden></div>
-    <ul id="warnings" class="warnings" hidden></ul>
-    <p id="setup" class="setup" hidden></p>
-    <h2 class="ledger-title">All accounts</h2>
-    <div class="ledger-head" aria-hidden="true">
-      <span>Account</span><span>Status</span><span>5-hour</span><span>7-day</span><span class="switch-head">Switch to</span>
+    <div class="regions">
+      <aside class="rail" aria-label="Now">
+        <div id="now" class="now"></div>
+        <ul id="warnings" class="warnings" hidden></ul>
+        <p id="setup" class="setup" hidden></p>
+      </aside>
+      <div class="ledger">
+        <div class="ledger-top">
+          <h2 id="ledger-title" class="ledger-title">All accounts</h2>
+          <div class="ledger-head" aria-hidden="true">
+            <span>Account</span><span>Status</span><span class="h-7d">7-day</span><span class="h-rs">Resets</span><span class="h-mw">Model weekly</span><span class="h-5h">5-hour</span><span class="switch-head">Switch to</span>
+          </div>
+        </div>
+        <main id="cards" class="cards" aria-live="polite"></main>
+      </div>
     </div>
-    <main id="cards" class="cards" aria-live="polite"></main>
   </div>
   <div id="toast" class="toast" role="status" hidden></div>
   <script src="/app.js"></script>

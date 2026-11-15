@@ -861,8 +861,8 @@ test("alertLines writes the server's percent and threshold the way a card writes
     { account: "a@example.com", level: "critical", percent: 92.4, threshold: 85, window: "7-day" },
     { account: "z@example.com", level: "warning", percent: 89.6, threshold: 60, window: "Fable" }
   ], accounts), [
-    { kind: "crit", text: "Work: 7-day usage at 92%, past 85%" },
-    { kind: "warn", text: "z@example.com: Fable usage at 90%, past 60%" }
+    { kind: "crit", text: "Work · 7-day 92%, past 85%" },
+    { kind: "warn", text: "z@example.com · Fable 90%, past 60%" }
   ]);
   assert.deepStrictEqual(alertLines(undefined, accounts), []);
 });
@@ -1444,4 +1444,79 @@ test("the fleet summary counts usable accounts, the 7-day quota they have left, 
   assert.strictEqual(spentOnly.weeklyLeft, null);
   assert.strictEqual(spentOnly.nextReset, null);
   assert.strictEqual(fleetSummary(accounts.slice(0, 11), NOW).nextBack, null);
+});
+
+const { fiveHourShown, modelLabel, ciSummary, cellReading, rowNotices, figuresAsOf, alertRole } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+
+test("the 5-hour column is shown only when some account's plan has the window", () => {
+  const ultraOnly = card("u@x", {}, null, 10);
+  ultraOnly.usage.limits[0] = limit("session", null, { known: false, notApplicable: true });
+  assert.strictEqual(fiveHourShown([ultraOnly]), false);
+  assert.strictEqual(fiveHourShown([ultraOnly, card("p@x", {}, 30, 10)]), true);
+  assert.strictEqual(fiveHourShown([]), false);
+});
+
+test("the model-weekly heading is the one label the known windows share, else a generic name", () => {
+  const fable = (email, label, known) => {
+    const account = card(email, {}, 0, 0);
+    account.usage.limits[2] = limit("weekly_scoped", 10, { label, known });
+    return account;
+  };
+  assert.strictEqual(modelLabel([fable("a@x", "Fable", true), fable("b@x", "Fable", true), fable("c@x", "scoped", false)]), "Fable");
+  assert.strictEqual(modelLabel([fable("a@x", "Fable", true), fable("b@x", "Opus", true)]), "Model weekly");
+  assert.strictEqual(modelLabel([fable("c@x", "scoped", false)]), "Model weekly");
+});
+
+test("the compact CI chip counts the roles in their worst tone and lists every badge in its title", () => {
+  const roster = { ciRoles: [{ name: "a" }, { name: "b" }] };
+  assert.deepStrictEqual(ciSummary(roster, [{ kind: "ok", text: "a · token" }, { kind: "warn", text: "b · token · split" }, { text: "CI token" }]),
+    { kind: "warn", text: "CI · 2 roles", title: "a · token\nb · token · split\nCI token" });
+  assert.strictEqual(ciSummary({ ciRoles: [{ name: "a" }] }, [{ kind: "crit", text: "a · token · expired" }]).text, "CI · 1 role");
+  assert.strictEqual(ciSummary({ ciRoles: [{ name: "a" }] }, [{ kind: "crit", text: "x" }]).kind, "crit");
+  assert.strictEqual(ciSummary({ ciRoles: [] }, [{ kind: "ok", text: "CI token · 2026-01-01" }]), null);
+  assert.strictEqual(ciSummary(null, []), null);
+});
+
+test("a ledger cell's figure is a percentage, or a short muted mark with the reading in its title", () => {
+  assert.deepStrictEqual(cellReading(limit("weekly_all", 97.6)), { text: "98%", title: null, muted: false });
+  assert.deepStrictEqual(cellReading(limit("session", null, { notApplicable: true })), { text: "\u2013", title: "not on this plan", muted: true });
+  assert.deepStrictEqual(cellReading(limit("session", null, { known: false })), { text: "\u2013", title: "unknown", muted: true });
+  assert.deepStrictEqual(cellReading(limit("session", 40, { windowReset: true })), { text: "reset", title: "window reset since last read", muted: true });
+  assert.deepStrictEqual(cellReading(undefined), { text: "\u2013", title: "not on this plan", muted: true });
+});
+
+test("a row keeps its warnings on its face and leaves neutral facts to Detailed", () => {
+  const dashboard = { refresh: { inProgress: false } };
+  const read = { hasCredentials: true, refresh: { state: "read" } };
+  const fine = dated("fine@x", 30, Object.assign({ loginExpiresAt: new Date(NOW + 20 * 86400000).toISOString(), loggedInAt: minutesAgo(600) }, read));
+  assert.deepStrictEqual(rowNotices(fine, dashboard, NOW, [fine]), []);
+  const refreshing = dated("busy@x", 30, { hasCredentials: true, refresh: { state: "idle" } });
+  assert.deepStrictEqual(rowNotices(refreshing, { refresh: { inProgress: true } }, NOW, [refreshing]), []);
+  const stale = card("stale@x", read, 10, 10, 45);
+  assert.deepStrictEqual(rowNotices(stale, dashboard, NOW, [stale]), ["read 45 min ago, may be out of date"]);
+  stale.usage.source = "refresh";
+  assert.match(rowNotices(stale, dashboard, NOW, [stale])[0], /^as of .*45 min ago via refresh; may be out of date$/);
+  const failed = dated("failed@x", 30, { hasCredentials: true, refresh: { state: "read-failed", message: "Usage read failed" } });
+  assert.deepStrictEqual(rowNotices(failed, dashboard, NOW, [failed]), ["Usage read failed"]);
+  const out = dated("out@x", 30, Object.assign({ cliLoggedOut: "The CLI logged out of this account; log in again." }, read));
+  assert.deepStrictEqual(rowNotices(out, dashboard, NOW, [out]), ["The CLI logged out of this account; log in again."]);
+  const soon = dated("soon@x", 30, Object.assign({ loginExpiresAt: new Date(NOW + 3 * 86400000).toISOString() }, read));
+  assert.deepStrictEqual(rowNotices(soon, dashboard, NOW, [soon]), ["login expires in 3 d"]);
+  const token = dated("token@x", 30, Object.assign({ roster: { ciRoles: [{ name: "Lane", tokenSetOn: "2025-10-20", tokenSecret: "T" }] } }, read));
+  assert.match(rowNotices(token, dashboard, NOW, [token])[0], /^When the token expires on 2026-10-20, these roles stop: Lane$/);
+});
+
+test("the ledger's figures are dated by the capture most accounts share, the later on a tie", () => {
+  const at = (minutes) => { const account = card("x@x", {}, 0, 0, minutes); return account; };
+  assert.strictEqual(figuresAsOf([at(10), at(10), at(2)]), minutesAgo(10));
+  assert.strictEqual(figuresAsOf([at(10), at(2)]), minutesAgo(2));
+  const unread = card("u@x", {}, 0, 0);
+  unread.usage.capturedAt = null;
+  assert.strictEqual(figuresAsOf([unread]), null);
+});
+
+test("a best-spare button shows the role alone and keeps the full label for its name", () => {
+  assert.strictEqual(alertRole("Assign reviews_security to best spare elif.yilmaz.lab"), "reviews_security");
+  assert.strictEqual(alertRole("Assign legacy (review lanes) (lane-two) to best spare Spare"), "legacy (review lanes) (lane-two)");
+  assert.strictEqual(alertRole("Something else"), "Something else");
 });
