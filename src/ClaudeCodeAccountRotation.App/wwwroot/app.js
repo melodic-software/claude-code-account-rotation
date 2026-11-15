@@ -13,6 +13,21 @@
   // What every lane's Console key is named, so a key list says which is a lane's.
   var CONSOLE_KEY_NAME = "github-actions";
 
+  // How close a login's fixed expiry has to be before its card warns.
+  var LOGIN_WARN_SECONDS = 7 * 24 * 3600;
+
+  // The ledger's view settings, the only thing the page keeps in the browser's
+  // storage: enum values under one key, each read back against its list, and
+  // never an address, an alias or the token. The first value of each list is
+  // the default; burn order is the server's own.
+  var VIEW_KEY = "ccar.view.v1";
+  var VIEW_ORDERS = ["burn", "reset7", "reset5", "left", "name"];
+  var VIEW_SHOWS = ["all", "usable", "attention", "spent", "paused"];
+  var VIEW_DENSITIES = ["compact", "detailed"];
+  // The refresh outcomes a row warns about. The rest say nothing or are said
+  // by the credential chip.
+  var REFRESH_ERRORS = ["stranded", "lost", "token-refresh-failed", "read-failed", "login-dead", "rate-limited", "budget-refused"];
+
   // Loaded by Node for tests/js, which has no page: export the pure helpers and stop.
   if (typeof document === "undefined") {
     module.exports = {
@@ -74,6 +89,20 @@
     module.exports.stateChip = stateChip;
     module.exports.loginLine = loginLine;
     module.exports.loginOffered = loginOffered;
+    module.exports.countdown = countdown;
+    module.exports.resetTitle = resetTitle;
+    module.exports.parseView = parseView;
+    module.exports.readView = readView;
+    module.exports.writeView = writeView;
+    module.exports.groupOf = groupOf;
+    module.exports.groupHeading = groupHeading;
+    module.exports.needsAttention = needsAttention;
+    module.exports.shows = shows;
+    module.exports.filterCounts = filterCounts;
+    module.exports.arrange = arrange;
+    module.exports.layoutKey = layoutKey;
+    module.exports.reordered = reordered;
+    module.exports.fleetSummary = fleetSummary;
     return;
   }
 
@@ -82,8 +111,6 @@
   // stop hook's route do.
   var POLL_MS = 10000;
   var BROWSERS = ["", "chrome", "edge", "brave"];
-  // How close a login's fixed expiry has to be before its card warns.
-  var LOGIN_WARN_SECONDS = 7 * 24 * 3600;
   // The select value that means "this profile is not in the list"; every other
   // value is an index into profileCatalog, because a directory name can hold
   // any character and a joined key would break on the separator.
@@ -126,10 +153,14 @@
   // The card node per e-mail, rebuilt by each render, so a login panel can be
   // hung on the right card without querying by an address that needs escaping.
   var cardNodes = {};
-  // The addresses of the cards on the page, in the order they are on it, set by
-  // the same rebuild that fills cardNodes. What an arriving payload is compared
-  // against to tell a reorder from an update in place.
+  // The layout key of the ledger on the page (layoutKey), set by the same
+  // rebuild that fills cardNodes. What an arriving payload is compared against
+  // to tell a reorder from an update in place.
   var renderedOrder = [];
+  // The ledger's view settings, read once at load; the bar that changes them
+  // sits on the All accounts line, outside #cards.
+  var view = readView(viewStorage());
+  var viewBar = buildViewBar();
   // The per-process token from the document's meta, or from a #t= fragment that
   // --open put on the URL, or pasted by the operator. It stays in this closure:
   // the page reads the fragment once and removes it from the address bar, and
@@ -750,7 +781,7 @@
     strip.appendChild(head);
 
     if (account) {
-      strip.appendChild(element("p", "say " + say.kind, say.text));
+      strip.appendChild(sayLine(say, account, at));
       if (account.cliLoggedOut) { strip.appendChild(element("p", "cli-logout", account.cliLoggedOut)); }
       var meters = element("div", "mt");
       account.usage.limits.forEach(function (limit) {
@@ -903,7 +934,7 @@
   }
 
   function openLoginPanel(email, session) {
-    var card = cardNodes[email];
+    var card = cardFor(email);
     if (!card) { return; }
 
     var panel = element("details", "login");
@@ -977,7 +1008,7 @@
   // reaches this page. The panel is a details.login, so an open one holds the
   // poll's re-render the same way.
   function openCiTokenPanel(account) {
-    var card = cardNodes[account.email];
+    var card = cardFor(account.email);
     if (!card) { return; }
     var existing = card.querySelector("details.ci-token");
     if (existing) { existing.parentNode.removeChild(existing); }
@@ -1173,7 +1204,7 @@
   // answer the two cost questions, and it is stored and sent in one click.
   function openApiKeyPanel(account, admin) {
     var key = keyKind(admin);
-    var card = cardNodes[account.email];
+    var card = cardFor(account.email);
     if (!card) { return; }
     var existing = card.querySelector("details.api-key");
     if (existing) { existing.parentNode.removeChild(existing); }
@@ -1271,7 +1302,7 @@
             }));
             showToast(said.join(" "), done ? "ok" : "warn");
             return refresh(true).then(function () {
-              var redrawn = cardNodes[account.email];
+              var redrawn = cardFor(account.email);
               if (redrawn && panel.parentNode !== redrawn) { redrawn.appendChild(panel); }
             });
           })
@@ -1347,7 +1378,7 @@
   // kept in the OS store beside the Console key. The field is cleared as soon
   // as it is read, and the token never comes back to this page.
   function openCiTokenValuePanel(account) {
-    var card = cardNodes[account.email];
+    var card = cardFor(account.email);
     if (!card) { return; }
     var existing = card.querySelector("details.ci-token-value");
     if (existing) { existing.parentNode.removeChild(existing); }
@@ -1399,7 +1430,7 @@
   // role, with no sign-in. The roles are the CI panel's; the halves offered
   // are the ones this machine stores and the role takes.
   function openAssignPanel(account) {
-    var card = cardNodes[account.email];
+    var card = cardFor(account.email);
     if (!card) { return; }
     var existing = card.querySelector("details.assign-role");
     if (existing) { existing.parentNode.removeChild(existing); }
@@ -1737,6 +1768,29 @@
     return "in " + span(secondsUntil(instant, from));
   }
 
+  // A reset said finely enough to order a week of them: span's ladder under a
+  // day, then days and hours, then whole days from a week. Floored on span's
+  // own rounded minutes, so the text never runs ahead of the clock and both
+  // ladders turn over at the same instant. Ages, login expiry and token life
+  // stay on span.
+  function countdown(seconds) {
+    var minutes = Math.round(seconds / 60);
+    if (minutes < 24 * 60) { return span(seconds); }
+    var hours = Math.floor(minutes / 60);
+    var days = Math.floor(hours / 24);
+    return days >= 7 || hours % 24 === 0 ? days + " d" : days + " d " + (hours % 24) + " h";
+  }
+
+  function resetIn(instant, from) {
+    return "in " + countdown(secondsUntil(instant, from));
+  }
+
+  // The absolute local instant a countdown stands for, as its hover text.
+  // Locale and zone are the browser's unless a caller names them.
+  function resetTitle(instant, locale, zone) {
+    return new Date(instant).toLocaleString(locale, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: zone });
+  }
+
   // An age in the buckets a countdown uses, said the other way round, so the
   // operator reads "logged in 12 d ago" against "login expires in 16 d" without
   // translating between two shapes.
@@ -1911,7 +1965,7 @@
   // A window that has already reset has no reset to count down to: "resets in
   // 0 s" beside "window reset since last read" is the same stale figure said twice.
   function resetLine(limit, at) {
-    return limit.resetsAt && !limit.windowReset ? "resets " + relative(limit.resetsAt, at) : null;
+    return limit.resetsAt && !limit.windowReset ? "resets " + resetIn(limit.resetsAt, at) : null;
   }
 
   // One window: its label and reading, the bar, when it resets, and, only for a
@@ -1924,7 +1978,7 @@
     box.appendChild(line);
     box.appendChild(bar(limit, ticks));
     var reset = resetLine(limit, at);
-    if (reset) { box.appendChild(element("small", null, reset)); }
+    if (reset) { box.appendChild(element("small", null, reset)).title = resetTitle(limit.resetsAt); }
     if (limit.source) { box.appendChild(element("small", stale(limit.capturedAt, at) ? "stale" : null, asOf(limit.capturedAt, limit.source, at))); }
     return box;
   }
@@ -2551,15 +2605,15 @@
     // Exhausted is the 7-day window spent, and nothing else; a spent 5-hour
     // window is a pause of hours with its own reset (Q34).
     if (account.standing === "exhausted") {
-      return { kind: "crit", text: account.nextResetAt ? "Exhausted, usable " + relative(account.nextResetAt, at) : "Exhausted" };
+      return { kind: "crit", text: account.nextResetAt ? "Exhausted, usable " + resetIn(account.nextResetAt, at) : "Exhausted" };
     }
     if (account.standing === "limited") {
-      return { kind: "crit", text: "5-hour limit reached" + (account.nextResetAt ? ", resets " + relative(account.nextResetAt, at) : "") };
+      return { kind: "crit", text: "5-hour limit reached" + (account.nextResetAt ? ", resets " + resetIn(account.nextResetAt, at) : "") };
     }
     // A spent model-scoped weekly window, the other windows open: never
     // recommended, still switchable by hand for work on another model.
     if (account.standing === "model-limited") {
-      return { kind: "crit", text: (account.limitedModel || "Model") + " weekly limit reached" + (account.nextResetAt ? ", resets " + relative(account.nextResetAt, at) : "") };
+      return { kind: "crit", text: (account.limitedModel || "Model") + " weekly limit reached" + (account.nextResetAt ? ", resets " + resetIn(account.nextResetAt, at) : "") };
     }
     if (chip === "paused" || account.standing === "paused") { return { kind: "paused", text: "Paused" }; }
     if (account.standing === "unread") { return { kind: "", text: "No usage read yet" }; }
@@ -2577,6 +2631,210 @@
     var gap = unknownWindow(account);
     if (gap) { return { kind: "warn", text: "Not verified: " + gap + " figure unknown" }; }
     return { kind: "ok", text: "Usable now" };
+  }
+
+  // The sentence's line. When it counts down to a reset, its hover names the
+  // instant: whichever of the account's resets the sentence printed.
+  function sayLine(say, account, at) {
+    var line = element("p", "say " + say.kind, say.text);
+    var named = [account.nextResetAt].concat(account.usage.limits.map(function (limit) { return limit.resetsAt; })).filter(function (instant) {
+      return instant && say.text.indexOf(resetIn(instant, at)) !== -1;
+    })[0];
+    if (named) { line.title = resetTitle(named); }
+    return line;
+  }
+
+  // The view settings read back from storage: each value checked against its
+  // list and defaulted when absent or unknown, every other key dropped, so
+  // nothing but these four can ride along in the stored value.
+  function parseView(raw) {
+    var stored = null;
+    try { stored = JSON.parse(raw); } catch (error) { stored = null; }
+    if (!stored || typeof stored !== "object" || Array.isArray(stored)) { stored = {}; }
+    function pick(list, value) { return list.indexOf(value) !== -1 ? value : list[0]; }
+    return {
+      order: pick(VIEW_ORDERS, stored.order),
+      group: typeof stored.group === "boolean" ? stored.group : true,
+      show: pick(VIEW_SHOWS, stored.show),
+      density: pick(VIEW_DENSITIES, stored.density)
+    };
+  }
+
+  // The storage getter itself throws when the browser blocks site data, so
+  // the caller passes what it could get, null included.
+  function readView(storage) {
+    try {
+      return parseView(storage ? storage.getItem(VIEW_KEY) : null);
+    } catch (error) {
+      return parseView(null);
+    }
+  }
+
+  // Whether the view was stored. Only the parsed four values are written.
+  function writeView(storage, view) {
+    try {
+      storage.setItem(VIEW_KEY, JSON.stringify(parseView(JSON.stringify(view))));
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // The group an account sits in: its standing, with an unread account in use
+  // (the server lifts it to just after the usable ones) apart from an idle one.
+  function groupOf(account) {
+    return account.standing === "unread" && (account.isLive || account.heldAway) ? "unread-in-use" : account.standing;
+  }
+
+  // A group header: its label, how many rows it shows, and what the group's
+  // time means. Model names the spent window of a model-limited group.
+  function groupHeading(key, count, order, model) {
+    var usable = { burn: "soonest 7-day reset first", reset7: "soonest 7-day reset first", reset5: "soonest 5-hour reset first", left: "most left first", name: "by name" };
+    var headings = {
+      usable: ["Usable", usable[order]],
+      "unread-in-use": ["In use, not read", "no figures yet"],
+      "model-limited": [(model || "Model") + " limit reached", "usable again at the " + (model || "model's") + " weekly reset"],
+      limited: ["5-hour limit reached", "usable again at the 5-hour reset"],
+      exhausted: ["Exhausted", "usable again at the 7-day reset"],
+      unread: ["Not read", "no figures yet"],
+      paused: ["Paused", "left out of rotation"]
+    };
+    var heading = headings[key] || [key, ""];
+    return { key: key, label: heading[0], count: count, meaning: heading[1], text: [heading[0], count].concat(heading[1] ? [heading[1]] : []).join(" · ") };
+  }
+
+  // Any warning or error on the row: a stale reading, a refresh error, a login
+  // that is missing, expired, paused or expiring within the warning window, a
+  // CLI logout, or a CI token expiry. A spent window alone is not one.
+  function needsAttention(account, at, accounts) {
+    var age = usageAge(account, at);
+    var chip = stateChip(account, at);
+    return !!account.cliLoggedOut
+      || ["error", "needs login", "login expired", "login paused"].indexOf(chip) !== -1
+      || loginSoon(account, at)
+      || (age !== null && age > STALE_SECONDS)
+      || REFRESH_ERRORS.indexOf(account.refresh && account.refresh.state) !== -1
+      || ciTokenExpiries(account.roster, at, accounts, account.email).length > 0;
+  }
+
+  function spent(account) {
+    return ["limited", "model-limited", "exhausted"].indexOf(account.standing) !== -1;
+  }
+
+  // Whether the Show filter keeps the row.
+  function shows(account, show, at, accounts) {
+    if (show === "usable") { return account.standing === "usable"; }
+    if (show === "spent") { return spent(account); }
+    if (show === "paused") { return account.standing === "paused" || !!(account.roster && account.roster.paused); }
+    if (show === "attention") { return needsAttention(account, at, accounts); }
+    return true;
+  }
+
+  // How many rows each Show choice would keep.
+  function filterCounts(accounts, at) {
+    var counts = {};
+    VIEW_SHOWS.forEach(function (show) {
+      counts[show] = accounts.filter(function (account) { return shows(account, show, at, accounts); }).length;
+    });
+    return counts;
+  }
+
+  // A window's reset, or null when it has none to count down to.
+  function windowReset(account, kind) {
+    var limit = account.usage.limits.filter(function (candidate) { return candidate.kind === kind; })[0];
+    return limit && limit.resetsAt && !limit.windowReset ? limit.resetsAt : null;
+  }
+
+  // What the ledger shows, in the order it shows it: a copy of the server's
+  // array, never the array itself, which recommended() and every other reader
+  // keep using as it came. Each row is { account, hidden, resetAt }, resetAt
+  // the instant it is ordered by; with grouping on, a { group, hidden } header
+  // leads each run of one group in server order. Runs, not buckets: the server
+  // places an in-use unread account apart from an idle one. Every order but
+  // burn sorts inside each run while grouping is on, so spent accounts stay
+  // last, and across the whole list when it is off; undated rows go last and
+  // ties keep the server's order. A filter only marks rows hidden, and a
+  // header hidden when it is left with none.
+  function arrange(accounts, view, at) {
+    var runs = [];
+    var rows = accounts.map(function (account, index) {
+      var key = groupOf(account);
+      if (!runs.length || runs[runs.length - 1].key !== key) { runs.push({ key: key, model: account.limitedModel || null, count: 0 }); }
+      var resetAt = view.order === "reset7" ? windowReset(account, "weekly_all")
+        : view.order === "reset5" ? windowReset(account, "session")
+        : account.nextResetAt || null;
+      var room = view.order === "left" ? headroom(account) : null;
+      var rank = view.order === "reset7" || view.order === "reset5" ? (resetAt ? Date.parse(resetAt) : null)
+        : view.order === "left" ? (room === null ? null : -room)
+        : view.order === "name" ? displayName(account).toLowerCase() + "\u0000" + account.email
+        : null;
+      var hidden = !shows(account, view.show, at, accounts);
+      if (!hidden) { runs[runs.length - 1].count += 1; }
+      return { account: account, index: index, run: runs.length - 1, rank: rank, hidden: hidden, resetAt: resetAt };
+    });
+    function byRank(left, right) {
+      if (left === right) { return 0; }
+      if (left === null) { return 1; }
+      if (right === null) { return -1; }
+      return left < right ? -1 : 1;
+    }
+    rows.sort(function (a, b) {
+      return (view.group ? a.run - b.run : 0) || byRank(a.rank, b.rank) || a.index - b.index;
+    });
+    var items = [];
+    var last = -1;
+    rows.forEach(function (row) {
+      if (view.group && row.run !== last) {
+        var run = runs[row.run];
+        items.push({ group: groupHeading(run.key, run.count, view.order, run.model), hidden: run.count === 0 });
+        last = row.run;
+      }
+      items.push({ account: row.account, hidden: row.hidden, resetAt: row.resetAt });
+    });
+    return items;
+  }
+
+  // What the reorder guard compares: the headers and rows on screen, in order,
+  // whether any row is, and the density. Figures changing in place leave it
+  // alone; anything that moves a visible row changes it.
+  function layoutKey(items, density) {
+    var shown = items.filter(function (item) { return !item.hidden; });
+    var key = shown.map(function (item) { return item.group ? "g:" + item.group.key : item.account.email; });
+    if (!shown.some(function (item) { return item.account; })) { key.push("empty"); }
+    key.push("d:" + density);
+    return key;
+  }
+
+  // Whether the arriving layout differs from the one on screen, which is the
+  // only thing the guard in render() defers for.
+  function reordered(arriving, rendered) {
+    return arriving.length !== rendered.length
+      || arriving.some(function (part, index) { return part !== rendered[index]; });
+  }
+
+  // The fleet in four figures: usable accounts of all, the 7-day quota the
+  // usable ones have left counted in whole accounts, the soonest reset among
+  // them, and the first spent account to come back. A figure with no data is null.
+  function fleetSummary(accounts, at) {
+    var usable = accounts.filter(function (account) { return account.standing === "usable"; });
+    var left = null;
+    usable.forEach(function (account) {
+      var weekly = account.usage.limits.filter(function (limit) { return limit.kind === "weekly_all"; })[0];
+      if (!weekly || !weekly.known || (!weekly.windowReset && weekly.percent === null)) { return; }
+      left = (left || 0) + (weekly.windowReset ? 1 : Math.max(0, 100 - weekly.percent) / 100);
+    });
+    function soonest(list) {
+      return list.filter(function (account) { return account.nextResetAt && Date.parse(account.nextResetAt) > at; }).reduce(function (best, account) {
+        return !best || Date.parse(account.nextResetAt) < Date.parse(best.resetAt) ? { account: account, resetAt: account.nextResetAt } : best;
+      }, null);
+    }
+    return {
+      usable: usable.length,
+      total: accounts.length,
+      weeklyLeft: left === null ? null : Math.round(left * 10) / 10,
+      nextReset: soonest(usable),
+      nextBack: soonest(accounts.filter(spent))
+    };
   }
 
   // The window the "near the limit" sentence names: the fuller of the two at
@@ -2603,7 +2861,8 @@
       var column = limit.kind === "session" || limit.kind === "weekly_all";
       if (!column && limit.known) {
         var reset = resetLine(limit, at);
-        lines.appendChild(element("p", "asof", limit.label + " " + reading(limit) + (reset ? ", " + reset : "")));
+        var other = lines.appendChild(element("p", "asof", limit.label + " " + reading(limit) + (reset ? ", " + reset : "")));
+        if (reset) { other.title = resetTitle(limit.resetsAt); }
       }
       if (limit.source) { lines.appendChild(element("p", asOfClass(limit.capturedAt, at), limit.label + " " + asOf(limit.capturedAt, limit.source, at))); }
     });
@@ -2638,7 +2897,7 @@
     box.appendChild(bar(limit, ticks));
     box.appendChild(element("span", "pct " + meterTone(limit), reading(limit)));
     var reset = resetLine(limit, at);
-    if (reset) { box.appendChild(element("small", null, reset)); }
+    if (reset) { box.appendChild(element("small", null, reset)).title = resetTitle(limit.resetsAt); }
     return box;
   }
 
@@ -2814,13 +3073,6 @@
     return heading;
   }
 
-  // Whether the arriving payload would move a card, which is the only thing the
-  // guard below defers for.
-  function reordered(arriving) {
-    return arriving.length !== renderedOrder.length
-      || arriving.some(function (email, index) { return email !== renderedOrder[index]; });
-  }
-
   // A row's overflow menu item: the menu closes before the action runs, so the
   // redraw that follows is not held back by an open menu.
   function menuItem(more, label, className, onClick) {
@@ -2916,7 +3168,7 @@
     line.appendChild(who);
 
     var status = element("div", "st");
-    status.appendChild(element("p", "say " + say.kind, say.text));
+    status.appendChild(sayLine(say, account, at));
     status.appendChild(statusLines(account, dashboard, at));
     ciTokenExpiries(roster, at, lastAccounts, account.email).forEach(function (expiry) {
       status.appendChild(element("p", "say " + expiry.tone, ciExpirySentence(expiry)));
@@ -3015,7 +3267,128 @@
     return card;
   }
 
-  function render(dashboard, force) {
+  // The browser's storage, or null: the getter itself throws when the browser
+  // blocks site data, and the view then lives in memory only.
+  function viewStorage() {
+    try {
+      return window.localStorage;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // A row's card for a panel to hang on, shown even when the filter hid it: a
+  // panel opened from outside the row, such as the WSL strip's Log in again,
+  // must not land in a card nobody can see.
+  function cardFor(email) {
+    var card = cardNodes[email];
+    if (card) { card.hidden = false; }
+    return card;
+  }
+
+  // One choice of a radio group in the view bar, with room for a count.
+  function viewChoice(name, value, text) {
+    var label = element("label", "view-choice");
+    var input = element("input");
+    input.type = "radio";
+    input.name = "view-" + name;
+    input.value = value;
+    input.addEventListener("change", function () {
+      var change = {};
+      change[name] = value;
+      changeView(change);
+    });
+    label.appendChild(input);
+    label.appendChild(element("span", null, text));
+    label.appendChild(element("span", "count"));
+    return label;
+  }
+
+  // The view bar, on the All accounts line and outside #cards, so pointing at
+  // it is not pointing at the list. Built from select and input elements only:
+  // the mutation lock disables every button on the page.
+  function buildViewBar() {
+    var bar = element("div", "view-bar");
+    var orderField = element("label", "view-field");
+    orderField.appendChild(element("span", null, "Order"));
+    var order = element("select");
+    order.name = "view-order";
+    [["burn", "Burn order"], ["reset7", "7-day reset"], ["reset5", "5-hour reset"], ["left", "Most left"], ["name", "Name"]].forEach(function (choice) {
+      var option = element("option", null, choice[1]);
+      option.value = choice[0];
+      order.appendChild(option);
+    });
+    order.addEventListener("change", function () { changeView({ order: order.value }); });
+    orderField.appendChild(order);
+    bar.appendChild(orderField);
+    var groupField = element("label", "view-field");
+    var group = element("input");
+    group.type = "checkbox";
+    group.name = "view-group";
+    group.addEventListener("change", function () { changeView({ group: group.checked }); });
+    groupField.appendChild(group);
+    groupField.appendChild(element("span", null, "Group by status"));
+    bar.appendChild(groupField);
+    var show = element("fieldset", "view-show");
+    show.appendChild(element("legend", null, "Show"));
+    [["all", "All"], ["usable", "Usable"], ["attention", "Needs attention"], ["spent", "Spent"], ["paused", "Paused"]].forEach(function (choice) {
+      show.appendChild(viewChoice("show", choice[0], choice[1]));
+    });
+    bar.appendChild(show);
+    var density = element("fieldset", "view-density");
+    density.appendChild(element("legend", null, "Density"));
+    density.appendChild(viewChoice("density", "compact", "Compact"));
+    density.appendChild(viewChoice("density", "detailed", "Detailed"));
+    bar.appendChild(density);
+    bar.appendChild(element("p", "fleet-summary"));
+    var title = document.querySelector(".ledger-title");
+    title.parentNode.insertBefore(bar, title.nextSibling);
+    syncViewBar(bar);
+    return bar;
+  }
+
+  // The bar's controls set to the view in force.
+  function syncViewBar(bar) {
+    bar.querySelector("select[name='view-order']").value = view.order;
+    bar.querySelector("input[name='view-group']").checked = view.group;
+    Array.prototype.forEach.call(bar.querySelectorAll("input[type='radio']"), function (input) {
+      input.checked = view[input.name.slice(5)] === input.value;
+    });
+  }
+
+  // A view control's change: kept, stored, and drawn through the ordinary
+  // render. It may skip the pointer test, since the operator asked for the
+  // move, but never the open-panel test, and it is never a forced render,
+  // which would discard an open panel.
+  function changeView(change) {
+    view = parseView(JSON.stringify(Object.assign({}, view, change)));
+    writeView(viewStorage(), view);
+    syncViewBar(viewBar);
+    if (lastDashboard) { render(lastDashboard, false, true); }
+  }
+
+  // The filter counts and the fleet's four figures, redrawn on every poll.
+  function drawViewCounts(dashboard) {
+    var at = new Date(dashboard.capturedAt).getTime();
+    var counts = filterCounts(dashboard.accounts, at);
+    Array.prototype.forEach.call(viewBar.querySelectorAll("input[name='view-show']"), function (input) {
+      input.parentNode.querySelector(".count").textContent = " " + counts[input.value];
+    });
+    var summary = fleetSummary(dashboard.accounts, at);
+    var line = viewBar.querySelector(".fleet-summary");
+    line.replaceChildren();
+    var figures = [summary.usable + " of " + summary.total + " usable"];
+    if (summary.weeklyLeft !== null) { figures.push(summary.weeklyLeft.toFixed(1) + " accounts of 7-day quota left"); }
+    figures.forEach(function (text) { line.appendChild(element("span", null, text + " · ")); });
+    [["next reset ", summary.nextReset], ["next back ", summary.nextBack]].forEach(function (figure) {
+      if (!figure[1]) { return; }
+      var text = figure[0] + resetIn(figure[1].resetAt, at) + ", " + uniqueName(figure[1].account, dashboard.accounts);
+      line.appendChild(element("span", null, text + " · ")).title = resetTitle(figure[1].resetAt);
+    });
+    if (line.lastChild) { line.lastChild.textContent = line.lastChild.textContent.slice(0, -3); }
+  }
+
+  function render(dashboard, force, viewChanged) {
     // The header, the Now strips, the banner, the setup sentence, and the
     // warnings are not part of any row, so they are written before the guards
     // below and on every poll: an operator with an Edit panel, a half-typed
@@ -3057,6 +3430,7 @@
       alertStrip.appendChild(element("li", "asof", "as of the last refresh, " + new Date(dashboard.alertsComputedAt).toLocaleTimeString()));
     }
     renderNow();
+    drawViewCounts(dashboard);
     // Rendering rebuilds every row, so the ten-second poll would otherwise wipe an
     // Edit panel, a half-typed login code, a display name being typed, or an open
     // row menu, out from under whoever is using it. A mutation's own render
@@ -3069,11 +3443,15 @@
     // so deferring on it alone would freeze the rows for as long as an operator
     // left the cursor on them. An order identical to the one on screen moves no
     // row, so it is rendered in place and a Refresh all pass keeps landing row by
-    // row under the pointer.
-    var arriving = dashboard.accounts.map(function (account) { return account.email; });
-    if (!force && reordered(arriving) && (cards.matches(":hover") || cards.contains(document.activeElement))) { return; }
-
+    // row under the pointer. What is compared is the layout on screen: the
+    // view's order, its group headers, the rows its filter hides, and the
+    // density, so a re-sort on new figures waits for the pointer too.
     var at = new Date(dashboard.capturedAt).getTime();
+    var items = arrange(dashboard.accounts, view, at);
+    var arriving = layoutKey(items, view.density);
+    if (!force && !viewChanged && reordered(arriving, renderedOrder) && (cards.matches(":hover") || cards.contains(document.activeElement))) { return; }
+
+    // Next up, like every other reader, takes the server's array as it came.
     var next = recommended(dashboard.accounts, function (account) {
       return account.canSwitchHere || (account.offeredTo || []).length > 0;
     }, at);
@@ -3081,11 +3459,26 @@
     cardNodes = {};
     renderedOrder = arriving;
     renderedSides = sideNames();
-    dashboard.accounts.forEach(function (account) {
-      var card = row(account, dashboard, at, account === next);
-      cardNodes[account.email] = card;
+    cards.setAttribute("data-density", view.density);
+    // Every row is built, the filtered ones hidden, so a panel opener always
+    // finds its card.
+    items.forEach(function (item) {
+      if (item.group) {
+        var header = element("div", "group " + item.group.key, item.group.text);
+        header.hidden = item.hidden;
+        cards.appendChild(header);
+        return;
+      }
+      var card = row(item.account, dashboard, at, item.account === next);
+      card.hidden = item.hidden;
+      cardNodes[item.account.email] = card;
       cards.appendChild(card);
     });
+    if (dashboard.accounts.length && arriving.indexOf("empty") !== -1) {
+      var none = element("p", "empty", "No account matches this filter. ");
+      none.appendChild(actionButton("Show all", "secondary sm", function () { changeView({ show: "all" }); }));
+      cards.appendChild(none);
+    }
   }
 
   // What the rows' switch buttons read from the sides: which sides there are

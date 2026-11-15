@@ -1166,3 +1166,282 @@ test("a stranded card without login flags reads error and offers no login", () =
   assert.strictEqual(stateChip(stranded, NOW), "error");
   assert.strictEqual(loginOffered(stranded, NOW), false);
 });
+
+const { countdown, resetTitle, parseView, readView, writeView, arrange, shows, needsAttention, filterCounts, fleetSummary, layoutKey, reordered, groupOf, groupHeading } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+
+const HOUR = 3600;
+
+test("a reset counts down in hours and minutes under a day, days and hours to a week, whole days after", () => {
+  assert.strictEqual(countdown(3 * HOUR), "3 h 0 min");
+  assert.strictEqual(countdown(22 * HOUR + 14 * 60), "22 h 14 min");
+  assert.strictEqual(countdown(23 * HOUR + 59 * 60 + 40), "1 d");
+  assert.strictEqual(countdown(24 * HOUR), "1 d");
+  assert.strictEqual(countdown(25 * HOUR), "1 d 1 h");
+  assert.strictEqual(countdown(49 * HOUR), "2 d 1 h");
+  assert.strictEqual(countdown(144 * HOUR), "6 d");
+  assert.strictEqual(countdown(167 * HOUR + 59 * 60), "6 d 23 h");
+  assert.strictEqual(countdown(168 * HOUR), "7 d");
+  assert.strictEqual(countdown(200 * HOUR), "8 d");
+  assert.strictEqual(countdown(45), "45 s");
+});
+
+test("a reset's title names the weekday and the time", () => {
+  const title = resetTitle("2026-10-02T20:00:00Z", "en-US", "UTC");
+  assert.match(title, /Fri/);
+  assert.match(title, /8:00/);
+});
+
+// A usable card whose 7-day window resets hours from NOW, the instant the
+// server sorted it by.
+function dated(email, hours, fields, weekly) {
+  const at = new Date(NOW + hours * HOUR * 1000).toISOString();
+  const account = card(email, Object.assign({ nextResetAt: at }, fields), 0, weekly === undefined ? 40 : weekly);
+  account.usage.limits[1].resetsAt = at;
+  return account;
+}
+
+// The fleet's shape: eleven usable accounts in the server's order, soonest
+// 7-day reset first, then two exhausted ones.
+function fleet() {
+  const usable = [26, 30, 49, 50, 58, 58.5, 61, 70, 90, 120, 163].map((hours, index) => dated("u" + index + "@x", hours));
+  return usable.concat([
+    dated("x0@x", 36, { standing: "exhausted", canSwitchHere: false }, 100),
+    dated("x1@x", 54, { standing: "exhausted", canSwitchHere: false }, 100)
+  ]);
+}
+
+const DEFAULT_VIEW = { order: "burn", group: true, show: "all", density: "compact" };
+
+function rowsOf(items) {
+  return items.filter((item) => item.account).map((item) => item.account.email);
+}
+
+test("a reset sentence counts down in days and hours", () => {
+  const account = dated("x@x", 49, { standing: "exhausted", hasCredentials: true, refresh: { state: "read" } }, 100);
+  assert.strictEqual(sentence(account, NOW).text, "Exhausted, usable in 2 d 1 h");
+});
+
+test("the stored view falls back to the defaults on anything it does not recognise, and keeps only its own keys", () => {
+  assert.deepStrictEqual(parseView(null), DEFAULT_VIEW);
+  assert.deepStrictEqual(parseView("{not json"), DEFAULT_VIEW);
+  assert.deepStrictEqual(parseView("\"name\""), DEFAULT_VIEW);
+  assert.deepStrictEqual(parseView("[1,2]"), DEFAULT_VIEW);
+  assert.deepStrictEqual(parseView(JSON.stringify({ order: "evil", group: "yes", show: "<img>", density: 3 })), DEFAULT_VIEW);
+  assert.deepStrictEqual(
+    parseView(JSON.stringify({ order: "name", group: false, show: "spent", density: "detailed", token: "secret", email: "a@x" })),
+    { order: "name", group: false, show: "spent", density: "detailed" });
+  assert.deepStrictEqual(parseView(JSON.stringify({ order: "reset5" })), Object.assign({}, DEFAULT_VIEW, { order: "reset5" }));
+});
+
+test("the view is read from ccar.view.v1, and storage that is missing or throws gives the defaults", () => {
+  const asked = [];
+  const storage = { getItem: (key) => { asked.push(key); return JSON.stringify({ order: "left", show: "usable" }); } };
+  assert.deepStrictEqual(readView(storage), Object.assign({}, DEFAULT_VIEW, { order: "left", show: "usable" }));
+  assert.deepStrictEqual(asked, ["ccar.view.v1"]);
+  assert.deepStrictEqual(readView(null), DEFAULT_VIEW);
+  assert.deepStrictEqual(readView({ getItem: () => { throw new Error("blocked"); } }), DEFAULT_VIEW);
+  assert.deepStrictEqual(readView({ getItem: () => "{\"order\":\"evil\"}" }), DEFAULT_VIEW);
+});
+
+test("writing the view sets ccar.view.v1 once with the four view values only, and a storage that throws is survived", () => {
+  const calls = [];
+  const written = writeView({ setItem: (key, value) => calls.push([key, value]) }, { order: "reset7", group: false, show: "paused", density: "detailed", token: "t" });
+  assert.strictEqual(written, true);
+  assert.strictEqual(calls.length, 1);
+  assert.strictEqual(calls[0][0], "ccar.view.v1");
+  assert.deepStrictEqual(JSON.parse(calls[0][1]), { order: "reset7", group: false, show: "paused", density: "detailed" });
+  assert.strictEqual(writeView({ setItem: () => { throw new Error("quota"); } }, DEFAULT_VIEW), false);
+  assert.strictEqual(writeView(null, DEFAULT_VIEW), false);
+});
+
+test("arranging never touches the server array, and Next up is still read from it", () => {
+  const accounts = Object.freeze(fleet());
+  const before = accounts.map((account) => account.email);
+  const next = recommended(accounts, (account) => account.canSwitchHere, NOW);
+  ["burn", "reset7", "reset5", "left", "name"].forEach((order) => {
+    [true, false].forEach((group) => {
+      const items = arrange(accounts, Object.assign({}, DEFAULT_VIEW, { order, group }), NOW);
+      assert.strictEqual(rowsOf(items).length, accounts.length);
+      items.filter((item) => item.account).forEach((item) => assert.ok(accounts.indexOf(item.account) !== -1));
+    });
+  });
+  assert.deepStrictEqual(accounts.map((account) => account.email), before);
+  assert.strictEqual(recommended(accounts, (account) => account.canSwitchHere, NOW), next);
+});
+
+test("the fleet in burn order is two groups, each headed by its label, count and what its time means", () => {
+  const items = arrange(fleet(), DEFAULT_VIEW, NOW);
+  const headers = items.filter((item) => item.group);
+  assert.deepStrictEqual(headers.map((item) => item.group.text), [
+    "Usable · 11 · soonest 7-day reset first",
+    "Exhausted · 2 · usable again at the 7-day reset"
+  ]);
+  assert.deepStrictEqual(rowsOf(items), fleet().map((account) => account.email));
+  assert.strictEqual(items[0].group.key, "usable");
+  assert.strictEqual(items[12].group.key, "exhausted");
+});
+
+test("no row crosses a group while grouping is on, whatever the order", () => {
+  const accounts = fleet();
+  // An exhausted account whose reset comes before every usable one, and a
+  // name that sorts first, would lead a flat list.
+  accounts[11].usage.limits[1].resetsAt = new Date(NOW + HOUR * 1000).toISOString();
+  accounts[11].email = "aaa@x";
+  ["burn", "reset7", "reset5", "left", "name"].forEach((order) => {
+    let current = null;
+    arrange(accounts, Object.assign({}, DEFAULT_VIEW, { order }), NOW).forEach((item) => {
+      if (item.group) { current = item.group.key; return; }
+      assert.strictEqual(groupOf(item.account), current, order + ": " + item.account.email);
+    });
+  });
+  const flat = arrange(accounts, Object.assign({}, DEFAULT_VIEW, { order: "reset7", group: false }), NOW);
+  assert.strictEqual(flat.filter((item) => item.group).length, 0);
+  assert.strictEqual(rowsOf(flat)[0], "aaa@x");
+});
+
+test("an order other than burn sorts inside each server group, ties in server order", () => {
+  const accounts = [
+    dated("b@x", 50, {}, 10),
+    dated("a@x", 30, {}, 70),
+    dated("c@x", 40, {}, 10),
+    dated("z@x", 20, { standing: "exhausted" }, 100)
+  ];
+  const view = (order) => Object.assign({}, DEFAULT_VIEW, { order });
+  assert.deepStrictEqual(rowsOf(arrange(accounts, view("burn"), NOW)), ["b@x", "a@x", "c@x", "z@x"]);
+  assert.deepStrictEqual(rowsOf(arrange(accounts, view("reset7"), NOW)), ["a@x", "c@x", "b@x", "z@x"]);
+  assert.deepStrictEqual(rowsOf(arrange(accounts, view("left"), NOW)), ["b@x", "c@x", "a@x", "z@x"]);
+  assert.deepStrictEqual(rowsOf(arrange(accounts, view("name"), NOW)), ["a@x", "b@x", "c@x", "z@x"]);
+});
+
+test("the name order reads the display name, not the address", () => {
+  const accounts = [dated("a@x", 10, { roster: { alias: "Zed" } }), dated("b@x", 20, { roster: { alias: "amy" } })];
+  assert.deepStrictEqual(rowsOf(arrange(accounts, Object.assign({}, DEFAULT_VIEW, { order: "name" }), NOW)), ["b@x", "a@x"]);
+});
+
+test("undated resets sort last, and a window that reset since its read counts as undated", () => {
+  const accounts = [dated("none@x", 10), dated("late@x", 90), dated("reset@x", 5), dated("soon@x", 30)];
+  accounts[0].usage.limits[1].resetsAt = null;
+  accounts[2].usage.limits[1].windowReset = true;
+  [true, false].forEach((group) => {
+    assert.deepStrictEqual(rowsOf(arrange(accounts, Object.assign({}, DEFAULT_VIEW, { order: "reset7", group }), NOW)), ["soon@x", "late@x", "none@x", "reset@x"]);
+  });
+  const five = [dated("a@x", 10), dated("b@x", 20)];
+  five[1].usage.limits[0].resetsAt = new Date(NOW + 2 * HOUR * 1000).toISOString();
+  assert.deepStrictEqual(rowsOf(arrange(five, Object.assign({}, DEFAULT_VIEW, { order: "reset5" }), NOW)), ["b@x", "a@x"]);
+});
+
+test("with grouping off, burn order is the server order with no headers", () => {
+  const items = arrange(fleet(), Object.assign({}, DEFAULT_VIEW, { group: false }), NOW);
+  assert.strictEqual(items.filter((item) => item.group).length, 0);
+  assert.deepStrictEqual(rowsOf(items), fleet().map((account) => account.email));
+});
+
+test("groups are runs in server order, so an in-use unread account and an idle one head separate groups", () => {
+  const accounts = [
+    dated("u@x", 10),
+    card("live@x", { standing: "unread", isLive: true }, null, null),
+    dated("x@x", 30, { standing: "exhausted" }, 100),
+    card("idle@x", { standing: "unread" }, null, null)
+  ];
+  const items = arrange(accounts, DEFAULT_VIEW, NOW);
+  assert.deepStrictEqual(items.map((item) => item.group ? "g:" + item.group.key : item.account.email),
+    ["g:usable", "u@x", "g:unread-in-use", "live@x", "g:exhausted", "x@x", "g:unread", "idle@x"]);
+});
+
+test("every standing has a group label and says what its time means", () => {
+  const texts = ["usable", "unread-in-use", "model-limited", "limited", "exhausted", "unread", "paused"]
+    .map((key) => groupHeading(key, 2, "burn", "Fable").text);
+  assert.deepStrictEqual(texts, [
+    "Usable · 2 · soonest 7-day reset first",
+    "In use, not read · 2 · no figures yet",
+    "Fable limit reached · 2 · usable again at the Fable weekly reset",
+    "5-hour limit reached · 2 · usable again at the 5-hour reset",
+    "Exhausted · 2 · usable again at the 7-day reset",
+    "Not read · 2 · no figures yet",
+    "Paused · 2 · left out of rotation"
+  ]);
+  assert.strictEqual(groupHeading("usable", 3, "name").text, "Usable · 3 · by name");
+  assert.strictEqual(groupHeading("usable", 3, "left").text, "Usable · 3 · most left first");
+  assert.strictEqual(groupHeading("usable", 3, "reset5").text, "Usable · 3 · soonest 5-hour reset first");
+  assert.strictEqual(groupHeading("model-limited", 1, "burn", null).text, "Model limit reached · 1 · usable again at the model's weekly reset");
+});
+
+test("a filter hides rows without dropping them, and hides a header left with nothing under it", () => {
+  const accounts = fleet();
+  const items = arrange(accounts, Object.assign({}, DEFAULT_VIEW, { show: "usable" }), NOW);
+  assert.strictEqual(rowsOf(items).length, 13);
+  assert.deepStrictEqual(items.filter((item) => item.account && !item.hidden).map((item) => item.account.email), accounts.slice(0, 11).map((account) => account.email));
+  const headers = items.filter((item) => item.group);
+  assert.deepStrictEqual(headers.map((item) => [item.group.text, item.hidden]), [
+    ["Usable · 11 · soonest 7-day reset first", false],
+    ["Exhausted · 0 · usable again at the 7-day reset", true]
+  ]);
+  const spent = arrange(accounts, Object.assign({}, DEFAULT_VIEW, { show: "spent" }), NOW);
+  assert.deepStrictEqual(spent.filter((item) => item.account && !item.hidden).map((item) => item.account.email), ["x0@x", "x1@x"]);
+});
+
+test("needs attention is any warning or error on the row, never a spent window alone", () => {
+  const fine = dated("fine@x", 30, { hasCredentials: true, refresh: { state: "read" } });
+  assert.strictEqual(needsAttention(fine, NOW, [fine]), false);
+  assert.strictEqual(needsAttention(dated("spent@x", 30, { standing: "exhausted", hasCredentials: true, refresh: { state: "read" } }, 100), NOW, []), false);
+  const stale = card("stale@x", { hasCredentials: true, refresh: { state: "read" } }, 10, 10, 45);
+  const failed = dated("failed@x", 30, { hasCredentials: true, refresh: { state: "read-failed", message: "Usage read failed" } });
+  const loggedOut = dated("out@x", 30, { hasCredentials: true, refresh: { state: "read" }, cliLoggedOut: "Logged out of the CLI" });
+  const expiring = dated("soon@x", 30, { hasCredentials: true, refresh: { state: "read" }, loginExpiresAt: new Date(NOW + 3 * 86400000).toISOString() });
+  const later = dated("later@x", 30, { hasCredentials: true, refresh: { state: "read" }, loginExpiresAt: new Date(NOW + 20 * 86400000).toISOString() });
+  const token = dated("token@x", 30, { hasCredentials: true, refresh: { state: "read" }, roster: { ciRoles: [{ name: "Lane", tokenSetOn: "2025-10-20", tokenSecret: "T" }] } });
+  const noLogin = dated("new@x", 30, { hasCredentials: false, refresh: { state: "needs-login" } });
+  [stale, failed, loggedOut, expiring, token, noLogin].forEach((account) => assert.strictEqual(needsAttention(account, NOW, [account]), true, account.email));
+  assert.strictEqual(needsAttention(later, NOW, [later]), false);
+  assert.strictEqual(shows(failed, "attention", NOW, [failed]), true);
+  assert.strictEqual(shows(fine, "attention", NOW, [fine]), false);
+});
+
+test("each filter keeps its own rows, and the counts say how many each would show", () => {
+  const accounts = [
+    dated("u@x", 10, { hasCredentials: true, refresh: { state: "read" } }),
+    dated("l@x", 10, { standing: "limited", hasCredentials: true, refresh: { state: "read" } }),
+    dated("m@x", 10, { standing: "model-limited", hasCredentials: true, refresh: { state: "read" } }),
+    dated("p@x", 10, { standing: "paused", hasCredentials: true, refresh: { state: "read" }, roster: { paused: true } }),
+    dated("e@x", 10, { standing: "exhausted", hasCredentials: true, refresh: { state: "stranded" } }, 100)
+  ];
+  const kept = (show) => accounts.filter((account) => shows(account, show, NOW, accounts)).map((account) => account.email);
+  assert.deepStrictEqual(kept("all"), ["u@x", "l@x", "m@x", "p@x", "e@x"]);
+  assert.deepStrictEqual(kept("usable"), ["u@x"]);
+  assert.deepStrictEqual(kept("spent"), ["l@x", "m@x", "e@x"]);
+  assert.deepStrictEqual(kept("paused"), ["p@x"]);
+  assert.deepStrictEqual(kept("attention"), ["e@x"]);
+  assert.deepStrictEqual(filterCounts(accounts, NOW), { all: 5, usable: 1, attention: 1, spent: 3, paused: 1 });
+});
+
+test("the layout key changes with what is displayed and nothing else", () => {
+  const accounts = fleet();
+  const view = DEFAULT_VIEW;
+  const key = layoutKey(arrange(accounts, view, NOW), view.density);
+  assert.strictEqual(reordered(key, layoutKey(arrange(fleet(), view, NOW), view.density)), false);
+  assert.strictEqual(reordered(key, layoutKey(arrange(accounts, view, NOW), "detailed")), true);
+  assert.strictEqual(reordered(key, layoutKey(arrange(accounts, Object.assign({}, view, { show: "usable" }), NOW), view.density)), true);
+  assert.strictEqual(reordered(key, layoutKey(arrange(accounts, Object.assign({}, view, { group: false }), NOW), view.density)), true);
+  assert.strictEqual(reordered(key, layoutKey(arrange(accounts.slice().reverse(), view, NOW), view.density)), true);
+  assert.strictEqual(reordered(key, key.slice(0, -1)), true);
+  const changedFigures = fleet();
+  changedFigures[0].usage.limits[1].percent = 77;
+  assert.strictEqual(reordered(key, layoutKey(arrange(changedFigures, view, NOW), view.density)), false);
+  const none = layoutKey(arrange(accounts, Object.assign({}, view, { show: "paused" }), NOW), view.density);
+  assert.ok(none.indexOf("empty") !== -1);
+});
+
+test("the fleet summary counts usable accounts, the 7-day quota they have left, the next reset and the next account back", () => {
+  const accounts = fleet();
+  const summary = fleetSummary(accounts, NOW);
+  assert.strictEqual(summary.usable, 11);
+  assert.strictEqual(summary.total, 13);
+  assert.strictEqual(summary.weeklyLeft, 6.6);
+  assert.strictEqual(summary.nextReset.account.email, "u0@x");
+  assert.strictEqual(summary.nextBack.account.email, "x0@x");
+  const spentOnly = fleetSummary(accounts.slice(11), NOW);
+  assert.strictEqual(spentOnly.usable, 0);
+  assert.strictEqual(spentOnly.weeklyLeft, null);
+  assert.strictEqual(spentOnly.nextReset, null);
+  assert.strictEqual(fleetSummary(accounts.slice(0, 11), NOW).nextBack, null);
+});
