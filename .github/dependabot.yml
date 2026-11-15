@@ -7,8 +7,10 @@
 # `first-party-actions` group (the melodic-software/ci-workflows composite
 # action pins) and the `vendor-actions` group (non-major only) are the
 # auto-merge lanes armed by pr-automerge-dependabot.yml; every other PR is
-# reviewed by hand. A dependency joins the first group that matches it, so
-# majors fall through to the reviewed `github-actions` group.
+# in the review tier. A dependency joins the first group that matches it: a
+# vendor major falls through to the reviewed `github-actions` group, and a
+# first-party major stays in `first-party-actions`, where the lane does not arm
+# a pull request that holds a major bump, so it takes the review tier.
 version: 2
 updates:
   - package-ecosystem: github-actions
