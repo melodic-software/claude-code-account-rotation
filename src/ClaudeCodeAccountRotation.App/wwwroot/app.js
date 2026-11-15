@@ -110,6 +110,10 @@
     module.exports.rowNotices = rowNotices;
     module.exports.figuresAsOf = figuresAsOf;
     module.exports.alertRole = alertRole;
+    module.exports.motionKeys = motionKeys;
+    module.exports.motionPlan = motionPlan;
+    module.exports.pickControl = pickControl;
+    module.exports.viewAnnouncement = viewAnnouncement;
     return;
   }
 
@@ -167,6 +171,14 @@
   // rebuild that fills cardNodes. What an arriving payload is compared against
   // to tell a reorder from an update in place.
   var renderedOrder = [];
+  // The row and header nodes the last rebuild drew, keyed for the reorder
+  // motion (motionKeys), and the count of reorders set going, so only the
+  // latest one hands the list back to the pointer.
+  var motionNodes = {};
+  var settleRun = 0;
+  var lastInputWasKey = false;
+  // The visually hidden line that says what a view change did.
+  var viewStatus = document.getElementById("view-status");
   // The ledger's view settings, read once at load; the bar that changes them
   // sits on the All accounts line, outside #cards.
   var view = readView(viewStorage());
@@ -292,6 +304,9 @@
   }
 
   function showTokenForm() {
+    // Nothing loads until there is a token, so the loading line would wait forever.
+    var loading = cards.querySelector(".loading");
+    if (loading) { loading.hidden = true; }
     var form = document.getElementById("instance-token");
     if (!form) {
       form = element("form", "roster-form instance-token");
@@ -977,7 +992,7 @@
     code.placeholder = "paste the code here";
     var submit = element("button", null, "Submit code");
     submit.type = "submit";
-    form.appendChild(code);
+    labeled(form, "Sign-in code", code);
     form.appendChild(submit);
     form.addEventListener("submit", function (event) {
       event.preventDefault();
@@ -1600,7 +1615,7 @@
         code.placeholder = "paste the code here";
         var submit = element("button", null, "Submit code");
         submit.type = "submit";
-        codeForm.appendChild(code);
+        labeled(codeForm, "Sign-in code", code);
         codeForm.appendChild(submit);
         codeForm.addEventListener("submit", function (event) {
           event.preventDefault();
@@ -2840,6 +2855,57 @@
     return key;
   }
 
+  // One key per arranged item for the reorder motion: "r:" and the address for
+  // a row, "g:", the group and its run's place among runs of that group for a
+  // header, since the server can place two runs of one group apart.
+  function motionKeys(items) {
+    var seen = {};
+    return items.map(function (item) {
+      if (!item.group) { return "r:" + item.account.email; }
+      seen[item.group.key] = (seen[item.group.key] || 0) + 1;
+      return "g:" + item.group.key + ":" + seen[item.group.key];
+    });
+  }
+
+  // What the reorder motion moves, from where each key sat before the rebuild
+  // and where it sits after: { key, dy } for one that moved a pixel or more,
+  // { key, enter } for one that was not shown before. A key no longer shown
+  // has nothing to move.
+  function motionPlan(before, after) {
+    return Object.keys(after).reduce(function (plan, key) {
+      if (!Object.prototype.hasOwnProperty.call(before, key)) {
+        plan.push({ key: key, enter: true });
+      } else if (Math.abs(before[key] - after[key]) >= 1) {
+        plan.push({ key: key, dy: before[key] - after[key] });
+      }
+      return plan;
+    }, []);
+  }
+
+  // Which of a rebuilt row's controls takes the focus back: the one with the
+  // saved label at the saved place, else the first with that label, else the
+  // one at the saved place, else none (-1).
+  function pickControl(labels, saved) {
+    if (labels[saved.index] === saved.label) { return saved.index; }
+    var named = labels.indexOf(saved.label);
+    if (named >= 0) { return named; }
+    return saved.index >= 0 && saved.index < labels.length ? saved.index : -1;
+  }
+
+  // What the status line says after a view change, for example
+  // "Sorted by 7-day reset, 11 accounts shown".
+  function viewAnnouncement(view, shown, total) {
+    var orders = { burn: "burn order", reset7: "7-day reset", reset5: "5-hour reset", left: "most left", name: "name" };
+    var filters = { usable: "Usable", attention: "Needs attention", spent: "Spent", paused: "Paused" };
+    var parts = ["Sorted by " + orders[view.order]];
+    if (!view.group) { parts.push("not grouped"); }
+    parts.push(view.show === "all"
+      ? shown + (shown === 1 ? " account" : " accounts") + " shown"
+      : shown + " of " + total + " accounts shown: " + filters[view.show]);
+    if (view.density === "detailed") { parts.push("detailed rows"); }
+    return parts.join(", ");
+  }
+
   // Whether the arriving layout differs from the one on screen, which is the
   // only thing the guard in render() defers for.
   function reordered(arriving, rendered) {
@@ -3644,7 +3710,16 @@
     // which moves every column after it, so the guard counts it as a move.
     var fiveHour = fiveHourShown(dashboard.accounts);
     var arriving = layoutKey(items, view.density + (fiveHour ? "" : " no-5h"));
-    if (!force && !viewChanged && reordered(arriving, renderedOrder) && (cards.matches(":hover") || cards.contains(document.activeElement))) { return; }
+    // The first paint has no row on screen to move, only the loading line.
+    var first = renderedOrder.length === 0;
+    var moved = !first && reordered(arriving, renderedOrder);
+    if (!force && !viewChanged && moved && (cards.matches(":hover") || cards.contains(document.activeElement))) { return; }
+    // Rows slide to their new places only when the same rows are re-ordered:
+    // not on the first paint, not when the density or the column set changed
+    // every row's shape, and not for a view the operator changed by keyboard.
+    var before = moved && arriving[arriving.length - 1] === renderedOrder[renderedOrder.length - 1]
+      && !(viewChanged && lastInputWasKey) ? motionTops() : null;
+    var focused = focusedControl();
 
     // Next up, like every other reader, takes the server's array as it came.
     var next = recommended(dashboard.accounts, function (account) {
@@ -3652,6 +3727,7 @@
     }, at);
     cards.innerHTML = "";
     cardNodes = {};
+    motionNodes = {};
     renderedOrder = arriving;
     renderedSides = sideNames();
     cards.setAttribute("data-density", view.density);
@@ -3660,19 +3736,22 @@
     ledger.querySelector(".h-mw").textContent = ledger.querySelector(".h-mw").title = modelLabel(dashboard.accounts);
     // Every row is built, the filtered ones hidden, so a panel opener always
     // finds its card.
-    items.forEach(function (item) {
+    var keys = motionKeys(items);
+    items.forEach(function (item, index) {
       if (item.group) {
         var header = element("div", "group " + item.group.key);
         header.appendChild(element("span", "g-label", item.group.label));
         header.appendChild(element("span", "g-count", " · " + item.group.count));
         if (item.group.meaning) { header.appendChild(element("span", "g-meaning", " · " + item.group.meaning)); }
         header.hidden = item.hidden;
+        motionNodes[keys[index]] = header;
         cards.appendChild(header);
         return;
       }
       var card = row(item.account, dashboard, at, item.account === next, item.resetAt);
       card.hidden = item.hidden;
       cardNodes[item.account.email] = card;
+      motionNodes[keys[index]] = card;
       cards.appendChild(card);
     });
     if (dashboard.accounts.length && arriving.indexOf("empty") !== -1) {
@@ -3680,6 +3759,96 @@
       none.appendChild(actionButton("Show all", "secondary sm", function () { changeView({ show: "all" }); }));
       cards.appendChild(none);
     }
+    if (before) { settle(before); }
+    if (focused) { restoreFocus(focused); }
+    if (viewChanged) {
+      var shown = items.filter(function (item) { return item.account && !item.hidden; }).length;
+      announce(viewAnnouncement(view, shown, dashboard.accounts.length));
+    }
+  }
+
+  // Where each shown row and header sits now, by its motion key.
+  function motionTops() {
+    var tops = {};
+    Object.keys(motionNodes).forEach(function (key) {
+      if (!motionNodes[key].hidden) { tops[key] = motionNodes[key].getBoundingClientRect().top; }
+    });
+    return tops;
+  }
+
+  // The reorder motion: each row and header that moved slides from where it
+  // was to where it is (FLIP through element.animate, which the CSP allows
+  // and which writes no style attribute), and one that was not shown fades
+  // in. Under reduced motion a moved row only fades. The list takes no
+  // pointer until the last slide ends, so Switch never lands on a row in
+  // motion, and a timer hands it back even if an animation never settles.
+  function settle(before) {
+    var plan = motionPlan(before, motionTops());
+    if (!plan.length) { return; }
+    var still = lessMotion();
+    var animations = plan.map(function (step) {
+      var node = motionNodes[step.key];
+      if (step.enter) {
+        return node.animate([{ opacity: 0 }, { opacity: 1 }], { duration: motionMs("--dur-medium"), easing: motionToken("--ease-out") });
+      }
+      return still
+        ? node.animate([{ opacity: 0.4 }, { opacity: 1 }], { duration: motionMs("--dur-short"), easing: "linear" })
+        : node.animate([{ translate: "0 " + step.dy + "px" }, { translate: "0 0" }], { duration: motionMs("--dur-long"), easing: motionToken("--ease-in-out") });
+    });
+    var run = ++settleRun;
+    function done() {
+      if (run === settleRun) { cards.classList.remove("settling"); }
+    }
+    cards.classList.add("settling");
+    setTimeout(done, motionMs("--dur-long") + 150);
+    Promise.all(animations.map(function (animation) { return animation.finished; })).then(done, done);
+  }
+
+  // The stylesheet's motion tokens, so the script and the CSS share one scale.
+  function motionToken(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  function motionMs(name) {
+    return parseFloat(motionToken(name)) || 0;
+  }
+
+  function lessMotion() {
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }
+
+  // The focused control in the ledger, as its row and its place in the row,
+  // so a rebuild can hand the focus to the same control on the same account.
+  function focusedControl() {
+    var active = document.activeElement;
+    if (!active || active === cards || !cards.contains(active)) { return null; }
+    var email = Object.keys(cardNodes).filter(function (key) { return cardNodes[key].contains(active); })[0];
+    if (!email) { return null; }
+    var controls = rowControls(cardNodes[email]);
+    return { email: email, index: controls.indexOf(active), label: controlLabel(active) };
+  }
+
+  function restoreFocus(saved) {
+    var card = cardNodes[saved.email];
+    if (!card || card.hidden) { return; }
+    var controls = rowControls(card);
+    var at = pickControl(controls.map(controlLabel), saved);
+    if (at >= 0) { controls[at].focus({ preventScroll: true }); }
+  }
+
+  function rowControls(card) {
+    return Array.prototype.slice.call(card.querySelectorAll("button, summary, input, select, textarea, a[href]"));
+  }
+
+  function controlLabel(node) {
+    return node.getAttribute("aria-label") || node.textContent.trim();
+  }
+
+  // Said once by the status line: cleared first, so the same words twice are
+  // still read out.
+  function announce(text) {
+    viewStatus.textContent = "";
+    setTimeout(function () { viewStatus.textContent = text; }, 50);
   }
 
   // What the rows' switch buttons read from the sides: which sides there are
@@ -3733,13 +3902,31 @@
       if (!open.contains(event.target)) { open.open = false; }
     });
   });
+  // Escape closes a row menu, Add an account and Check roles, and gives the
+  // focus back to the control that opened it.
   document.addEventListener("keydown", function (event) {
     if (event.key !== "Escape") { return; }
-    Array.prototype.forEach.call(document.querySelectorAll("details.more[open]"), function (open) {
+    Array.prototype.forEach.call(document.querySelectorAll("details.more[open], details.roster-add[open]"), function (open) {
       open.open = false;
       open.querySelector("summary").focus();
     });
   });
+  // A row menu or a popover opened with the pointer grows in from its top
+  // right corner; under reduced motion it only fades. Opened from the
+  // keyboard (a click with no pointer count), it is simply there. Set going
+  // before the summary's default action opens it, so no frame shows it whole.
+  document.addEventListener("click", function (event) {
+    var summary = event.target.closest && event.target.closest("details.more > summary, details.roster-add > summary");
+    if (!summary || summary.parentNode.open || event.detail === 0) { return; }
+    var layer = summary.parentNode.querySelector(":scope > .menu, :scope > .popover");
+    if (!layer) { return; }
+    layer.animate(lessMotion() ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 0, scale: 0.97 }, { opacity: 1, scale: 1 }],
+      { duration: motionMs("--dur-short"), easing: motionToken("--ease-out") });
+  }, true);
+  // Whether the last thing the operator did was a key: a view changed from
+  // the keyboard redraws in place, with no rows sliding.
+  document.addEventListener("pointerdown", function () { lastInputWasKey = false; }, true);
+  document.addEventListener("keydown", function () { lastInputWasKey = true; }, true);
 
 
   addForm.addEventListener("submit", function (event) {
@@ -3875,6 +4062,8 @@
       showTokenForm();
       return;
     }
+    var loading = cards.querySelector(".loading");
+    if (loading) { loading.hidden = false; }
     mountHistory();
     fetch("/api/browser-profiles", { headers: withBearer({ "Accept": "application/json" }) })
       .then(function (response) {

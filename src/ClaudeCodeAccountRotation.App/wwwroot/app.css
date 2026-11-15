@@ -14,8 +14,8 @@
   --text: #141413; --muted: #6b6a64; --faint: #b0aea5;
   --accent: #d97757; --accent-hover: #e08a6d; --accent-press: #c6613f; --accent-fg: #141413;
   --ok: #5f7148; --ok-fill: #788c5d; --info: #3f6c9c; --high: #a4501c; --high-fill: #d0702f; --warn: #8a6414; --warn-fill: #c79a3e; --crit: #b0453a; --crit-fill: #c0503f;
-  --track: #ecebe4; --focus: #6a9bcc; --shadow: 0 1px 2px rgb(20 20 19 / .04), 0 2px 8px -2px rgb(20 20 19 / .05);
-  --hover: color-mix(in srgb, var(--surface-2) 80%, var(--line));
+  --track: #ecebe4; --focus: #3f6c9c; --shadow: 0 1px 2px rgb(20 20 19 / .04), 0 2px 8px -2px rgb(20 20 19 / .05);
+  --hover: color-mix(in srgb, var(--line) 80%, var(--surface-2));
   --sans: Poppins, Arial, sans-serif; --serif: Lora, Georgia, serif;
 
   /* Type: one scale, size and line height in pairs. */
@@ -32,6 +32,12 @@
   /* Elevation: menus and popovers over the page. */
   --surface-overlay: #ffffff;
   --elevation-overlay: 0 0 0 1px rgb(20 20 19 / .06), 0 12px 32px -8px rgb(20 20 19 / .18);
+  /* Motion: ease-out for what enters, ease-in for what leaves for good,
+     ease-in-out for what moves on screen. */
+  --ease-out: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-in: cubic-bezier(0.3, 0, 1, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --dur-short: 150ms; --dur-medium: 200ms; --dur-long: 250ms;
 
   /* The page frame and the ledger's columns. */
   --gutter: clamp(16px, 2.5vw, 48px);
@@ -47,7 +53,7 @@
     --text: #faf9f5; --muted: #a3a19a; --faint: #5e5d58;
     --accent-hover: #e3906f;
     --ok: #a3b584; --ok-fill: #8fa472; --info: #8db4dc; --high: #eb8f55; --high-fill: #e08045; --warn: #d4a94f; --warn-fill: #d4a94f; --crit: #e8716a; --crit-fill: #e0605a;
-    --track: #2e2d2b; --shadow: 0 1px 2px rgb(0 0 0 / .3);
+    --track: #2e2d2b; --focus: #6a9bcc; --shadow: 0 1px 2px rgb(0 0 0 / .3);
     --hover: #232220;
     --surface-overlay: #2a2927;
     --elevation-overlay: 0 0 0 1px rgb(255 255 255 / .09), 0 16px 40px -8px rgb(0 0 0 / .6);
@@ -62,6 +68,8 @@ h1, h2, h3 { margin: 0; font-weight: 500; }
 p { margin: 0; }
 .muted { color: var(--muted); }
 [hidden] { display: none !important; }
+/* Read by screen readers, not drawn. */
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 /* ---------- the page frame ---------- */
 .wrap { max-inline-size: 2400px; margin-inline: auto; padding: var(--space-4) var(--gutter) var(--space-8); }
@@ -80,8 +88,11 @@ p { margin: 0; }
   height: 36px; padding: 0 14px; border-radius: var(--radius-md);
   border: 1px solid var(--line-strong); background: var(--surface);
   font: 500 13px/1 var(--sans); white-space: nowrap; cursor: pointer;
-  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+  transition: background-color var(--dur-short) ease, border-color var(--dur-short) ease, color var(--dur-short) ease;
 }
+/* Rows are rebuilt by a poll, so a fade there would replay under the pointer
+   every ten seconds: in the ledger, hover changes at once. */
+#cards :where(button, summary) { transition: none; }
 .sm { height: 28px; padding: 0 10px; border-radius: var(--radius-md); font-size: 13px; }
 .lg { height: auto; min-height: 40px; padding: 4px 12px; border-radius: var(--radius-md); flex-direction: column; align-items: flex-start; gap: 0; font: 500 13px/18px var(--sans); white-space: normal; text-align: start; }
 .lg small { font: 400 12px/16px var(--sans); opacity: .8; }
@@ -94,14 +105,17 @@ p { margin: 0; }
 .quiet { background: transparent; border-color: transparent; color: var(--muted); }
 .danger { background: transparent; border-color: transparent; color: var(--crit); }
 @media (hover: hover) and (pointer: fine) {
-  :where(button):hover, .secondary:hover { background: var(--surface-2); }
-  .primary:hover, .switch:hover { background: var(--accent-hover); }
-  .quiet:hover { background: var(--surface-2); color: var(--text); }
-  .danger:hover { background: color-mix(in srgb, var(--crit) 9%, transparent); }
+  :where(button):not(:disabled):hover, .secondary:not(:disabled):hover { background: var(--surface-2); }
+  .primary:not(:disabled):hover, .switch:not(:disabled):hover { background: var(--accent-hover); }
+  .quiet:not(:disabled):hover { background: var(--surface-2); color: var(--text); }
+  .danger:not(:disabled):hover { background: color-mix(in srgb, var(--crit) 9%, transparent); }
 }
-button:disabled, button:disabled:hover { opacity: .45; cursor: not-allowed; }
+/* Disabled reads in the muted tokens, not a dim: a dimmed primary read pink. */
+button:disabled { background: var(--surface-2); border-color: var(--line); color: var(--muted); cursor: not-allowed; }
+button:is(.quiet, .danger):disabled { background: transparent; border-color: transparent; }
 summary { list-style: none; cursor: pointer; }
 summary::-webkit-details-marker { display: none; }
+/* An outline, not a shadow: forced colours drop box-shadow. */
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 /* ---------- header ---------- */
@@ -231,7 +245,7 @@ summary::-webkit-details-marker { display: none; }
 .chip:has(input:checked) .count { color: color-mix(in srgb, var(--bg) 70%, var(--text)); }
 /* Density: a segmented pair. */
 .toggle { display: inline-flex; padding: 2px; gap: 2px; border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--surface-2); }
-.option { height: 22px; padding: 0 10px; border-radius: 6px; color: var(--muted); }
+.option { height: 22px; padding: 0 10px; border-radius: var(--radius-sm); color: var(--muted); }
 .option:has(input:checked) { background: var(--surface); color: var(--text); box-shadow: 0 0 0 1px var(--line-strong); }
 .option:has(input:focus-visible) { outline-offset: -2px; }
 @media (hover: hover) and (pointer: fine) {
@@ -335,7 +349,8 @@ summary::-webkit-details-marker { display: none; }
 .seg > * { border: 0; border-radius: 0; }
 .seg > * + * { border-inline-start: 1px solid var(--line-strong); }
 .seg button { background: transparent; }
-@media (hover: hover) and (pointer: fine) { .seg button:hover { background: var(--surface-2); } }
+.seg > :focus-visible { outline-offset: -2px; }
+@media (hover: hover) and (pointer: fine) { .seg button:not(:disabled):hover { background: var(--surface-2); } }
 /* A switch the server refuses is not offered at all. */
 .seg button[data-refused] { display: none; }
 .seg:not(:has(> :not([data-refused]))) { display: none; }
@@ -377,8 +392,9 @@ details.more .menu {
   position: absolute; inset-inline-end: 0; inset-block-start: calc(100% + 6px); z-index: 20; min-width: 13rem; padding: var(--space-1); display: grid;
   background: var(--surface-overlay); border: 1px solid var(--line); border-radius: var(--radius-lg); box-shadow: var(--elevation-overlay);
 }
-details.more .menu button { justify-content: flex-start; font-weight: 400; border-radius: 7px; }
+details.more .menu button { justify-content: flex-start; font-weight: 400; border-radius: var(--radius-md); }
 details.more .menu button.quiet { color: var(--text); }
+details.more .menu button:disabled { color: var(--muted); }
 details.more .menu hr { border: 0; border-block-start: 1px solid var(--line); margin: var(--space-1) 0; width: 100%; }
 
 /* A row's Edit and login panels open under it, full width. */
@@ -388,7 +404,9 @@ details.more .menu hr { border: 0; border-block-start: 1px solid var(--line); ma
 .card details.login a { color: var(--info); }
 .card details.login p { font-family: var(--serif); margin-top: var(--space-2); }
 
-/* The line an empty filter leaves, and the way back. */
+/* The line an empty filter leaves, and the way back; the line before the
+   first dashboard arrives. */
+.cards > .loading { padding: var(--space-4) var(--space-3); font: var(--text-md); color: var(--muted); border-block-end: 1px solid var(--line); }
 .cards > .empty { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-4) var(--space-3); font: var(--text-md); color: var(--muted); border-block-end: 1px solid var(--line); }
 details.history { margin-block-start: var(--space-3); }
 
@@ -401,9 +419,13 @@ details.history { margin-block-start: var(--space-3); }
 .roster-form .field > span { font: var(--text-xs); color: var(--muted); }
 .roster-form .field[hidden] { display: none; }
 .roster-form textarea { resize: vertical; }
-.roster-form input, .roster-form select, .roster-form textarea {
-  width: 100%; padding: 7px 10px; border-radius: var(--radius-md); border: 1px solid var(--line-strong); background: var(--surface); color: var(--text);
+.roster-form input:not([type="checkbox"], [type="radio"]), .roster-form select, .roster-form textarea {
+  width: 100%; padding: 6px 10px; border-radius: var(--radius-md); border: 1px solid var(--line-strong); background: var(--surface); color: var(--text);
 }
+/* A checkbox keeps its own size and sits before its label on one line. */
+.roster-form input:is([type="checkbox"], [type="radio"]) { inline-size: 16px; block-size: 16px; margin: 0; flex: none; accent-color: var(--info); }
+.roster-form .field:has(> input:is([type="checkbox"], [type="radio"])) { flex-direction: row-reverse; justify-content: flex-end; align-items: center; gap: var(--space-2); }
+.roster-form .field:has(> input:is([type="checkbox"], [type="radio"])) > span { font: var(--text-sm); color: var(--text); }
 .roster-form ::placeholder { color: var(--muted); opacity: 1; }
 .roster-form button { align-self: flex-start; }
 .roster-form details.repair > summary { cursor: pointer; font: var(--text-xs); color: var(--muted); }
@@ -462,4 +484,25 @@ details.history { margin-block-start: var(--space-3); }
   .rs { justify-content: flex-start; }
 }
 
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+/* ---------- motion ---------- */
+/* Rows moving after a reorder (app.js settle()): nothing lands on a row while
+   it slides, and a row crossing another hides the one beneath. */
+#cards.settling { pointer-events: none; }
+#cards.settling > :is(.card, .group) { position: relative; background: var(--bg); }
+
+/* The row menu and the popovers open from their top right corner (app.js
+   enter()); the toast rises in and fades out. Closing either is instant. */
+details.more > .menu, .roster-add > .popover { transform-origin: top right; }
+@media (prefers-reduced-motion: no-preference) {
+  .toast { transition: opacity var(--dur-short) var(--ease-in), display var(--dur-short) allow-discrete; }
+  .toast:not([hidden]) { transition: opacity var(--dur-medium) var(--ease-out), translate var(--dur-medium) var(--ease-out), display var(--dur-medium) allow-discrete; }
+  .toast[hidden] { opacity: 0; }
+  @starting-style { .toast:not([hidden]) { opacity: 0; translate: 0 8px; } }
+}
+/* Reduced motion keeps the fades and drops the movement. */
+@media (prefers-reduced-motion: reduce) {
+  .toast { transition: opacity var(--dur-short) var(--ease-in), display var(--dur-short) allow-discrete; }
+  .toast:not([hidden]) { transition: opacity var(--dur-medium) var(--ease-out), display var(--dur-medium) allow-discrete; }
+  .toast[hidden] { opacity: 0; }
+  @starting-style { .toast:not([hidden]) { opacity: 0; } }
+}

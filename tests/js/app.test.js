@@ -1532,3 +1532,37 @@ test("a best-spare button shows the role alone and keeps the full label for its 
   assert.strictEqual(alertRole("Assign legacy (review lanes) (lane-two) to best spare Spare"), "legacy (review lanes) (lane-two)");
   assert.strictEqual(alertRole("Something else"), "Something else");
 });
+
+const { motionKeys, motionPlan, pickControl, viewAnnouncement } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+
+test("the reorder motion keys a row by its address and each header by its run, so two runs of one group stay apart", () => {
+  const items = [
+    { group: { key: "usable" } }, { account: { email: "a@x" } },
+    { group: { key: "unread" } }, { account: { email: "b@x" } },
+    { group: { key: "exhausted" } }, { account: { email: "c@x" } },
+    { group: { key: "unread" } }, { account: { email: "d@x" } }
+  ];
+  assert.deepStrictEqual(motionKeys(items), ["g:usable:1", "r:a@x", "g:unread:1", "r:b@x", "g:exhausted:1", "r:c@x", "g:unread:2", "r:d@x"]);
+});
+
+test("the reorder motion moves what moved a pixel or more, fades in what was not shown, and leaves the rest", () => {
+  const before = { "r:a": 100, "r:b": 150, "r:c": 200.4 };
+  const after = { "r:a": 150, "r:b": 100, "r:c": 200, "r:d": 250 };
+  assert.deepStrictEqual(motionPlan(before, after), [{ key: "r:a", dy: -50 }, { key: "r:b", dy: 50 }, { key: "r:d", enter: true }]);
+  assert.deepStrictEqual(motionPlan(before, {}), []);
+});
+
+test("a rebuilt row gives the focus back to the same control, found by its label before its place", () => {
+  const labels = ["Rename this account", "This machine", "WSL", "More actions for a"];
+  assert.strictEqual(pickControl(labels, { index: 2, label: "WSL" }), 2);
+  assert.strictEqual(pickControl(["Rename this account", "Log in again", "This machine", "WSL"], { index: 2, label: "WSL" }), 3);
+  assert.strictEqual(pickControl(labels, { index: 1, label: "Gone" }), 1);
+  assert.strictEqual(pickControl(labels, { index: 9, label: "Gone" }), -1);
+});
+
+test("a view change is said in one sentence: the order, the rows shown, and what differs from the default", () => {
+  const view = { order: "reset7", group: true, show: "all", density: "compact" };
+  assert.strictEqual(viewAnnouncement(view, 11, 13), "Sorted by 7-day reset, 11 accounts shown");
+  assert.strictEqual(viewAnnouncement(Object.assign({}, view, { order: "burn", show: "attention" }), 3, 13), "Sorted by burn order, 3 of 13 accounts shown: Needs attention");
+  assert.strictEqual(viewAnnouncement(Object.assign({}, view, { group: false, density: "detailed" }), 1, 1), "Sorted by 7-day reset, not grouped, 1 account shown, detailed rows");
+});
