@@ -764,7 +764,7 @@
     var where = element("div", "where");
     where.appendChild(element("span", "dot " + (say ? say.kind : "")));
     where.appendChild(element("span", null, sideLabel(name)));
-    if (side) { where.appendChild(element("span", "detail", side.detail)); }
+    if (side) { where.appendChild(element("span", "detail", side.detail)).title = side.detail; }
     who.appendChild(where);
     if (account) {
       // Every strip is headed the same way, the name over the address, so the
@@ -1997,7 +1997,7 @@
     box.appendChild(line);
     box.appendChild(bar(limit, ticks));
     var reset = resetLine(limit, at);
-    if (reset) { box.appendChild(element("small", null, reset)).title = resetTitle(limit.resetsAt); }
+    if (reset) { box.appendChild(element("small", null, reset)).title = reset + "\n" + resetTitle(limit.resetsAt); }
     return box;
   }
 
@@ -2332,17 +2332,27 @@
     return Math.round(percent) + "%";
   }
 
-  // The alert strip's lines, worst first as the server sent them. An alert
-  // only says how close an account is; it acts on nothing by itself (see
-  // bestSpareActions for the one button it carries).
+  // The alert strip's lines, one per alerted account, worst first as the
+  // server sent them: each of its windows past a threshold, the worst tone of
+  // them, and the index of its first alert, the one bestSpareActions puts the
+  // buttons on. An alert only says how close an account is; it acts on
+  // nothing by itself.
   function alertLines(alerts, accounts) {
-    return (alerts || []).map(function (alert) {
+    var groups = [];
+    (alerts || []).forEach(function (alert, index) {
+      var part = alert.window + " " + percentText(alert.percent) + ", past " + percentText(alert.threshold);
+      var kind = alert.level === "critical" ? "crit" : "warn";
+      var group = groups.filter(function (candidate) { return candidate.account === alert.account; })[0];
+      if (group) {
+        group.parts.push(part);
+        if (kind === "crit") { group.kind = "crit"; }
+        return;
+      }
       var account = (accounts || []).filter(function (candidate) { return candidate.email === alert.account; })[0];
-      var name = account ? uniqueName(account, accounts) : alert.account;
-      return {
-        kind: alert.level === "critical" ? "crit" : "warn",
-        text: name + " · " + alert.window + " " + percentText(alert.percent) + ", past " + percentText(alert.threshold)
-      };
+      groups.push({ account: alert.account, name: account ? uniqueName(account, accounts) : alert.account, parts: [part], kind: kind, first: index });
+    });
+    return groups.map(function (group) {
+      return { kind: group.kind, text: group.name + " · " + group.parts.join(" · "), first: group.first };
     });
   }
 
@@ -2890,7 +2900,8 @@
     if (!count) { return null; }
     var kind = badges.some(function (badge) { return badge.kind === "crit"; }) ? "crit"
       : badges.some(function (badge) { return badge.kind === "warn"; }) ? "warn" : "ok";
-    return { kind: kind, text: "CI · " + count + (count === 1 ? " role" : " roles"), title: badges.map(function (badge) { return badge.text; }).join("\n") };
+    var text = "CI · " + count + (count === 1 ? " role" : " roles");
+    return { kind: kind, text: text, title: [text].concat(badges.map(function (badge) { return badge.text; })).join("\n") };
   }
 
   // A window's figure in a ledger cell's fixed slot: a percentage, or a short
@@ -3001,7 +3012,7 @@
     var pct = box.appendChild(element("span", "pct " + (figure.muted ? "muted" : meterTone(limit)), figure.text));
     if (figure.title) { pct.title = figure.title; }
     var reset = limit ? resetLine(limit, at) : null;
-    if (reset) { box.appendChild(element("small", null, reset)).title = resetTitle(limit.resetsAt); }
+    if (reset) { box.appendChild(element("small", null, reset)).title = reset + "\n" + resetTitle(limit.resetsAt); }
     return box;
   }
 
@@ -3285,6 +3296,10 @@
       keyChip.title = keyBadge.title;
       badges.appendChild(keyChip);
     }
+    // A narrow ledger can cut a chip short, so each says itself in full on hover.
+    Array.prototype.forEach.call(badges.children, function (chipNode) {
+      if (!chipNode.title) { chipNode.title = chipNode.textContent; }
+    });
     title.appendChild(badges);
     who.appendChild(title);
     // The heading is the display name, or the local part when the account has
@@ -3299,7 +3314,7 @@
     // lines under it show in Detailed only.
     var status = element("div", "st");
     status.appendChild(sayLine(say, account, at));
-    if (!status.firstChild.title) { status.firstChild.title = say.text; }
+    status.firstChild.title = say.text + (status.firstChild.title ? "\n" + status.firstChild.title : "");
     status.appendChild(statusLines(account, dashboard, at));
     ciTokenExpiries(roster, at, lastAccounts, account.email).forEach(function (expiry) {
       status.appendChild(element("p", "say detail-only " + expiry.tone, ciExpirySentence(expiry)));
@@ -3317,7 +3332,7 @@
     if (notices.length) {
       card.className += " has-notice";
       var notice = element("p", "notice compact-only " + (account.cliLoggedOut || loginExpired(account, at) ? "crit" : "warn"), notices.join(" · "));
-      notice.title = notices.join("\n");
+      notice.title = notice.textContent;
       line.appendChild(notice);
     }
 
@@ -3455,7 +3470,7 @@
     var bar = element("div", "view-bar");
     var controls = element("div", "view-controls");
     var orderField = element("label", "view-field");
-    orderField.appendChild(element("span", null, "Order"));
+    orderField.appendChild(element("span", "view-name", "Order"));
     var order = element("select");
     order.name = "view-order";
     [["burn", "Burn order"], ["reset7", "7-day reset"], ["reset5", "5-hour reset"], ["left", "Most left"], ["name", "Name"]].forEach(function (choice) {
@@ -3583,14 +3598,15 @@
     // that changes nothing never moves a button from under the pointer.
     var fresh = element("ul");
     if (alerts.length) { fresh.appendChild(element("li", "alerts-head", "Usage alerts · " + alerts.length)); }
-    alerts.forEach(function (alert, index) {
+    alerts.forEach(function (alert) {
       var line = element("li", "alert " + alert.kind);
       line.appendChild(element("p", "alert-text", alert.text));
-      if (spareActions[index].length) {
-        var spare = accountByEmail(spareActions[index][0].spare);
-        line.appendChild(element("p", "spare", "Move to best spare " + (spare ? uniqueName(spare, dashboard.accounts) : spareActions[index][0].spare) + ":"));
+      var actions = spareActions[alert.first];
+      if (actions.length) {
+        var spare = accountByEmail(actions[0].spare);
+        line.appendChild(element("p", "spare", "Move to best spare " + (spare ? uniqueName(spare, dashboard.accounts) : actions[0].spare) + ":"));
         var roles = element("div", "roles");
-        spareActions[index].forEach(function (action) {
+        actions.forEach(function (action) {
           // Rebuilt by every poll, so it takes the running mutation's lock as it is drawn.
           var button = blockable(actionButton(alertRole(action.label), "secondary sm", function () { assignToBestSpare(action); }), false);
           button.setAttribute("aria-label", action.label);

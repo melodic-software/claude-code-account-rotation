@@ -861,10 +861,22 @@ test("alertLines writes the server's percent and threshold the way a card writes
     { account: "a@example.com", level: "critical", percent: 92.4, threshold: 85, window: "7-day" },
     { account: "z@example.com", level: "warning", percent: 89.6, threshold: 60, window: "Fable" }
   ], accounts), [
-    { kind: "crit", text: "Work · 7-day 92%, past 85%" },
-    { kind: "warn", text: "z@example.com · Fable 90%, past 60%" }
+    { kind: "crit", text: "Work · 7-day 92%, past 85%", first: 0 },
+    { kind: "warn", text: "z@example.com · Fable 90%, past 60%", first: 1 }
   ]);
   assert.deepStrictEqual(alertLines(undefined, accounts), []);
+});
+
+test("alertLines gives an account one line for all its windows, in the worst tone, keyed to its first alert", () => {
+  const accounts = [{ email: "a@example.com", roster: { alias: "Work" } }, { email: "b@example.com", roster: null }];
+  assert.deepStrictEqual(alertLines([
+    { account: "a@example.com", level: "warning", percent: 100, threshold: 75, window: "5-hour" },
+    { account: "b@example.com", level: "warning", percent: 72, threshold: 70, window: "7-day" },
+    { account: "a@example.com", level: "critical", percent: 100, threshold: 90, window: "7-day" }
+  ], accounts), [
+    { kind: "crit", text: "Work · 5-hour 100%, past 75% · 7-day 100%, past 90%", first: 0 },
+    { kind: "warn", text: "b · 7-day 72%, past 70%", first: 1 }
+  ]);
 });
 
 const { bestSpareActions } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
@@ -1470,7 +1482,7 @@ test("the model-weekly heading is the one label the known windows share, else a 
 test("the compact CI chip counts the roles in their worst tone and lists every badge in its title", () => {
   const roster = { ciRoles: [{ name: "a" }, { name: "b" }] };
   assert.deepStrictEqual(ciSummary(roster, [{ kind: "ok", text: "a · token" }, { kind: "warn", text: "b · token · split" }, { text: "CI token" }]),
-    { kind: "warn", text: "CI · 2 roles", title: "a · token\nb · token · split\nCI token" });
+    { kind: "warn", text: "CI · 2 roles", title: "CI · 2 roles\na · token\nb · token · split\nCI token" });
   assert.strictEqual(ciSummary({ ciRoles: [{ name: "a" }] }, [{ kind: "crit", text: "a · token · expired" }]).text, "CI · 1 role");
   assert.strictEqual(ciSummary({ ciRoles: [{ name: "a" }] }, [{ kind: "crit", text: "x" }]).kind, "crit");
   assert.strictEqual(ciSummary({ ciRoles: [] }, [{ kind: "ok", text: "CI token · 2026-01-01" }]), null);

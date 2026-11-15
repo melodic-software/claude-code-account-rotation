@@ -35,7 +35,7 @@
 
   /* The page frame and the ledger's columns. */
   --gutter: clamp(16px, 2.5vw, 48px);
-  --rail: clamp(26rem, 21vw, 28rem);
+  --rail: clamp(24rem, 21vw, 28rem);
   --act: 20.5rem;
   --cols: minmax(9rem, 1.1fr) minmax(7rem, 1fr) 9.5rem 6rem 6.5rem 6.5rem var(--act);
   --cols-no-5h: minmax(9rem, 1.1fr) minmax(7rem, 1fr) 9.5rem 6rem 6.5rem var(--act);
@@ -83,7 +83,7 @@ p { margin: 0; }
   transition: background-color .15s ease, border-color .15s ease, color .15s ease;
 }
 .sm { height: 28px; padding: 0 10px; border-radius: var(--radius-md); font-size: 13px; }
-.lg { height: auto; min-height: 44px; padding: 6px 14px; border-radius: var(--radius-md); flex-direction: column; align-items: flex-start; gap: 0; font: 500 13px/18px var(--sans); white-space: normal; text-align: start; }
+.lg { height: auto; min-height: 40px; padding: 4px 12px; border-radius: var(--radius-md); flex-direction: column; align-items: flex-start; gap: 0; font: 500 13px/18px var(--sans); white-space: normal; text-align: start; }
 .lg small { font: 400 12px/16px var(--sans); opacity: .8; }
 /* Full strength on the orange: at .8 the subtitle falls under AA (4.45:1). */
 .primary.lg small { opacity: 1; }
@@ -147,7 +147,7 @@ summary::-webkit-details-marker { display: none; }
 
 /* ---------- the Now strips, one per side ---------- */
 .now { display: grid; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); gap: var(--space-3); }
-.side-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: var(--space-3) var(--space-4); display: grid; gap: var(--space-2); align-content: start; box-shadow: var(--shadow); min-inline-size: 0; }
+.side-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: var(--space-3) var(--space-4); display: grid; gap: 6px; align-content: start; box-shadow: var(--shadow); min-inline-size: 0; }
 .sh { display: flex; align-items: flex-start; gap: var(--space-3); }
 .who { flex: 1; min-inline-size: 0; }
 .where { display: flex; align-items: center; gap: var(--space-2); font: var(--text-xs); color: var(--muted); white-space: nowrap; min-inline-size: 0; }
@@ -167,11 +167,11 @@ summary::-webkit-details-marker { display: none; }
 .prompt { padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); font: 400 13px/18px var(--serif); background: color-mix(in srgb, var(--crit) 8%, var(--surface)); color: var(--crit); }
 .mt { display: grid; grid-template-columns: repeat(auto-fit, minmax(5.5rem, 1fr)); gap: var(--space-2) 10px; }
 .meter { min-inline-size: 0; }
-.meter .l { display: flex; justify-content: space-between; gap: var(--space-1); align-items: baseline; font: var(--text-xs); color: var(--muted); margin-block-end: 6px; white-space: nowrap; }
+.meter .l { display: flex; justify-content: space-between; gap: var(--space-1); align-items: baseline; font: var(--text-xs); color: var(--muted); margin-block-end: 4px; white-space: nowrap; }
 .meter .l .pct { color: var(--text); font-weight: 500; }
-.meter small { display: block; margin-block-start: 6px; font: var(--text-xs); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.meter small { display: block; margin-block-start: 4px; font: var(--text-xs); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* A window with no reset to show keeps the line, so both strips' buttons sit level. */
-.meter:not(:has(small))::after { content: "\00a0"; display: block; margin-block-start: 6px; font: var(--text-xs); }
+.meter:not(:has(small))::after { content: "\00a0"; display: block; margin-block-start: 4px; font: var(--text-xs); }
 .go { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center; }
 .go .lg { flex: 1 1 12rem; min-inline-size: 0; }
 .go .lg > span { max-inline-size: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -183,9 +183,9 @@ summary::-webkit-details-marker { display: none; }
 .say.crit, .n.crit, .pct.crit, .notice.crit { color: var(--crit); }
 .pct.muted { color: var(--muted); font-weight: 400; }
 .say.paused { color: var(--muted); }
-.bar { position: relative; height: 6px; border-radius: var(--radius-full); background: var(--track); overflow: hidden; }
+.bar { position: relative; height: 6px; border-radius: var(--radius-full); background: var(--track); }
 /* The alert thresholds the server names, on a CI-role account's 7-day bar. */
-.bar .tick { position: absolute; inset-block: 0; width: 2px; margin-inline-start: -1px; background: var(--text); opacity: .6; }
+.bar .tick { position: absolute; inset-block: -3px; width: 2px; margin-inline-start: -1px; background: var(--text); box-shadow: 0 0 0 1px var(--bg); }
 .bar i { display: block; height: 100%; border-radius: inherit; background: var(--faint); }
 .bar i.ok { background: var(--ok-fill); } .bar i.high { background: var(--high-fill); } .bar i.warn { background: var(--warn-fill); } .bar i.crit { background: var(--crit-fill); }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; display: inline-block; }
@@ -259,7 +259,13 @@ summary::-webkit-details-marker { display: none; }
 }
 /* A ledger between 1000 and 1300 px wide keeps one line with narrower figures. */
 @container ledger (max-width: 1299px) {
-  .ledger-top, .cards { --cols: minmax(8rem, 1.1fr) minmax(6.5rem, 1fr) 7.5rem 5.5rem 6.5rem 5rem var(--act); --cols-no-5h: minmax(8rem, 1.1fr) minmax(6.5rem, 1fr) 7.5rem 5.5rem 6.5rem var(--act); }
+  .ledger-top, .cards { --cols: minmax(8rem, 1.1fr) minmax(6.5rem, 1fr) 6.5rem 5.25rem 5.5rem 4.5rem var(--act); --cols-no-5h: minmax(8rem, 1.1fr) minmax(6.5rem, 1fr) 6.5rem 5.25rem 5.5rem var(--act); }
+  .ledger-head, .row { column-gap: 10px; }
+  /* Too narrow for a readable bar: the small meters keep their figure only. */
+  .row > :is(.u.mw, .u.h5) .bar { visibility: hidden; }
+  .view-controls { column-gap: var(--space-3); }
+  /* The prefixes stay the controls' names, read but not shown. */
+  .view-name { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 }
 
 /* A group header: what the rows under it are and what their times mean. */
@@ -279,15 +285,16 @@ summary::-webkit-details-marker { display: none; }
 
 /* Account: the dot and the name on one line; the chips, then the address,
    on the line under it, the address giving way first. */
-.nm { display: grid; grid-template-columns: 18px auto minmax(0, 1fr); grid-template-areas: "dot name name" ". chips addr"; align-items: center; row-gap: 2px; }
+.nm { display: grid; grid-template-columns: 18px minmax(0, max-content) minmax(0, 1fr); grid-template-areas: "dot name name" ". chips addr"; align-items: center; row-gap: 2px; }
 .nm > .dot { grid-area: dot; }
 .nm .title { display: contents; }
 .card h2 { grid-area: name; font: 500 14px/20px var(--sans); display: flex; min-inline-size: 0; contain: inline-size; }
 .card h2 .display-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.badges { grid-area: chips; display: flex; gap: var(--space-1); margin-inline-end: var(--space-2); }
+.badges { grid-area: chips; display: flex; gap: var(--space-1); margin-inline-end: var(--space-2); min-inline-size: 0; }
 .badges:empty { display: none; }
 .ledger[data-density="compact"] .badges:not(:has(> :not(.detail-only))) { display: none; }
-.nm .badge { height: 18px; }
+.nm .badge { height: 18px; min-inline-size: 0; flex-shrink: 1; }
+.ledger[data-density="compact"] .nm .badge:not(.detail-only) { display: block; line-height: 18px; overflow: hidden; text-overflow: ellipsis; }
 .address { grid-area: addr; font: 400 12px/18px var(--sans); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ledger[data-density="detailed"] .nm { grid-template-columns: 18px minmax(0, 1fr); grid-template-areas: "dot name" ". chips" ". addr"; row-gap: 4px; }
 .ledger[data-density="detailed"] .badges { flex-wrap: wrap; margin: 0; }
@@ -442,6 +449,7 @@ details.history { margin-block-start: var(--space-3); }
   .u { grid-template-columns: auto minmax(0, 1fr) 3.25rem; }
   .u .cell-label { grid-column: 1; max-inline-size: 4.5rem; overflow: hidden; text-overflow: ellipsis; }
   .row > .u.mw, .row > .u.h5 { padding-inline: 0; }
+  .row > :is(.u.mw, .u.h5) .bar { visibility: visible; }
   .u .bar, .u .no-bar { grid-column: 2; }
   .u .pct { grid-column: 3; }
   .rs { display: flex; justify-content: flex-end; align-items: baseline; gap: 6px; }
