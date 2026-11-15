@@ -2883,13 +2883,12 @@
   }
 
   // Which of a rebuilt row's controls takes the focus back: the one with the
-  // saved label at the saved place, else the first with that label, else the
-  // one at the saved place, else none (-1).
+  // saved label at the saved place, else the first with that label, else none
+  // (-1). Never a control by place alone: a button that went away would hand
+  // the focus to whatever took its place, and Enter there could be a Switch.
   function pickControl(labels, saved) {
     if (labels[saved.index] === saved.label) { return saved.index; }
-    var named = labels.indexOf(saved.label);
-    if (named >= 0) { return named; }
-    return saved.index >= 0 && saved.index < labels.length ? saved.index : -1;
+    return labels.indexOf(saved.label);
   }
 
   // What the status line says after a view change, for example
@@ -3713,7 +3712,9 @@
     // The first paint has no row on screen to move, only the loading line.
     var first = renderedOrder.length === 0;
     var moved = !first && reordered(arriving, renderedOrder);
-    if (!force && !viewChanged && moved && (cards.matches(":hover") || cards.contains(document.activeElement))) { return; }
+    // While rows slide the list takes no pointer, so :hover cannot be read;
+    // a slide in progress counts as the pointer being there.
+    if (!force && !viewChanged && moved && (cards.matches(":hover") || cards.classList.contains("settling") || cards.contains(document.activeElement))) { return; }
     // Rows slide to their new places only when the same rows are re-ordered:
     // not on the first paint, not when the density or the column set changed
     // every row's shape, and not for a view the operator changed by keyboard.
@@ -3837,7 +3838,10 @@
   }
 
   function rowControls(card) {
-    return Array.prototype.slice.call(card.querySelectorAll("button, summary, input, select, textarea, a[href]"));
+    // Only what can take the focus: a refused switch button is in the row but not drawn.
+    return Array.prototype.filter.call(card.querySelectorAll("button, summary, input, select, textarea, a[href]"), function (node) {
+      return node.getClientRects().length > 0;
+    });
   }
 
   function controlLabel(node) {

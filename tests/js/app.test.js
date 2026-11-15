@@ -1552,12 +1552,12 @@ test("the reorder motion moves what moved a pixel or more, fades in what was not
   assert.deepStrictEqual(motionPlan(before, {}), []);
 });
 
-test("a rebuilt row gives the focus back to the same control, found by its label before its place", () => {
+test("a rebuilt row gives the focus back to the same control by its label, and to none when the control went away", () => {
   const labels = ["Rename this account", "This machine", "WSL", "More actions for a"];
   assert.strictEqual(pickControl(labels, { index: 2, label: "WSL" }), 2);
   assert.strictEqual(pickControl(["Rename this account", "Log in again", "This machine", "WSL"], { index: 2, label: "WSL" }), 3);
-  assert.strictEqual(pickControl(labels, { index: 1, label: "Gone" }), 1);
-  assert.strictEqual(pickControl(labels, { index: 9, label: "Gone" }), -1);
+  // Re-issue token went away: the focus must not fall to the Switch now at its place.
+  assert.strictEqual(pickControl(labels, { index: 1, label: "Re-issue token" }), -1);
 });
 
 test("a view change is said in one sentence: the order, the rows shown, and what differs from the default", () => {
