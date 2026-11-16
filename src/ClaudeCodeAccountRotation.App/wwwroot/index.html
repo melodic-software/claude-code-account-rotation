@@ -20,12 +20,16 @@
         <details class="roster-add">
           <summary class="btn quiet sm">Add an account</summary>
           <form id="add" class="roster-form popover">
+            <p class="popover-title">Add an account</p>
             <label class="field">
               <span>Email</span>
               <input id="add-email" name="email" type="email" required autocomplete="off" placeholder="you@example.com">
             </label>
             <div id="add-fields" class="fields"></div>
-            <button type="submit" class="btn primary">Add</button>
+            <div class="form-actions popover-actions">
+              <button type="button" class="btn quiet popover-cancel">Cancel</button>
+              <button type="submit" class="btn primary">Add</button>
+            </div>
           </form>
         </details>
         <button id="stop" type="button" class="btn quiet sm">Stop</button>

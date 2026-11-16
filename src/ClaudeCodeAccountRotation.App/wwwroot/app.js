@@ -874,7 +874,7 @@
       }
     } else if (side.online) {
       if (account && account.roster && account.loggedOutOn === side.side) {
-        go.appendChild(actionButton("Log in again on " + sideLabel(name), "primary lg", function () { loginFromSide(side.side, account.email); }));
+        go.appendChild(actionButton("Log in again on " + sideLabel(name), "secondary lg fix login-side", function () { loginFromSide(side.side, account.email); }));
       }
       var there = recommended(lastAccounts, takesOn(side.side), at);
       if (there) {
@@ -885,7 +885,7 @@
       }
       // Read at click time, and re-read by the server before anything moves.
       if (side.liveAccount) {
-        go.appendChild(blockable(actionButton("Hand back", "quiet", function () { releaseSide(side.side, side.liveAccount); }), false));
+        go.appendChild(blockable(actionButton("Hand back", "secondary hand-back", function () { releaseSide(side.side, side.liveAccount); }), false));
       }
     } else if (side.canStart) {
       go.appendChild(blockable(actionButton("Start " + sideLabel(name) + " side", "secondary", function () { mutate(sidePath(side.side, "/start"), "POST", null, null); }), false));
@@ -1729,7 +1729,9 @@
       var box = element("input");
       box.type = "checkbox";
       box.checked = true;
-      labeled(roleBox, places.length === 1 ? role.name : role.name + " in " + roleWhere(role), box);
+      // Named as the badges and alerts name it, so one role reads one way.
+      var roleName = role.prefix ? role.name.toLowerCase() : role.name;
+      labeled(roleBox, places.length === 1 ? roleName : roleName + " in " + roleWhere(role), box);
       return box;
     });
     // Roles to add by their token secrets, all set on the date above. It
@@ -1774,6 +1776,7 @@
     var save = element("button", "primary", "Save");
     save.type = "submit";
     actions.appendChild(save);
+    actions.appendChild(actionButton("Cancel", "quiet", function () { panel.open = false; }));
     // A card that does not need a login still lets the operator force one; here
     // it is reachable without inviting a click from the card's face.
     if (offerLogin) {
@@ -2027,7 +2030,7 @@
     (ticks || []).forEach(function (percent) {
       var tick = element("b", "tick");
       tick.style.left = percent + "%";
-      tick.title = "alert at " + percentText(percent);
+      tick.title = "CI role alert threshold " + percentText(percent);
       track.appendChild(tick);
     });
     // A 2 px tick is too small to hover, so the whole track names the marks.
@@ -3181,7 +3184,7 @@
   // track never reads as 0%; the percentage sits in a fixed slot so every bar
   // in the column has one length.
   function cell(limit, at, ticks, kind, label) {
-    var box = element("div", "u " + kind);
+    var box = element("div", "u " + kind + (!limit || limit.notApplicable === true ? " none" : ""));
     // The column header is hidden on narrow screens and from screen readers,
     // so each cell names its own window.
     // The model column says one name on every row, the one its header says.
@@ -3193,22 +3196,22 @@
     var reset = limit ? resetLine(limit, at) : null;
     if (reset) {
       box.appendChild(element("small", "detail-only", reset)).title = reset + "\n" + resetTitle(limit.resetsAt);
-      // The Resets column counts down one window per row; the 5-hour window's
-      // own reset stays under its figure in compact too.
-      if (kind === "h5") {
-        pct.title = [figure.title, reset].filter(Boolean).join("\n");
-        box.appendChild(element("small", "compact-only soon", countdown(secondsUntil(limit.resetsAt, at)))).title = reset + "\n" + resetTitle(limit.resetsAt);
-      }
+      // The compact cell is one line, bar and figure; the window's own reset
+      // is the figure's hover there.
+      pct.title = [figure.title, reset, resetTitle(limit.resetsAt)].filter(Boolean).join("\n");
     }
     return box;
   }
 
   // The instant the row is ordered by in its group, as a countdown: the
   // ledger's spine, end-aligned so the times read down one edge.
-  function resetCell(resetAt, at, windowName) {
+  function resetCell(resetAt, at, windowName, columnWindow) {
     var box = element("div", "rs");
     box.appendChild(element("span", "cell-label", "Resets"));
     if (resetAt && Date.parse(resetAt) > at) {
+      // The column is the 7-day reset; a row counting down to another window
+      // names it, so the column never changes its unit unsaid.
+      if (windowName !== columnWindow) { box.appendChild(element("span", "window", windowName.replace(/ weekly$/, "").replace("5-hour", "5h") + " · ")); }
       box.appendChild(element("span", "when", countdown(secondsUntil(resetAt, at)))).title = windowName + " reset, " + resetTitle(resetAt);
     } else {
       box.appendChild(element("span", "when muted", "–")).title = "no reset to count down to";
@@ -3416,6 +3419,7 @@
       // and a banner.
       var here = actionButton(HERE, "secondary sm", function () { switchTo(account.email); });
       here.setAttribute("aria-label", "Switch " + HERE.toLowerCase() + " to " + name);
+      if (dashboard.banner) { here.title = "Switching is off"; }
       seg.appendChild(refusable(blockable(here, switchBlocked(account, dashboard, false)), !account.canSwitchHere));
     }
     lastSides.forEach(function (side) {
@@ -3426,6 +3430,7 @@
       var there = actionButton(sideLabel(side.side), "secondary sm", function () { switchSide(side.side, account.email); });
       there.setAttribute("aria-label", "Switch " + sideLabel(side.side) + " to " + name);
       var refused = (account.offeredTo || []).indexOf(side.side) === -1;
+      if (dashboard.banner) { there.title = "Switching is off"; }
       seg.appendChild(refusable(blockable(there, refused || !!dashboard.banner), refused));
     });
     return seg;
@@ -3438,11 +3443,11 @@
     var tone = say.kind === "ok" && loginSoon(account, at) ? "warn" : say.kind;
     // A row that cannot be used now reads quieter than one that can.
     var card = element("section", "card" + (account.isLive && !account.cliLoggedOut ? " live" : "") + (account.cliLoggedOut ? " logged-out" : "") + (paused ? " paused" : "")
-      + (account.standing === "usable" ? "" : " quiet") + (next ? " next" : ""));
+      + (account.standing === "usable" ? "" : " quiet") + (spent(account) ? " spent" : "") + (next ? " next" : ""));
     var line = element("div", "row");
 
     var who = element("div", "nm");
-    who.appendChild(element("span", "dot " + tone));
+    var dot = who.appendChild(element("span", "dot " + tone));
     var title = element("div", "title");
     title.appendChild(cardHeading(account));
     var badges = element("span", "badges");
@@ -3457,7 +3462,8 @@
     // Parked is where nearly every account sits, so the compact row leaves it
     // out, and a logout's status already names the side the account is in use on.
     if (account.chip) { badges.appendChild(element("span", "badge store" + (account.chip === "parked" || account.cliLoggedOut ? " detail-only" : ""), account.chip)); }
-    if (chip && (!account.chip || (chip !== "live" && chip !== "ready"))) {
+    // A paused account's status says Paused, so its chip would say it twice.
+    if (chip && (!account.chip || (chip !== "live" && chip !== "ready")) && !(chip === "paused" && say.kind === "paused")) {
       badges.appendChild(element("span", "badge " + chip.replace(/ /g, "-"), chip));
     }
     if (!roster) { badges.appendChild(element("span", "badge off-roster", "not on roster")); }
@@ -3512,8 +3518,15 @@
       brief = { kind: noticeKind, text: notices.join(" · ") };
       notices = [];
     }
-    var briefLine = status.appendChild(element("p", "say brief " + brief.kind, brief.text));
+    // Every status starts with a capital, a server's lower-case message too.
+    var briefLine = status.appendChild(element("p", "say brief " + brief.kind, brief.text.charAt(0).toUpperCase() + brief.text.slice(1)));
     briefLine.title = brief.text === say.text ? full.title : [brief.text, full.title].filter(Boolean).join("\n");
+    // The dot says the worst the row says: a usable account with a warning on
+    // its face is not green.
+    var worst = [brief.kind].concat(notices.length ? [noticeKind] : [], ciChip ? [ciChip.kind] : []);
+    if (tone === "ok" && worst.some(function (kind) { return kind === "warn" || kind === "crit"; })) {
+      dot.className = "dot " + (worst.indexOf("crit") !== -1 ? "crit" : "warn");
+    }
     full.className += " full";
     status.appendChild(full);
     status.appendChild(statusLines(account, dashboard, at));
@@ -3528,7 +3541,7 @@
     var resetWindow = view.order === "reset5" || (view.order === "burn" && account.standing === "limited") ? "5-hour"
       : view.order === "burn" && account.standing === "model-limited" ? (account.limitedModel || "Model") + " weekly" : "7-day";
     line.appendChild(cell(limitOf("weekly_all"), at, meterTicks(account, dashboard.alertThresholds), "d7", "7-day"));
-    line.appendChild(resetCell(resetAt, at, resetWindow));
+    line.appendChild(resetCell(resetAt, at, resetWindow, view.order === "reset5" ? "5-hour" : "7-day"));
     line.appendChild(cell(limitOf("weekly_scoped"), at, [], "mw", modelColumn));
     line.appendChild(cell(limitOf("session"), at, [], "h5", "5-hour"));
 
@@ -3585,8 +3598,9 @@
       }));
     }
     menu.appendChild(blockable(menuItem(more, "Refresh usage", "quiet sm", function () { refreshAccount(account.email); }), false));
-    // In groups under rules: open, CI token, API and Admin keys, rotation. A
-    // delete reads in the danger colour.
+    // In groups under rules: open, CI token, API and Admin keys, rotation, and
+    // every delete last, apart under its own rule, so no ordinary item sits
+    // between two that destroy something. A delete reads in the danger colour.
     if (roster) {
       menu.appendChild(element("hr"));
       menu.appendChild(menuItem(more, "Open claude.ai", "quiet sm", function () { openAccountPage(account.email, "claude-ai", "claude.ai"); }));
@@ -3594,42 +3608,42 @@
       menu.appendChild(element("hr"));
       menu.appendChild(menuItem(more, "Generate CI token", "quiet sm", function () { openCiTokenPanel(account); }));
       menu.appendChild(menuItem(more, roster.ciTokenStoredOn ? "Replace CI token" : "Store CI token", "quiet sm", function () { openCiTokenValuePanel(account); }));
-      if (roster.ciTokenStoredOn) {
-        menu.appendChild(menuItem(more, "Delete CI token", "danger sm", function () { clearCiTokenValue(account.email); }));
-      }
       if (roster.ciTokenStoredOn || roster.consoleApiKeySetOn) {
         menu.appendChild(menuItem(more, "Assign to role", "quiet sm", function () { openAssignPanel(account); }));
       }
-    }
-    if (roster) {
       menu.appendChild(element("hr"));
       menu.appendChild(menuItem(more, roster.consoleApiKeySetOn ? "Replace API key" : "Set API key", "quiet sm", function () { openApiKeyPanel(account); }));
       if (roster.consoleApiKeySetOn && (roster.ciRoles || []).some(function (role) { return role.keySecret; })) {
         menu.appendChild(menuItem(more, "Push API key", "quiet sm", function () { openApiKeyPanel(account); }));
       }
-      if (roster.consoleApiKeySetOn) {
-        menu.appendChild(menuItem(more, "Delete API key", "danger sm", function () { clearApiKey(account.email); }));
-      }
       menu.appendChild(menuItem(more, roster.adminKeySetOn ? "Replace Admin key" : "Set Admin key", "quiet sm", function () { openApiKeyPanel(account, true); }));
-      if (roster.adminKeySetOn) {
-        menu.appendChild(menuItem(more, "Delete Admin key", "danger sm", function () { clearApiKey(account.email, true); }));
-      }
       if (roster.consoleApiKeySetOn && roster.adminKeySetOn) {
         menu.appendChild(menuItem(more, "Check API key", "quiet sm", function () { checkApiKey(account.email); }));
       }
-    }
-    if (roster) {
       menu.appendChild(element("hr"));
       menu.appendChild(menuItem(more, paused ? "Resume rotation" : "Pause rotation", "quiet sm", function () { setPaused(account.email, !paused); }));
+    }
+    var deletes = [];
+    if (roster && roster.ciTokenStoredOn) {
+      deletes.push(menuItem(more, "Delete CI token", "danger sm", function () { clearCiTokenValue(account.email); }));
+    }
+    if (roster && roster.consoleApiKeySetOn) {
+      deletes.push(menuItem(more, "Delete API key", "danger sm", function () { clearApiKey(account.email); }));
+    }
+    if (roster && roster.adminKeySetOn) {
+      deletes.push(menuItem(more, "Delete Admin key", "danger sm", function () { clearApiKey(account.email, true); }));
     }
     // Remove revokes the login and deletes the folder, so it sits apart, under
     // a rule, and never beside Switch.
     if (!account.isLive) {
-      menu.appendChild(element("hr"));
       // Removing a slot the other side holds would skip the logout it cannot
       // reach and delete the record that says the pair exists at all. The
       // route refuses it; the button goes with it.
-      menu.appendChild(blockable(menuItem(more, "Remove account", "danger sm", function () { remove(account.email); }), account.heldAway));
+      deletes.push(blockable(menuItem(more, "Remove account", "danger sm", function () { remove(account.email); }), account.heldAway));
+    }
+    if (deletes.length) {
+      menu.appendChild(element("hr"));
+      deletes.forEach(function (item) { menu.appendChild(item); });
     }
     more.appendChild(menu);
     act.appendChild(more);
@@ -3776,8 +3790,10 @@
     });
     var taken = figuresAsOf(dashboard.accounts);
     var asOfLine = viewBar.querySelector(".figures-asof");
-    asOfLine.textContent = taken ? "Figures as of " + new Date(taken).toLocaleTimeString() : "";
-    asOfLine.title = taken ? "When most rows were read; a row read at another time says so in Detailed, and a stale one on its face" : "";
+    // Said with its age, so it reads apart from the header's Updated, which is
+    // when the page last asked the service.
+    asOfLine.textContent = taken ? "Figures as of " + new Date(taken).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) + " · read " + ago(taken, at) : "";
+    asOfLine.title = taken ? "When most rows' usage was read (" + new Date(taken).toLocaleTimeString() + "); Updated in the header is when the page last asked the service. A row read at another time says so in Detailed, and a stale one on its face" : "";
   }
 
   function render(dashboard, force, viewChanged) {
@@ -3792,6 +3808,7 @@
     lastDashboard = dashboard;
     lastAccounts = dashboard.accounts;
     captured.textContent = "Updated " + new Date(dashboard.capturedAt).toLocaleTimeString();
+    captured.title = "When the page last asked the service; the ledger's figures line says when the usage itself was read";
     refreshStateLine.textContent = passState(dashboard);
     refreshAllButton.disabled = busy;
     banner.hidden = !dashboard.banner;
@@ -3900,7 +3917,11 @@
     ledger.setAttribute("data-density", view.density);
     ledger.classList.toggle("no-5h", !fiveHour);
     ledger.classList.toggle("sparse-5h", sparse);
-    ledger.querySelector(".h-mw").textContent = ledger.querySelector(".h-mw").title = modelLabel(dashboard.accounts);
+    // A generic model name is cut to fit the column, whole in its hover.
+    var modelHead = ledger.querySelector(".h-mw");
+    modelHead.title = modelLabel(dashboard.accounts);
+    modelHead.textContent = modelHead.title === "Model weekly" ? "Model 7-d" : modelHead.title;
+    ledger.querySelector(".h-rs").textContent = view.order === "reset5" ? "5-hour reset" : "7-day reset";
     // Every row is built, the filtered ones hidden, so a panel opener always
     // finds its card.
     var keys = motionKeys(items);
@@ -4071,6 +4092,13 @@
     Array.prototype.forEach.call(document.querySelectorAll("details.more[open], details.roster-add[open]"), function (open) {
       if (!open.contains(event.target)) { open.open = false; }
     });
+    // A popover's Cancel closes it and hands the focus back to its opener.
+    var cancel = event.target.closest && event.target.closest("details.roster-add .popover-cancel");
+    if (cancel) {
+      var popover = cancel.closest("details.roster-add");
+      popover.open = false;
+      popover.querySelector("summary").focus();
+    }
   });
   // Escape closes a row menu, Add an account and Check roles, and gives the
   // focus back to the control that opened it.
