@@ -3576,8 +3576,11 @@
     // Beside the meters, so an account near its 7-day limit can have its
     // roles' token re-issued without opening the menu. It opens the same
     // panel as Generate CI token, with this account's roles ticked.
+    // The slot holds one button. A login the row needs outranks the re-issue,
+    // which then moves into the row menu.
     var reissue = reissueButton(account, openCiTokenPanel);
-    if (reissue) { extra.appendChild(actionButton(reissue.label, "secondary sm", reissue.click)); }
+    var loginFix = !!roster && ((!account.isLive && loginOffered(account, at)) || !!account.loggedOutOn);
+    if (reissue && !loginFix) { extra.appendChild(actionButton(reissue.label, "secondary sm", reissue.click)); }
     // The live account is signed in already; logging it into its parked folder
     // would leave one account holding two logins. A card with a login good for
     // longer than the warning window does not need the button on its face; an
@@ -3616,6 +3619,7 @@
       }));
     }
     menu.appendChild(blockable(menuItem(more, "Refresh usage", "quiet sm", function () { refreshAccount(account.email); }), false));
+    if (reissue && loginFix) { menu.appendChild(menuItem(more, reissue.label, "quiet sm", reissue.click)); }
     // In groups under rules: open, CI token, API and Admin keys, rotation, and
     // every delete last, apart under its own rule, so no ordinary item sits
     // between two that destroy something. A delete reads in the danger colour.

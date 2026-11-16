@@ -454,8 +454,9 @@ button.fold, button.fold:is(:hover, :disabled) { height: auto; padding: 0; borde
 .act { display: grid; grid-template-columns: var(--fix) 10.5rem 2rem; column-gap: 6px; justify-items: end; align-items: center; }
 /* The one fix a row offers, filling its own fixed slot on every row, so the
    fixes share both edges; an empty slot keeps its width. */
-.extra { display: flex; gap: 6px; justify-self: stretch; min-inline-size: 0; }
-.extra > button { flex: 1 1 0; min-inline-size: 0; padding-inline: var(--space-2); }
+/* One button fills the slot; any second one stacks under it, never beside it. */
+.extra { display: flex; flex-direction: column; gap: 4px; justify-self: stretch; min-inline-size: 0; }
+.extra > button { flex: none; min-inline-size: 0; padding-inline: var(--space-2); }
 /* A row's fix: outlined, in the orange's text tone. */
 .secondary.fix { color: var(--high); border-color: color-mix(in srgb, var(--high) 45%, var(--line-strong)); }
 .extra, .seg { grid-row: 1; }

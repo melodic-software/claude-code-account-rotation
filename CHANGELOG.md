@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.1] - 2026-11-15
+
+### Fixed
+
+- **A row that offers both Log in again and Re-issue token no longer draws them over each other.**
+  The row's fix slot holds one button: the login stays on the row and Re-issue token moves into
+  that row's menu.
+
 ## [3.1.0] - 2026-11-15
 
 ### Changed
