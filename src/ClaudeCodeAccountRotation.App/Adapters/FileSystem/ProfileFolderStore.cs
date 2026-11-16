@@ -153,6 +153,19 @@ internal sealed partial class ProfileFolderStore
             }
         }
 
+        DeleteLoginResidue(folder, cancellationToken);
+    }
+
+    /// <summary>
+    /// Removes what a refused login left beside a pair that was put back. No
+    /// profile is written first: the state file here names the account that was
+    /// refused, and the folder keeps whatever identity it had before.
+    /// </summary>
+    public void DiscardLoginResidue(string folderPath) =>
+        DeleteLoginResidue(UnderRoot(folderPath), CancellationToken.None);
+
+    private static void DeleteLoginResidue(string folder, CancellationToken cancellationToken)
+    {
         foreach (string entry in Directory.EnumerateFileSystemEntries(folder))
         {
             cancellationToken.ThrowIfCancellationRequested();

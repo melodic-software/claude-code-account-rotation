@@ -47,6 +47,7 @@ public sealed class CredentialAuditLogTests
         await CredentialFiles.WriteAsync(factory.LiveDirectory, "refresh-live", cancellationToken);
         await factory.WriteStateFileAsync(LiveEmail, cancellationToken);
         factory.Cli.Email = LiveEmail;
+        factory.Cli.EmailByDirectory[Path.Combine(factory.ProfilesRoot, ProfileFolderName.FromEmail(AccountEmail.Parse(ParkedEmail).Value))] = ParkedEmail;
         using HttpClient client = factory.CreateMutatingClient();
         using HttpResponseMessage added = await client.PostAsJsonAsync(
             _accounts,

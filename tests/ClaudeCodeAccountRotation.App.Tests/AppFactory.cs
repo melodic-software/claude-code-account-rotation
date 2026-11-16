@@ -433,6 +433,10 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
     {
         public string? Email { get; set; }
 
+        /// <summary>The address a folder's own login reports, for the folders that differ from <see cref="Email"/>.</summary>
+        public Dictionary<string, string?> EmailByDirectory { get; } =
+            new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+
         /// <summary>What every folder reports; "max" is the only tier the roster admits.</summary>
         public string? SubscriptionType { get; set; } = "max";
 
@@ -452,7 +456,10 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
                 ? Task.FromException<Result<ClaudeAuthStatus, string>>(fault)
                 : Task.FromResult(ReadError is string error
                     ? Result<ClaudeAuthStatus, string>.Failure(error)
-                    : Result<ClaudeAuthStatus, string>.Success(new ClaudeAuthStatus(true, Email, "claude.ai", "Personal", SubscriptionType, null)));
+                    : Result<ClaudeAuthStatus, string>.Success(new ClaudeAuthStatus(true, EmailFor(configDirectory), "claude.ai", "Personal", SubscriptionType, null)));
+
+        private string? EmailFor(string? configDirectory) =>
+            configDirectory is not null && EmailByDirectory.TryGetValue(configDirectory, out string? email) ? email : Email;
 
         public Task<Result<Unit, string>> LogoutAsync(string configDirectory, CancellationToken cancellationToken)
         {

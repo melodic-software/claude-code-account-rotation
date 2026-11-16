@@ -41,6 +41,9 @@ public sealed class LoginEndpointTests
         await CredentialFiles.WriteAsync(factory.LiveDirectory, "refresh-live", cancellationToken);
         await factory.WriteStateFileAsync(LiveEmail, cancellationToken);
         factory.Cli.Email = LiveEmail;
+        // What the CLI answers under the parked folder once a login there has
+        // signed in as the row's own address; a test of any other sign-in resets it.
+        factory.Cli.EmailByDirectory[FolderOf(factory, ParkedEmail)] = ParkedEmail;
         using HttpClient client = factory.CreateMutatingClient();
         using HttpResponseMessage added = await client.PostAsJsonAsync(
             _accounts,
@@ -275,6 +278,146 @@ public sealed class LoginEndpointTests
         completed["message"]!.GetValue<string>().ShouldBe("Logged in as " + ParkedEmail + ".");
         factory.Cli.LogoutCalls.ShouldBeEmpty();
         File.Exists(Path.Combine(folder, CredentialFiles.FileName)).ShouldBeTrue();
+    }
+
+    /// <summary>
+    /// The browser profile was signed in to another account, so the sign-in the
+    /// row started completed as that one: the pair, the state file, and the CLI's
+    /// own answer under the folder all name <paramref name="signedInAs"/>.
+    /// </summary>
+    private static Func<ScriptedLoginChild, string, Task> SignInAs(AppFactory factory, string signedInAs)
+    {
+        factory.Cli.EmailByDirectory[FolderOf(factory, ParkedEmail)] = signedInAs;
+        return async (child, code) =>
+        {
+            await CredentialFiles.WriteAsync(child.ConfigDirectory, "refresh-" + signedInAs, CancellationToken.None);
+            await File.WriteAllTextAsync(
+                Path.Combine(child.ConfigDirectory, ".claude.json"),
+                new JsonObject { ["numStartups"] = 1, ["oauthAccount"] = AppFactory.AccountJson(signedInAs) }.ToJsonString(),
+                CancellationToken.None);
+            child.Exit();
+        };
+    }
+
+    private const string WrongAccountPrefix =
+        "That login was refused: the browser signed in as " + LiveEmail + ", not " + ParkedEmail + ".";
+
+    private const string OtherAccountUnrevoked =
+        " `claude auth logout` is never run against another account's login, so that refresh token stays valid until its login expires.";
+
+    private const string PickTheRowsAccount = " Log in again and pick " + ParkedEmail + " at the sign-in step.";
+
+    [Fact]
+    public async Task ALoginThatSignsInAsAnotherAddressIsDeletedUnrevokedAndNamesThatAddress()
+    {
+        await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
+        factory.LoginChild.OnCode = SignInAs(factory, LiveEmail);
+        string folder = FolderOf(factory, ParkedEmail);
+        using HttpClient client = factory.CreateMutatingClient();
+        JsonObject started = await StartLoginAsync(client, TestContext.Current.CancellationToken);
+
+        JsonObject refused = await SubmitCodeAsync(client, started["id"]!.GetValue<string>(), Code, TestContext.Current.CancellationToken);
+
+        refused["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Failed));
+        refused["message"]!.GetValue<string>().ShouldBe(
+            WrongAccountPrefix
+            + " The credentials it wrote were deleted, so nothing joined the rotation."
+            + OtherAccountUnrevoked
+            + PickTheRowsAccount);
+        // The pair is another account's, often the live one: no logout runs against it.
+        factory.Cli.LogoutCalls.ShouldBeEmpty();
+        // Nothing is left under the row's folder to be listed as the other account.
+        File.Exists(Path.Combine(folder, CredentialFiles.FileName)).ShouldBeFalse();
+        File.Exists(Path.Combine(folder, "profile.json")).ShouldBeFalse();
+        File.Exists(Path.Combine(folder, ".claude.json")).ShouldBeFalse();
+        factory.Logs.Lines.ShouldContain(line => line.Contains("login for " + ParkedEmail + " signed in as " + LiveEmail, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ALoginThatSignsInAsAnotherAddressPutsBackThePairTheFolderHeld()
+    {
+        await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
+        string folder = FolderOf(factory, ParkedEmail);
+        byte[] pairBefore = await SeedPairAsync(folder, "refresh-old", TestContext.Current.CancellationToken);
+        string profilePath = Path.Combine(folder, "profile.json");
+        await File.WriteAllTextAsync(profilePath, AppFactory.AccountJson(ParkedEmail).ToJsonString(), TestContext.Current.CancellationToken);
+        byte[] profileBefore = await File.ReadAllBytesAsync(profilePath, TestContext.Current.CancellationToken);
+        factory.LoginChild.OnCode = SignInAs(factory, LiveEmail);
+        using HttpClient client = factory.CreateMutatingClient();
+        JsonObject started = await StartLoginAsync(client, TestContext.Current.CancellationToken);
+
+        JsonObject refused = await SubmitCodeAsync(client, started["id"]!.GetValue<string>(), Code, TestContext.Current.CancellationToken);
+
+        refused["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Failed));
+        refused["message"]!.GetValue<string>().ShouldBe(
+            WrongAccountPrefix
+            + " The credentials it wrote were removed, and the login that folder held before was put back."
+            + OtherAccountUnrevoked
+            + PickTheRowsAccount);
+        // The row's working login is the operator's, and the wrong sign-in does not cost it.
+        factory.Cli.LogoutCalls.ShouldBeEmpty();
+        (await File.ReadAllBytesAsync(Path.Combine(folder, CredentialFiles.FileName), TestContext.Current.CancellationToken)).ShouldBe(pairBefore);
+        (await File.ReadAllBytesAsync(profilePath, TestContext.Current.CancellationToken)).ShouldBe(profileBefore);
+        File.Exists(Path.Combine(folder, ".claude.json")).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task AWrongAddressLoginIntoAFolderIdentifiedOnlyByItsStateFileKeepsThatIdentity()
+    {
+        await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
+        string folder = FolderOf(factory, ParkedEmail);
+        byte[] pairBefore = await SeedPairAsync(folder, "refresh-old", TestContext.Current.CancellationToken);
+        // A login whose tidy-up never ran: the pair, and a state file as the only identity.
+        await File.WriteAllTextAsync(
+            Path.Combine(folder, ".claude.json"),
+            new JsonObject { ["numStartups"] = 1, ["oauthAccount"] = AppFactory.AccountJson(ParkedEmail) }.ToJsonString(),
+            TestContext.Current.CancellationToken);
+        factory.LoginChild.OnCode = SignInAs(factory, LiveEmail);
+        using HttpClient client = factory.CreateMutatingClient();
+        JsonObject started = await StartLoginAsync(client, TestContext.Current.CancellationToken);
+
+        JsonObject refused = await SubmitCodeAsync(client, started["id"]!.GetValue<string>(), Code, TestContext.Current.CancellationToken);
+
+        refused["message"]!.GetValue<string>().ShouldContain("put back");
+        (await File.ReadAllBytesAsync(Path.Combine(folder, CredentialFiles.FileName), TestContext.Current.CancellationToken)).ShouldBe(pairBefore);
+        // The login rewrote the state file to name the other account. The folder must still be the row's.
+        JsonObject profile = JsonNode.Parse(
+            await File.ReadAllTextAsync(Path.Combine(folder, "profile.json"), TestContext.Current.CancellationToken))!.AsObject();
+        profile["emailAddress"]!.GetValue<string>().ShouldBe(ParkedEmail);
+    }
+
+    [Fact]
+    public async Task ALoginWhoseAddressDiffersOnlyInCaseIsTheRowsOwn()
+    {
+        await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
+        factory.LoginChild.OnCode = LoginChildScript.CompleteLoginAsync;
+        factory.Cli.EmailByDirectory[FolderOf(factory, ParkedEmail)] = ParkedEmail.ToUpperInvariant();
+        using HttpClient client = factory.CreateMutatingClient();
+        JsonObject started = await StartLoginAsync(client, TestContext.Current.CancellationToken);
+
+        JsonObject completed = await SubmitCodeAsync(client, started["id"]!.GetValue<string>(), Code, TestContext.Current.CancellationToken);
+
+        completed["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Completed));
+        factory.Cli.LogoutCalls.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task AMaxLoginTheCliNamesNoAddressForFailsClosedRatherThanAdmitting()
+    {
+        await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
+        factory.LoginChild.OnCode = LoginChildScript.CompleteLoginAsync;
+        string folder = FolderOf(factory, ParkedEmail);
+        factory.Cli.EmailByDirectory[folder] = null;
+        using HttpClient client = factory.CreateMutatingClient();
+        JsonObject started = await StartLoginAsync(client, TestContext.Current.CancellationToken);
+
+        JsonObject refused = await SubmitCodeAsync(client, started["id"]!.GetValue<string>(), Code, TestContext.Current.CancellationToken);
+
+        // A Max tier with no address is no evidence that the row's account signed in.
+        refused["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Failed));
+        refused["message"]!.GetValue<string>().ShouldContain("did not report which address signed in");
+        factory.Cli.LogoutCalls.ShouldBe([folder]);
+        File.Exists(Path.Combine(folder, CredentialFiles.FileName)).ShouldBeFalse();
     }
 
     /// <summary>
