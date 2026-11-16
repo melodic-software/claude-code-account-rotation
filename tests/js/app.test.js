@@ -620,7 +620,7 @@ test("within 30 days the sentence warns, roles with no key stop, and after the d
   assert.strictEqual(soon.length, 1);
   assert.strictEqual(soon[0].tone, "warn");
   assert.deepStrictEqual(soon[0].stop, ["LEGACY"]);
-  assert.strictEqual(ciExpirySentence(soon[0]), "When the token expires on 2027-01-01, these roles fall back to their API key only: A; these roles stop: LEGACY");
+  assert.strictEqual(ciExpirySentence(soon[0]), "When the CI token expires on 2027-01-01, these roles fall back to their API key only: A; these roles stop: LEGACY");
   assert.strictEqual(ciTokenExpiries(roster, Date.parse("2027-01-02T00:00:00Z"))[0].tone, "crit");
 });
 
@@ -639,7 +639,7 @@ test("outside the 30-day window no expiry entry is shown", () => {
 test("after the date the sentence reads in the past", () => {
   const roster = { ciRoles: [expiryRole("A", "2026-01-01", "2026-01-01"), expiryRole("LEGACY", "2026-01-01", null)] };
   const [late] = ciTokenExpiries(roster, Date.parse("2027-01-02T00:00:00Z"));
-  assert.strictEqual(ciExpirySentence(late), "The token expired on 2027-01-01; these roles now run on their API key only: A; these roles stopped: LEGACY");
+  assert.strictEqual(ciExpirySentence(late), "The CI token expired on 2027-01-01; these roles now run on their API key only: A; these roles stopped: LEGACY");
 });
 
 test("a split role whose key half another account holds falls back to its key rather than stopping", () => {
@@ -1531,7 +1531,7 @@ test("a row keeps its warnings on its face and leaves neutral facts to Detailed"
   const soon = dated("soon@x", 30, Object.assign({ loginExpiresAt: new Date(NOW + 3 * 86400000).toISOString() }, read));
   assert.deepStrictEqual(rowNotices(soon, dashboard, NOW, [soon]), ["login expires in 3 d"]);
   const token = dated("token@x", 30, Object.assign({ roster: { ciRoles: [{ name: "Lane", tokenSetOn: "2025-10-20", tokenSecret: "T" }] } }, read));
-  assert.match(rowNotices(token, dashboard, NOW, [token])[0], /^When the token expires on 2026-10-20, these roles stop: Lane$/);
+  assert.match(rowNotices(token, dashboard, NOW, [token])[0], /^When the CI token expires on 2026-10-20, these roles stop: Lane$/);
 });
 
 test("the ledger's figures are dated by the capture most accounts share, the later on a tie", () => {
@@ -1601,7 +1601,7 @@ test("a usable account whose login blocks a switch is not usable now, and a paus
   [loggedOut, expired, missing, stranded].forEach((account) => {
     assert.strictEqual(credentialBlocked(account, NOW), true, account.email);
     assert.strictEqual(usableNow(account, NOW), false, account.email);
-    assert.strictEqual(groupOf(account, NOW), "needs-login", account.email);
+    assert.strictEqual(groupOf(account, NOW), "usable", account.email);
   });
   [fine, paused, held].forEach((account) => {
     assert.strictEqual(credentialBlocked(account, NOW), false, account.email);
@@ -1611,7 +1611,7 @@ test("a usable account whose login blocks a switch is not usable now, and a paus
   assert.strictEqual(groupOf(blocked("x@x", 10, { standing: "exhausted", hasCredentials: false }), NOW), "exhausted");
 });
 
-test("blocked logins leave the Usable group for one Needs login group after it, each in server order, and the server order is kept with grouping off", () => {
+test("blocked logins stay in the Usable group in the server's order, the Usable chip counts them, and the summary counts only the ready ones", () => {
   const accounts = [
     blocked("u1@x", 10),
     blocked("b1@x", 20, { hasCredentials: false }),
@@ -1623,15 +1623,14 @@ test("blocked logins leave the Usable group for one Needs login group after it, 
   const before = accounts.map((account) => account.email);
   const items = arrange(accounts, DEFAULT_VIEW, NOW);
   assert.deepStrictEqual(items.map((item) => item.group ? item.group.text : item.account.email), [
-    "Usable · 3 · soonest 7-day reset first", "u1@x", "u2@x", "u3@x",
-    "Needs login · 2 · quota left, log in again to use", "b1@x", "b2@x",
+    "Usable · 5 · soonest 7-day reset first", "u1@x", "b1@x", "u2@x", "b2@x", "u3@x",
     "Exhausted · 1 · usable again at the 7-day reset", "x@x"
   ]);
   assert.deepStrictEqual(rowsOf(arrange(accounts, Object.assign({}, DEFAULT_VIEW, { group: false }), NOW)), before);
   assert.deepStrictEqual(accounts.map((account) => account.email), before);
   assert.strictEqual(fleetSummary(accounts, NOW).usable, 3);
-  assert.strictEqual(filterCounts(accounts, NOW).usable, 3);
-  assert.deepStrictEqual(rowsOf(arrange(accounts, Object.assign({}, DEFAULT_VIEW, { order: "reset7" }), NOW)), ["u1@x", "u2@x", "u3@x", "b1@x", "b2@x", "x@x"]);
+  assert.strictEqual(filterCounts(accounts, NOW).usable, 5);
+  assert.deepStrictEqual(rowsOf(arrange(accounts, Object.assign({}, DEFAULT_VIEW, { order: "reset7" }), NOW)), ["u1@x", "b1@x", "u2@x", "b2@x", "u3@x", "x@x"]);
 });
 
 test("a usable account in the red near a limit needs attention, one in the orange does not", () => {

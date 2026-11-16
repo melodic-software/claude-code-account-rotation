@@ -750,6 +750,13 @@
     return name.length <= 3 ? name.toUpperCase() : name.charAt(0).toUpperCase() + name.slice(1);
   }
 
+  // A server phrase ("in use by wsl") with each side named as the page names it.
+  function sideWords(text) {
+    return lastSides.reduce(function (said, side) {
+      return said.split(" " + side.side).join(" " + sideLabel(side.side));
+    }, text);
+  }
+
   function accountByEmail(email) {
     return lastAccounts.filter(function (candidate) { return candidate.email === email; })[0] || null;
   }
@@ -826,7 +833,7 @@
 
     if (account) {
       strip.appendChild(sayLine(say, account, at));
-      if (account.cliLoggedOut) { strip.appendChild(element("p", "cli-logout", account.cliLoggedOut)); }
+      if (account.cliLoggedOut) { strip.appendChild(element("p", "cli-logout", sideWords(account.cliLoggedOut))); }
       var meters = element("div", "mt");
       account.usage.limits.forEach(function (limit) {
         if (limit.known || limit.kind === "session" || limit.kind === "weekly_all") {
@@ -835,12 +842,10 @@
       });
       strip.appendChild(meters);
       account.usage.limits.forEach(function (limit) {
-        // A window read with the rest, minutes apart and current, adds a
-        // timestamp and nothing else.
-        var withTheRest = account.usage.capturedAt && limit.source === account.usage.source && Math.abs(Date.parse(limit.capturedAt) - Date.parse(account.usage.capturedAt)) <= 300000;
-        if (!limit.source || (withTheRest && !stale(limit.capturedAt, at))) { return; }
-        var source = limit.label + " " + asOf(limit.capturedAt, limit.source, at);
-        strip.appendChild(element("p", "source" + (stale(limit.capturedAt, at) ? " stale" : ""), source)).title = source;
+        // A current window adds only a timestamp the ledger's figures line
+        // already gives, so the strip names a window's read only when it is stale.
+        if (!limit.source || !stale(limit.capturedAt, at)) { return; }
+        strip.appendChild(element("p", "source stale", limit.label + " read " + ago(limit.capturedAt, at) + ", may be out of date")).title = limit.label + " " + asOf(limit.capturedAt, limit.source, at);
       });
     }
 
@@ -1699,8 +1704,8 @@
   function editPanel(account, offerLogin) {
     var panel = element("details", "edit");
     panel.appendChild(element("summary", null, "Edit"));
-    // Two columns: who the account is on the left, its notes and CI record on
-    // the right; the repair fold and the actions run under both.
+    // Columns: who the account is, its notes and CI token date, then the roles
+    // it backs; the repair fold and the actions run under all of them.
     var form = element("form", "roster-form edit-form");
     var left = form.appendChild(element("div", "edit-col"));
     var right = form.appendChild(element("div", "edit-col"));
@@ -1723,7 +1728,8 @@
     // that share one place are listed under it once.
     var ciRoles = (account.roster && account.roster.ciRoles) || [];
     var places = ciRoles.map(roleWhere).filter(function (place, index, all) { return all.indexOf(place) === index; });
-    var roleBox = ciRoles.length ? right.appendChild(element("div", "fields role-list")) : null;
+    // The roles take a third column of their own, so a wide row is not half empty.
+    var roleBox = ciRoles.length ? form.insertBefore(element("div", "edit-col"), right.nextSibling).appendChild(element("div", "fields role-list")) : null;
     if (roleBox) { roleBox.appendChild(element("span", "group-label", places.length === 1 ? "Backs these roles in " + places[0] : "Backs these roles")); }
     var ciKeep = ciRoles.map(function (role) {
       var box = element("input");
@@ -1780,7 +1786,8 @@
     // A card that does not need a login still lets the operator force one; here
     // it is reachable without inviting a click from the card's face.
     if (offerLogin) {
-      actions.appendChild(actionButton("Log in again", "secondary", function () { startLogin(account.email); }));
+      // Apart from Save and Cancel: an account action, not the form's commit.
+      actions.appendChild(actionButton("Log in again", "secondary login-again", function () { startLogin(account.email); }));
     }
     form.addEventListener("submit", function (event) {
       event.preventDefault();
@@ -1936,7 +1943,8 @@
   function asOf(capturedAt, source, from) {
     var taken = new Date(capturedAt);
     var sameDay = taken.toDateString() === new Date(from).toDateString();
-    return "as of " + (sameDay ? taken.toLocaleTimeString() : taken.toLocaleString()) + ", " + ago(capturedAt, from)
+    var time = { hour: "numeric", minute: "2-digit" };
+    return "as of " + (sameDay ? taken.toLocaleTimeString([], time) : taken.toLocaleString([], Object.assign({ month: "short", day: "numeric" }, time))) + ", " + ago(capturedAt, from)
       + " via " + source + (stale(capturedAt, from) ? "; may be out of date" : "");
   }
 
@@ -2034,7 +2042,7 @@
       track.appendChild(tick);
     });
     // A 2 px tick is too small to hover, so the whole track names the marks.
-    if (ticks && ticks.length) { track.title = "Ticks: CI alerts at " + ticks.map(percentText).join(" and "); }
+    if (ticks && ticks.length) { track.title = "Marks: CI role alerts at " + ticks.map(percentText).join(" and "); }
     return track;
   }
 
@@ -2057,7 +2065,8 @@
     box.appendChild(line);
     box.appendChild(bar(limit, ticks));
     var reset = resetLine(limit, at);
-    if (reset) { box.appendChild(element("small", null, reset)).title = reset + "\n" + resetTitle(limit.resetsAt); }
+    // Said short, "resets 2 h 37 min", so it fits a third of a strip whole.
+    if (reset) { box.appendChild(element("small", null, reset.replace(/^resets in /, "resets "))).title = reset + "\n" + resetTitle(limit.resetsAt); }
     return box;
   }
 
@@ -2136,7 +2145,7 @@
     var parts = [];
     if (expiry.fallback.length) { parts.push((past ? "these roles now run on their API key only: " : "these roles fall back to their API key only: ") + expiry.fallback.join(", ")); }
     if (expiry.stop.length) { parts.push((past ? "these roles stopped: " : "these roles stop: ") + expiry.stop.join(", ")); }
-    return (past ? "The token expired on " + expiry.expiresOn + "; " : "When the token expires on " + expiry.expiresOn + ", ") + parts.join("; ");
+    return (past ? "The CI token expired on " + expiry.expiresOn + "; " : "When the CI token expires on " + expiry.expiresOn + ", ") + parts.join("; ");
   }
 
   // A role's name as a badge and the expiry line say it: lowercase for a
@@ -2815,10 +2824,10 @@
   }
 
   // The group an account sits in: its standing, with an unread account in use
-  // (the server lifts it to just after the usable ones) apart from an idle one,
-  // and a usable one whose login blocks a switch apart from the rest.
+  // (the server lifts it to just after the usable ones) apart from an idle one.
+  // A usable one whose login blocks a switch stays in Usable, in the server's
+  // place, its login warning on its face (SPEC §3, §4).
   function groupOf(account, at) {
-    if (account.standing === "usable" && credentialBlocked(account, at)) { return "needs-login"; }
     return account.standing === "unread" && (account.isLive || account.heldAway) ? "unread-in-use" : account.standing;
   }
 
@@ -2828,7 +2837,6 @@
     var usable = { burn: "soonest 7-day reset first", reset7: "soonest 7-day reset first", reset5: "soonest 5-hour reset first", left: "most left first", name: "by name" };
     var headings = {
       usable: ["Usable", usable[order]],
-      "needs-login": ["Needs login", "quota left, log in again to use"],
       "unread-in-use": ["In use, not read", "no figures yet"],
       "model-limited": [(model || "Model") + " limit reached", "usable again at the " + (model || "model's") + " weekly reset"],
       limited: ["5-hour limit reached", "usable again at the 5-hour reset"],
@@ -2863,7 +2871,8 @@
 
   // Whether the Show filter keeps the row.
   function shows(account, show, at, accounts) {
-    if (show === "usable") { return usableNow(account, at); }
+    // The Usable group's own rows, so the chip and the header count alike.
+    if (show === "usable") { return account.standing === "usable"; }
     if (show === "spent") { return spent(account); }
     if (show === "paused") { return account.standing === "paused" || !!(account.roster && account.roster.paused); }
     if (show === "attention") { return needsAttention(account, at, accounts); }
@@ -2896,26 +2905,9 @@
   // ties keep the server's order. A filter only marks rows hidden, and a
   // header hidden when it is left with none.
   function arrange(accounts, view, at) {
-    // A usable run's blocked logins follow it as one run of their own, each
-    // side keeping the server's order, so the burn order inside a group is
-    // still the server's.
-    var family = -1;
-    var previous = null;
-    var entries = accounts.map(function (account, index) {
-      var key = groupOf(account, at);
-      var kind = key === "needs-login" ? "usable" : key;
-      if (kind !== previous) { family += 1; }
-      previous = kind;
-      return { account: account, index: index, key: key, family: family };
-    });
-    entries.sort(function (a, b) {
-      return a.family - b.family || (a.key === "needs-login") - (b.key === "needs-login") || a.index - b.index;
-    });
     var runs = [];
-    var rows = entries.map(function (entry) {
-      var account = entry.account;
-      var index = entry.index;
-      var key = entry.key;
+    var rows = accounts.map(function (account, index) {
+      var key = groupOf(account, at);
       if (!runs.length || runs[runs.length - 1].key !== key) { runs.push({ key: key, model: account.limitedModel || null, count: 0 }); }
       var resetAt = view.order === "reset7" ? windowReset(account, "weekly_all")
         : view.order === "reset5" ? windowReset(account, "session")
@@ -3071,6 +3063,11 @@
       });
     });
     return labels.length === 1 ? labels[0] : "Model weekly";
+  }
+
+  // The model column's short name, the same in its header and in its cells.
+  function modelShort(label) {
+    return label === "Model weekly" ? "Model" : label;
   }
 
   // The compact row's one CI chip in place of a badge per role: the role
@@ -3461,9 +3458,10 @@
     var chip = stateChip(account, at);
     // Parked is where nearly every account sits, so the compact row leaves it
     // out, and a logout's status already names the side the account is in use on.
-    if (account.chip) { badges.appendChild(element("span", "badge store" + (account.chip === "parked" || account.cliLoggedOut ? " detail-only" : ""), account.chip)); }
+    if (account.chip) { badges.appendChild(element("span", "badge store" + (account.chip === "parked" || account.cliLoggedOut ? " detail-only" : ""), sideWords(account.chip))); }
     // A paused account's status says Paused, so its chip would say it twice.
-    if (chip && (!account.chip || (chip !== "live" && chip !== "ready")) && !(chip === "paused" && say.kind === "paused")) {
+    // A chip that says what the status says ("needs login") is left out too.
+    if (chip && (!account.chip || (chip !== "live" && chip !== "ready")) && !(chip === "paused" && say.kind === "paused") && chip !== say.text.toLowerCase()) {
       badges.appendChild(element("span", "badge " + chip.replace(/ /g, "-"), chip));
     }
     if (!roster) { badges.appendChild(element("span", "badge off-roster", "not on roster")); }
@@ -3518,15 +3516,25 @@
       brief = { kind: noticeKind, text: notices.join(" · ") };
       notices = [];
     }
+    // A usage alert the rail lists is said on the row too, so the two agree.
+    var alerted = (dashboard.alerts || []).filter(function (alert) { return alert.account === account.email; })[0];
+    if (!brief.text && alerted) {
+      brief = { kind: alerted.level === "critical" ? "crit" : "warn", text: "Past " + alerted.window + " alert · " + percentText(alerted.threshold) };
+    }
     // Every status starts with a capital, a server's lower-case message too.
-    var briefLine = status.appendChild(element("p", "say brief " + brief.kind, brief.text.charAt(0).toUpperCase() + brief.text.slice(1)));
-    briefLine.title = brief.text === say.text ? full.title : [brief.text, full.title].filter(Boolean).join("\n");
+    var briefText = brief.text.charAt(0).toUpperCase() + brief.text.slice(1);
+    var briefLine = status.appendChild(element("p", "say brief " + brief.kind, briefText));
+    briefLine.title = brief.text === say.text ? briefText + full.title.slice(say.text.length) : [briefText, full.title].filter(Boolean).join("\n");
     // The dot says the worst the row says: a usable account with a warning on
     // its face is not green.
-    var worst = [brief.kind].concat(notices.length ? [noticeKind] : [], ciChip ? [ciChip.kind] : []);
+    // A CI token's state is the lanes' trouble, not this account's quota or
+    // login, so it raises the dot to warn at most.
+    var worst = [brief.kind].concat(notices.length ? [noticeKind] : [], ciChip && ciChip.kind !== "ok" ? ["warn"] : []);
     if (tone === "ok" && worst.some(function (kind) { return kind === "warn" || kind === "crit"; })) {
       dot.className = "dot " + (worst.indexOf("crit") !== -1 ? "crit" : "warn");
     }
+    // In the Usable group red is kept for quota: a login a click fixes is amber.
+    if (account.standing === "usable" && credentialBlocked(account, at)) { dot.className = "dot warn"; }
     full.className += " full";
     status.appendChild(full);
     status.appendChild(statusLines(account, dashboard, at));
@@ -3542,7 +3550,7 @@
       : view.order === "burn" && account.standing === "model-limited" ? (account.limitedModel || "Model") + " weekly" : "7-day";
     line.appendChild(cell(limitOf("weekly_all"), at, meterTicks(account, dashboard.alertThresholds), "d7", "7-day"));
     line.appendChild(resetCell(resetAt, at, resetWindow, view.order === "reset5" ? "5-hour" : "7-day"));
-    line.appendChild(cell(limitOf("weekly_scoped"), at, [], "mw", modelColumn));
+    line.appendChild(cell(limitOf("weekly_scoped"), at, [], "mw", modelShort(modelColumn)));
     line.appendChild(cell(limitOf("session"), at, [], "h5", "5-hour"));
 
     if (notices.length) {
@@ -3782,7 +3790,8 @@
       part.appendChild(document.createTextNode(" " + words));
       if (title) { part.title = title; }
     }
-    figure(summary.usable + " of " + summary.total, "usable");
+    // Usable and logged in: the Usable group can also hold a login to fix.
+    figure(summary.usable + " of " + summary.total, "ready", "Usable and logged in: a switch to these goes through now");
     if (summary.weeklyLeft !== null) { figure(summary.weeklyLeft.toFixed(1), "accounts of 7-day quota left"); }
     [["Next reset", summary.nextReset], ["Next back", summary.nextBack]].forEach(function (pair) {
       if (!pair[1]) { return; }
@@ -3794,6 +3803,8 @@
     // when the page last asked the service.
     asOfLine.textContent = taken ? "Figures as of " + new Date(taken).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) + " · read " + ago(taken, at) : "";
     asOfLine.title = taken ? "When most rows' usage was read (" + new Date(taken).toLocaleTimeString() + "); Updated in the header is when the page last asked the service. A row read at another time says so in Detailed, and a stale one on its face" : "";
+    // A narrow ledger drops the line and keeps it as the title's hover.
+    document.querySelector(".ledger-title").title = asOfLine.textContent;
   }
 
   function render(dashboard, force, viewChanged) {
@@ -3807,9 +3818,11 @@
     // follows canSwitchHere, a request in flight, and the reconciliation banner.
     lastDashboard = dashboard;
     lastAccounts = dashboard.accounts;
-    captured.textContent = "Updated " + new Date(dashboard.capturedAt).toLocaleTimeString();
-    captured.title = "When the page last asked the service; the ledger's figures line says when the usage itself was read";
-    refreshStateLine.textContent = passState(dashboard);
+    // One time format on the page: hour and minute, the seconds in the hover.
+    captured.textContent = "Updated " + new Date(dashboard.capturedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    captured.title = "When the page last asked the service (" + new Date(dashboard.capturedAt).toLocaleTimeString() + "); the ledger's figures line says when the usage itself was read";
+    var pass = passState(dashboard);
+    refreshStateLine.textContent = pass.charAt(0).toUpperCase() + pass.slice(1);
     refreshAllButton.disabled = busy;
     banner.hidden = !dashboard.banner;
     banner.replaceChildren();
@@ -3920,8 +3933,9 @@
     // A generic model name is cut to fit the column, whole in its hover.
     var modelHead = ledger.querySelector(".h-mw");
     modelHead.title = modelLabel(dashboard.accounts);
-    modelHead.textContent = modelHead.title === "Model weekly" ? "Model 7-d" : modelHead.title;
-    ledger.querySelector(".h-rs").textContent = view.order === "reset5" ? "5-hour reset" : "7-day reset";
+    modelHead.textContent = modelShort(modelHead.title) + " 7-day";
+    // Burn order, Most left and Name count each row down to its own next reset.
+    ledger.querySelector(".h-rs").textContent = view.order === "reset5" ? "5-hour reset" : view.order === "reset7" ? "7-day reset" : "Next reset";
     // Every row is built, the filtered ones hidden, so a panel opener always
     // finds its card.
     var keys = motionKeys(items);

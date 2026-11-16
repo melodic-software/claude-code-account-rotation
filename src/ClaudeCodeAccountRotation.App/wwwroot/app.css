@@ -76,7 +76,7 @@ p { margin: 0; }
 
 /* ---------- the page frame ---------- */
 /* Content up to 3200 px: about 93% of a 3440 px ultrawide. */
-.wrap { max-inline-size: calc(3200px + 2 * var(--gutter)); margin-inline: auto; padding: var(--space-4) var(--gutter) var(--space-8); }
+.wrap { max-inline-size: calc(3200px + 2 * var(--gutter)); margin-inline: auto; padding: var(--space-4) var(--gutter) var(--space-4); }
 .regions { display: grid; gap: var(--space-4); margin-block-start: var(--space-4); }
 .rail { display: grid; gap: var(--space-3); align-content: start; min-inline-size: 0; }
 .ledger { container: ledger / inline-size; min-inline-size: 0; }
@@ -85,14 +85,27 @@ p { margin: 0; }
   .regions { grid-template-columns: var(--rail) minmax(0, 1fr); column-gap: var(--space-6); align-items: start; }
   .rail .now { grid-template-columns: minmax(0, 1fr); }
 }
-/* An ultrawide page lets the rail grow to 32rem. */
-@media (min-width: 2800px) { :root { --rail: clamp(28rem, 15vw, 32rem); } }
+/* An ultrawide page lets the rail grow to 32rem, and the alerts, notices and
+   setup sentence take a second rail at the right, so the ledger between them
+   is not stretched past what the eye can follow along a row. */
+@media (min-width: 2800px) {
+  :root { --rail: clamp(28rem, 15vw, 32rem); }
+  .regions { grid-template-columns: var(--rail) minmax(0, 125rem) 24rem; grid-template-rows: auto auto auto 1fr; justify-content: center; }
+  .rail { display: contents; }
+  .rail > .now { grid-column: 1; grid-row: 1 / -1; align-self: start; }
+  .regions > .ledger { grid-column: 2; grid-row: 1 / -1; }
+  .rail > :not(.now) { grid-column: 3; align-self: start; }
+}
 /* Under 1600 px the alerts, the notices and the setup sentence share one
    line while folded, rather than a bar each. */
 @media (max-width: 1599px) {
-  .rail { grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); }
-  .rail > .now, .rail > :has(button.fold[aria-expanded="true"]) { grid-column: 1 / -1; }
-  .alerts:has(button.fold[aria-expanded="false"]), .rail > .setup { padding-block: var(--space-2); }
+  .rail { display: flex; flex-wrap: wrap; align-items: flex-start; }
+  .rail > * { flex: 0 1 auto; min-inline-size: 0; }
+  .rail > .now, .rail > :has(button.fold[aria-expanded="true"]) { flex-basis: 100%; }
+  /* One look for the three: an outlined box one line high, the colour of
+     its text carrying how much it matters. */
+  .rail > :is(.alerts, .warnings, .setup) { padding: 6px var(--space-3); min-block-size: 32px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
+  .rail > .setup { color: var(--muted); }
 }
 
 /* ---------- controls ---------- */
@@ -167,7 +180,6 @@ button.fold, button.fold:is(:hover, :disabled) { height: auto; padding: 0; borde
   button.fold::before { content: "\25B8\00A0"; }
   button.fold[aria-expanded="true"]::before { content: "\25BE\00A0"; }
   :is(.alerts, .warnings):has(button.fold[aria-expanded="false"]) > li:not(.alerts-head, .warnings-head) { display: none; }
-  .warnings:has(button.fold[aria-expanded="false"]) { padding-block: var(--space-2); }
 }
 @media (min-width: 1600px) { button.fold { pointer-events: none; } }
 
@@ -185,16 +197,15 @@ button.fold, button.fold:is(:hover, :disabled) { height: auto; padding: 0; borde
 .alerts li.asof { font: var(--text-xs); }
 /* Below the rail's width the alerts run as a band, lines side by side. */
 @media (max-width: 1599px) {
-  .alerts { grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); align-items: start; }
+  .alerts:has(button.fold[aria-expanded="true"]) { grid-template-columns: repeat(auto-fill, minmax(min(100%, 18rem), 1fr)); align-items: start; }
   .alerts-head, .alerts li.asof { grid-column: 1 / -1; }
 }
 
 /* ---------- the Now strips, one per side ---------- */
-/* Side by side under 1600 px, every strip one height with its actions at the
-   foot; three fit on one line from about 850 px. */
-.now { display: grid; grid-template-columns: repeat(auto-fit, minmax(16.25rem, 1fr)); gap: var(--space-3); align-items: stretch; }
+/* Side by side under 1600 px, each strip its own height with its actions
+   right under its content; three fit on one line from about 1100 px, two below. */
+.now { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); gap: var(--space-3); align-items: start; }
 .side-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: var(--space-3) var(--space-4); display: flex; flex-direction: column; gap: 6px; box-shadow: var(--shadow); min-inline-size: 0; }
-.side-card > .go { margin-block-start: auto; }
 .sh { display: flex; align-items: flex-start; gap: var(--space-3); }
 .who { flex: 1; min-inline-size: 0; }
 .where { display: flex; align-items: center; gap: var(--space-2); font: var(--text-xs); color: var(--muted); white-space: nowrap; min-inline-size: 0; }
@@ -208,6 +219,7 @@ button.fold, button.fold:is(:hover, :disabled) { height: auto; padding: 0; borde
 .hr .n { display: block; font: 500 28px/32px var(--sans); letter-spacing: -.02em; }
 .hr span:last-child { font: var(--text-xs); color: var(--muted); }
 .say { font: 400 14px/20px var(--sans); }
+.side-card :is(.say, .source, .prompt, .cli-logout) { text-wrap: pretty; }
 .side-card .cli-logout, .side-card .source { font: var(--text-xs); }
 /* Where a figure came from wraps rather than losing "may be out of date". */
 .side-card .source { color: var(--muted); }
@@ -217,7 +229,7 @@ button.fold, button.fold:is(:hover, :disabled) { height: auto; padding: 0; borde
 .meter { min-inline-size: 0; }
 .meter .l { display: flex; justify-content: space-between; gap: var(--space-1); align-items: baseline; font: var(--text-xs); color: var(--muted); margin-block-end: 4px; white-space: nowrap; }
 .meter .l .pct { color: var(--text); font-weight: 500; }
-.meter small { display: block; margin-block-start: 4px; font: var(--text-xs); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.meter small { display: block; margin-block-start: 4px; font: var(--text-xs); color: var(--muted); }
 /* A window with no reset to show keeps the line, so both strips' buttons sit level. */
 .meter:not(:has(small))::after { content: "\00a0"; display: block; margin-block-start: 4px; font: var(--text-xs); }
 /* Stacked at every width: a login fix across the strip, then the switch
@@ -240,11 +252,9 @@ button.fold, button.fold:is(:hover, :disabled) { height: auto; padding: 0; borde
 .say.paused { color: var(--muted); }
 .bar { position: relative; height: 6px; border-radius: var(--radius-full); background: var(--track); }
 /* The alert thresholds the server names, on a CI-role account's 7-day bar. */
-/* Each tick stands above and below the track, never through the fill. */
-.bar .tick {
-  position: absolute; inset-block: -4px; width: 2px; margin-inline-start: -1px; opacity: .6;
-  background: linear-gradient(var(--text) 3px, transparent 3px calc(100% - 3px), var(--text) calc(100% - 3px));
-}
+/* Each threshold is one thin solid mark across the track; the track's and
+   the 7-day header's hover say what the marks are. */
+.bar .tick { position: absolute; inset-block: -3px; width: 1px; background: var(--text); opacity: .55; }
 .bar i { display: block; height: 100%; border-radius: inherit; background: var(--faint); }
 .bar i.ok { background: var(--ok-fill); } .bar i.high { background: var(--high-fill); } .bar i.warn { background: var(--warn-fill); } .bar i.crit { background: var(--crit-fill); }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; display: inline-block; }
@@ -283,6 +293,9 @@ button.fold, button.fold:is(:hover, :disabled) { height: auto; padding: 0; borde
 .view-choice input { position: absolute; opacity: 0; inline-size: 1px; block-size: 1px; margin: 0; pointer-events: none; }
 .view-choice .count { font-weight: 500; color: var(--muted); }
 .view-choice .count:empty { display: none; }
+/* Needs attention cuts across the status buckets, so it stands apart from them. */
+.view-show .chip:has(input[value="attention"]) { order: 1; margin-inline-start: var(--space-3); }
+.view-show .chip:has(input[value="attention"])::before { content: ""; position: absolute; inset-inline-start: -9px; inset-block: 4px; border-inline-start: 1px solid var(--line-strong); }
 .view-choice:has(input:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
 /* Show: single-choice chips. */
 .chip { height: 28px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: var(--radius-full); background: var(--surface); color: var(--text); }
@@ -308,7 +321,7 @@ button.fold, button.fold:is(:hover, :disabled) { height: auto; padding: 0; borde
    Switch. Declared on the two grids' parents, so a ledger class that narrows
    the 5-hour column (--w5h) reaches them. */
 .ledger-top, .cards {
-  --w-acct: minmax(16rem, 1.4fr); --w-st: minmax(12rem, 1fr); --w7d: 7.5rem; --w-rs: 6rem; --w-mw: 6.5rem; --w5h: 6rem;
+  --w-acct: minmax(16rem, 1.4fr); --w-st: minmax(12rem, 1fr); --w7d: 7.5rem; --w-rs: 7.5rem; --w-mw: 6.5rem; --w5h: 6rem;
   --cols: var(--w-acct) var(--w-st) var(--w7d) var(--w-rs) var(--w-mw) var(--w5h) var(--act);
   --cols-no-5h: var(--w-acct) var(--w-st) var(--w7d) var(--w-rs) var(--w-mw) var(--act);
 }
@@ -317,36 +330,34 @@ button.fold, button.fold:is(:hover, :disabled) { height: auto; padding: 0; borde
 .ledger.no-5h :is(.h-5h, .u.h5) { display: none; }
 .ledger-head { grid-column: 1 / -1; margin-block-start: var(--space-2); padding: 6px var(--space-3); border-block-end: 1px solid var(--line-strong); font: var(--text-xs); color: var(--muted); }
 .ledger-head > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* A meter's header starts where its bar starts and spans bar and figure; the
-   Resets header ends where its times end. */
-.ledger-head .h-rs { text-align: end; }
+/* A figure's header ends where its figures end: the meters' percentages and
+   the Resets times are all end-aligned. */
+.ledger-head :is(.h-7d, .h-rs, .h-mw, .h-5h) { text-align: end; }
 /* Air between the Resets spine and the small meters after it, so each bar
    reads with its own header and figure. */
 .ledger-head .h-mw, .row > .u.mw { padding-inline-start: var(--space-5); }
 .ledger-head .h-5h, .row > .u.h5 { padding-inline-start: var(--space-3); }
-/* "Switch to" over the segment, past the slot for a row's fix; the menu's
-   column has no heading. */
-.switch-head { padding-inline-start: calc(var(--fix) + 6px); }
+/* The actions column's head on the same grid as its cells: "Fix" over the
+   slot for a row's fix, "Switch to" over the segment; the menu has none. */
+.ledger-head > .act-head { display: grid; grid-template-columns: var(--fix) 10.5rem 2rem; column-gap: 6px; }
 /* Too few 5-hour figures to spend a bar's width on: the figure alone. */
 .ledger.sparse-5h :is(.ledger-top, .cards) { --w5h: 5.25rem; }
 @container ledger (min-width: 1000px) {
   .ledger.sparse-5h .row > .u.h5 { grid-template-columns: 0 minmax(0, 1fr); column-gap: 0; }
   .ledger.sparse-5h .row > .u.h5 .bar { visibility: hidden; }
-  .ledger.sparse-5h .ledger-head .h-5h { text-align: end; }
 }
 /* A wide ledger gives its room to the bars, so the figures sit nearer the names. */
 @container ledger (min-width: 1700px) {
-  .ledger-top, .cards { --w7d: 10rem; --w-rs: 7.5rem; --w-mw: 8.5rem; --w5h: 7.5rem; }
+  .ledger-top, .cards { --w7d: 10rem; --w-rs: 8rem; --w-mw: 8.5rem; --w5h: 7.5rem; --w-acct: minmax(16rem, 36rem); --w-st: minmax(12rem, 26rem); }
 }
 /* A ledger between 1000 and 1300 px wide keeps one line with narrower figures. */
 @container ledger (max-width: 1299px) {
-  .ledger-top, .cards { --w-acct: minmax(10rem, 1.3fr); --w-st: minmax(6.5rem, 1fr); --w7d: 6.5rem; --w-rs: 5.25rem; --w-mw: 5.5rem; --w5h: 4.5rem; }
+  .ledger-top, .cards { --w-acct: minmax(10rem, 1.6fr); --w-st: minmax(6.5rem, 1fr); --w7d: 6.5rem; --w-rs: 6.25rem; --w-mw: 5.5rem; --w5h: 4.5rem; }
   .ledger-head, .row { column-gap: 10px; }
   .ledger-head .h-mw, .row > .u.mw { padding-inline-start: var(--space-2); }
   /* Too narrow for a readable bar: the small meters keep their figure only,
      and the 5-hour reset is left to the figure's hover. */
   .row > :is(.u.mw, .u.h5) .bar { visibility: hidden; }
-  .ledger-head :is(.h-mw, .h-5h) { text-align: end; }
   .view-controls { column-gap: var(--space-3); }
   /* The prefixes stay the controls' names, read but not shown. */
   .view-name { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -362,10 +373,9 @@ button.fold, button.fold:is(:hover, :disabled) { height: auto; padding: 0; borde
 }
 .group .g-label { font: 500 13px/18px var(--sans); color: var(--text); }
 .group.usable { border-inline-start-color: var(--ok-fill); }
-.group:is(.needs-login, .unread-in-use) { border-inline-start-color: var(--warn-fill); }
+.group.unread-in-use { border-inline-start-color: var(--warn-fill); }
 .group:is(.limited, .model-limited, .exhausted) { border-inline-start-color: var(--crit-fill); }
-.group.needs-login .g-label { color: var(--warn); }
-.cards > .group:not(:first-child) { margin-block-start: var(--space-3); }
+.cards > .group:not(:first-child) { margin-block-start: var(--space-2); }
 
 .card { border-block-end: 1px solid var(--line); }
 @media (hover: hover) and (pointer: fine) {
@@ -380,6 +390,11 @@ button.fold, button.fold:is(:hover, :disabled) { height: auto; padding: 0; borde
 .row > * { grid-row: 1 / 3; min-inline-size: 0; }
 .has-notice .row > .st { grid-row: 1; }
 .row > .notice { grid-row: 2; grid-column: 2; font: var(--text-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A row with nothing to say in Status lends that cell to its name and address. */
+@container ledger (min-width: 1000px) {
+  .ledger[data-density="compact"] .row:not(:has(> .notice)):has(> .st > .say.brief:empty) > .nm { grid-column: span 2; }
+  .ledger[data-density="compact"] .row:not(:has(> .notice)):has(> .st > .say.brief:empty) > .st { display: none; }
+}
 
 /* Account, one line: the dot, the name, the chips, then the address. When the
    cell is tight the address takes only what is left: it ellipsizes, then goes,
@@ -401,7 +416,7 @@ button.fold, button.fold:is(:hover, :disabled) { height: auto; padding: 0; borde
 .address { grid-area: addr; container: address / inline-size; font: 400 12px/18px var(--sans); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nm .address > span { padding-inline-start: var(--space-3); }
 /* Too little left to read: the address goes rather than show a stub. */
-@container address (max-width: 4.5rem) { .nm .address > span { display: none; } }
+@container address (max-width: 8rem) { .nm .address > span { display: none; } }
 .ledger[data-density="detailed"] .nm { grid-template-columns: 18px minmax(0, 1fr); grid-template-areas: "dot name" ". chips" ". addr"; row-gap: 4px; column-gap: 0; }
 .ledger[data-density="detailed"] .nm :is(h2, .badges) { margin-inline-start: 0; }
 .ledger[data-density="detailed"] .nm .address > span { padding-inline-start: 0; }
@@ -458,7 +473,10 @@ button.fold, button.fold:is(:hover, :disabled) { height: auto; padding: 0; borde
 /* A switch the server refuses is not offered at all. */
 .seg button[data-refused] { display: none; }
 .seg:not(:has(> :not([data-refused]))) { display: none; }
-.seg .live { font: var(--text-xs); color: var(--muted); padding: 0 10px; line-height: 26px; white-space: nowrap; }
+.seg .live { font: var(--text-xs); color: var(--info); padding: 0 10px; line-height: 26px; white-space: nowrap; }
+/* Where the account lives: a filled chip, not a button. */
+.seg:has(> .live) { border-color: transparent; background: color-mix(in srgb, var(--info) 10%, var(--surface)); }
+.seg:has(> .live) > * { border-inline-start-color: transparent; }
 
 /* Rows that cannot be used now read quieter: muted name and time, faded bars. */
 .card.quiet h2, .card.quiet .rs .when { color: var(--muted); font-weight: 400; }
@@ -467,17 +485,19 @@ button.fold, button.fold:is(:hover, :disabled) { height: auto; padding: 0; borde
 /* A spent row is not a first pick: its figures and switch buttons step back,
    in muted text, which keeps AA. */
 .card.spent .u .pct { color: var(--muted); font-weight: 400; }
-.card.spent .seg { border-color: transparent; background: transparent; }
-.card.spent .seg > * + * { border-inline-start-color: transparent; }
+.card.spent .seg:not(:has(> .live)) { border-color: var(--line); background: transparent; }
+.card.spent .seg > * + * { border-inline-start-color: var(--line); }
 .card.spent .seg button:not(:disabled) { color: var(--muted); }
 @media (hover: hover) and (pointer: fine) {
   .card.spent:hover .seg { border-color: var(--line-strong); }
   .card.spent:hover .seg > * + * { border-inline-start-color: var(--line-strong); }
   .card.spent:hover .seg button:not(:disabled) { color: var(--text); }
 }
-/* A switch the banner turns off reads as off, not as a paler button. */
+/* A switch the banner turns off reads as off, in the same muted outline as a
+   spent row's: one look for a switch that is not a first pick now. */
 .seg button:disabled { background: transparent; color: var(--muted); }
-.seg:has(> button:disabled) { border-style: dashed; }
+.seg:has(> button:disabled:not([data-refused])) { border-color: var(--line); }
+.seg:has(> button:disabled:not([data-refused])) > * + * { border-inline-start-color: var(--line); }
 /* Paused reads as muted text, which holds AA; only the bars and dot fade. */
 .card.paused .row > :not(.act), .card.paused .row > :not(.act) * { color: var(--muted); }
 .card.paused .bar { opacity: .6; }
@@ -519,6 +539,7 @@ details.more .menu button.danger { color: var(--crit); }
 
 /* A row's Edit and login panels open under it, full width. */
 .card > details.edit:not([open]) { display: none; }
+.card > details.edit { max-inline-size: 78rem; }
 .card > details.edit, .card > details.login { margin: 0 var(--space-3) var(--space-4) var(--space-8); padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
 .card > details > summary { font-weight: 500; }
 .card details.login a { color: var(--info); }
@@ -528,7 +549,7 @@ details.more .menu button.danger { color: var(--crit); }
    first dashboard arrives. */
 .cards > .loading { padding: var(--space-4) var(--space-3); font: var(--text-md); color: var(--muted); border-block-end: 1px solid var(--line); }
 .cards > .empty { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-4) var(--space-3); font: var(--text-md); color: var(--muted); border-block-end: 1px solid var(--line); }
-details.history { margin-block-start: var(--space-3); }
+details.history { margin-block-start: var(--space-1); }
 /* A disclosure that reads as one: a marker, in the group headers' type. */
 details.history > summary { display: inline-flex; align-items: center; height: 28px; padding: 0 var(--space-3); font: 500 12px/16px var(--sans); color: var(--text); cursor: pointer; }
 details.history > summary::before { content: "\25B8\00A0"; color: var(--muted); }
@@ -568,6 +589,7 @@ details.history[open] > summary::before { content: "\25BE\00A0"; }
 .edit-col { display: flex; flex-direction: column; gap: 10px; min-inline-size: 0; }
 .edit-form > :is(details.repair, .form-actions) { grid-column: 1 / -1; }
 .form-actions { display: flex; gap: var(--space-2); }
+.form-actions > .login-again { order: 1; margin-inline-start: auto; }
 .roster-form .role-list { gap: 6px; }
 .role-list .group-label { font: var(--text-xs); color: var(--muted); }
 .instance-token { max-width: 32rem; margin: var(--space-8) auto 0; background: var(--surface); border: 1px solid var(--line); font-family: var(--sans); }
@@ -588,14 +610,18 @@ details.history[open] > summary::before { content: "\25BE\00A0"; }
 @container ledger (max-width: 999px) {
   .ledger-top { grid-template-columns: minmax(0, 1fr); }
   .view-controls { grid-column: 1; justify-content: flex-start; margin-block-start: var(--space-2); }
+  /* The density pair on the title line, and the figures' time in the title's
+     hover, so the controls take one line less above the first row. */
+  .view-density { position: absolute; inset-block-start: 0; inset-inline-end: 0; }
+  .figures-asof { display: none; }
   .ledger-head { display: none; }
   .row, .ledger.no-5h .row {
-    grid-template-columns: minmax(0, 1fr) 10rem 8rem 8rem 7.5rem;
+    grid-template-columns: minmax(0, 1fr) minmax(9rem, 10rem) 9.5rem minmax(9rem, 10rem) minmax(9rem, 10rem);
     grid-template-rows: auto auto auto;
     grid-template-areas: "nm nm act act act" "st d7 rs mw h5" "nt nt nt nt nt";
     row-gap: 6px; padding-block: var(--space-2);
   }
-  .ledger.no-5h .row { grid-template-columns: minmax(0, 1fr) 10rem 8rem 8rem; grid-template-areas: "nm act act act" "st d7 rs mw" "nt nt nt nt"; }
+  .ledger.no-5h .row { grid-template-columns: minmax(0, 1fr) minmax(9rem, 10rem) 9.5rem minmax(9rem, 10rem); grid-template-areas: "nm act act act" "st d7 rs mw" "nt nt nt nt"; }
   .row > * { grid-row: auto; }
   .row > .nm { grid-area: nm; }
   .row > .act { grid-area: act; }
@@ -606,9 +632,10 @@ details.history[open] > summary::before { content: "\25BE\00A0"; }
   .row > .h5 { grid-area: h5; }
   .row > .notice { grid-area: nt; }
   .cell-label { position: static; width: auto; height: auto; clip-path: none; font: var(--text-xs); color: var(--muted); }
-  /* Each label in a fixed track, so labels and values line up row to row. */
-  .u { grid-template-columns: 3.5rem minmax(0, 1fr) 3.25rem; }
-  .u .cell-label { grid-column: 1; overflow: hidden; text-overflow: ellipsis; }
+  /* Each label beside its bar, the bar never under 2.5rem, the figure in a
+     fixed slot at the end. */
+  .u { grid-template-columns: max-content minmax(2.5rem, 1fr) 3rem; column-gap: 6px; }
+  .u .cell-label { grid-column: 1; }
   /* A window the plan does not have is not worth a labelled dash. */
   .row > .u.none { visibility: hidden; }
   .fleet-summary { column-gap: var(--space-4); }
