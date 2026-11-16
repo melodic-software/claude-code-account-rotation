@@ -17,7 +17,7 @@ updates:
     directory: /
     labels: ["dependencies"]
     schedule:
-      interval: weekly
+      interval: daily
     open-pull-requests-limit: 5
     commit-message:
       prefix: build
