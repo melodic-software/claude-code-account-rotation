@@ -482,6 +482,26 @@ account, the tool restarts the task:
 - Set `remoteControlTask` to `null` or `""` in `config.json` to turn this off. A file without the
   key uses the default.
 
+## Arranging the ledger
+
+The bar on the **All accounts** line changes how the page shows the accounts, never which account
+is offered next or the order the server keeps:
+
+- **Order**: `Burn order` (the server's order, the default), `7-day reset`, `5-hour reset`,
+  `Most left` or `Name`.
+- **Group by status** (on by default): a header starts each group, such as `Usable · 11 · soonest
+  7-day reset first`. With grouping on, an order other than burn order sorts inside each group,
+  so spent accounts stay last; with it off, the whole list sorts by the chosen order.
+- **Show**: `All`, `Usable`, `Needs attention` (a warning or error on the row), `Spent` or
+  `Paused`, each with its count. A filter only hides rows; `Show all` brings them back.
+- **Compact** (one line per account, warnings kept on the row) or **Detailed** (every line the
+  row has).
+
+The choices are kept in the browser's local storage under `ccar.view.v1`, as these four settings
+and nothing else. `127.0.0.1`, `localhost` and another port are separate origins to the browser,
+so each keeps its own choices. `Next up`, the Now strips' buttons and the switch prompts always
+follow the server's order, whatever the page shows.
+
 ## Reading the dashboard from scripts
 
 `GET /api/dashboard`, sent with `Authorization: Bearer` and the token on the second line of
@@ -489,9 +509,11 @@ account, the tool restarts the task:
 a change to any of them is a breaking change in the CHANGELOG. Everything else may change
 without notice.
 
-- `accounts[]`, in the dashboard's order: grouped `usable`, then `model-limited`, then `limited`,
+- `accounts[]`, in the server's order: grouped `usable`, then `model-limited`, then `limited`,
   then `exhausted`, then `unread`, then `paused`. Within a group, accounts sort by `nextResetAt` (the weekly reset for a
   usable account), earliest first, with an undated one after every dated one, then by e-mail.
+  The order and filter the page shows are view settings kept in the browser
+  ([Arranging the ledger](#arranging-the-ledger)); they never change this array.
 - `accounts[].email`.
 - `accounts[].standing`: `usable`, `model-limited` (a model's weekly window, such as Fable's, is at
   100% and the 5-hour and 7-day are not; `nextResetAt` is that window's reset and

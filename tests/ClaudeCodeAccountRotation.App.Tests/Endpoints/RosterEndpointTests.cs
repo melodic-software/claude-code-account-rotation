@@ -722,7 +722,7 @@ public sealed class RosterEndpointTests
         script.ShouldContain("{ alias: alias }");
         // Notes stay on the Edit panel. The shared builder is still the display
         // name, browser, and profile, and a blank note is sent so it can clear.
-        script.ShouldContain("labeled(form, \"Notes\", notes)");
+        script.ShouldContain("labeled(right, \"Notes\", notes)");
         script.ShouldContain("body.notes = notes.value.trim() || null");
         script.ShouldContain("labeled(container, \"Display name\", alias)");
         // The CI token marker: an edit-panel date field, sent on save only when

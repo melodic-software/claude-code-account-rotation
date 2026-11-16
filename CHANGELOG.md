@@ -4,6 +4,44 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **The dashboard fits a fleet on one screen.** From 1600 px wide the Now strips, the usage alerts
+  and the warnings sit in a rail beside the ledger, and each account is one compact row: name and
+  address, status sentence, 7-day bar, reset countdown, model-weekly and 5-hour bars, and the
+  switch buttons at one place on every row. A row keeps its warnings on its face; `Detailed` shows
+  every line it had before. The 5-hour column drops when no account has the window. Fleet of 13 at
+  1920x1080: every row visible without scrolling, against one before.
+- **Reset countdowns print days and hours** (`2 d 1 h`) from 24 hours up, and whole days from a
+  week, with the reset's weekday and time on hover. Before, every reset from 48 to 59 hours read
+  `2 d`.
+- **The usage alerts take one line per account**, and the move to the best spare is one short
+  button per role.
+
+### Added
+
+- **A view bar on the ledger**: order, group by status, a filter with counts, and compact or
+  detailed rows, kept in the browser's local storage. `accounts[]` from `/api/dashboard`, `Next
+  up` and every switch keep the server's order. See
+  [Arranging the ledger](README.md#arranging-the-ledger).
+- Group headers that say what each group's time means, a fleet summary line, and a sticky column
+  head.
+- Rows slide to their new places when the order changes, and menus and popovers open with a short
+  fade. Under reduced motion nothing moves; the fades stay.
+
+### Fixed
+
+- The list no longer re-announces itself to screen readers on every poll; a view change is
+  announced once. A poll that redraws the rows keeps keyboard focus on the same control.
+- Escape closes Add an account, Check roles and the row menu, and returns focus to the button that
+  opened it. The sign-in code fields have a label, and Edit-panel checkboxes sit beside their
+  labels.
+- The focus ring is an outline that shows on the switch buttons and under Windows contrast themes,
+  at 3:1 or better in both schemes. Disabled buttons read muted instead of dimmed.
+- A hovered row no longer blinks on each poll.
+
 ## [3.0.0] - 2026-11-13
 
 ### Changed

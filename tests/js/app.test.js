@@ -620,7 +620,7 @@ test("within 30 days the sentence warns, roles with no key stop, and after the d
   assert.strictEqual(soon.length, 1);
   assert.strictEqual(soon[0].tone, "warn");
   assert.deepStrictEqual(soon[0].stop, ["LEGACY"]);
-  assert.strictEqual(ciExpirySentence(soon[0]), "When the token expires on 2027-01-01, these roles fall back to their API key only: A; these roles stop: LEGACY");
+  assert.strictEqual(ciExpirySentence(soon[0]), "When the CI token expires on 2027-01-01, these roles fall back to their API key only: A; these roles stop: LEGACY");
   assert.strictEqual(ciTokenExpiries(roster, Date.parse("2027-01-02T00:00:00Z"))[0].tone, "crit");
 });
 
@@ -639,7 +639,7 @@ test("outside the 30-day window no expiry entry is shown", () => {
 test("after the date the sentence reads in the past", () => {
   const roster = { ciRoles: [expiryRole("A", "2026-01-01", "2026-01-01"), expiryRole("LEGACY", "2026-01-01", null)] };
   const [late] = ciTokenExpiries(roster, Date.parse("2027-01-02T00:00:00Z"));
-  assert.strictEqual(ciExpirySentence(late), "The token expired on 2027-01-01; these roles now run on their API key only: A; these roles stopped: LEGACY");
+  assert.strictEqual(ciExpirySentence(late), "The CI token expired on 2027-01-01; these roles now run on their API key only: A; these roles stopped: LEGACY");
 });
 
 test("a split role whose key half another account holds falls back to its key rather than stopping", () => {
@@ -861,10 +861,38 @@ test("alertLines writes the server's percent and threshold the way a card writes
     { account: "a@example.com", level: "critical", percent: 92.4, threshold: 85, window: "7-day" },
     { account: "z@example.com", level: "warning", percent: 89.6, threshold: 60, window: "Fable" }
   ], accounts), [
-    { kind: "crit", text: "Work: 7-day usage at 92%, past 85%" },
-    { kind: "warn", text: "z@example.com: Fable usage at 90%, past 60%" }
+    { kind: "crit", text: "a · 7-day 92%, past 85%", title: "Work", first: 0 },
+    { kind: "warn", text: "z@example.com · Fable 90%, past 60%", title: "z@example.com", first: 1 }
   ]);
   assert.deepStrictEqual(alertLines(undefined, accounts), []);
+});
+
+test("alertLines names an account by its address's local part, the full address when another account shares it", () => {
+  const accounts = [
+    { email: "long@example.com", roster: { alias: "Weekend overflow for the nightly batch and release-candidate lanes" } },
+    { email: "pat@one.example", roster: null },
+    { email: "pat@two.example", roster: null }
+  ];
+  const lines = alertLines([
+    { account: "long@example.com", level: "warning", percent: 72, threshold: 70, window: "Fable" },
+    { account: "pat@one.example", level: "warning", percent: 72, threshold: 70, window: "7-day" }
+  ], accounts);
+  assert.deepStrictEqual(lines.map((line) => [line.text, line.title]), [
+    ["long · Fable 72%, past 70%", "Weekend overflow for the nightly batch and release-candidate lanes"],
+    ["pat@one.example · 7-day 72%, past 70%", "pat"]
+  ]);
+});
+
+test("alertLines gives an account one line for all its windows, in the worst tone, keyed to its first alert", () => {
+  const accounts = [{ email: "a@example.com", roster: { alias: "Work" } }, { email: "b@example.com", roster: null }];
+  assert.deepStrictEqual(alertLines([
+    { account: "a@example.com", level: "warning", percent: 100, threshold: 75, window: "5-hour" },
+    { account: "b@example.com", level: "warning", percent: 72, threshold: 70, window: "7-day" },
+    { account: "a@example.com", level: "critical", percent: 100, threshold: 90, window: "7-day" }
+  ], accounts), [
+    { kind: "crit", text: "a · 5-hour 100%, past 75% · 7-day 100%, past 90%", title: "Work", first: 0 },
+    { kind: "warn", text: "b · 7-day 72%, past 70%", title: "b", first: 1 }
+  ]);
 });
 
 const { bestSpareActions } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
@@ -1165,4 +1193,493 @@ test("a stranded card without login flags reads error and offers no login", () =
   const stranded = { isLive: false, hasCredentials: true, loginPaused: false, loginDead: false, loginExpiresAt: null, refresh: { state: "stranded" } };
   assert.strictEqual(stateChip(stranded, NOW), "error");
   assert.strictEqual(loginOffered(stranded, NOW), false);
+});
+
+const { countdown, resetTitle, parseView, readView, writeView, arrange, shows, needsAttention, filterCounts, fleetSummary, layoutKey, reordered, groupOf, groupHeading } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+
+const HOUR = 3600;
+
+test("a reset counts down in hours and minutes under a day, days and hours to a week, whole days after", () => {
+  assert.strictEqual(countdown(3 * HOUR), "3 h 0 min");
+  assert.strictEqual(countdown(22 * HOUR + 14 * 60), "22 h 14 min");
+  assert.strictEqual(countdown(23 * HOUR + 59 * 60 + 40), "1 d");
+  assert.strictEqual(countdown(24 * HOUR), "1 d");
+  assert.strictEqual(countdown(25 * HOUR), "1 d 1 h");
+  assert.strictEqual(countdown(49 * HOUR), "2 d 1 h");
+  assert.strictEqual(countdown(144 * HOUR), "6 d");
+  assert.strictEqual(countdown(167 * HOUR + 59 * 60), "6 d 23 h");
+  assert.strictEqual(countdown(168 * HOUR), "7 d");
+  assert.strictEqual(countdown(200 * HOUR), "8 d");
+  assert.strictEqual(countdown(45), "45 s");
+});
+
+test("a reset's title names the weekday and the time", () => {
+  const title = resetTitle("2026-10-02T20:00:00Z", "en-US", "UTC");
+  assert.match(title, /Fri/);
+  assert.match(title, /8:00/);
+});
+
+// A usable card whose 7-day window resets hours from NOW, the instant the
+// server sorted it by.
+function dated(email, hours, fields, weekly) {
+  const at = new Date(NOW + hours * HOUR * 1000).toISOString();
+  const account = card(email, Object.assign({ nextResetAt: at }, fields), 0, weekly === undefined ? 40 : weekly);
+  account.usage.limits[1].resetsAt = at;
+  return account;
+}
+
+// The fleet's shape: eleven usable accounts in the server's order, soonest
+// 7-day reset first, then two exhausted ones.
+function fleet() {
+  const usable = [26, 30, 49, 50, 58, 58.5, 61, 70, 90, 120, 163].map((hours, index) => dated("u" + index + "@x", hours));
+  return usable.concat([
+    dated("x0@x", 36, { standing: "exhausted", canSwitchHere: false }, 100),
+    dated("x1@x", 54, { standing: "exhausted", canSwitchHere: false }, 100)
+  ]);
+}
+
+const DEFAULT_VIEW = { order: "burn", group: true, show: "all", density: "compact" };
+
+function rowsOf(items) {
+  return items.filter((item) => item.account).map((item) => item.account.email);
+}
+
+test("a reset sentence counts down in days and hours", () => {
+  const account = dated("x@x", 49, { standing: "exhausted", hasCredentials: true, refresh: { state: "read" } }, 100);
+  assert.strictEqual(sentence(account, NOW).text, "Exhausted, usable in 2 d 1 h");
+});
+
+test("the stored view falls back to the defaults on anything it does not recognise, and keeps only its own keys", () => {
+  assert.deepStrictEqual(parseView(null), DEFAULT_VIEW);
+  assert.deepStrictEqual(parseView("{not json"), DEFAULT_VIEW);
+  assert.deepStrictEqual(parseView("\"name\""), DEFAULT_VIEW);
+  assert.deepStrictEqual(parseView("[1,2]"), DEFAULT_VIEW);
+  assert.deepStrictEqual(parseView(JSON.stringify({ order: "evil", group: "yes", show: "<img>", density: 3 })), DEFAULT_VIEW);
+  assert.deepStrictEqual(
+    parseView(JSON.stringify({ order: "name", group: false, show: "spent", density: "detailed", token: "secret", email: "a@x" })),
+    { order: "name", group: false, show: "spent", density: "detailed" });
+  assert.deepStrictEqual(parseView(JSON.stringify({ order: "reset5" })), Object.assign({}, DEFAULT_VIEW, { order: "reset5" }));
+});
+
+test("the view is read from ccar.view.v1, and storage that is missing or throws gives the defaults", () => {
+  const asked = [];
+  const storage = { getItem: (key) => { asked.push(key); return JSON.stringify({ order: "left", show: "usable" }); } };
+  assert.deepStrictEqual(readView(storage), Object.assign({}, DEFAULT_VIEW, { order: "left", show: "usable" }));
+  assert.deepStrictEqual(asked, ["ccar.view.v1"]);
+  assert.deepStrictEqual(readView(null), DEFAULT_VIEW);
+  assert.deepStrictEqual(readView({ getItem: () => { throw new Error("blocked"); } }), DEFAULT_VIEW);
+  assert.deepStrictEqual(readView({ getItem: () => "{\"order\":\"evil\"}" }), DEFAULT_VIEW);
+});
+
+test("writing the view sets ccar.view.v1 once with the four view values only, and a storage that throws is survived", () => {
+  const calls = [];
+  const written = writeView({ setItem: (key, value) => calls.push([key, value]) }, { order: "reset7", group: false, show: "paused", density: "detailed", token: "t" });
+  assert.strictEqual(written, true);
+  assert.strictEqual(calls.length, 1);
+  assert.strictEqual(calls[0][0], "ccar.view.v1");
+  assert.deepStrictEqual(JSON.parse(calls[0][1]), { order: "reset7", group: false, show: "paused", density: "detailed" });
+  assert.strictEqual(writeView({ setItem: () => { throw new Error("quota"); } }, DEFAULT_VIEW), false);
+  assert.strictEqual(writeView(null, DEFAULT_VIEW), false);
+});
+
+test("arranging never touches the server array, and Next up is still read from it", () => {
+  const accounts = Object.freeze(fleet());
+  const before = accounts.map((account) => account.email);
+  const next = recommended(accounts, (account) => account.canSwitchHere, NOW);
+  ["burn", "reset7", "reset5", "left", "name"].forEach((order) => {
+    [true, false].forEach((group) => {
+      const items = arrange(accounts, Object.assign({}, DEFAULT_VIEW, { order, group }), NOW);
+      assert.strictEqual(rowsOf(items).length, accounts.length);
+      items.filter((item) => item.account).forEach((item) => assert.ok(accounts.indexOf(item.account) !== -1));
+    });
+  });
+  assert.deepStrictEqual(accounts.map((account) => account.email), before);
+  assert.strictEqual(recommended(accounts, (account) => account.canSwitchHere, NOW), next);
+});
+
+test("the fleet in burn order is two groups, each headed by its label, count and what its time means", () => {
+  const items = arrange(fleet(), DEFAULT_VIEW, NOW);
+  const headers = items.filter((item) => item.group);
+  assert.deepStrictEqual(headers.map((item) => item.group.text), [
+    "Usable · 11 · soonest 7-day reset first",
+    "Exhausted · 2 · usable again at the 7-day reset"
+  ]);
+  assert.deepStrictEqual(rowsOf(items), fleet().map((account) => account.email));
+  assert.strictEqual(items[0].group.key, "usable");
+  assert.strictEqual(items[12].group.key, "exhausted");
+});
+
+test("no row crosses a group while grouping is on, whatever the order", () => {
+  const accounts = fleet();
+  // An exhausted account whose reset comes before every usable one, and a
+  // name that sorts first, would lead a flat list.
+  accounts[11].usage.limits[1].resetsAt = new Date(NOW + HOUR * 1000).toISOString();
+  accounts[11].email = "aaa@x";
+  ["burn", "reset7", "reset5", "left", "name"].forEach((order) => {
+    let current = null;
+    arrange(accounts, Object.assign({}, DEFAULT_VIEW, { order }), NOW).forEach((item) => {
+      if (item.group) { current = item.group.key; return; }
+      assert.strictEqual(groupOf(item.account, NOW), current, order + ": " + item.account.email);
+    });
+  });
+  const flat = arrange(accounts, Object.assign({}, DEFAULT_VIEW, { order: "reset7", group: false }), NOW);
+  assert.strictEqual(flat.filter((item) => item.group).length, 0);
+  assert.strictEqual(rowsOf(flat)[0], "aaa@x");
+});
+
+test("an order other than burn sorts inside each server group, ties in server order", () => {
+  const accounts = [
+    dated("b@x", 50, {}, 10),
+    dated("a@x", 30, {}, 70),
+    dated("c@x", 40, {}, 10),
+    dated("z@x", 20, { standing: "exhausted" }, 100)
+  ];
+  const view = (order) => Object.assign({}, DEFAULT_VIEW, { order });
+  assert.deepStrictEqual(rowsOf(arrange(accounts, view("burn"), NOW)), ["b@x", "a@x", "c@x", "z@x"]);
+  assert.deepStrictEqual(rowsOf(arrange(accounts, view("reset7"), NOW)), ["a@x", "c@x", "b@x", "z@x"]);
+  assert.deepStrictEqual(rowsOf(arrange(accounts, view("left"), NOW)), ["b@x", "c@x", "a@x", "z@x"]);
+  assert.deepStrictEqual(rowsOf(arrange(accounts, view("name"), NOW)), ["a@x", "b@x", "c@x", "z@x"]);
+});
+
+test("the name order reads the display name, not the address", () => {
+  const accounts = [dated("a@x", 10, { roster: { alias: "Zed" } }), dated("b@x", 20, { roster: { alias: "amy" } })];
+  assert.deepStrictEqual(rowsOf(arrange(accounts, Object.assign({}, DEFAULT_VIEW, { order: "name" }), NOW)), ["b@x", "a@x"]);
+});
+
+test("undated resets sort last, and a window that reset since its read counts as undated", () => {
+  const accounts = [dated("none@x", 10), dated("late@x", 90), dated("reset@x", 5), dated("soon@x", 30)];
+  accounts[0].usage.limits[1].resetsAt = null;
+  accounts[2].usage.limits[1].windowReset = true;
+  [true, false].forEach((group) => {
+    assert.deepStrictEqual(rowsOf(arrange(accounts, Object.assign({}, DEFAULT_VIEW, { order: "reset7", group }), NOW)), ["soon@x", "late@x", "none@x", "reset@x"]);
+  });
+  const five = [dated("a@x", 10), dated("b@x", 20)];
+  five[1].usage.limits[0].resetsAt = new Date(NOW + 2 * HOUR * 1000).toISOString();
+  assert.deepStrictEqual(rowsOf(arrange(five, Object.assign({}, DEFAULT_VIEW, { order: "reset5" }), NOW)), ["b@x", "a@x"]);
+});
+
+test("with grouping off, burn order is the server order with no headers", () => {
+  const items = arrange(fleet(), Object.assign({}, DEFAULT_VIEW, { group: false }), NOW);
+  assert.strictEqual(items.filter((item) => item.group).length, 0);
+  assert.deepStrictEqual(rowsOf(items), fleet().map((account) => account.email));
+});
+
+test("groups are runs in server order, so an in-use unread account and an idle one head separate groups", () => {
+  const accounts = [
+    dated("u@x", 10),
+    card("live@x", { standing: "unread", isLive: true }, null, null),
+    dated("x@x", 30, { standing: "exhausted" }, 100),
+    card("idle@x", { standing: "unread" }, null, null)
+  ];
+  const items = arrange(accounts, DEFAULT_VIEW, NOW);
+  assert.deepStrictEqual(items.map((item) => item.group ? "g:" + item.group.key : item.account.email),
+    ["g:usable", "u@x", "g:unread-in-use", "live@x", "g:exhausted", "x@x", "g:unread", "idle@x"]);
+});
+
+test("every standing has a group label and says what its time means", () => {
+  const texts = ["usable", "unread-in-use", "model-limited", "limited", "exhausted", "unread", "paused"]
+    .map((key) => groupHeading(key, 2, "burn", "Fable").text);
+  assert.deepStrictEqual(texts, [
+    "Usable · 2 · soonest 7-day reset first",
+    "In use, not read · 2 · no figures yet",
+    "Fable limit reached · 2 · usable again at the Fable weekly reset",
+    "5-hour limit reached · 2 · usable again at the 5-hour reset",
+    "Exhausted · 2 · usable again at the 7-day reset",
+    "Not read · 2 · no figures yet",
+    "Paused · 2 · left out of rotation"
+  ]);
+  assert.strictEqual(groupHeading("usable", 3, "name").text, "Usable · 3 · by name");
+  assert.strictEqual(groupHeading("usable", 3, "left").text, "Usable · 3 · most left first");
+  assert.strictEqual(groupHeading("usable", 3, "reset5").text, "Usable · 3 · soonest 5-hour reset first");
+  assert.strictEqual(groupHeading("model-limited", 1, "burn", null).text, "Model limit reached · 1 · usable again at the model's weekly reset");
+});
+
+test("a filter hides rows without dropping them, and hides a header left with nothing under it", () => {
+  const accounts = fleet();
+  const items = arrange(accounts, Object.assign({}, DEFAULT_VIEW, { show: "usable" }), NOW);
+  assert.strictEqual(rowsOf(items).length, 13);
+  assert.deepStrictEqual(items.filter((item) => item.account && !item.hidden).map((item) => item.account.email), accounts.slice(0, 11).map((account) => account.email));
+  const headers = items.filter((item) => item.group);
+  assert.deepStrictEqual(headers.map((item) => [item.group.text, item.hidden]), [
+    ["Usable · 11 · soonest 7-day reset first", false],
+    ["Exhausted · 0 · usable again at the 7-day reset", true]
+  ]);
+  const spent = arrange(accounts, Object.assign({}, DEFAULT_VIEW, { show: "spent" }), NOW);
+  assert.deepStrictEqual(spent.filter((item) => item.account && !item.hidden).map((item) => item.account.email), ["x0@x", "x1@x"]);
+});
+
+test("needs attention is any warning or error on the row, never a spent window alone", () => {
+  const fine = dated("fine@x", 30, { hasCredentials: true, refresh: { state: "read" } });
+  assert.strictEqual(needsAttention(fine, NOW, [fine]), false);
+  assert.strictEqual(needsAttention(dated("spent@x", 30, { standing: "exhausted", hasCredentials: true, refresh: { state: "read" } }, 100), NOW, []), false);
+  const stale = card("stale@x", { hasCredentials: true, refresh: { state: "read" } }, 10, 10, 45);
+  const failed = dated("failed@x", 30, { hasCredentials: true, refresh: { state: "read-failed", message: "Usage read failed" } });
+  const loggedOut = dated("out@x", 30, { hasCredentials: true, refresh: { state: "read" }, cliLoggedOut: "Logged out of the CLI" });
+  const expiring = dated("soon@x", 30, { hasCredentials: true, refresh: { state: "read" }, loginExpiresAt: new Date(NOW + 3 * 86400000).toISOString() });
+  const later = dated("later@x", 30, { hasCredentials: true, refresh: { state: "read" }, loginExpiresAt: new Date(NOW + 20 * 86400000).toISOString() });
+  const token = dated("token@x", 30, { hasCredentials: true, refresh: { state: "read" }, roster: { ciRoles: [{ name: "Lane", tokenSetOn: "2025-10-20", tokenSecret: "T" }] } });
+  const noLogin = dated("new@x", 30, { hasCredentials: false, refresh: { state: "needs-login" } });
+  [stale, failed, loggedOut, expiring, token, noLogin].forEach((account) => assert.strictEqual(needsAttention(account, NOW, [account]), true, account.email));
+  assert.strictEqual(needsAttention(later, NOW, [later]), false);
+  assert.strictEqual(shows(failed, "attention", NOW, [failed]), true);
+  assert.strictEqual(shows(fine, "attention", NOW, [fine]), false);
+});
+
+test("each filter keeps its own rows, and the counts say how many each would show", () => {
+  const accounts = [
+    dated("u@x", 10, { hasCredentials: true, refresh: { state: "read" } }),
+    dated("l@x", 10, { standing: "limited", hasCredentials: true, refresh: { state: "read" } }),
+    dated("m@x", 10, { standing: "model-limited", hasCredentials: true, refresh: { state: "read" } }),
+    dated("p@x", 10, { standing: "paused", hasCredentials: true, refresh: { state: "read" }, roster: { paused: true } }),
+    dated("e@x", 10, { standing: "exhausted", hasCredentials: true, refresh: { state: "stranded" } }, 100)
+  ];
+  const kept = (show) => accounts.filter((account) => shows(account, show, NOW, accounts)).map((account) => account.email);
+  assert.deepStrictEqual(kept("all"), ["u@x", "l@x", "m@x", "p@x", "e@x"]);
+  assert.deepStrictEqual(kept("usable"), ["u@x"]);
+  assert.deepStrictEqual(kept("spent"), ["l@x", "m@x", "e@x"]);
+  assert.deepStrictEqual(kept("paused"), ["p@x"]);
+  assert.deepStrictEqual(kept("attention"), ["e@x"]);
+  assert.deepStrictEqual(filterCounts(accounts, NOW), { all: 5, usable: 1, attention: 1, spent: 3, paused: 1 });
+});
+
+test("the layout key changes with what is displayed and nothing else", () => {
+  const accounts = fleet();
+  const view = DEFAULT_VIEW;
+  const key = layoutKey(arrange(accounts, view, NOW), view.density);
+  assert.strictEqual(reordered(key, layoutKey(arrange(fleet(), view, NOW), view.density)), false);
+  assert.strictEqual(reordered(key, layoutKey(arrange(accounts, view, NOW), "detailed")), true);
+  assert.strictEqual(reordered(key, layoutKey(arrange(accounts, Object.assign({}, view, { show: "usable" }), NOW), view.density)), true);
+  assert.strictEqual(reordered(key, layoutKey(arrange(accounts, Object.assign({}, view, { group: false }), NOW), view.density)), true);
+  assert.strictEqual(reordered(key, layoutKey(arrange(accounts.slice().reverse(), view, NOW), view.density)), true);
+  assert.strictEqual(reordered(key, key.slice(0, -1)), true);
+  const changedFigures = fleet();
+  changedFigures[0].usage.limits[1].percent = 77;
+  assert.strictEqual(reordered(key, layoutKey(arrange(changedFigures, view, NOW), view.density)), false);
+  const none = layoutKey(arrange(accounts, Object.assign({}, view, { show: "paused" }), NOW), view.density);
+  assert.ok(none.indexOf("empty") !== -1);
+});
+
+test("the fleet summary counts usable accounts, the 7-day quota they have left, the next reset and the next account back", () => {
+  const accounts = fleet();
+  const summary = fleetSummary(accounts, NOW);
+  assert.strictEqual(summary.usable, 11);
+  assert.strictEqual(summary.total, 13);
+  assert.strictEqual(summary.weeklyLeft, 6.6);
+  assert.strictEqual(summary.nextReset.account.email, "u0@x");
+  assert.strictEqual(summary.nextBack.account.email, "x0@x");
+  const spentOnly = fleetSummary(accounts.slice(11), NOW);
+  assert.strictEqual(spentOnly.usable, 0);
+  assert.strictEqual(spentOnly.weeklyLeft, null);
+  assert.strictEqual(spentOnly.nextReset, null);
+  assert.strictEqual(fleetSummary(accounts.slice(0, 11), NOW).nextBack, null);
+});
+
+const { fiveHourShown, modelLabel, ciSummary, cellReading, rowNotices, figuresAsOf, alertRole } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+
+test("the 5-hour column is shown only when some account's plan has the window", () => {
+  const ultraOnly = card("u@x", {}, null, 10);
+  ultraOnly.usage.limits[0] = limit("session", null, { known: false, notApplicable: true });
+  assert.strictEqual(fiveHourShown([ultraOnly]), false);
+  assert.strictEqual(fiveHourShown([ultraOnly, card("p@x", {}, 30, 10)]), true);
+  assert.strictEqual(fiveHourShown([]), false);
+});
+
+test("the model-weekly heading is the one label the known windows share, else a generic name", () => {
+  const fable = (email, label, known) => {
+    const account = card(email, {}, 0, 0);
+    account.usage.limits[2] = limit("weekly_scoped", 10, { label, known });
+    return account;
+  };
+  assert.strictEqual(modelLabel([fable("a@x", "Fable", true), fable("b@x", "Fable", true), fable("c@x", "scoped", false)]), "Fable");
+  assert.strictEqual(modelLabel([fable("a@x", "Fable", true), fable("b@x", "Opus", true)]), "Model weekly");
+  assert.strictEqual(modelLabel([fable("c@x", "scoped", false)]), "Model weekly");
+});
+
+test("the compact CI chip counts the roles in their worst tone and lists every badge in its title", () => {
+  const roster = { ciRoles: [{ name: "a" }, { name: "b" }] };
+  assert.deepStrictEqual(ciSummary(roster, [{ kind: "ok", text: "a · token" }, { kind: "warn", text: "b · token · split" }, { text: "CI token" }]),
+    { kind: "warn", text: "CI · 2 roles", title: "CI · 2 roles\na · token\nb · token · split\nCI token" });
+  assert.strictEqual(ciSummary({ ciRoles: [{ name: "a" }] }, [{ kind: "crit", text: "a · token · expired" }]).text, "CI · 1 role");
+  assert.strictEqual(ciSummary({ ciRoles: [{ name: "a" }] }, [{ kind: "crit", text: "x" }]).kind, "crit");
+  assert.strictEqual(ciSummary({ ciRoles: [] }, [{ kind: "ok", text: "CI token · 2026-01-01" }]), null);
+  assert.strictEqual(ciSummary(null, []), null);
+});
+
+test("a ledger cell's figure is a percentage, or a short muted mark with the reading in its title", () => {
+  assert.deepStrictEqual(cellReading(limit("weekly_all", 97.6)), { text: "98%", title: null, muted: false });
+  assert.deepStrictEqual(cellReading(limit("session", null, { notApplicable: true })), { text: "\u2013", title: "not on this plan", muted: true });
+  assert.deepStrictEqual(cellReading(limit("session", null, { known: false })), { text: "\u2013", title: "unknown", muted: true });
+  assert.deepStrictEqual(cellReading(limit("session", 40, { windowReset: true })), { text: "reset", title: "window reset since last read", muted: true });
+  assert.deepStrictEqual(cellReading(undefined), { text: "\u2013", title: "not on this plan", muted: true });
+});
+
+test("a row keeps its warnings on its face and leaves neutral facts to Detailed", () => {
+  const dashboard = { refresh: { inProgress: false } };
+  const read = { hasCredentials: true, refresh: { state: "read" } };
+  const fine = dated("fine@x", 30, Object.assign({ loginExpiresAt: new Date(NOW + 20 * 86400000).toISOString(), loggedInAt: minutesAgo(600) }, read));
+  assert.deepStrictEqual(rowNotices(fine, dashboard, NOW, [fine]), []);
+  const refreshing = dated("busy@x", 30, { hasCredentials: true, refresh: { state: "idle" } });
+  assert.deepStrictEqual(rowNotices(refreshing, { refresh: { inProgress: true } }, NOW, [refreshing]), []);
+  const stale = card("stale@x", read, 10, 10, 45);
+  assert.deepStrictEqual(rowNotices(stale, dashboard, NOW, [stale]), ["read 45 min ago, may be out of date"]);
+  stale.usage.source = "refresh";
+  assert.match(rowNotices(stale, dashboard, NOW, [stale])[0], /^as of .*45 min ago via refresh; may be out of date$/);
+  const failed = dated("failed@x", 30, { hasCredentials: true, refresh: { state: "read-failed", message: "Usage read failed" } });
+  assert.deepStrictEqual(rowNotices(failed, dashboard, NOW, [failed]), ["Usage read failed"]);
+  const out = dated("out@x", 30, Object.assign({ cliLoggedOut: "The CLI logged out of this account; log in again." }, read));
+  assert.deepStrictEqual(rowNotices(out, dashboard, NOW, [out]), ["The CLI logged out of this account; log in again."]);
+  const soon = dated("soon@x", 30, Object.assign({ loginExpiresAt: new Date(NOW + 3 * 86400000).toISOString() }, read));
+  assert.deepStrictEqual(rowNotices(soon, dashboard, NOW, [soon]), ["login expires in 3 d"]);
+  const token = dated("token@x", 30, Object.assign({ roster: { ciRoles: [{ name: "Lane", tokenSetOn: "2025-10-20", tokenSecret: "T" }] } }, read));
+  assert.match(rowNotices(token, dashboard, NOW, [token])[0], /^When the CI token expires on 2026-10-20, these roles stop: Lane$/);
+});
+
+test("the ledger's figures are dated by the capture most accounts share, the later on a tie", () => {
+  const at = (minutes) => { const account = card("x@x", {}, 0, 0, minutes); return account; };
+  assert.strictEqual(figuresAsOf([at(10), at(10), at(2)]), minutesAgo(10));
+  assert.strictEqual(figuresAsOf([at(10), at(2)]), minutesAgo(2));
+  const unread = card("u@x", {}, 0, 0);
+  unread.usage.capturedAt = null;
+  assert.strictEqual(figuresAsOf([unread]), null);
+});
+
+test("a best-spare button shows the role alone and keeps the full label for its name", () => {
+  assert.strictEqual(alertRole("Assign reviews_security to best spare elif.yilmaz.lab"), "reviews_security");
+  assert.strictEqual(alertRole("Assign legacy (review lanes) (lane-two) to best spare Spare"), "legacy (review lanes) (lane-two)");
+  assert.strictEqual(alertRole("Something else"), "Something else");
+});
+
+const { motionKeys, motionPlan, pickControl, viewAnnouncement } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+
+test("the reorder motion keys a row by its address and each header by its run, so two runs of one group stay apart", () => {
+  const items = [
+    { group: { key: "usable" } }, { account: { email: "a@x" } },
+    { group: { key: "unread" } }, { account: { email: "b@x" } },
+    { group: { key: "exhausted" } }, { account: { email: "c@x" } },
+    { group: { key: "unread" } }, { account: { email: "d@x" } }
+  ];
+  assert.deepStrictEqual(motionKeys(items), ["g:usable:1", "r:a@x", "g:unread:1", "r:b@x", "g:exhausted:1", "r:c@x", "g:unread:2", "r:d@x"]);
+});
+
+test("the reorder motion moves what moved a pixel or more, fades in what was not shown, and leaves the rest", () => {
+  const before = { "r:a": 100, "r:b": 150, "r:c": 200.4 };
+  const after = { "r:a": 150, "r:b": 100, "r:c": 200, "r:d": 250 };
+  assert.deepStrictEqual(motionPlan(before, after), [{ key: "r:a", dy: -50 }, { key: "r:b", dy: 50 }, { key: "r:d", enter: true }]);
+  assert.deepStrictEqual(motionPlan(before, {}), []);
+});
+
+test("a rebuilt row gives the focus back to the same control by its label, and to none when the control went away", () => {
+  const labels = ["Rename this account", "This machine", "WSL", "More actions for a"];
+  assert.strictEqual(pickControl(labels, { index: 2, label: "WSL" }), 2);
+  assert.strictEqual(pickControl(["Rename this account", "Log in again", "This machine", "WSL"], { index: 2, label: "WSL" }), 3);
+  // Re-issue token went away: the focus must not fall to the Switch now at its place.
+  assert.strictEqual(pickControl(labels, { index: 1, label: "Re-issue token" }), -1);
+});
+
+test("a view change is said in one sentence: the order, the rows shown, and what differs from the default", () => {
+  const view = { order: "reset7", group: true, show: "all", density: "compact" };
+  assert.strictEqual(viewAnnouncement(view, 11, 13), "Sorted by 7-day reset, 11 accounts shown");
+  assert.strictEqual(viewAnnouncement(Object.assign({}, view, { order: "burn", show: "attention" }), 3, 13), "Sorted by burn order, 3 of 13 accounts shown: Needs attention");
+  assert.strictEqual(viewAnnouncement(Object.assign({}, view, { group: false, density: "detailed" }), 1, 1), "Sorted by 7-day reset, not grouped, 1 account shown, detailed rows");
+});
+
+const { credentialBlocked, usableNow, rowStatus, localStamps, fiveHourSparse } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+
+// A usable account in every way but its login.
+function blocked(email, hours, fields) {
+  return dated(email, hours, Object.assign({ hasCredentials: true, refresh: { state: "read" } }, fields));
+}
+
+test("a usable account whose login blocks a switch is not usable now, and a paused login or a held slot is", () => {
+  const fine = blocked("fine@x", 10);
+  const loggedOut = blocked("out@x", 10, { cliLoggedOut: "The CLI on wsl logged out", isLive: true });
+  const expired = blocked("exp@x", 10, { loginExpiresAt: new Date(NOW - 1000).toISOString() });
+  const missing = blocked("new@x", 10, { hasCredentials: false });
+  const stranded = blocked("str@x", 10, { refresh: { state: "stranded", message: "credentials stranded in recovery" } });
+  const paused = blocked("pau@x", 10, { loginPaused: true });
+  const held = blocked("held@x", 10, { hasCredentials: false, heldAway: true });
+  [loggedOut, expired, missing, stranded].forEach((account) => {
+    assert.strictEqual(credentialBlocked(account, NOW), true, account.email);
+    assert.strictEqual(usableNow(account, NOW), false, account.email);
+    assert.strictEqual(groupOf(account, NOW), "usable", account.email);
+  });
+  [fine, paused, held].forEach((account) => {
+    assert.strictEqual(credentialBlocked(account, NOW), false, account.email);
+    assert.strictEqual(usableNow(account, NOW), true, account.email);
+    assert.strictEqual(groupOf(account, NOW), "usable", account.email);
+  });
+  assert.strictEqual(groupOf(blocked("x@x", 10, { standing: "exhausted", hasCredentials: false }), NOW), "exhausted");
+});
+
+test("blocked logins stay in the Usable group in the server's order, the Usable chip counts them, and the summary counts only the ready ones", () => {
+  const accounts = [
+    blocked("u1@x", 10),
+    blocked("b1@x", 20, { hasCredentials: false }),
+    blocked("u2@x", 30),
+    blocked("b2@x", 40, { loginExpiresAt: new Date(NOW - 1000).toISOString() }),
+    blocked("u3@x", 50),
+    dated("x@x", 5, { standing: "exhausted" }, 100)
+  ];
+  const before = accounts.map((account) => account.email);
+  const items = arrange(accounts, DEFAULT_VIEW, NOW);
+  assert.deepStrictEqual(items.map((item) => item.group ? item.group.text : item.account.email), [
+    "Usable · 5 · soonest 7-day reset first", "u1@x", "b1@x", "u2@x", "b2@x", "u3@x",
+    "Exhausted · 1 · usable again at the 7-day reset", "x@x"
+  ]);
+  assert.deepStrictEqual(rowsOf(arrange(accounts, Object.assign({}, DEFAULT_VIEW, { group: false }), NOW)), before);
+  assert.deepStrictEqual(accounts.map((account) => account.email), before);
+  assert.strictEqual(fleetSummary(accounts, NOW).usable, 3);
+  assert.strictEqual(filterCounts(accounts, NOW).usable, 5);
+  assert.deepStrictEqual(rowsOf(arrange(accounts, Object.assign({}, DEFAULT_VIEW, { order: "reset7" }), NOW)), ["u1@x", "b1@x", "u2@x", "b2@x", "u3@x", "x@x"]);
+});
+
+test("a usable account in the red near a limit needs attention, one in the orange does not", () => {
+  assert.strictEqual(needsAttention(blocked("red@x", 10, {}), NOW, []), false);
+  const red = blocked("red@x", 10);
+  red.usage.limits[1].percent = 92;
+  const orange = blocked("orange@x", 10);
+  orange.usage.limits[1].percent = 80;
+  assert.strictEqual(needsAttention(red, NOW, [red]), true);
+  assert.strictEqual(needsAttention(orange, NOW, [orange]), false);
+});
+
+test("the ledger's status says the state in a few words, no reset and no age, and nothing for a plain usable account", () => {
+  const near = blocked("n@x", 10);
+  near.usage.limits[1].percent = 92;
+  near.usage.limits[1].label = "7-day";
+  assert.deepStrictEqual(rowStatus(near, NOW), { kind: "crit", text: "Near 7-day limit" });
+  assert.deepStrictEqual(rowStatus(blocked("e@x", 49, { standing: "exhausted" }), NOW), { kind: "crit", text: "Exhausted" });
+  assert.deepStrictEqual(rowStatus(blocked("l@x", 2, { standing: "limited" }), NOW), { kind: "crit", text: "5-hour limit reached" });
+  assert.deepStrictEqual(rowStatus(blocked("m@x", 50, { standing: "model-limited", limitedModel: "Fable" }), NOW), { kind: "crit", text: "Fable limit reached" });
+  assert.deepStrictEqual(rowStatus(blocked("p@x", 10, { loginPaused: true }), NOW), { kind: "warn", text: "Login paused" });
+  assert.deepStrictEqual(rowStatus(blocked("x@x", 10, { loginExpiresAt: new Date(NOW - 1000).toISOString() }), NOW), { kind: "crit", text: "Login expired" });
+  assert.deepStrictEqual(rowStatus(card("s@x", { hasCredentials: true, refresh: { state: "read" } }, 10, 10, 45), NOW), { kind: "warn", text: "May be out of date" });
+  assert.deepStrictEqual(rowStatus(blocked("ok@x", 10), NOW), { kind: "ok", text: "" });
+});
+
+test("a server sentence's UTC stamps are said in local time, and other text is left alone", () => {
+  assert.strictEqual(localStamps("superseded here on 2026-11-14 21:43:10Z. Switching", "en-US", "America/New_York"), "superseded here on Nov 14, 4:43 PM. Switching");
+  assert.strictEqual(localStamps("at 2026-11-14T21:43Z", "en-US", "UTC"), "at Nov 14, 9:43 PM");
+  assert.strictEqual(localStamps("no stamp, 2026-11-14 only"), "no stamp, 2026-11-14 only");
+});
+
+test("the 5-hour column narrows when under one account in five has a 5-hour figure", () => {
+  const without = (email) => card(email, {}, null, 10);
+  const some = [card("a@x", {}, 30, 10)].concat(["b", "c", "d", "e", "f"].map((name) => without(name + "@x")));
+  some.forEach((account) => { if (account.email !== "a@x") { account.usage.limits[0].known = false; } });
+  assert.strictEqual(fiveHourSparse(some), true);
+  assert.strictEqual(fiveHourSparse(some.slice(0, 5)), false);
+});
+
+test("a row's reset names the window nextResetAt belongs to under every order but the two reset orders", () => {
+  const { resetWindowOf } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+  const limited = { standing: "limited" };
+  const model = { standing: "model-limited", limitedModel: "Fable" };
+  ["burn", "left", "name"].forEach((order) => {
+    assert.strictEqual(resetWindowOf(order, limited), "5-hour");
+    assert.strictEqual(resetWindowOf(order, model), "Fable weekly");
+    assert.strictEqual(resetWindowOf(order, { standing: "usable" }), "7-day");
+  });
+  assert.strictEqual(resetWindowOf("reset7", limited), "7-day");
+  assert.strictEqual(resetWindowOf("reset5", model), "5-hour");
 });

@@ -64,7 +64,7 @@ internal sealed partial class DashboardAssembler(
 
     private const string AdoptSentence = "Click Adopt to put the live account on the roster.";
 
-    private const string LoginSentence = "Click Login on the card that needs a login.";
+    private const string LoginSentence = "Click Log in on the account that needs a login.";
 
     private const string AddSentence = "Use Add an account, then Login.";
 

@@ -43,7 +43,7 @@ public sealed class DashboardAssemblerTests
 
     private const string AdoptSetup = "Click Adopt to put the live account on the roster.";
 
-    private const string LoginSetup = "Click Login on the card that needs a login.";
+    private const string LoginSetup = "Click Log in on the account that needs a login.";
 
     private const string AddSetup = "Use Add an account, then Login.";
 

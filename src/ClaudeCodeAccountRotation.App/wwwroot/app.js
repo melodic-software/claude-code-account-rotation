@@ -13,6 +13,21 @@
   // What every lane's Console key is named, so a key list says which is a lane's.
   var CONSOLE_KEY_NAME = "github-actions";
 
+  // How close a login's fixed expiry has to be before its card warns.
+  var LOGIN_WARN_SECONDS = 7 * 24 * 3600;
+
+  // The ledger's view settings, the only thing the page keeps in the browser's
+  // storage: enum values under one key, each read back against its list, and
+  // never an address, an alias or the token. The first value of each list is
+  // the default; burn order is the server's own.
+  var VIEW_KEY = "ccar.view.v1";
+  var VIEW_ORDERS = ["burn", "reset7", "reset5", "left", "name"];
+  var VIEW_SHOWS = ["all", "usable", "attention", "spent", "paused"];
+  var VIEW_DENSITIES = ["compact", "detailed"];
+  // The refresh outcomes a row warns about. The rest say nothing or are said
+  // by the credential chip.
+  var REFRESH_ERRORS = ["stranded", "lost", "token-refresh-failed", "read-failed", "login-dead", "rate-limited", "budget-refused"];
+
   // Loaded by Node for tests/js, which has no page: export the pure helpers and stop.
   if (typeof document === "undefined") {
     module.exports = {
@@ -74,6 +89,37 @@
     module.exports.stateChip = stateChip;
     module.exports.loginLine = loginLine;
     module.exports.loginOffered = loginOffered;
+    module.exports.countdown = countdown;
+    module.exports.resetWindowOf = resetWindowOf;
+    module.exports.resetTitle = resetTitle;
+    module.exports.parseView = parseView;
+    module.exports.readView = readView;
+    module.exports.writeView = writeView;
+    module.exports.groupOf = groupOf;
+    module.exports.groupHeading = groupHeading;
+    module.exports.needsAttention = needsAttention;
+    module.exports.shows = shows;
+    module.exports.filterCounts = filterCounts;
+    module.exports.arrange = arrange;
+    module.exports.layoutKey = layoutKey;
+    module.exports.reordered = reordered;
+    module.exports.fleetSummary = fleetSummary;
+    module.exports.fiveHourShown = fiveHourShown;
+    module.exports.modelLabel = modelLabel;
+    module.exports.ciSummary = ciSummary;
+    module.exports.cellReading = cellReading;
+    module.exports.rowNotices = rowNotices;
+    module.exports.figuresAsOf = figuresAsOf;
+    module.exports.alertRole = alertRole;
+    module.exports.motionKeys = motionKeys;
+    module.exports.motionPlan = motionPlan;
+    module.exports.pickControl = pickControl;
+    module.exports.viewAnnouncement = viewAnnouncement;
+    module.exports.credentialBlocked = credentialBlocked;
+    module.exports.usableNow = usableNow;
+    module.exports.rowStatus = rowStatus;
+    module.exports.localStamps = localStamps;
+    module.exports.fiveHourSparse = fiveHourSparse;
     return;
   }
 
@@ -82,13 +128,14 @@
   // stop hook's route do.
   var POLL_MS = 10000;
   var BROWSERS = ["", "chrome", "edge", "brave"];
-  // How close a login's fixed expiry has to be before its card warns.
-  var LOGIN_WARN_SECONDS = 7 * 24 * 3600;
   // The select value that means "this profile is not in the list"; every other
   // value is an index into profileCatalog, because a directory name can hold
   // any character and a joined key would break on the separator.
   var OTHER = "other";
   var cards = document.getElementById("cards");
+  // The ledger as a whole: its column set and density are classes here, so
+  // the column head and the rows change grid together.
+  var ledger = cards.parentNode;
   var banner = document.getElementById("banner");
   var setup = document.getElementById("setup");
   var warnings = document.getElementById("warnings");
@@ -97,6 +144,18 @@
   var alertStrip = element("ul", "alerts");
   alertStrip.hidden = true;
   warnings.parentNode.insertBefore(alertStrip, warnings);
+  // Under 1600 px the alerts and the warnings each fold to one line; whether
+  // each is open lives here only, for this page's life.
+  var alertsOpen = false;
+  var warningsOpen = false;
+  [[alertStrip, "alerts"], [warnings, "warnings"]].forEach(function (pair) {
+    pair[0].addEventListener("click", function (event) {
+      var fold = event.target.closest && event.target.closest("button.fold");
+      if (!fold) { return; }
+      var open = pair[1] === "alerts" ? (alertsOpen = !alertsOpen) : (warningsOpen = !warningsOpen);
+      fold.setAttribute("aria-expanded", String(open));
+    });
+  });
   var captured = document.getElementById("captured");
   var refreshAllButton = document.getElementById("refresh-all");
   var refreshStateLine = document.getElementById("refresh-state");
@@ -126,10 +185,22 @@
   // The card node per e-mail, rebuilt by each render, so a login panel can be
   // hung on the right card without querying by an address that needs escaping.
   var cardNodes = {};
-  // The addresses of the cards on the page, in the order they are on it, set by
-  // the same rebuild that fills cardNodes. What an arriving payload is compared
-  // against to tell a reorder from an update in place.
+  // The layout key of the ledger on the page (layoutKey), set by the same
+  // rebuild that fills cardNodes. What an arriving payload is compared against
+  // to tell a reorder from an update in place.
   var renderedOrder = [];
+  // The row and header nodes the last rebuild drew, keyed for the reorder
+  // motion (motionKeys), and the count of reorders set going, so only the
+  // latest one hands the list back to the pointer.
+  var motionNodes = {};
+  var settleRun = 0;
+  var lastInputWasKey = false;
+  // The visually hidden line that says what a view change did.
+  var viewStatus = document.getElementById("view-status");
+  // The ledger's view settings, read once at load; the bar that changes them
+  // sits on the All accounts line, outside #cards.
+  var view = readView(viewStorage());
+  var viewBar = buildViewBar();
   // The per-process token from the document's meta, or from a #t= fragment that
   // --open put on the URL, or pasted by the operator. It stays in this closure:
   // the page reads the fragment once and removes it from the address bar, and
@@ -251,6 +322,9 @@
   }
 
   function showTokenForm() {
+    // Nothing loads until there is a token, so the loading line would wait forever.
+    var loading = cards.querySelector(".loading");
+    if (loading) { loading.hidden = true; }
     var form = document.getElementById("instance-token");
     if (!form) {
       form = element("form", "roster-form instance-token");
@@ -677,6 +751,13 @@
     return name.length <= 3 ? name.toUpperCase() : name.charAt(0).toUpperCase() + name.slice(1);
   }
 
+  // A server phrase ("in use by wsl") with each side named as the page names it.
+  function sideWords(text) {
+    return lastSides.reduce(function (said, side) {
+      return said.split(" " + side.side).join(" " + sideLabel(side.side));
+    }, text);
+  }
+
   function accountByEmail(email) {
     return lastAccounts.filter(function (candidate) { return candidate.email === email; })[0] || null;
   }
@@ -702,7 +783,7 @@
     // Named in the markup, so a strip whose target changed is never kept for
     // looking the same: renderNow compares markup, not click handlers.
     button.setAttribute("data-target", target.email);
-    button.appendChild(element("span", null, label));
+    button.appendChild(element("span", null, label)).title = label;
     var weekly = target.usage.limits.filter(function (limit) { return limit.kind === "weekly_all"; })[0];
     if (weekly && weekly.known) {
       var reset = resetLine(weekly, at);
@@ -723,13 +804,14 @@
     var where = element("div", "where");
     where.appendChild(element("span", "dot " + (say ? say.kind : "")));
     where.appendChild(element("span", null, sideLabel(name)));
-    if (side) { where.appendChild(element("span", "detail", side.detail)); }
+    if (side) { where.appendChild(element("span", "detail", side.detail)).title = side.detail; }
     who.appendChild(where);
     if (account) {
       // Every strip is headed the same way, the name over the address, so the
       // strips' meters line up whether or not another account shares the name.
-      who.appendChild(element("h2", null, displayName(account)));
+      who.appendChild(element("h2", null, displayName(account))).title = displayName(account);
       var address = element("div", "em");
+      address.title = account.email;
       address.appendChild(wrappableEmail(account.email));
       var tag = ciTag(account.roster);
       if (tag) { address.appendChild(element("span", "tag", tag)); }
@@ -740,18 +822,19 @@
       who.appendChild(element("h2", "empty", side && !side.online ? "Not answering" : (side && side.liveAccount) || "Holding nothing"));
     }
     head.appendChild(who);
-    if (account) {
-      var room = headroom(account);
+    // No figure, no headline: a bare dash there reads as a minus sign.
+    var room = account ? headroom(account) : null;
+    if (room !== null) {
       var figure = element("div", "hr");
-      figure.appendChild(element("span", "n " + (room === null ? "" : tier(100 - room)), room === null ? "–" : room + "%"));
-      figure.appendChild(element("span", null, "headroom"));
+      figure.appendChild(element("span", "n " + tier(100 - room), room + "%"));
+      figure.appendChild(element("span", null, "left"));
       head.appendChild(figure);
     }
     strip.appendChild(head);
 
     if (account) {
-      strip.appendChild(element("p", "say " + say.kind, say.text));
-      if (account.cliLoggedOut) { strip.appendChild(element("p", "cli-logout", account.cliLoggedOut)); }
+      strip.appendChild(sayLine(say, account, at));
+      if (account.cliLoggedOut) { strip.appendChild(element("p", "cli-logout", sideWords(account.cliLoggedOut))); }
       var meters = element("div", "mt");
       account.usage.limits.forEach(function (limit) {
         if (limit.known || limit.kind === "session" || limit.kind === "weekly_all") {
@@ -759,6 +842,12 @@
         }
       });
       strip.appendChild(meters);
+      account.usage.limits.forEach(function (limit) {
+        // A current window adds only a timestamp the ledger's figures line
+        // already gives, so the strip names a window's read only when it is stale.
+        if (!limit.source || !stale(limit.capturedAt, at)) { return; }
+        strip.appendChild(element("p", "source stale", limit.label + " read " + ago(limit.capturedAt, at) + ", may be out of date")).title = limit.label + " " + asOf(limit.capturedAt, limit.source, at);
+      });
     }
 
     var go = element("div", "go");
@@ -791,7 +880,7 @@
       }
     } else if (side.online) {
       if (account && account.roster && account.loggedOutOn === side.side) {
-        go.appendChild(actionButton("Log in again on " + sideLabel(name), "primary lg", function () { loginFromSide(side.side, account.email); }));
+        go.appendChild(actionButton("Log in again on " + sideLabel(name), "secondary lg fix login-side", function () { loginFromSide(side.side, account.email); }));
       }
       var there = recommended(lastAccounts, takesOn(side.side), at);
       if (there) {
@@ -802,7 +891,7 @@
       }
       // Read at click time, and re-read by the server before anything moves.
       if (side.liveAccount) {
-        go.appendChild(blockable(actionButton("Hand back", "quiet", function () { releaseSide(side.side, side.liveAccount); }), false));
+        go.appendChild(blockable(actionButton("Hand back", "secondary hand-back", function () { releaseSide(side.side, side.liveAccount); }), false));
       }
     } else if (side.canStart) {
       go.appendChild(blockable(actionButton("Start " + sideLabel(name) + " side", "secondary", function () { mutate(sidePath(side.side, "/start"), "POST", null, null); }), false));
@@ -903,7 +992,7 @@
   }
 
   function openLoginPanel(email, session) {
-    var card = cardNodes[email];
+    var card = cardFor(email);
     if (!card) { return; }
 
     var panel = element("details", "login");
@@ -930,7 +1019,7 @@
     code.placeholder = "paste the code here";
     var submit = element("button", null, "Submit code");
     submit.type = "submit";
-    form.appendChild(code);
+    labeled(form, "Sign-in code", code);
     form.appendChild(submit);
     form.addEventListener("submit", function (event) {
       event.preventDefault();
@@ -977,7 +1066,7 @@
   // reaches this page. The panel is a details.login, so an open one holds the
   // poll's re-render the same way.
   function openCiTokenPanel(account) {
-    var card = cardNodes[account.email];
+    var card = cardFor(account.email);
     if (!card) { return; }
     var existing = card.querySelector("details.ci-token");
     if (existing) { existing.parentNode.removeChild(existing); }
@@ -1173,7 +1262,7 @@
   // answer the two cost questions, and it is stored and sent in one click.
   function openApiKeyPanel(account, admin) {
     var key = keyKind(admin);
-    var card = cardNodes[account.email];
+    var card = cardFor(account.email);
     if (!card) { return; }
     var existing = card.querySelector("details.api-key");
     if (existing) { existing.parentNode.removeChild(existing); }
@@ -1271,7 +1360,7 @@
             }));
             showToast(said.join(" "), done ? "ok" : "warn");
             return refresh(true).then(function () {
-              var redrawn = cardNodes[account.email];
+              var redrawn = cardFor(account.email);
               if (redrawn && panel.parentNode !== redrawn) { redrawn.appendChild(panel); }
             });
           })
@@ -1347,7 +1436,7 @@
   // kept in the OS store beside the Console key. The field is cleared as soon
   // as it is read, and the token never comes back to this page.
   function openCiTokenValuePanel(account) {
-    var card = cardNodes[account.email];
+    var card = cardFor(account.email);
     if (!card) { return; }
     var existing = card.querySelector("details.ci-token-value");
     if (existing) { existing.parentNode.removeChild(existing); }
@@ -1399,7 +1488,7 @@
   // role, with no sign-in. The roles are the CI panel's; the halves offered
   // are the ones this machine stores and the role takes.
   function openAssignPanel(account) {
-    var card = cardNodes[account.email];
+    var card = cardFor(account.email);
     if (!card) { return; }
     var existing = card.querySelector("details.assign-role");
     if (existing) { existing.parentNode.removeChild(existing); }
@@ -1553,7 +1642,7 @@
         code.placeholder = "paste the code here";
         var submit = element("button", null, "Submit code");
         submit.type = "submit";
-        codeForm.appendChild(code);
+        labeled(codeForm, "Sign-in code", code);
         codeForm.appendChild(submit);
         codeForm.addEventListener("submit", function (event) {
           event.preventDefault();
@@ -1616,29 +1705,40 @@
   function editPanel(account, offerLogin) {
     var panel = element("details", "edit");
     panel.appendChild(element("summary", null, "Edit"));
-    var form = element("form", "roster-form");
-    var fields = accountFields(form, account.roster);
+    // Columns: who the account is, its notes and CI token date, then the roles
+    // it backs; the repair fold and the actions run under all of them.
+    var form = element("form", "roster-form edit-form");
+    var left = form.appendChild(element("div", "edit-col"));
+    var right = form.appendChild(element("div", "edit-col"));
+    var fields = accountFields(left, account.roster);
     // A warning is a note, not a name. The heading stays a short display name
     // because this field is where that sentence goes.
     var notes = element("textarea");
     notes.rows = 3;
     notes.value = (account.roster && account.roster.notes) || "";
     notes.placeholder = "warnings belong here, not in the name";
-    labeled(form, "Notes", notes);
+    labeled(right, "Notes", notes);
     // Generate CI token sets this itself. By hand it is the operator's own
     // record of when they ran `claude setup-token`; clearing it also clears
     // every token half the account backs. Nothing here reads GitHub or the token itself.
     var ciToken = element("input");
     ciToken.type = "date";
     ciToken.value = (account.roster && account.roster.ciTokenGeneratedOn) || "";
-    labeled(form, "CI token generated on", ciToken);
-    // The roles this account backs; unticking one takes it off on save.
+    labeled(right, "CI token generated on", ciToken);
+    // The roles this account backs; unticking one takes it off on save. Roles
+    // that share one place are listed under it once.
     var ciRoles = (account.roster && account.roster.ciRoles) || [];
+    var places = ciRoles.map(roleWhere).filter(function (place, index, all) { return all.indexOf(place) === index; });
+    // The roles take a third column of their own, so a wide row is not half empty.
+    var roleBox = ciRoles.length ? form.insertBefore(element("div", "edit-col"), right.nextSibling).appendChild(element("div", "fields role-list")) : null;
+    if (roleBox) { roleBox.appendChild(element("span", "group-label", places.length === 1 ? "Backs these roles in " + places[0] : "Backs these roles")); }
     var ciKeep = ciRoles.map(function (role) {
       var box = element("input");
       box.type = "checkbox";
       box.checked = true;
-      labeled(form, "Backs " + role.name + " in " + roleWhere(role), box);
+      // Named as the badges and alerts name it, so one role reads one way.
+      var roleName = role.prefix ? role.name.toLowerCase() : role.name;
+      labeled(roleBox, places.length === 1 ? roleName : roleName + " in " + roleWhere(role), box);
       return box;
     });
     // Roles to add by their token secrets, all set on the date above. It
@@ -1679,13 +1779,16 @@
     ciSecretWhere.placeholder = "owner/repository, or an organization";
     labeled(repair, "CI secret in", ciSecretWhere);
     form.appendChild(repair);
-    var save = element("button", null, "Save");
+    var actions = form.appendChild(element("div", "form-actions"));
+    var save = element("button", "primary", "Save");
     save.type = "submit";
-    form.appendChild(save);
+    actions.appendChild(save);
+    actions.appendChild(actionButton("Cancel", "quiet", function () { panel.open = false; }));
     // A card that does not need a login still lets the operator force one; here
     // it is reachable without inviting a click from the card's face.
     if (offerLogin) {
-      form.appendChild(actionButton("Log in again", "secondary", function () { startLogin(account.email); }));
+      // Apart from Save and Cancel: an account action, not the form's commit.
+      actions.appendChild(actionButton("Log in again", "secondary login-again", function () { startLogin(account.email); }));
     }
     form.addEventListener("submit", function (event) {
       event.preventDefault();
@@ -1735,6 +1838,39 @@
 
   function relative(instant, from) {
     return "in " + span(secondsUntil(instant, from));
+  }
+
+  // A reset said finely enough to order a week of them: span's ladder under a
+  // day, then days and hours, then whole days from a week. Floored on span's
+  // own rounded minutes, so the text never runs ahead of the clock and both
+  // ladders turn over at the same instant. Ages, login expiry and token life
+  // stay on span.
+  function countdown(seconds) {
+    var minutes = Math.round(seconds / 60);
+    if (minutes < 24 * 60) { return span(seconds); }
+    var hours = Math.floor(minutes / 60);
+    var days = Math.floor(hours / 24);
+    return days >= 7 || hours % 24 === 0 ? days + " d" : days + " d " + (hours % 24) + " h";
+  }
+
+  function resetIn(instant, from) {
+    return "in " + countdown(secondsUntil(instant, from));
+  }
+
+  // The absolute local instant a countdown stands for, as its hover text.
+  // Locale and zone are the browser's unless a caller names them.
+  function resetTitle(instant, locale, zone) {
+    return new Date(instant).toLocaleString(locale, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: zone });
+  }
+
+  // A server sentence with its UTC stamps ("2026-11-14 21:43:10Z") said in
+  // local time like every other time on the page.
+  function localStamps(text, locale, zone) {
+    return String(text).replace(/\b(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?)Z\b/g, function (stamp, day, time) {
+      var instant = new Date(day + "T" + time + "Z");
+      return isNaN(instant.getTime()) ? stamp
+        : instant.toLocaleString(locale, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: zone });
+    });
   }
 
   // An age in the buckets a countdown uses, said the other way round, so the
@@ -1808,7 +1944,8 @@
   function asOf(capturedAt, source, from) {
     var taken = new Date(capturedAt);
     var sameDay = taken.toDateString() === new Date(from).toDateString();
-    return "as of " + (sameDay ? taken.toLocaleTimeString() : taken.toLocaleString()) + ", " + ago(capturedAt, from)
+    var time = { hour: "numeric", minute: "2-digit" };
+    return "as of " + (sameDay ? taken.toLocaleTimeString([], time) : taken.toLocaleString([], Object.assign({ month: "short", day: "numeric" }, time))) + ", " + ago(capturedAt, from)
       + " via " + source + (stale(capturedAt, from) ? "; may be out of date" : "");
   }
 
@@ -1902,30 +2039,35 @@
     (ticks || []).forEach(function (percent) {
       var tick = element("b", "tick");
       tick.style.left = percent + "%";
-      tick.title = "alert at " + percentText(percent);
+      tick.title = "CI role alert threshold " + percentText(percent);
       track.appendChild(tick);
     });
+    // A 2 px tick is too small to hover, so the whole track names the marks.
+    if (ticks && ticks.length) { track.title = "Marks: CI role alerts at " + ticks.map(percentText).join(" and "); }
     return track;
   }
 
   // A window that has already reset has no reset to count down to: "resets in
   // 0 s" beside "window reset since last read" is the same stale figure said twice.
   function resetLine(limit, at) {
-    return limit.resetsAt && !limit.windowReset ? "resets " + relative(limit.resetsAt, at) : null;
+    return limit.resetsAt && !limit.windowReset ? "resets " + resetIn(limit.resetsAt, at) : null;
   }
 
-  // One window: its label and reading, the bar, when it resets, and, only for a
-  // row taken from another source than the account's own, where it came from.
+  // One window in a Now strip: its label and how much of it is used, the bar,
+  // and when it resets. Where a row came from, when not the account's own
+  // source, is said under the meters, so no meter grows a line its neighbours lack.
   function meter(limit, at, ticks) {
     var box = element("div", "meter");
     var line = element("div", "l");
     line.appendChild(element("span", "label", limit.label));
-    line.appendChild(element("span", "pct " + meterTone(limit), reading(limit)));
+    var figure = cellReading(limit);
+    var pct = line.appendChild(element("span", "pct " + meterTone(limit), figure.muted ? figure.text : figure.text + " used"));
+    if (figure.title) { pct.title = figure.title; }
     box.appendChild(line);
     box.appendChild(bar(limit, ticks));
     var reset = resetLine(limit, at);
-    if (reset) { box.appendChild(element("small", null, reset)); }
-    if (limit.source) { box.appendChild(element("small", stale(limit.capturedAt, at) ? "stale" : null, asOf(limit.capturedAt, limit.source, at))); }
+    // Said short, "resets 2 h 37 min", so it fits a third of a strip whole.
+    if (reset) { box.appendChild(element("small", null, reset.replace(/^resets in /, "resets "))).title = reset + "\n" + resetTitle(limit.resetsAt); }
     return box;
   }
 
@@ -2004,7 +2146,7 @@
     var parts = [];
     if (expiry.fallback.length) { parts.push((past ? "these roles now run on their API key only: " : "these roles fall back to their API key only: ") + expiry.fallback.join(", ")); }
     if (expiry.stop.length) { parts.push((past ? "these roles stopped: " : "these roles stop: ") + expiry.stop.join(", ")); }
-    return (past ? "The token expired on " + expiry.expiresOn + "; " : "When the token expires on " + expiry.expiresOn + ", ") + parts.join("; ");
+    return (past ? "The CI token expired on " + expiry.expiresOn + "; " : "When the CI token expires on " + expiry.expiresOn + ", ") + parts.join("; ");
   }
 
   // A role's name as a badge and the expiry line say it: lowercase for a
@@ -2260,18 +2402,38 @@
     return Math.round(percent) + "%";
   }
 
-  // The alert strip's lines, worst first as the server sent them. An alert
-  // only says how close an account is; it acts on nothing by itself (see
-  // bestSpareActions for the one button it carries).
+  // The alert strip's lines, one per alerted account, worst first as the
+  // server sent them: each of its windows past a threshold, the worst tone of
+  // them, and the index of its first alert, the one bestSpareActions puts the
+  // buttons on. An alert only says how close an account is; it acts on
+  // nothing by itself.
   function alertLines(alerts, accounts) {
-    return (alerts || []).map(function (alert) {
+    var groups = [];
+    (alerts || []).forEach(function (alert, index) {
+      var part = alert.window + " " + percentText(alert.percent) + ", past " + percentText(alert.threshold);
+      var kind = alert.level === "critical" ? "crit" : "warn";
+      var group = groups.filter(function (candidate) { return candidate.account === alert.account; })[0];
+      if (group) {
+        group.parts.push(part);
+        if (kind === "crit") { group.kind = "crit"; }
+        return;
+      }
+      // Named by the address's local part, which stays short where a display
+      // name can run to a sentence; the display name is the line's hover.
       var account = (accounts || []).filter(function (candidate) { return candidate.email === alert.account; })[0];
-      var name = account ? uniqueName(account, accounts) : alert.account;
-      return {
-        kind: alert.level === "critical" ? "crit" : "warn",
-        text: name + ": " + alert.window + " usage at " + percentText(alert.percent) + ", past " + percentText(alert.threshold)
-      };
+      var shared = (accounts || []).some(function (other) { return other.email !== alert.account && localPart(other.email) === localPart(alert.account); });
+      groups.push({ account: alert.account, name: account && !shared ? localPart(alert.account) : alert.account, title: account ? displayName(account) : alert.account, parts: [part], kind: kind, first: index });
     });
+    return groups.map(function (group) {
+      return { kind: group.kind, text: group.name + " · " + group.parts.join(" · "), title: group.title, first: group.first };
+    });
+  }
+
+  // A best-spare button's short face: the role its full label names, which
+  // stays the button's accessible name and hover text.
+  function alertRole(label) {
+    var end = label.lastIndexOf(" to best spare ");
+    return label.indexOf("Assign ") === 0 && end > 7 ? label.slice(7, end) : label;
   }
 
   // Assign to best spare, per alert line: one action for each role whose
@@ -2551,15 +2713,15 @@
     // Exhausted is the 7-day window spent, and nothing else; a spent 5-hour
     // window is a pause of hours with its own reset (Q34).
     if (account.standing === "exhausted") {
-      return { kind: "crit", text: account.nextResetAt ? "Exhausted, usable " + relative(account.nextResetAt, at) : "Exhausted" };
+      return { kind: "crit", text: account.nextResetAt ? "Exhausted, usable " + resetIn(account.nextResetAt, at) : "Exhausted" };
     }
     if (account.standing === "limited") {
-      return { kind: "crit", text: "5-hour limit reached" + (account.nextResetAt ? ", resets " + relative(account.nextResetAt, at) : "") };
+      return { kind: "crit", text: "5-hour limit reached" + (account.nextResetAt ? ", resets " + resetIn(account.nextResetAt, at) : "") };
     }
     // A spent model-scoped weekly window, the other windows open: never
     // recommended, still switchable by hand for work on another model.
     if (account.standing === "model-limited") {
-      return { kind: "crit", text: (account.limitedModel || "Model") + " weekly limit reached" + (account.nextResetAt ? ", resets " + relative(account.nextResetAt, at) : "") };
+      return { kind: "crit", text: (account.limitedModel || "Model") + " weekly limit reached" + (account.nextResetAt ? ", resets " + resetIn(account.nextResetAt, at) : "") };
     }
     if (chip === "paused" || account.standing === "paused") { return { kind: "paused", text: "Paused" }; }
     if (account.standing === "unread") { return { kind: "", text: "No usage read yet" }; }
@@ -2577,6 +2739,392 @@
     var gap = unknownWindow(account);
     if (gap) { return { kind: "warn", text: "Not verified: " + gap + " figure unknown" }; }
     return { kind: "ok", text: "Usable now" };
+  }
+
+  // The ledger row's state in a few words: sentence() without the reset, which
+  // the Resets column carries, and without the reading's age, which the
+  // row's notice line carries. Empty for a plain usable row, whose group
+  // already says so.
+  function rowStatus(account, at) {
+    var say = sentence(account, at);
+    var chip = stateChip(account, at);
+    if (account.cliLoggedOut || ["login expired", "error", "needs login"].indexOf(chip) !== -1) { return say; }
+    if (account.standing === "exhausted") { return { kind: "crit", text: "Exhausted" }; }
+    if (account.standing === "limited") { return { kind: "crit", text: "5-hour limit reached" }; }
+    if (account.standing === "model-limited") { return { kind: "crit", text: (account.limitedModel || "Model") + " limit reached" }; }
+    if (say.kind === "paused" || account.standing === "unread") { return say; }
+    var near = nearestLimit(account.usage.limits);
+    if (near) { return { kind: meterTone(near), text: "Near " + near.label + " limit" }; }
+    var age = usageAge(account, at);
+    if (age !== null && age > STALE_SECONDS) { return { kind: "warn", text: "May be out of date" }; }
+    if (say.kind !== "ok") { return say; }
+    if (chip === "login paused") { return { kind: "warn", text: "Login paused" }; }
+    return { kind: "ok", text: "" };
+  }
+
+  // The sentence's line. When it counts down to a reset, its hover names the
+  // instant: whichever of the account's resets the sentence printed.
+  function sayLine(say, account, at) {
+    var line = element("p", "say " + say.kind, say.text);
+    var named = [account.nextResetAt].concat(account.usage.limits.map(function (limit) { return limit.resetsAt; })).filter(function (instant) {
+      return instant && say.text.indexOf(resetIn(instant, at)) !== -1;
+    })[0];
+    if (named) { line.title = resetTitle(named); }
+    return line;
+  }
+
+  // The view settings read back from storage: each value checked against its
+  // list and defaulted when absent or unknown, every other key dropped, so
+  // nothing but these four can ride along in the stored value.
+  function parseView(raw) {
+    var stored = null;
+    try { stored = JSON.parse(raw); } catch (error) { stored = null; }
+    if (!stored || typeof stored !== "object" || Array.isArray(stored)) { stored = {}; }
+    function pick(list, value) { return list.indexOf(value) !== -1 ? value : list[0]; }
+    return {
+      order: pick(VIEW_ORDERS, stored.order),
+      group: typeof stored.group === "boolean" ? stored.group : true,
+      show: pick(VIEW_SHOWS, stored.show),
+      density: pick(VIEW_DENSITIES, stored.density)
+    };
+  }
+
+  // The storage getter itself throws when the browser blocks site data, so
+  // the caller passes what it could get, null included.
+  function readView(storage) {
+    try {
+      return parseView(storage ? storage.getItem(VIEW_KEY) : null);
+    } catch (error) {
+      return parseView(null);
+    }
+  }
+
+  // Whether the view was stored. Only the parsed four values are written.
+  function writeView(storage, view) {
+    try {
+      storage.setItem(VIEW_KEY, JSON.stringify(parseView(JSON.stringify(view))));
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // Whether the account's login stops a switch to it until someone logs in
+  // again: a CLI logout, a login missing, expired or refused, or credentials
+  // stranded in recovery. A paused login is not one, since Switch retries it,
+  // and neither is the empty slot of an account another side holds.
+  function credentialBlocked(account, at) {
+    if (account.cliLoggedOut) { return true; }
+    if (account.isLive || account.heldAway) { return false; }
+    return account.hasCredentials === false || loginExpired(account, at) || !!(account.refresh && account.refresh.state === "stranded");
+  }
+
+  // Usable by its quota and by its login: what the Usable group and count hold.
+  function usableNow(account, at) {
+    return account.standing === "usable" && !credentialBlocked(account, at);
+  }
+
+  // The group an account sits in: its standing, with an unread account in use
+  // (the server lifts it to just after the usable ones) apart from an idle one.
+  // A usable one whose login blocks a switch stays in Usable, in the server's
+  // place, its login warning on its face (SPEC §3, §4).
+  function groupOf(account, at) {
+    return account.standing === "unread" && (account.isLive || account.heldAway) ? "unread-in-use" : account.standing;
+  }
+
+  // A group header: its label, how many rows it shows, and what the group's
+  // time means. Model names the spent window of a model-limited group.
+  function groupHeading(key, count, order, model) {
+    var usable = { burn: "soonest 7-day reset first", reset7: "soonest 7-day reset first", reset5: "soonest 5-hour reset first", left: "most left first", name: "by name" };
+    var headings = {
+      usable: ["Usable", usable[order]],
+      "unread-in-use": ["In use, not read", "no figures yet"],
+      "model-limited": [(model || "Model") + " limit reached", "usable again at the " + (model || "model's") + " weekly reset"],
+      limited: ["5-hour limit reached", "usable again at the 5-hour reset"],
+      exhausted: ["Exhausted", "usable again at the 7-day reset"],
+      unread: ["Not read", "no figures yet"],
+      paused: ["Paused", "left out of rotation"]
+    };
+    var heading = headings[key] || [key, ""];
+    return { key: key, label: heading[0], count: count, meaning: heading[1], text: [heading[0], count].concat(heading[1] ? [heading[1]] : []).join(" · ") };
+  }
+
+  // Any warning or error on the row: a stale reading, a refresh error, a login
+  // that is missing, expired, paused or expiring within the warning window, a
+  // CLI logout, a CI token expiry, or a usable account in the red near a
+  // limit. A spent window alone is not one.
+  function needsAttention(account, at, accounts) {
+    var age = usageAge(account, at);
+    var chip = stateChip(account, at);
+    var near = account.standing === "usable" ? nearestLimit(account.usage.limits) : null;
+    return !!account.cliLoggedOut
+      || (!!near && meterTone(near) === "crit")
+      || ["error", "needs login", "login expired", "login paused"].indexOf(chip) !== -1
+      || loginSoon(account, at)
+      || (age !== null && age > STALE_SECONDS)
+      || REFRESH_ERRORS.indexOf(account.refresh && account.refresh.state) !== -1
+      || ciTokenExpiries(account.roster, at, accounts, account.email).length > 0;
+  }
+
+  function spent(account) {
+    return ["limited", "model-limited", "exhausted"].indexOf(account.standing) !== -1;
+  }
+
+  // Whether the Show filter keeps the row.
+  function shows(account, show, at, accounts) {
+    // The Usable group's own rows, so the chip and the header count alike.
+    if (show === "usable") { return account.standing === "usable"; }
+    if (show === "spent") { return spent(account); }
+    if (show === "paused") { return account.standing === "paused" || !!(account.roster && account.roster.paused); }
+    if (show === "attention") { return needsAttention(account, at, accounts); }
+    return true;
+  }
+
+  // How many rows each Show choice would keep.
+  function filterCounts(accounts, at) {
+    var counts = {};
+    VIEW_SHOWS.forEach(function (show) {
+      counts[show] = accounts.filter(function (account) { return shows(account, show, at, accounts); }).length;
+    });
+    return counts;
+  }
+
+  // A window's reset, or null when it has none to count down to.
+  function windowReset(account, kind) {
+    var limit = account.usage.limits.filter(function (candidate) { return candidate.kind === kind; })[0];
+    return limit && limit.resetsAt && !limit.windowReset ? limit.resetsAt : null;
+  }
+
+  // What the ledger shows, in the order it shows it: a copy of the server's
+  // array, never the array itself, which recommended() and every other reader
+  // keep using as it came. Each row is { account, hidden, resetAt }, resetAt
+  // the instant it is ordered by; with grouping on, a { group, hidden } header
+  // leads each run of one group in server order. Runs, not buckets: the server
+  // places an in-use unread account apart from an idle one. Every order but
+  // burn sorts inside each run while grouping is on, so spent accounts stay
+  // last, and across the whole list when it is off; undated rows go last and
+  // ties keep the server's order. A filter only marks rows hidden, and a
+  // header hidden when it is left with none.
+  function arrange(accounts, view, at) {
+    var runs = [];
+    var rows = accounts.map(function (account, index) {
+      var key = groupOf(account, at);
+      if (!runs.length || runs[runs.length - 1].key !== key) { runs.push({ key: key, model: account.limitedModel || null, count: 0 }); }
+      var resetAt = view.order === "reset7" ? windowReset(account, "weekly_all")
+        : view.order === "reset5" ? windowReset(account, "session")
+        : account.nextResetAt || null;
+      var room = view.order === "left" ? headroom(account) : null;
+      var rank = view.order === "reset7" || view.order === "reset5" ? (resetAt ? Date.parse(resetAt) : null)
+        : view.order === "left" ? (room === null ? null : -room)
+        : view.order === "name" ? displayName(account).toLowerCase() + "\u0000" + account.email
+        : null;
+      var hidden = !shows(account, view.show, at, accounts);
+      if (!hidden) { runs[runs.length - 1].count += 1; }
+      return { account: account, index: index, run: runs.length - 1, rank: rank, hidden: hidden, resetAt: resetAt };
+    });
+    function byRank(left, right) {
+      if (left === right) { return 0; }
+      if (left === null) { return 1; }
+      if (right === null) { return -1; }
+      return left < right ? -1 : 1;
+    }
+    rows.sort(function (a, b) {
+      return (view.group ? a.run - b.run : 0) || byRank(a.rank, b.rank) || a.index - b.index;
+    });
+    var items = [];
+    var last = -1;
+    rows.forEach(function (row) {
+      if (view.group && row.run !== last) {
+        var run = runs[row.run];
+        items.push({ group: groupHeading(run.key, run.count, view.order, run.model), hidden: run.count === 0 });
+        last = row.run;
+      }
+      items.push({ account: row.account, hidden: row.hidden, resetAt: row.resetAt });
+    });
+    return items;
+  }
+
+  // What the reorder guard compares: the headers and rows on screen, in order,
+  // whether any row is, and the density. Figures changing in place leave it
+  // alone; anything that moves a visible row changes it.
+  function layoutKey(items, density) {
+    var shown = items.filter(function (item) { return !item.hidden; });
+    var key = shown.map(function (item) { return item.group ? "g:" + item.group.key : item.account.email; });
+    if (!shown.some(function (item) { return item.account; })) { key.push("empty"); }
+    key.push("d:" + density);
+    return key;
+  }
+
+  // One key per arranged item for the reorder motion: "r:" and the address for
+  // a row, "g:", the group and its run's place among runs of that group for a
+  // header, since the server can place two runs of one group apart.
+  function motionKeys(items) {
+    var seen = {};
+    return items.map(function (item) {
+      if (!item.group) { return "r:" + item.account.email; }
+      seen[item.group.key] = (seen[item.group.key] || 0) + 1;
+      return "g:" + item.group.key + ":" + seen[item.group.key];
+    });
+  }
+
+  // What the reorder motion moves, from where each key sat before the rebuild
+  // and where it sits after: { key, dy } for one that moved a pixel or more,
+  // { key, enter } for one that was not shown before. A key no longer shown
+  // has nothing to move.
+  function motionPlan(before, after) {
+    return Object.keys(after).reduce(function (plan, key) {
+      if (!Object.prototype.hasOwnProperty.call(before, key)) {
+        plan.push({ key: key, enter: true });
+      } else if (Math.abs(before[key] - after[key]) >= 1) {
+        plan.push({ key: key, dy: before[key] - after[key] });
+      }
+      return plan;
+    }, []);
+  }
+
+  // Which of a rebuilt row's controls takes the focus back: the one with the
+  // saved label at the saved place, else the first with that label, else none
+  // (-1). Never a control by place alone: a button that went away would hand
+  // the focus to whatever took its place, and Enter there could be a Switch.
+  function pickControl(labels, saved) {
+    if (labels[saved.index] === saved.label) { return saved.index; }
+    return labels.indexOf(saved.label);
+  }
+
+  // What the status line says after a view change, for example
+  // "Sorted by 7-day reset, 11 accounts shown".
+  function viewAnnouncement(view, shown, total) {
+    var orders = { burn: "burn order", reset7: "7-day reset", reset5: "5-hour reset", left: "most left", name: "name" };
+    var filters = { usable: "Usable", attention: "Needs attention", spent: "Spent", paused: "Paused" };
+    var parts = ["Sorted by " + orders[view.order]];
+    if (!view.group) { parts.push("not grouped"); }
+    parts.push(view.show === "all"
+      ? shown + (shown === 1 ? " account" : " accounts") + " shown"
+      : shown + " of " + total + " accounts shown: " + filters[view.show]);
+    if (view.density === "detailed") { parts.push("detailed rows"); }
+    return parts.join(", ");
+  }
+
+  // Whether the arriving layout differs from the one on screen, which is the
+  // only thing the guard in render() defers for.
+  function reordered(arriving, rendered) {
+    return arriving.length !== rendered.length
+      || arriving.some(function (part, index) { return part !== rendered[index]; });
+  }
+
+  // The fleet in four figures: accounts usable now of all, the 7-day quota the
+  // usable ones have left counted in whole accounts, the soonest reset among
+  // them, and the first spent account to come back. A figure with no data is null.
+  function fleetSummary(accounts, at) {
+    var usable = accounts.filter(function (account) { return usableNow(account, at); });
+    var left = null;
+    usable.forEach(function (account) {
+      var weekly = account.usage.limits.filter(function (limit) { return limit.kind === "weekly_all"; })[0];
+      if (!weekly || !weekly.known || (!weekly.windowReset && weekly.percent === null)) { return; }
+      left = (left || 0) + (weekly.windowReset ? 1 : Math.max(0, 100 - weekly.percent) / 100);
+    });
+    function soonest(list) {
+      return list.filter(function (account) { return account.nextResetAt && Date.parse(account.nextResetAt) > at; }).reduce(function (best, account) {
+        return !best || Date.parse(account.nextResetAt) < Date.parse(best.resetAt) ? { account: account, resetAt: account.nextResetAt } : best;
+      }, null);
+    }
+    return {
+      usable: usable.length,
+      total: accounts.length,
+      weeklyLeft: left === null ? null : Math.round(left * 10) / 10,
+      nextReset: soonest(usable),
+      nextBack: soonest(accounts.filter(spent))
+    };
+  }
+
+  // Whether the ledger has a 5-hour column at all: not when no account's plan
+  // has the window.
+  function fiveHourShown(accounts) {
+    return accounts.some(function (account) {
+      return account.usage.limits.some(function (limit) { return limit.kind === "session" && limit.notApplicable !== true; });
+    });
+  }
+
+  // Whether so few accounts have a 5-hour figure (under one in five) that the
+  // column narrows to the figure alone.
+  function fiveHourSparse(accounts) {
+    var known = accounts.filter(function (account) {
+      return account.usage.limits.some(function (limit) { return limit.kind === "session" && limit.known && limit.percent !== null; });
+    }).length;
+    return known < accounts.length / 5;
+  }
+
+  // The model-weekly column's heading: the one label the known model-scoped
+  // windows share, or a generic name when they differ or none is known.
+  function modelLabel(accounts) {
+    var labels = [];
+    accounts.forEach(function (account) {
+      account.usage.limits.forEach(function (limit) {
+        if (limit.kind === "weekly_scoped" && limit.known && limit.label && labels.indexOf(limit.label) === -1) { labels.push(limit.label); }
+      });
+    });
+    return labels.length === 1 ? labels[0] : "Model weekly";
+  }
+
+  // The model column's short name, the same in its header and in its cells.
+  function modelShort(label) {
+    return label === "Model weekly" ? "Model" : label;
+  }
+
+  // The compact row's one CI chip in place of a badge per role: the role
+  // count in the worst tone any role badge carries, every badge in its title.
+  // Null for an account that backs no role.
+  function ciSummary(roster, badges) {
+    var count = ((roster && roster.ciRoles) || []).length;
+    if (!count) { return null; }
+    var kind = badges.some(function (badge) { return badge.kind === "crit"; }) ? "crit"
+      : badges.some(function (badge) { return badge.kind === "warn"; }) ? "warn" : "ok";
+    var text = "CI · " + count + (count === 1 ? " role" : " roles");
+    return { kind: kind, text: text, title: [text].concat(badges.map(function (badge) { return badge.text; })).join("\n") };
+  }
+
+  // A window's figure in a ledger cell's fixed slot: a percentage, or a short
+  // muted mark with the reading in its title when there is no percentage.
+  function cellReading(limit) {
+    if (!limit || limit.notApplicable === true) { return { text: "–", title: "not on this plan", muted: true }; }
+    if (!limit.known || limit.percent === null) { return { text: "–", title: "unknown", muted: true }; }
+    if (limit.windowReset) { return { text: "reset", title: "window reset since last read", muted: true }; }
+    return { text: percentText(limit.percent), title: null, muted: false };
+  }
+
+  // The warnings a row keeps on its face in either density: a CLI logout, a
+  // stale reading, a refresh that failed, a login that is expiring, expired or
+  // missing, and a CI token expiry. Neutral facts are not among them.
+  function rowNotices(account, dashboard, at, accounts) {
+    var notices = [];
+    if (account.cliLoggedOut) { notices.push(account.cliLoggedOut); }
+    // The same stale test needsAttention makes, said with the source when known.
+    var age = usageAge(account, at);
+    if (age !== null && age > STALE_SECONDS) {
+      var dated = [];
+      if (account.usage.source && stale(account.usage.capturedAt, at)) { dated.push(asOf(account.usage.capturedAt, account.usage.source, at)); }
+      account.usage.limits.forEach(function (limit) {
+        if (limit.source && stale(limit.capturedAt, at)) { dated.push(limit.label + " " + asOf(limit.capturedAt, limit.source, at)); }
+      });
+      Array.prototype.push.apply(notices, dated.length ? dated : ["read " + span(age) + " ago, may be out of date"]);
+    }
+    if (REFRESH_ERRORS.indexOf(account.refresh && account.refresh.state) !== -1) { notices.push(refreshState(account, dashboard)); }
+    if (loginSoon(account, at) && loginLine(account, at)) { notices.push(loginLine(account, at)); }
+    ciTokenExpiries(account.roster, at, accounts, account.email).forEach(function (expiry) { notices.push(ciExpirySentence(expiry)); });
+    return notices;
+  }
+
+  // When most of the ledger's figures were read: the capture instant the most
+  // accounts share, the later one on a tie. Null when nothing was read.
+  function figuresAsOf(accounts) {
+    var counts = {};
+    accounts.forEach(function (account) {
+      var taken = account.usage.capturedAt;
+      if (taken) { counts[taken] = (counts[taken] || 0) + 1; }
+    });
+    return Object.keys(counts).reduce(function (best, taken) {
+      return !best || counts[taken] > counts[best] || (counts[taken] === counts[best] && Date.parse(taken) > Date.parse(best)) ? taken : best;
+    }, null);
   }
 
   // The window the "near the limit" sentence names: the fuller of the two at
@@ -2603,7 +3151,8 @@
       var column = limit.kind === "session" || limit.kind === "weekly_all";
       if (!column && limit.known) {
         var reset = resetLine(limit, at);
-        lines.appendChild(element("p", "asof", limit.label + " " + reading(limit) + (reset ? ", " + reset : "")));
+        var other = lines.appendChild(element("p", "asof", limit.label + " " + reading(limit) + (reset ? ", " + reset : "")));
+        if (reset) { other.title = resetTitle(limit.resetsAt); }
       }
       if (limit.source) { lines.appendChild(element("p", asOfClass(limit.capturedAt, at), limit.label + " " + asOf(limit.capturedAt, limit.source, at))); }
     });
@@ -2629,16 +3178,52 @@
   }
 
   // One window in a row: the bar, the reading, and when it resets.
-  function cell(limit, at, ticks) {
-    var box = element("div", "u");
-    if (!limit) { return box; }
+  // The bar is left out where there is no figure to fill it, so an empty
+  // track never reads as 0%; the percentage sits in a fixed slot so every bar
+  // in the column has one length.
+  function cell(limit, at, ticks, kind, label) {
+    var box = element("div", "u " + kind + (!limit || limit.notApplicable === true ? " none" : ""));
     // The column header is hidden on narrow screens and from screen readers,
     // so each cell names its own window.
-    box.appendChild(element("span", "cell-label", limit.label));
-    box.appendChild(bar(limit, ticks));
-    box.appendChild(element("span", "pct " + meterTone(limit), reading(limit)));
-    var reset = resetLine(limit, at);
-    if (reset) { box.appendChild(element("small", null, reset)); }
+    // The model column says one name on every row, the one its header says.
+    box.appendChild(element("span", "cell-label", (kind !== "mw" && limit && limit.known && limit.label) || label));
+    var figure = cellReading(limit);
+    box.appendChild(figure.muted && !(limit && limit.windowReset) ? element("span", "no-bar") : bar(limit, ticks));
+    var pct = box.appendChild(element("span", "pct " + (figure.muted ? "muted" : meterTone(limit)), figure.text));
+    if (figure.title) { pct.title = figure.title; }
+    var reset = limit ? resetLine(limit, at) : null;
+    if (reset) {
+      box.appendChild(element("small", "detail-only", reset)).title = reset + "\n" + resetTitle(limit.resetsAt);
+      // The compact cell is one line, bar and figure; the window's own reset
+      // is the figure's hover there.
+      pct.title = [figure.title, reset, resetTitle(limit.resetsAt)].filter(Boolean).join("\n");
+    }
+    return box;
+  }
+
+  // Which window a row's reset figure counts down to. Only the two reset
+  // orders pick the window; every other order counts down to nextResetAt,
+  // whose window follows the standing.
+  function resetWindowOf(order, account) {
+    return order === "reset5" ? "5-hour"
+      : order === "reset7" ? "7-day"
+      : account.standing === "limited" ? "5-hour"
+      : account.standing === "model-limited" ? (account.limitedModel || "Model") + " weekly" : "7-day";
+  }
+
+  // The instant the row is ordered by in its group, as a countdown: the
+  // ledger's spine, end-aligned so the times read down one edge.
+  function resetCell(resetAt, at, windowName, columnWindow) {
+    var box = element("div", "rs");
+    box.appendChild(element("span", "cell-label", "Resets"));
+    if (resetAt && Date.parse(resetAt) > at) {
+      // The column is the 7-day reset; a row counting down to another window
+      // names it, so the column never changes its unit unsaid.
+      if (windowName !== columnWindow) { box.appendChild(element("span", "window", windowName.replace(/ weekly$/, "").replace("5-hour", "5h") + " · ")); }
+      box.appendChild(element("span", "when", countdown(secondsUntil(resetAt, at)))).title = windowName + " reset, " + resetTitle(resetAt);
+    } else {
+      box.appendChild(element("span", "when muted", "–")).title = "no reset to count down to";
+    }
     return box;
   }
 
@@ -2699,14 +3284,14 @@
   function showDisplayName(heading, account) {
     heading.textContent = "";
     if (!account.roster) {
-      heading.appendChild(document.createTextNode(displayName(account)));
+      heading.appendChild(element("span", "display-name", displayName(account)));
       return;
     }
     var button = element("button", "rename");
     button.type = "button";
     button.title = "Rename this account";
     button.setAttribute("aria-label", renameLabel(account, lastAccounts));
-    button.appendChild(element("span", "display-name", displayName(account)));
+    button.appendChild(element("span", "display-name", displayName(account))).title = displayName(account);
     button.appendChild(element("span", "rename-label", "Rename"));
     button.addEventListener("click", function () {
       // The Edit panel is already changing this account. Focus its display-name
@@ -2810,15 +3395,9 @@
 
   function cardHeading(account) {
     var heading = element("h2");
+    heading.title = displayName(account);
     showDisplayName(heading, account);
     return heading;
-  }
-
-  // Whether the arriving payload would move a card, which is the only thing the
-  // guard below defers for.
-  function reordered(arriving) {
-    return arriving.length !== renderedOrder.length
-      || arriving.some(function (email, index) { return email !== renderedOrder[index]; });
   }
 
   // A row's overflow menu item: the menu closes before the action runs, so the
@@ -2848,6 +3427,7 @@
       // and a banner.
       var here = actionButton(HERE, "secondary sm", function () { switchTo(account.email); });
       here.setAttribute("aria-label", "Switch " + HERE.toLowerCase() + " to " + name);
+      if (dashboard.banner) { here.title = "Switching is off"; }
       seg.appendChild(refusable(blockable(here, switchBlocked(account, dashboard, false)), !account.canSwitchHere));
     }
     lastSides.forEach(function (side) {
@@ -2858,21 +3438,24 @@
       var there = actionButton(sideLabel(side.side), "secondary sm", function () { switchSide(side.side, account.email); });
       there.setAttribute("aria-label", "Switch " + sideLabel(side.side) + " to " + name);
       var refused = (account.offeredTo || []).indexOf(side.side) === -1;
+      if (dashboard.banner) { there.title = "Switching is off"; }
       seg.appendChild(refusable(blockable(there, refused || !!dashboard.banner), refused));
     });
     return seg;
   }
 
-  function row(account, dashboard, at, next) {
+  function row(account, dashboard, at, next, resetAt) {
     var roster = account.roster;
     var paused = !!(roster && roster.paused);
     var say = sentence(account, at);
     var tone = say.kind === "ok" && loginSoon(account, at) ? "warn" : say.kind;
-    var card = element("section", "card" + (account.isLive && !account.cliLoggedOut ? " live" : "") + (account.cliLoggedOut ? " logged-out" : "") + (paused ? " paused" : ""));
+    // A row that cannot be used now reads quieter than one that can.
+    var card = element("section", "card" + (account.isLive && !account.cliLoggedOut ? " live" : "") + (account.cliLoggedOut ? " logged-out" : "") + (paused ? " paused" : "")
+      + (account.standing === "usable" ? "" : " quiet") + (spent(account) ? " spent" : "") + (next ? " next" : ""));
     var line = element("div", "row");
 
     var who = element("div", "nm");
-    who.appendChild(element("span", "dot " + tone));
+    var dot = who.appendChild(element("span", "dot " + tone));
     var title = element("div", "title");
     title.appendChild(cardHeading(account));
     var badges = element("span", "badges");
@@ -2884,28 +3467,42 @@
     // class is fixed rather than derived from the text, since a chip can
     // carry "(offline)".
     var chip = stateChip(account, at);
-    if (account.chip) { badges.appendChild(element("span", "badge store", account.chip)); }
-    if (chip && (!account.chip || (chip !== "live" && chip !== "ready"))) {
+    // Parked is where nearly every account sits, so the compact row leaves it
+    // out, and a logout's status already names the side the account is in use on.
+    if (account.chip) { badges.appendChild(element("span", "badge store" + (account.chip === "parked" || account.cliLoggedOut ? " detail-only" : ""), sideWords(account.chip))); }
+    // A paused account's status says Paused, so its chip would say it twice.
+    // A chip that says what the status says ("needs login") is left out too.
+    if (chip && (!account.chip || (chip !== "live" && chip !== "ready")) && !(chip === "paused" && say.kind === "paused") && chip !== say.text.toLowerCase()) {
       badges.appendChild(element("span", "badge " + chip.replace(/ /g, "-"), chip));
     }
     if (!roster) { badges.appendChild(element("span", "badge off-roster", "not on roster")); }
-    ciRoleBadges(roster, at, lastAccounts, account.email).forEach(function (ci) {
-      var ciBadge = element("span", "badge ci-token " + ci.kind, ci.text);
+    // In compact, an account that backs roles shows one CI chip in place of a
+    // badge per role, its title naming them and the stored token and key; the
+    // token and key chips are neutral facts, shown in Detailed.
+    var ciBadges = ciRoleBadges(roster, at, lastAccounts, account.email);
+    var tokenBadge = ciTokenBadge(roster);
+    var keyBadge = apiKeyBadge(roster);
+    var ciChip = ciSummary(roster, ciBadges.concat([tokenBadge, keyBadge].filter(Boolean)));
+    ciBadges.forEach(function (ci) {
+      var ciBadge = element("span", "badge ci-token " + ci.kind + (ciChip ? " detail-only" : ""), ci.text);
       ciBadge.title = ci.title;
       badges.appendChild(ciBadge);
     });
-    var tokenBadge = ciTokenBadge(roster);
+    if (ciChip) { badges.appendChild(element("span", "badge ci-token compact-only " + ciChip.kind, ciChip.text)).title = ciChip.title; }
     if (tokenBadge) {
-      var tokenChip = element("span", "badge api-key", tokenBadge.text);
+      var tokenChip = element("span", "badge api-key detail-only", tokenBadge.text);
       tokenChip.title = tokenBadge.title;
       badges.appendChild(tokenChip);
     }
-    var keyBadge = apiKeyBadge(roster);
     if (keyBadge) {
-      var keyChip = element("span", "badge api-key", keyBadge.text);
+      var keyChip = element("span", "badge api-key detail-only", keyBadge.text);
       keyChip.title = keyBadge.title;
       badges.appendChild(keyChip);
     }
+    // A narrow ledger can cut a chip short, so each says itself in full on hover.
+    Array.prototype.forEach.call(badges.children, function (chipNode) {
+      if (!chipNode.title) { chipNode.title = chipNode.textContent; }
+    });
     title.appendChild(badges);
     who.appendChild(title);
     // The heading is the display name, or the local part when the account has
@@ -2913,26 +3510,74 @@
     // record hid it only when the heading was the address itself, and a local
     // part is not the address, so this line is what keeps the account identifiable.
     who.appendChild(element("p", "address")).appendChild(wrappableEmail(account.email));
+    who.lastChild.title = account.email;
     line.appendChild(who);
 
+    // Compact says the state in a few words, the whole sentence on hover;
+    // Detailed says the sentence and the neutral lines under it.
     var status = element("div", "st");
-    status.appendChild(element("p", "say " + say.kind, say.text));
+    var full = sayLine(say, account, at);
+    full.title = say.text + (full.title ? "\n" + full.title : "");
+    var brief = rowStatus(account, at);
+    // The warnings stay on the compact row's face: on the status line when the
+    // state needs no words, else as one line under it, never repeating it.
+    var notices = rowNotices(account, dashboard, at, lastAccounts).filter(function (text) { return text !== brief.text && text !== say.text; });
+    var noticeKind = account.cliLoggedOut || loginExpired(account, at) ? "crit" : "warn";
+    if (!brief.text && notices.length) {
+      brief = { kind: noticeKind, text: notices.join(" · ") };
+      notices = [];
+    }
+    // A usage alert the rail lists is said on the row too, so the two agree.
+    var alerted = (dashboard.alerts || []).filter(function (alert) { return alert.account === account.email; })[0];
+    if (!brief.text && alerted) {
+      brief = { kind: alerted.level === "critical" ? "crit" : "warn", text: "Past " + alerted.window + " alert · " + percentText(alerted.threshold) };
+    }
+    // Every status starts with a capital, a server's lower-case message too.
+    var briefText = brief.text.charAt(0).toUpperCase() + brief.text.slice(1);
+    var briefLine = status.appendChild(element("p", "say brief " + brief.kind, briefText));
+    briefLine.title = brief.text === say.text ? briefText + full.title.slice(say.text.length) : [briefText, full.title].filter(Boolean).join("\n");
+    // The dot says the worst the row says: a usable account with a warning on
+    // its face is not green.
+    // A CI token's state is the lanes' trouble, not this account's quota or
+    // login, so it raises the dot to warn at most.
+    var worst = [brief.kind].concat(notices.length ? [noticeKind] : [], ciChip && ciChip.kind !== "ok" ? ["warn"] : []);
+    if (tone === "ok" && worst.some(function (kind) { return kind === "warn" || kind === "crit"; })) {
+      dot.className = "dot " + (worst.indexOf("crit") !== -1 ? "crit" : "warn");
+    }
+    // In the Usable group red is kept for quota: a login a click fixes is amber.
+    if (account.standing === "usable" && credentialBlocked(account, at)) { dot.className = "dot warn"; }
+    full.className += " full";
+    status.appendChild(full);
     status.appendChild(statusLines(account, dashboard, at));
     ciTokenExpiries(roster, at, lastAccounts, account.email).forEach(function (expiry) {
-      status.appendChild(element("p", "say " + expiry.tone, ciExpirySentence(expiry)));
+      status.appendChild(element("p", "say detail-only " + expiry.tone, ciExpirySentence(expiry)));
     });
     line.appendChild(status);
 
     function limitOf(kind) { return account.usage.limits.filter(function (limit) { return limit.kind === kind; })[0]; }
-    line.appendChild(cell(limitOf("session"), at));
-    line.appendChild(cell(limitOf("weekly_all"), at, meterTicks(account, dashboard.alertThresholds)));
+    var modelColumn = modelLabel(lastAccounts);
+    // Which window the Resets figure counts down to, for its hover.
+    var resetWindow = resetWindowOf(view.order, account);
+    line.appendChild(cell(limitOf("weekly_all"), at, meterTicks(account, dashboard.alertThresholds), "d7", "7-day"));
+    line.appendChild(resetCell(resetAt, at, resetWindow, view.order === "reset5" ? "5-hour" : "7-day"));
+    line.appendChild(cell(limitOf("weekly_scoped"), at, [], "mw", modelShort(modelColumn)));
+    line.appendChild(cell(limitOf("session"), at, [], "h5", "5-hour"));
+
+    if (notices.length) {
+      card.className += " has-notice";
+      var notice = element("p", "notice compact-only " + noticeKind, notices.join(" · "));
+      notice.title = notice.textContent;
+      line.appendChild(notice);
+    }
 
     var act = element("div", "act");
+    var extra = element("span", "extra");
+    act.appendChild(extra);
     // Beside the meters, so an account near its 7-day limit can have its
     // roles' token re-issued without opening the menu. It opens the same
     // panel as Generate CI token, with this account's roles ticked.
     var reissue = reissueButton(account, openCiTokenPanel);
-    if (reissue) { act.appendChild(actionButton(reissue.label, "secondary sm", reissue.click)); }
+    if (reissue) { extra.appendChild(actionButton(reissue.label, "secondary sm", reissue.click)); }
     // The live account is signed in already; logging it into its parked folder
     // would leave one account holding two logins. A card with a login good for
     // longer than the warning window does not need the button on its face; an
@@ -2942,13 +3587,14 @@
     // anyway; the button goes so the operator is not sent at a 409.
     var needsLogin = loginOffered(account, at);
     if (roster && !account.isLive && needsLogin) {
-      act.appendChild(actionButton(account.hasCredentials ? "Log in again" : "Login", "primary sm", function () { startLogin(account.email); }));
+      // A row's fix is outlined: the filled orange is the Now strip's one call to act.
+      extra.appendChild(actionButton(account.hasCredentials ? "Log in again" : "Log in", "secondary sm fix", function () { startLogin(account.email); }));
     }
     if (roster && account.loggedOutOn) {
-      act.appendChild(actionButton("Log in again", "primary sm", function () { loginFromSide(account.loggedOutOn, account.email); }));
+      extra.appendChild(actionButton("Log in again", "secondary sm fix", function () { loginFromSide(account.loggedOutOn, account.email); }));
     }
     if (!roster && account.isLive) {
-      act.appendChild(actionButton("Adopt", "secondary sm", function () { adopt(account.email); }));
+      extra.appendChild(actionButton("Adopt", "secondary sm", function () { adopt(account.email); })).title = "Put the live account on the roster";
     }
     act.appendChild(switchButtons(account, dashboard));
 
@@ -2961,50 +3607,61 @@
     if (edit) {
       menu.appendChild(menuItem(more, "Edit", "quiet sm", function () {
         edit.open = true;
+        // The row and its panel land just under the sticky ledger head, not
+        // beneath it, before the first field takes the focus.
+        document.documentElement.style.scrollPaddingTop = (document.querySelector(".ledger-top").getBoundingClientRect().height + 8) + "px";
+        card.scrollIntoView({ block: "start" });
         var first = edit.querySelector("input, select, textarea");
-        if (first) { first.focus(); }
+        if (first) { first.focus({ preventScroll: true }); }
       }));
     }
     menu.appendChild(blockable(menuItem(more, "Refresh usage", "quiet sm", function () { refreshAccount(account.email); }), false));
+    // In groups under rules: open, CI token, API and Admin keys, rotation, and
+    // every delete last, apart under its own rule, so no ordinary item sits
+    // between two that destroy something. A delete reads in the danger colour.
     if (roster) {
+      menu.appendChild(element("hr"));
       menu.appendChild(menuItem(more, "Open claude.ai", "quiet sm", function () { openAccountPage(account.email, "claude-ai", "claude.ai"); }));
       menu.appendChild(menuItem(more, "Open Console", "quiet sm", function () { openAccountPage(account.email, "keys", "the Console's API keys page"); }));
+      menu.appendChild(element("hr"));
       menu.appendChild(menuItem(more, "Generate CI token", "quiet sm", function () { openCiTokenPanel(account); }));
       menu.appendChild(menuItem(more, roster.ciTokenStoredOn ? "Replace CI token" : "Store CI token", "quiet sm", function () { openCiTokenValuePanel(account); }));
-      if (roster.ciTokenStoredOn) {
-        menu.appendChild(menuItem(more, "Delete CI token", "quiet sm", function () { clearCiTokenValue(account.email); }));
-      }
       if (roster.ciTokenStoredOn || roster.consoleApiKeySetOn) {
         menu.appendChild(menuItem(more, "Assign to role", "quiet sm", function () { openAssignPanel(account); }));
       }
-    }
-    if (roster) {
+      menu.appendChild(element("hr"));
       menu.appendChild(menuItem(more, roster.consoleApiKeySetOn ? "Replace API key" : "Set API key", "quiet sm", function () { openApiKeyPanel(account); }));
       if (roster.consoleApiKeySetOn && (roster.ciRoles || []).some(function (role) { return role.keySecret; })) {
         menu.appendChild(menuItem(more, "Push API key", "quiet sm", function () { openApiKeyPanel(account); }));
       }
-      if (roster.consoleApiKeySetOn) {
-        menu.appendChild(menuItem(more, "Delete API key", "quiet sm", function () { clearApiKey(account.email); }));
-      }
       menu.appendChild(menuItem(more, roster.adminKeySetOn ? "Replace Admin key" : "Set Admin key", "quiet sm", function () { openApiKeyPanel(account, true); }));
-      if (roster.adminKeySetOn) {
-        menu.appendChild(menuItem(more, "Delete Admin key", "quiet sm", function () { clearApiKey(account.email, true); }));
-      }
       if (roster.consoleApiKeySetOn && roster.adminKeySetOn) {
         menu.appendChild(menuItem(more, "Check API key", "quiet sm", function () { checkApiKey(account.email); }));
       }
-    }
-    if (roster) {
+      menu.appendChild(element("hr"));
       menu.appendChild(menuItem(more, paused ? "Resume rotation" : "Pause rotation", "quiet sm", function () { setPaused(account.email, !paused); }));
+    }
+    var deletes = [];
+    if (roster && roster.ciTokenStoredOn) {
+      deletes.push(menuItem(more, "Delete CI token", "danger sm", function () { clearCiTokenValue(account.email); }));
+    }
+    if (roster && roster.consoleApiKeySetOn) {
+      deletes.push(menuItem(more, "Delete API key", "danger sm", function () { clearApiKey(account.email); }));
+    }
+    if (roster && roster.adminKeySetOn) {
+      deletes.push(menuItem(more, "Delete Admin key", "danger sm", function () { clearApiKey(account.email, true); }));
     }
     // Remove revokes the login and deletes the folder, so it sits apart, under
     // a rule, and never beside Switch.
     if (!account.isLive) {
-      menu.appendChild(element("hr"));
       // Removing a slot the other side holds would skip the logout it cannot
       // reach and delete the record that says the pair exists at all. The
       // route refuses it; the button goes with it.
-      menu.appendChild(blockable(menuItem(more, "Remove account", "danger sm", function () { remove(account.email); }), account.heldAway));
+      deletes.push(blockable(menuItem(more, "Remove account", "danger sm", function () { remove(account.email); }), account.heldAway));
+    }
+    if (deletes.length) {
+      menu.appendChild(element("hr"));
+      deletes.forEach(function (item) { menu.appendChild(item); });
     }
     more.appendChild(menu);
     act.appendChild(more);
@@ -3015,7 +3672,152 @@
     return card;
   }
 
-  function render(dashboard, force) {
+  // The browser's storage, or null: the getter itself throws when the browser
+  // blocks site data, and the view then lives in memory only.
+  function viewStorage() {
+    try {
+      return window.localStorage;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // A row's card for a panel to hang on, shown even when the filter hid it: a
+  // panel opened from outside the row, such as the WSL strip's Log in again,
+  // must not land in a card nobody can see.
+  function cardFor(email) {
+    var card = cardNodes[email];
+    if (card) { card.hidden = false; }
+    return card;
+  }
+
+  // One choice of a radio group in the view bar, with room for a count.
+  function viewChoice(name, value, text, look) {
+    var label = element("label", "view-choice " + look);
+    var input = element("input");
+    input.type = "radio";
+    input.name = "view-" + name;
+    input.value = value;
+    input.addEventListener("change", function () {
+      var change = {};
+      change[name] = value;
+      changeView(change);
+    });
+    label.appendChild(input);
+    label.appendChild(element("span", null, text));
+    label.appendChild(element("span", "count"));
+    return label;
+  }
+
+  // The view bar, on the All accounts line and outside #cards, so pointing at
+  // it is not pointing at the list. Built from select and input elements only:
+  // the mutation lock disables every button on the page.
+  function buildViewBar() {
+    var bar = element("div", "view-bar");
+    var controls = element("div", "view-controls");
+    var orderField = element("label", "view-field");
+    orderField.appendChild(element("span", "view-name", "Order"));
+    var order = element("select");
+    order.name = "view-order";
+    [["burn", "Burn order"], ["reset7", "7-day reset"], ["reset5", "5-hour reset"], ["left", "Most left"], ["name", "Name"]].forEach(function (choice) {
+      var option = element("option", null, choice[1]);
+      option.value = choice[0];
+      order.appendChild(option);
+    });
+    order.addEventListener("change", function () { changeView({ order: order.value }); });
+    orderField.appendChild(order);
+    controls.appendChild(orderField);
+    var groupField = element("label", "view-field view-check");
+    var group = element("input");
+    group.type = "checkbox";
+    group.name = "view-group";
+    group.addEventListener("change", function () { changeView({ group: group.checked }); });
+    groupField.appendChild(group);
+    groupField.appendChild(element("span", null, "Group by status"));
+    controls.appendChild(groupField);
+    // Radio groups rather than fieldsets: a legend will not sit on the line.
+    var show = element("div", "view-show");
+    show.setAttribute("role", "radiogroup");
+    show.setAttribute("aria-label", "Show");
+    show.appendChild(element("span", "view-name", "Show"));
+    [["all", "All"], ["usable", "Usable"], ["attention", "Needs attention"], ["spent", "Spent"], ["paused", "Paused"]].forEach(function (choice) {
+      show.appendChild(viewChoice("show", choice[0], choice[1], "chip"));
+    });
+    controls.appendChild(show);
+    var density = element("div", "view-density");
+    density.setAttribute("role", "radiogroup");
+    density.setAttribute("aria-label", "Density");
+    var segment = element("span", "toggle");
+    segment.appendChild(viewChoice("density", "compact", "Compact", "option"));
+    segment.appendChild(viewChoice("density", "detailed", "Detailed", "option"));
+    density.appendChild(segment);
+    controls.appendChild(density);
+    bar.appendChild(controls);
+    var summary = element("div", "view-summary");
+    summary.appendChild(element("p", "fleet-summary"));
+    summary.appendChild(element("p", "figures-asof"));
+    bar.appendChild(summary);
+    var title = document.querySelector(".ledger-title");
+    title.parentNode.insertBefore(bar, title.nextSibling);
+    syncViewBar(bar);
+    return bar;
+  }
+
+  // The bar's controls set to the view in force.
+  function syncViewBar(bar) {
+    bar.querySelector("select[name='view-order']").value = view.order;
+    bar.querySelector("input[name='view-group']").checked = view.group;
+    Array.prototype.forEach.call(bar.querySelectorAll("input[type='radio']"), function (input) {
+      input.checked = view[input.name.slice(5)] === input.value;
+    });
+  }
+
+  // A view control's change: kept, stored, and drawn through the ordinary
+  // render. It may skip the pointer test, since the operator asked for the
+  // move, but never the open-panel test, and it is never a forced render,
+  // which would discard an open panel.
+  function changeView(change) {
+    view = parseView(JSON.stringify(Object.assign({}, view, change)));
+    writeView(viewStorage(), view);
+    syncViewBar(viewBar);
+    if (lastDashboard) { render(lastDashboard, false, true); }
+  }
+
+  // The filter counts and the fleet's four figures, redrawn on every poll.
+  function drawViewCounts(dashboard) {
+    var at = new Date(dashboard.capturedAt).getTime();
+    var counts = filterCounts(dashboard.accounts, at);
+    Array.prototype.forEach.call(viewBar.querySelectorAll("input[name='view-show']"), function (input) {
+      input.parentNode.querySelector(".count").textContent = counts[input.value];
+    });
+    var summary = fleetSummary(dashboard.accounts, at);
+    var line = viewBar.querySelector(".fleet-summary");
+    line.replaceChildren();
+    // Each figure a bold value and a muted word, the dot separators drawn by CSS.
+    function figure(value, words, title) {
+      var part = line.appendChild(element("span", "figure"));
+      part.appendChild(element("b", null, value));
+      part.appendChild(document.createTextNode(" " + words));
+      if (title) { part.title = title; }
+    }
+    // Usable and logged in: the Usable group can also hold a login to fix.
+    figure(summary.usable + " of " + summary.total, "ready", "Usable and logged in: a switch to these goes through now");
+    if (summary.weeklyLeft !== null) { figure(summary.weeklyLeft.toFixed(1), "accounts of 7-day quota left"); }
+    [["Next reset", summary.nextReset], ["Next back", summary.nextBack]].forEach(function (pair) {
+      if (!pair[1]) { return; }
+      figure(pair[0] + " " + resetIn(pair[1].resetAt, at), uniqueName(pair[1].account, dashboard.accounts), resetTitle(pair[1].resetAt));
+    });
+    var taken = figuresAsOf(dashboard.accounts);
+    var asOfLine = viewBar.querySelector(".figures-asof");
+    // Said with its age, so it reads apart from the header's Updated, which is
+    // when the page last asked the service.
+    asOfLine.textContent = taken ? "Figures as of " + new Date(taken).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) + " · read " + ago(taken, at) : "";
+    asOfLine.title = taken ? "When most rows' usage was read (" + new Date(taken).toLocaleTimeString() + "); Updated in the header is when the page last asked the service. A row read at another time says so in Detailed, and a stale one on its face" : "";
+    // A narrow ledger drops the line and keeps it as the title's hover.
+    document.querySelector(".ledger-title").title = asOfLine.textContent;
+  }
+
+  function render(dashboard, force, viewChanged) {
     // The header, the Now strips, the banner, the setup sentence, and the
     // warnings are not part of any row, so they are written before the guards
     // below and on every poll: an operator with an Edit panel, a half-typed
@@ -3026,8 +3828,11 @@
     // follows canSwitchHere, a request in flight, and the reconciliation banner.
     lastDashboard = dashboard;
     lastAccounts = dashboard.accounts;
-    captured.textContent = "Updated " + new Date(dashboard.capturedAt).toLocaleTimeString();
-    refreshStateLine.textContent = passState(dashboard);
+    // One time format on the page: hour and minute, the seconds in the hover.
+    captured.textContent = "Updated " + new Date(dashboard.capturedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    captured.title = "When the page last asked the service (" + new Date(dashboard.capturedAt).toLocaleTimeString() + "); the ledger's figures line says when the usage itself was read";
+    var pass = passState(dashboard);
+    refreshStateLine.textContent = pass.charAt(0).toUpperCase() + pass.slice(1);
     refreshAllButton.disabled = busy;
     banner.hidden = !dashboard.banner;
     banner.replaceChildren();
@@ -3039,24 +3844,54 @@
     setup.textContent = dashboard.setup || "";
     warnings.innerHTML = "";
     warnings.hidden = dashboard.warnings.length === 0;
-    dashboard.warnings.forEach(function (warning) { warnings.appendChild(element("li", null, warning)); });
+    if (dashboard.warnings.length) {
+      var notesFold = warnings.appendChild(element("li", "warnings-head")).appendChild(element("button", "fold", "Notices · " + dashboard.warnings.length));
+      notesFold.type = "button";
+      notesFold.setAttribute("aria-expanded", String(warningsOpen));
+    }
+    dashboard.warnings.forEach(function (warning) { warnings.appendChild(element("li", null, localStamps(warning))); });
     var alerts = alertLines(dashboard.alerts, dashboard.accounts);
-    alertStrip.replaceChildren();
     alertStrip.hidden = alerts.length === 0;
     var spareActions = bestSpareActions(dashboard.alerts, dashboard.accounts);
-    alerts.forEach(function (alert, index) {
-      var line = element("li", alert.kind, alert.text);
-      spareActions[index].forEach(function (action) {
-        line.appendChild(document.createTextNode(" "));
-        // Rebuilt by every poll, so it takes the running mutation's lock as it is drawn.
-        line.appendChild(blockable(actionButton(action.label, "sm", function () { assignToBestSpare(action); }), false));
-      });
-      alertStrip.appendChild(line);
-    });
-    if (alerts.length && dashboard.alertsComputedAt) {
-      alertStrip.appendChild(element("li", "asof", "as of the last refresh, " + new Date(dashboard.alertsComputedAt).toLocaleTimeString()));
+    // Built aside and put in place only when it says something new, so a poll
+    // that changes nothing never moves a button from under the pointer.
+    var fresh = element("ul");
+    if (alerts.length) {
+      // Under 1600 px the alerts fold to this one line until it is opened;
+      // in the rail they are always open and this is their heading.
+      var head = fresh.appendChild(element("li", "alerts-head"));
+      var fold = head.appendChild(element("button", "fold", "Usage alerts · " + alerts.length));
+      fold.type = "button";
+      fold.setAttribute("aria-expanded", String(alertsOpen));
     }
+    alerts.forEach(function (alert) {
+      var line = element("li", "alert " + alert.kind);
+      // "7-day" and "5-hour" never break at their hyphen.
+      line.appendChild(element("p", "alert-text", alert.text.replace(/(\d)-(day|hour)/g, "$1‑$2"))).title = alert.title + "\n" + alert.text;
+      var actions = spareActions[alert.first];
+      if (actions.length) {
+        var spare = accountByEmail(actions[0].spare);
+        line.appendChild(element("p", "spare", "Move to best spare " + (spare ? uniqueName(spare, dashboard.accounts) : actions[0].spare) + ":"));
+        var roles = element("div", "roles");
+        actions.forEach(function (action) {
+          // Rebuilt by every poll, so it takes the running mutation's lock as it is drawn.
+          var button = blockable(actionButton(alertRole(action.label), "secondary sm", function () { assignToBestSpare(action); }), false);
+          button.setAttribute("aria-label", action.label);
+          button.title = action.label;
+          roles.appendChild(button);
+        });
+        line.appendChild(roles);
+      }
+      fresh.appendChild(line);
+    });
+    // Its own time only when it is not the figures' time the ledger states.
+    var figuresTaken = figuresAsOf(dashboard.accounts);
+    if (alerts.length && dashboard.alertsComputedAt && !(figuresTaken && Math.abs(Date.parse(dashboard.alertsComputedAt) - Date.parse(figuresTaken)) <= 300000)) {
+      fresh.appendChild(element("li", "asof", "as of the last refresh, " + new Date(dashboard.alertsComputedAt).toLocaleTimeString()));
+    }
+    if (fresh.innerHTML !== alertStrip.innerHTML) { alertStrip.replaceChildren.apply(alertStrip, Array.prototype.slice.call(fresh.childNodes)); }
     renderNow();
+    drawViewCounts(dashboard);
     // Rendering rebuilds every row, so the ten-second poll would otherwise wipe an
     // Edit panel, a half-typed login code, a display name being typed, or an open
     // row menu, out from under whoever is using it. A mutation's own render
@@ -3069,23 +3904,166 @@
     // so deferring on it alone would freeze the rows for as long as an operator
     // left the cursor on them. An order identical to the one on screen moves no
     // row, so it is rendered in place and a Refresh all pass keeps landing row by
-    // row under the pointer.
-    var arriving = dashboard.accounts.map(function (account) { return account.email; });
-    if (!force && reordered(arriving) && (cards.matches(":hover") || cards.contains(document.activeElement))) { return; }
-
+    // row under the pointer. What is compared is the layout on screen: the
+    // view's order, its group headers, the rows its filter hides, and the
+    // density, so a re-sort on new figures waits for the pointer too.
     var at = new Date(dashboard.capturedAt).getTime();
+    var items = arrange(dashboard.accounts, view, at);
+    // The 5-hour column comes and goes with the accounts that have the window,
+    // which moves every column after it, so the guard counts it as a move.
+    var fiveHour = fiveHourShown(dashboard.accounts);
+    var sparse = fiveHour && fiveHourSparse(dashboard.accounts);
+    var arriving = layoutKey(items, view.density + (fiveHour ? "" : " no-5h") + (sparse ? " sparse-5h" : ""));
+    // The first paint has no row on screen to move, only the loading line.
+    var first = renderedOrder.length === 0;
+    var moved = !first && reordered(arriving, renderedOrder);
+    // While rows slide the list takes no pointer, so :hover cannot be read;
+    // a slide in progress counts as the pointer being there.
+    if (!force && !viewChanged && moved && (cards.matches(":hover") || cards.classList.contains("settling") || cards.contains(document.activeElement))) { return; }
+    // Rows slide to their new places only when the same rows are re-ordered:
+    // not on the first paint, not when the density or the column set changed
+    // every row's shape, and not for a view the operator changed by keyboard.
+    var before = moved && arriving[arriving.length - 1] === renderedOrder[renderedOrder.length - 1]
+      && !(viewChanged && lastInputWasKey) ? motionTops() : null;
+    var focused = focusedControl();
+
+    // Next up, like every other reader, takes the server's array as it came.
     var next = recommended(dashboard.accounts, function (account) {
       return account.canSwitchHere || (account.offeredTo || []).length > 0;
     }, at);
     cards.innerHTML = "";
     cardNodes = {};
+    motionNodes = {};
     renderedOrder = arriving;
     renderedSides = sideNames();
-    dashboard.accounts.forEach(function (account) {
-      var card = row(account, dashboard, at, account === next);
-      cardNodes[account.email] = card;
+    cards.setAttribute("data-density", view.density);
+    ledger.setAttribute("data-density", view.density);
+    ledger.classList.toggle("no-5h", !fiveHour);
+    ledger.classList.toggle("sparse-5h", sparse);
+    // A generic model name is cut to fit the column, whole in its hover.
+    var modelHead = ledger.querySelector(".h-mw");
+    modelHead.title = modelLabel(dashboard.accounts);
+    modelHead.textContent = modelShort(modelHead.title) + " 7-day";
+    // Burn order, Most left and Name count each row down to its own next reset.
+    ledger.querySelector(".h-rs").textContent = view.order === "reset5" ? "5-hour reset" : view.order === "reset7" ? "7-day reset" : "Next reset";
+    // Every row is built, the filtered ones hidden, so a panel opener always
+    // finds its card.
+    var keys = motionKeys(items);
+    items.forEach(function (item, index) {
+      if (item.group) {
+        var header = element("div", "group " + item.group.key);
+        header.appendChild(element("span", "g-label", item.group.label));
+        header.appendChild(element("span", "g-count", " · " + item.group.count));
+        if (item.group.meaning) { header.appendChild(element("span", "g-meaning", " · " + item.group.meaning)); }
+        header.hidden = item.hidden;
+        motionNodes[keys[index]] = header;
+        cards.appendChild(header);
+        return;
+      }
+      var card = row(item.account, dashboard, at, item.account === next, item.resetAt);
+      card.hidden = item.hidden;
+      cardNodes[item.account.email] = card;
+      motionNodes[keys[index]] = card;
       cards.appendChild(card);
     });
+    if (dashboard.accounts.length && arriving.indexOf("empty") !== -1) {
+      var none = element("p", "empty", "No account matches this filter. ");
+      none.appendChild(actionButton("Show all", "secondary sm", function () { changeView({ show: "all" }); }));
+      cards.appendChild(none);
+    }
+    if (before) { settle(before); }
+    if (focused) { restoreFocus(focused); }
+    if (viewChanged) {
+      var shown = items.filter(function (item) { return item.account && !item.hidden; }).length;
+      announce(viewAnnouncement(view, shown, dashboard.accounts.length));
+    }
+  }
+
+  // Where each shown row and header sits now, by its motion key.
+  function motionTops() {
+    var tops = {};
+    Object.keys(motionNodes).forEach(function (key) {
+      if (!motionNodes[key].hidden) { tops[key] = motionNodes[key].getBoundingClientRect().top; }
+    });
+    return tops;
+  }
+
+  // The reorder motion: each row and header that moved slides from where it
+  // was to where it is (FLIP through element.animate, which the CSP allows
+  // and which writes no style attribute), and one that was not shown fades
+  // in. Under reduced motion a moved row only fades. The list takes no
+  // pointer until the last slide ends, so Switch never lands on a row in
+  // motion, and a timer hands it back even if an animation never settles.
+  function settle(before) {
+    var plan = motionPlan(before, motionTops());
+    if (!plan.length) { return; }
+    var still = lessMotion();
+    var animations = plan.map(function (step) {
+      var node = motionNodes[step.key];
+      if (step.enter) {
+        return node.animate([{ opacity: 0 }, { opacity: 1 }], { duration: motionMs("--dur-medium"), easing: motionToken("--ease-out") });
+      }
+      return still
+        ? node.animate([{ opacity: 0.4 }, { opacity: 1 }], { duration: motionMs("--dur-short"), easing: "linear" })
+        : node.animate([{ translate: "0 " + step.dy + "px" }, { translate: "0 0" }], { duration: motionMs("--dur-long"), easing: motionToken("--ease-in-out") });
+    });
+    var run = ++settleRun;
+    function done() {
+      if (run === settleRun) { cards.classList.remove("settling"); }
+    }
+    cards.classList.add("settling");
+    setTimeout(done, motionMs("--dur-long") + 150);
+    Promise.all(animations.map(function (animation) { return animation.finished; })).then(done, done);
+  }
+
+  // The stylesheet's motion tokens, so the script and the CSS share one scale.
+  function motionToken(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  function motionMs(name) {
+    return parseFloat(motionToken(name)) || 0;
+  }
+
+  function lessMotion() {
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }
+
+  // The focused control in the ledger, as its row and its place in the row,
+  // so a rebuild can hand the focus to the same control on the same account.
+  function focusedControl() {
+    var active = document.activeElement;
+    if (!active || active === cards || !cards.contains(active)) { return null; }
+    var email = Object.keys(cardNodes).filter(function (key) { return cardNodes[key].contains(active); })[0];
+    if (!email) { return null; }
+    var controls = rowControls(cardNodes[email]);
+    return { email: email, index: controls.indexOf(active), label: controlLabel(active) };
+  }
+
+  function restoreFocus(saved) {
+    var card = cardNodes[saved.email];
+    if (!card || card.hidden) { return; }
+    var controls = rowControls(card);
+    var at = pickControl(controls.map(controlLabel), saved);
+    if (at >= 0) { controls[at].focus({ preventScroll: true }); }
+  }
+
+  function rowControls(card) {
+    // Only what can take the focus: a refused switch button is in the row but not drawn.
+    return Array.prototype.filter.call(card.querySelectorAll("button, summary, input, select, textarea, a[href]"), function (node) {
+      return node.getClientRects().length > 0;
+    });
+  }
+
+  function controlLabel(node) {
+    return node.getAttribute("aria-label") || node.textContent.trim();
+  }
+
+  // Said once by the status line: cleared first, so the same words twice are
+  // still read out.
+  function announce(text) {
+    viewStatus.textContent = "";
+    setTimeout(function () { viewStatus.textContent = text; }, 50);
   }
 
   // What the rows' switch buttons read from the sides: which sides there are
@@ -3138,14 +4116,39 @@
     Array.prototype.forEach.call(document.querySelectorAll("details.more[open], details.roster-add[open]"), function (open) {
       if (!open.contains(event.target)) { open.open = false; }
     });
+    // A popover's Cancel closes it and hands the focus back to its opener.
+    var cancel = event.target.closest && event.target.closest("details.roster-add .popover-cancel");
+    if (cancel) {
+      var popover = cancel.closest("details.roster-add");
+      popover.open = false;
+      popover.querySelector("summary").focus();
+    }
   });
+  // Escape closes a row menu, Add an account and Check roles, and gives the
+  // focus back to the control that opened it.
   document.addEventListener("keydown", function (event) {
     if (event.key !== "Escape") { return; }
-    Array.prototype.forEach.call(document.querySelectorAll("details.more[open]"), function (open) {
+    Array.prototype.forEach.call(document.querySelectorAll("details.more[open], details.roster-add[open]"), function (open) {
       open.open = false;
       open.querySelector("summary").focus();
     });
   });
+  // A row menu or a popover opened with the pointer grows in from its top
+  // right corner; under reduced motion it only fades. Opened from the
+  // keyboard (a click with no pointer count), it is simply there. Set going
+  // before the summary's default action opens it, so no frame shows it whole.
+  document.addEventListener("click", function (event) {
+    var summary = event.target.closest && event.target.closest("details.more > summary, details.roster-add > summary");
+    if (!summary || summary.parentNode.open || event.detail === 0) { return; }
+    var layer = summary.parentNode.querySelector(":scope > .menu, :scope > .popover");
+    if (!layer) { return; }
+    layer.animate(lessMotion() ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 0, scale: 0.97 }, { opacity: 1, scale: 1 }],
+      { duration: motionMs("--dur-short"), easing: motionToken("--ease-out") });
+  }, true);
+  // Whether the last thing the operator did was a key: a view changed from
+  // the keyboard redraws in place, with no rows sliding.
+  document.addEventListener("pointerdown", function () { lastInputWasKey = false; }, true);
+  document.addEventListener("keydown", function () { lastInputWasKey = true; }, true);
 
 
   addForm.addEventListener("submit", function (event) {
@@ -3281,6 +4284,8 @@
       showTokenForm();
       return;
     }
+    var loading = cards.querySelector(".loading");
+    if (loading) { loading.hidden = false; }
     mountHistory();
     fetch("/api/browser-profiles", { headers: withBearer({ "Accept": "application/json" }) })
       .then(function (response) {
@@ -3310,7 +4315,8 @@
   function mountHistory() {
     if (document.querySelector("details.history")) { return; }
     var panel = element("details", "history");
-    panel.appendChild(element("summary", "quiet sm", "History"));
+    // Its count is not known until it is read, which waits for the opening.
+    panel.appendChild(element("summary", null, "Role history · last 30 days"));
     var list = element("ul", "warnings");
     panel.appendChild(list);
     panel.addEventListener("toggle", function () {

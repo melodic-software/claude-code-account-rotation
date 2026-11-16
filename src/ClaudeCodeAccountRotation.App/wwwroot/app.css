@@ -14,9 +14,38 @@
   --text: #141413; --muted: #6b6a64; --faint: #b0aea5;
   --accent: #d97757; --accent-hover: #e08a6d; --accent-press: #c6613f; --accent-fg: #141413;
   --ok: #5f7148; --ok-fill: #788c5d; --info: #3f6c9c; --high: #a4501c; --high-fill: #d0702f; --warn: #8a6414; --warn-fill: #c79a3e; --crit: #b0453a; --crit-fill: #c0503f;
-  --track: #ecebe4; --focus: #6a9bcc; --shadow: 0 1px 2px rgb(20 20 19 / .04), 0 2px 8px -2px rgb(20 20 19 / .05);
+  --track: #ecebe4; --focus: #3f6c9c; --shadow: 0 1px 2px rgb(20 20 19 / .04), 0 2px 8px -2px rgb(20 20 19 / .05);
+  /* The row hover: a band as dark as muted and toned text allow (AA), framed
+     by two rules that carry it across a wide ledger. */
+  --hover: #eeede5; --hover-rule: #bdbbb1;
   --sans: Poppins, Arial, sans-serif; --serif: Lora, Georgia, serif;
-  --columns: minmax(0, 1.2fr) minmax(0, 1.5fr) 8.5rem 8.5rem 19rem;
+
+  /* Type: one scale, size and line height in pairs. */
+  --text-xs: 12px/16px var(--sans);
+  --text-sm: 13px/18px var(--sans);
+  --text-md: 14px/20px var(--sans);
+  --text-lg: 16px/24px var(--sans);
+  --text-xl: 20px/28px var(--sans);
+  --text-figure: 28px/32px var(--sans);
+  /* Spacing on a 4 px base. */
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-12: 48px;
+  /* Radii. */
+  --radius-sm: 4px; --radius-md: 8px; --radius-lg: 12px; --radius-full: 999px;
+  /* Elevation: menus and popovers over the page. */
+  --surface-overlay: #ffffff;
+  --elevation-overlay: 0 0 0 1px rgb(20 20 19 / .06), 0 12px 32px -8px rgb(20 20 19 / .18);
+  /* Motion: ease-out for what enters, ease-in for what leaves for good,
+     ease-in-out for what moves on screen. */
+  --ease-out: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-in: cubic-bezier(0.3, 0, 1, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --dur-short: 150ms; --dur-medium: 200ms; --dur-long: 250ms;
+
+  /* The page frame and the ledger's columns. */
+  --gutter: clamp(16px, 2.5vw, 48px);
+  --rail: clamp(24rem, 20vw, 28rem);
+  --fix: 7.5rem;
+  --act: calc(var(--fix) + 12.5rem + 12px);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -25,235 +54,627 @@
     --text: #faf9f5; --muted: #a3a19a; --faint: #5e5d58;
     --accent-hover: #e3906f;
     --ok: #a3b584; --ok-fill: #8fa472; --info: #8db4dc; --high: #eb8f55; --high-fill: #e08045; --warn: #d4a94f; --warn-fill: #d4a94f; --crit: #e8716a; --crit-fill: #e0605a;
-    --track: #2e2d2b; --shadow: 0 1px 2px rgb(0 0 0 / .3);
+    --track: #2e2d2b; --focus: #6a9bcc; --shadow: 0 1px 2px rgb(0 0 0 / .3);
+    --hover: #2d2c2a; --hover-rule: #4a4944;
+    --surface-overlay: #2a2927;
+    --elevation-overlay: 0 0 0 1px rgb(255 255 255 / .14), 0 0 0 2px rgb(0 0 0 / .4), 0 12px 32px rgb(0 0 0 / .6);
   }
 }
 
 * { box-sizing: border-box; }
 html, body { margin: 0; }
-body { background: var(--bg); color: var(--text); font: 14px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+/* A panel that makes the page scroll does not narrow every column under it. */
+html { scrollbar-gutter: stable; }
+body { background: var(--bg); color: var(--text); font: var(--text-md); -webkit-font-smoothing: antialiased; }
 button, input, select, textarea, summary { font: inherit; color: inherit; }
 h1, h2, h3 { margin: 0; font-weight: 500; }
 p { margin: 0; }
-.wrap { max-width: 1240px; margin: 0 auto; padding: 40px 32px 96px; }
 .muted { color: var(--muted); }
+[hidden] { display: none !important; }
+/* Read by screen readers, not drawn. */
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* ---------- the page frame ---------- */
+/* Content up to 3200 px: about 93% of a 3440 px ultrawide. */
+.wrap { max-inline-size: calc(3200px + 2 * var(--gutter)); margin-inline: auto; padding: var(--space-4) var(--gutter) var(--space-4); }
+.regions { display: grid; gap: var(--space-4); margin-block-start: var(--space-4); }
+.rail { display: grid; gap: var(--space-3); align-content: start; min-inline-size: 0; }
+.ledger { container: ledger / inline-size; min-inline-size: 0; }
+/* From 1600 px the Now strips and the alerts take a rail beside the ledger. */
+@media (min-width: 1600px) {
+  .regions { grid-template-columns: var(--rail) minmax(0, 1fr); column-gap: var(--space-6); align-items: start; }
+  .rail .now { grid-template-columns: minmax(0, 1fr); }
+}
+/* An ultrawide page lets the rail grow to 32rem, and the alerts, notices and
+   setup sentence take a second rail at the right, so the ledger between them
+   is not stretched past what the eye can follow along a row. */
+@media (min-width: 2800px) {
+  :root { --rail: clamp(28rem, 15vw, 32rem); }
+  .regions { grid-template-columns: var(--rail) minmax(0, 125rem) 24rem; grid-template-rows: auto auto auto 1fr; justify-content: center; }
+  .rail { display: contents; }
+  .rail > .now { grid-column: 1; grid-row: 1 / -1; align-self: start; }
+  .regions > .ledger { grid-column: 2; grid-row: 1 / -1; }
+  .rail > :not(.now) { grid-column: 3; align-self: start; }
+}
+/* Under 1600 px the alerts, the notices and the setup sentence share one
+   line while folded, rather than a bar each. */
+@media (max-width: 1599px) {
+  .rail { display: flex; flex-wrap: wrap; align-items: flex-start; }
+  .rail > * { flex: 0 1 auto; min-inline-size: 0; }
+  .rail > .now, .rail > :has(button.fold[aria-expanded="true"]) { flex-basis: 100%; }
+  /* One look for the three: an outlined box one line high, the colour of
+     its text carrying how much it matters. */
+  .rail > :is(.alerts, .warnings, .setup) { padding: 6px var(--space-3); min-block-size: 32px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
+  .rail > .setup { color: var(--muted); }
+}
 
 /* ---------- controls ---------- */
 :where(button, summary.sm) {
-  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-  height: 36px; padding: 0 14px; border-radius: 10px;
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2);
+  height: 36px; padding: 0 14px; border-radius: var(--radius-md);
   border: 1px solid var(--line-strong); background: var(--surface);
-  font-size: 13px; font-weight: 500; line-height: 1; white-space: nowrap; cursor: pointer;
-  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+  font: 500 13px/1 var(--sans); white-space: nowrap; cursor: pointer;
+  transition: background-color var(--dur-short) ease, border-color var(--dur-short) ease, color var(--dur-short) ease;
 }
-:where(button):hover { background: var(--surface-2); }
-.sm { height: 28px; padding: 0 10px; border-radius: 8px; font-size: 12.5px; }
-.lg { height: auto; min-height: 48px; padding: 8px 18px; border-radius: 12px; flex-direction: column; align-items: flex-start; gap: 2px; font-size: 14px; line-height: 20px; white-space: normal; text-align: left; }
-.lg small { font-size: 12px; font-weight: 400; line-height: 16px; opacity: .8; }
+/* Rows are rebuilt by a poll, so a fade there would replay under the pointer
+   every ten seconds: in the ledger, hover changes at once. */
+#cards :where(button, summary) { transition: none; }
+.sm { height: 28px; padding: 0 10px; border-radius: var(--radius-md); font-size: 13px; }
+.lg { height: auto; min-height: 40px; padding: 4px 12px; border-radius: var(--radius-md); flex-direction: column; align-items: flex-start; gap: 0; font: 500 13px/18px var(--sans); white-space: normal; text-align: start; }
+.lg small { font: 400 12px/16px var(--sans); opacity: .8; }
 /* Full strength on the orange: at .8 the subtitle falls under AA (4.45:1). */
 .primary.lg small { opacity: 1; }
 /* Secondary is the base look above, named here so the class reads as meant. */
 .secondary { background: var(--surface); border-color: var(--line-strong); color: var(--text); }
-.secondary:hover { background: var(--surface-2); }
 .primary, .switch { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
-.primary:hover, .switch:hover { background: var(--accent-hover); }
 .primary:active { background: var(--accent-press); }
 .quiet { background: transparent; border-color: transparent; color: var(--muted); }
-.quiet:hover { background: var(--surface-2); color: var(--text); }
 .danger { background: transparent; border-color: transparent; color: var(--crit); }
-.danger:hover { background: color-mix(in srgb, var(--crit) 9%, transparent); }
-button:disabled, button:disabled:hover { opacity: .45; cursor: not-allowed; }
+@media (hover: hover) and (pointer: fine) {
+  :where(button):not(:disabled):hover, .secondary:not(:disabled):hover { background: var(--surface-2); }
+  .primary:not(:disabled):hover, .switch:not(:disabled):hover { background: var(--accent-hover); }
+  .quiet:not(:disabled):hover { background: var(--surface-2); color: var(--text); }
+  .danger:not(:disabled):hover { background: color-mix(in srgb, var(--crit) 9%, transparent); }
+}
+/* Disabled reads in the muted tokens, not a dim: a dimmed primary read pink. */
+button:disabled { background: var(--surface-2); border-color: var(--line); color: var(--muted); cursor: not-allowed; }
+button:is(.quiet, .danger):disabled { background: transparent; border-color: transparent; }
 summary { list-style: none; cursor: pointer; }
 summary::-webkit-details-marker { display: none; }
-:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--focus); }
+/* An outline, not a shadow: forced colours drop box-shadow. */
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 /* ---------- header ---------- */
-.top { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 16px; }
-.top h1 { font-size: 20px; letter-spacing: -.01em; }
-.asof { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.asof.stale, small.stale { color: var(--warn); }
+.top { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2) var(--space-4); min-block-size: 36px; }
+.top h1 { font: 500 20px/28px var(--sans); letter-spacing: -.01em; }
+.asof { font: var(--text-sm); color: var(--muted); }
+.asof.stale, small.stale, .source.stale { color: var(--warn); }
 .spacer { flex: 1; }
-.tools { display: flex; gap: 4px; align-items: center; align-self: center; }
+.tools { display: flex; gap: var(--space-2); align-items: center; }
+/* The header's actions share one outlined look; Stop, which ends the
+   service, stands apart in the danger colour. */
+.tools > :is(button, details > summary) { height: 32px; border-color: var(--line-strong); background: var(--surface); color: var(--text); }
+.tools > #stop { margin-inline-start: var(--space-2); color: var(--crit); border-color: color-mix(in srgb, var(--crit) 40%, var(--line-strong)); }
+.tools > #stop::before { content: ""; inline-size: 8px; block-size: 8px; border-radius: 1px; background: currentColor; }
 .roster-add { position: relative; }
 .popover {
-  position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; width: 22rem; padding: 16px;
-  background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 32px -8px rgb(20 20 19 / .18);
+  position: absolute; inset-inline-end: 0; inset-block-start: calc(100% + 6px); z-index: 20; width: 22rem; padding: var(--space-4);
+  background: var(--surface-overlay); border: 1px solid var(--line); border-radius: var(--radius-lg); box-shadow: var(--elevation-overlay);
 }
 
 /* ---------- banner, warnings, setup ---------- */
-.banner, .setup, .warnings, .alerts, .instance-token {
-  margin: 16px 0 0; padding: 12px 16px; border-radius: 12px; font-family: var(--serif); font-size: 14px; line-height: 1.55;
+.banner, .setup, .warnings, .instance-token {
+  margin: 0; padding: var(--space-3) var(--space-4); border-radius: var(--radius-lg); font: 400 14px/20px var(--sans);
 }
-.banner { display: flex; gap: 12px; align-items: baseline; background: color-mix(in srgb, var(--warn-fill) 12%, var(--bg)); }
-.banner b { color: var(--warn); font: 500 13px var(--sans); white-space: nowrap; }
-.warnings { list-style: none; color: var(--warn); background: color-mix(in srgb, var(--warn-fill) 8%, var(--bg)); }
-/* The usage alerts: information only, worst first, with the pass's time last. */
-.alerts { list-style: none; background: color-mix(in srgb, var(--warn-fill) 8%, var(--bg)); }
-.alerts .warn { color: var(--warn); }
-.alerts .crit { color: var(--crit); }
-.alerts .asof { color: var(--muted); font-size: 12px; }
+.banner { display: flex; gap: var(--space-3); align-items: baseline; margin-block-start: var(--space-3); background: color-mix(in srgb, var(--warn-fill) 12%, var(--bg)); }
+.banner b { color: var(--warn); font: 500 13px/18px var(--sans); white-space: nowrap; }
+.warnings { list-style: none; display: grid; gap: var(--space-2); font: 400 13px/18px var(--sans); color: var(--warn); background: color-mix(in srgb, var(--warn-fill) 8%, var(--bg)); }
 /* The first-run sentence. Not a warning: the banner is what blocks Switch. */
-.setup { background: var(--surface-2); }
-[hidden] { display: none !important; }
+.setup { font: 400 13px/18px var(--sans); background: var(--surface-2); }
+/* The alerts' and the warnings' heads: a plain heading in the rail, and the
+   one line they fold to under 1600 px. */
+button.fold, button.fold:is(:hover, :disabled) { height: auto; padding: 0; border: 0; background: none; font: 500 12px/16px var(--sans); color: var(--muted); cursor: default; }
+.warnings button.fold { color: var(--warn); }
+@media (max-width: 1599px) {
+  button.fold { cursor: pointer; }
+  button.fold::before { content: "\25B8\00A0"; }
+  button.fold[aria-expanded="true"]::before { content: "\25BE\00A0"; }
+  :is(.alerts, .warnings):has(button.fold[aria-expanded="false"]) > li:not(.alerts-head, .warnings-head) { display: none; }
+}
+@media (min-width: 1600px) { button.fold { pointer-events: none; } }
+
+/* The usage alerts: one line per account, worst first, then the move to the
+   best spare as one short button per role. */
+.alerts { list-style: none; margin: 0; padding: var(--space-3); display: grid; gap: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
+.alerts-head { font: 500 12px/16px var(--sans); color: var(--muted); }
+.alert { display: grid; gap: var(--space-1); padding-inline-start: 10px; border-inline-start: 3px solid var(--warn-fill); }
+.alert.crit { border-inline-start-color: var(--crit-fill); }
+.alert-text { font: 500 13px/18px var(--sans); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+.alert.warn .alert-text { color: var(--warn); }
+.alert.crit .alert-text { color: var(--crit); }
+.alert .spare { font: var(--text-xs); color: var(--muted); }
+.alert .roles { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.alerts li.asof { font: var(--text-xs); }
+/* Below the rail's width the alerts run as a band, lines side by side. */
+@media (max-width: 1599px) {
+  .alerts:has(button.fold[aria-expanded="true"]) { grid-template-columns: repeat(auto-fill, minmax(min(100%, 18rem), 1fr)); align-items: start; }
+  .alerts-head, .alerts li.asof { grid-column: 1 / -1; }
+}
 
 /* ---------- the Now strips, one per side ---------- */
-.now { display: grid; grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr)); gap: 16px; margin-top: 32px; }
-.side-card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 24px; display: grid; gap: 16px; align-content: start; box-shadow: var(--shadow); }
-.sh { display: flex; align-items: flex-start; gap: 16px; }
-.who { flex: 1; min-width: 0; }
-.where { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
-.where .detail { font-family: var(--serif); }
-.where .detail::before { content: "\00b7"; margin-right: 8px; }
-.side-card h2 { font-size: 24px; line-height: 32px; letter-spacing: -.015em; overflow-wrap: anywhere; }
+/* Side by side under 1600 px, each strip its own height with its actions
+   right under its content; three fit on one line from about 1100 px, two below. */
+.now { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); gap: var(--space-3); align-items: start; }
+.side-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: var(--space-3) var(--space-4); display: flex; flex-direction: column; gap: 6px; box-shadow: var(--shadow); min-inline-size: 0; }
+.sh { display: flex; align-items: flex-start; gap: var(--space-3); }
+.who { flex: 1; min-inline-size: 0; }
+.where { display: flex; align-items: center; gap: var(--space-2); font: var(--text-xs); color: var(--muted); white-space: nowrap; min-inline-size: 0; }
+.where .detail { overflow: hidden; text-overflow: ellipsis; }
+.where .detail::before { content: "\00b7"; margin-inline-end: var(--space-2); }
+.side-card h2 { font: 500 16px/24px var(--sans); letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .side-card h2.empty { color: var(--muted); }
-.em { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-family: var(--serif); font-size: 14px; color: var(--muted); }
-.hr { text-align: right; }
-.hr .n { display: block; font-size: 40px; line-height: 44px; font-weight: 500; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
-.hr span:last-child { font-size: 12px; color: var(--muted); }
-.say { font-family: var(--serif); font-size: 15px; }
+.em { display: flex; gap: var(--space-2); align-items: center; font: var(--text-xs); color: var(--muted); white-space: nowrap; min-inline-size: 0; }
+.em > span:first-child { overflow: hidden; text-overflow: ellipsis; }
+.hr { text-align: end; flex: none; }
+.hr .n { display: block; font: 500 28px/32px var(--sans); letter-spacing: -.02em; }
+.hr span:last-child { font: var(--text-xs); color: var(--muted); }
+.say { font: 400 14px/20px var(--sans); }
+.side-card :is(.say, .source, .prompt, .cli-logout) { text-wrap: pretty; }
+.side-card .cli-logout, .side-card .source { font: var(--text-xs); }
+/* Where a figure came from wraps rather than losing "may be out of date". */
+.side-card .source { color: var(--muted); }
 /* The #148 "switch now" prompt: the strip's one call to act. */
-.prompt { padding: 10px 14px; border-radius: 10px; font-family: var(--serif); background: color-mix(in srgb, var(--crit) 8%, var(--surface)); color: var(--crit); }
-.mt { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 24px; }
-.meter .l { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
-.meter .l .pct { font-size: 14px; color: var(--text); }
-.meter small { display: block; margin-top: 8px; font-size: 12px; color: var(--muted); }
-/* A window with no reset to show (one at 0% has not started) keeps the line, so both strips' buttons sit level. */
-.meter:not(:has(small))::after { content: "\00a0"; display: block; margin-top: 8px; font-size: 12px; }
-.go { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.prompt { padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); font: 400 13px/18px var(--sans); background: color-mix(in srgb, var(--crit) 8%, var(--surface)); color: var(--crit); }
+.mt { display: grid; grid-template-columns: repeat(auto-fit, minmax(5.5rem, 1fr)); gap: var(--space-2) 10px; }
+.meter { min-inline-size: 0; }
+.meter .l { display: flex; justify-content: space-between; gap: var(--space-1); align-items: baseline; font: var(--text-xs); color: var(--muted); margin-block-end: 4px; white-space: nowrap; }
+.meter .l .pct { color: var(--text); font-weight: 500; }
+.meter small { display: block; margin-block-start: 4px; font: var(--text-xs); color: var(--muted); }
+/* A window with no reset to show keeps the line, so both strips' buttons sit level. */
+.meter:not(:has(small))::after { content: "\00a0"; display: block; margin-block-start: 4px; font: var(--text-xs); }
+/* Stacked at every width: a login fix across the strip, then the switch
+   with Hand back beside it; the switch's name wraps rather than being cut. */
+.go { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2); align-items: stretch; }
+.go > :is(.login-side, :not(.hand-back):last-child) { grid-column: 1 / -1; }
+.go > :not(.lg) { justify-self: start; }
+.go > .hand-back { justify-self: stretch; height: auto; }
+.go .lg { min-inline-size: 0; }
+.go .lg > span { max-inline-size: 100%; overflow-wrap: anywhere; }
+/* The strip's login fix: outlined in the warning tone, not a solid fill. */
+.go > .login-side.fix { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, var(--line-strong)); background: color-mix(in srgb, var(--warn-fill) 10%, var(--surface)); }
 
 /* ---------- tone ---------- */
 .say.ok { color: var(--ok); }
-.say.warn, .n.warn, .meter .l .pct.warn, .u .pct.warn { color: var(--warn); }
-.say.high, .n.high, .meter .l .pct.high, .u .pct.high { color: var(--high); }
-.say.crit, .n.crit, .meter .l .pct.crit, .u .pct.crit { color: var(--crit); }
-.meter .l .pct.muted, .u .pct.muted { color: var(--muted); }
+.say.warn, .n.warn, .pct.warn, .notice.warn { color: var(--warn); }
+.say.high, .n.high, .pct.high { color: var(--high); }
+.say.crit, .n.crit, .pct.crit, .notice.crit { color: var(--crit); }
+.pct.muted { color: var(--muted); font-weight: 400; }
 .say.paused { color: var(--muted); }
-.bar { position: relative; height: 6px; border-radius: 999px; background: var(--track); overflow: hidden; }
+.bar { position: relative; height: 6px; border-radius: var(--radius-full); background: var(--track); }
 /* The alert thresholds the server names, on a CI-role account's 7-day bar. */
-.bar .tick { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--text); opacity: .45; }
+/* Each threshold is one thin solid mark across the track; the track's and
+   the 7-day header's hover say what the marks are. */
+.bar .tick { position: absolute; inset-block: -3px; width: 1px; background: var(--text); opacity: .55; }
 .bar i { display: block; height: 100%; border-radius: inherit; background: var(--faint); }
 .bar i.ok { background: var(--ok-fill); } .bar i.high { background: var(--high-fill); } .bar i.warn { background: var(--warn-fill); } .bar i.crit { background: var(--crit-fill); }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; display: inline-block; }
 .dot.ok { background: var(--ok-fill); } .dot.high { background: var(--high-fill); } .dot.warn { background: var(--warn-fill); } .dot.crit { background: var(--crit-fill); }
 .dot.paused { background: transparent; box-shadow: inset 0 0 0 1.5px var(--faint); }
 .tag, .badge {
-  display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 6px;
-  background: var(--surface-2); color: var(--muted); font: 500 11.5px var(--sans); white-space: nowrap;
+  display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border-radius: var(--radius-sm);
+  background: var(--surface-2); color: var(--muted); font: 500 12px/16px var(--sans); white-space: nowrap;
 }
-.badge.next { color: var(--text); background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.badge.next { color: var(--text); background: color-mix(in srgb, var(--accent) 22%, transparent); }
 .badge.store, .badge.live, .badge.off-roster { color: var(--info); background: color-mix(in srgb, var(--info) 10%, transparent); }
-.badge.needs-login, .badge.ci-token.warn { color: var(--warn); background: color-mix(in srgb, var(--warn-fill) 12%, transparent); }
-.badge.ci-token.crit { color: var(--crit); background: color-mix(in srgb, var(--crit) 10%, transparent); }
+.badge.needs-login, .badge.ci-token.warn, .badge.login-paused { color: var(--warn); background: color-mix(in srgb, var(--warn-fill) 14%, transparent); }
+.badge.ci-token.crit, .badge.login-expired, .badge.error, .badge.logged-out { color: var(--crit); background: color-mix(in srgb, var(--crit) 10%, transparent); }
 .field[hidden] { display: none; }
-.badge.login-expired, .badge.error, .badge.logged-out { color: var(--crit); background: color-mix(in srgb, var(--crit) 10%, transparent); }
 
 /* ---------- the ledger ---------- */
-.ledger-title { font-size: 14px; margin: 40px 0 8px; }
-.ledger-head, .row { display: grid; grid-template-columns: var(--columns); gap: 16px; align-items: center; }
-.ledger-head { padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); }
-.switch-head { text-align: right; }
-.card { border-bottom: 1px solid var(--line); transition: background-color .15s ease; }
-.card:hover { background: color-mix(in srgb, var(--surface-2) 70%, transparent); }
-/* Paused reads as muted text, which holds AA; only the bars and dot fade. */
-.card.paused .row > :not(.act), .card.paused .row > :not(.act) * { color: var(--muted); }
-.card.paused .bar { opacity: .6; }
-.row { padding: 12px; }
-.nm { display: grid; grid-template-columns: 8px minmax(0, 1fr); column-gap: 12px; align-items: center; }
-/* Level with the name line, not centred on the name and its chips together. */
-.nm > .dot { align-self: start; margin-top: 7px; }
-/* The chips always take their own line under the name, however short the name is. */
-.nm .title { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.badges { display: flex; flex-wrap: wrap; gap: 6px 8px; }
+/* The title line, the view bar and the column head stay in view while the
+   rows scroll under them. */
+.ledger-top {
+  position: sticky; inset-block-start: 0; z-index: 5; background: var(--bg);
+  display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: var(--space-4); align-items: center;
+}
+.ledger-title { font: 500 16px/24px var(--sans); grid-column: 1; }
+.view-bar { display: contents; }
+.view-controls { grid-column: 2; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-2) var(--space-5); min-block-size: 32px; }
+.view-field { display: inline-flex; align-items: center; gap: var(--space-2); font: var(--text-sm); color: var(--muted); cursor: pointer; }
+.view-field select {
+  height: 28px; padding: 0 var(--space-2); border: 1px solid var(--line-strong); border-radius: var(--radius-md);
+  background: var(--surface); color: var(--text); font: var(--text-sm); cursor: pointer;
+}
+.view-check { color: var(--text); }
+.view-check input { margin: 0; inline-size: 16px; block-size: 16px; accent-color: var(--accent-press); }
+.view-show, .view-density { display: inline-flex; align-items: center; gap: var(--space-1); }
+.view-name { font: var(--text-sm); color: var(--muted); margin-inline-end: var(--space-1); }
+.view-choice { position: relative; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; white-space: nowrap; font: var(--text-sm); }
+.view-choice input { position: absolute; opacity: 0; inline-size: 1px; block-size: 1px; margin: 0; pointer-events: none; }
+.view-choice .count { font-weight: 500; color: var(--muted); }
+.view-choice .count:empty { display: none; }
+/* Needs attention cuts across the status buckets, so it stands apart from them. */
+.view-show .chip:has(input[value="attention"]) { order: 1; margin-inline-start: var(--space-3); }
+.view-show .chip:has(input[value="attention"])::before { content: ""; position: absolute; inset-inline-start: -9px; inset-block: 4px; border-inline-start: 1px solid var(--line-strong); }
+.view-choice:has(input:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* Show: single-choice chips. */
+.chip { height: 28px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: var(--radius-full); background: var(--surface); color: var(--text); }
+.chip:has(input:checked) { background: var(--text); border-color: var(--text); color: var(--bg); }
+.chip:has(input:checked) .count { color: color-mix(in srgb, var(--bg) 70%, var(--text)); }
+/* Density: a segmented pair. */
+.toggle { display: inline-flex; padding: 2px; gap: 2px; border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--surface-2); }
+.option { height: 22px; padding: 0 10px; border-radius: var(--radius-sm); color: var(--muted); }
+.option:has(input:checked) { background: var(--surface); color: var(--text); box-shadow: 0 0 0 1px var(--line-strong); }
+.option:has(input:focus-visible) { outline-offset: -2px; }
+@media (hover: hover) and (pointer: fine) {
+  .chip:not(:has(input:checked)):hover { background: var(--surface-2); }
+  .option:not(:has(input:checked)):hover { color: var(--text); }
+}
+.view-summary { grid-column: 1 / -1; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: var(--space-1) var(--space-4); margin-block-start: var(--space-2); }
+.fleet-summary { display: flex; flex-wrap: wrap; font: var(--text-sm); color: var(--muted); }
+.fleet-summary b { font-weight: 500; color: var(--text); }
+.fleet-summary .figure { white-space: nowrap; }
+.fleet-summary .figure + .figure::before { content: "\00b7"; margin-inline: var(--space-2); color: var(--faint); }
+.figures-asof { font: var(--text-xs); color: var(--muted); white-space: nowrap; }
+
+/* The columns: Account | Status | 7-day | Resets | Model weekly | 5-hour |
+   Switch. Declared on the two grids' parents, so a ledger class that narrows
+   the 5-hour column (--w5h) reaches them. */
+.ledger-top, .cards {
+  --w-acct: minmax(16rem, 1.4fr); --w-st: minmax(12rem, 1fr); --w7d: 7.5rem; --w-rs: 7.5rem; --w-mw: 6.5rem; --w5h: 6rem;
+  --cols: var(--w-acct) var(--w-st) var(--w7d) var(--w-rs) var(--w-mw) var(--w5h) var(--act);
+  --cols-no-5h: var(--w-acct) var(--w-st) var(--w7d) var(--w-rs) var(--w-mw) var(--act);
+}
+.ledger-head, .row { display: grid; grid-template-columns: var(--cols); column-gap: var(--space-3); align-items: center; }
+.ledger.no-5h .ledger-head, .ledger.no-5h .row { grid-template-columns: var(--cols-no-5h); }
+.ledger.no-5h :is(.h-5h, .u.h5) { display: none; }
+.ledger-head { grid-column: 1 / -1; margin-block-start: var(--space-2); padding: 6px var(--space-3); border-block-end: 1px solid var(--line-strong); font: var(--text-xs); color: var(--muted); }
+.ledger-head > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A figure's header ends where its figures end: the meters' percentages and
+   the Resets times are all end-aligned. */
+.ledger-head :is(.h-7d, .h-rs, .h-mw, .h-5h) { text-align: end; }
+/* Air between the Resets spine and the small meters after it, so each bar
+   reads with its own header and figure. */
+.ledger-head .h-mw, .row > .u.mw { padding-inline-start: var(--space-5); }
+.ledger-head .h-5h, .row > .u.h5 { padding-inline-start: var(--space-3); }
+/* The actions column's head on the same grid as its cells: "Fix" over the
+   slot for a row's fix, "Switch to" over the segment; the menu has none. */
+.ledger-head > .act-head { display: grid; grid-template-columns: var(--fix) 10.5rem 2rem; column-gap: 6px; }
+/* Too few 5-hour figures to spend a bar's width on: the figure alone. */
+.ledger.sparse-5h :is(.ledger-top, .cards) { --w5h: 5.25rem; }
+@container ledger (min-width: 1000px) {
+  .ledger.sparse-5h .row > .u.h5 { grid-template-columns: 0 minmax(0, 1fr); column-gap: 0; }
+  .ledger.sparse-5h .row > .u.h5 .bar { visibility: hidden; }
+}
+/* A wide ledger gives its room to the bars, so the figures sit nearer the names. */
+@container ledger (min-width: 1700px) {
+  .ledger-top, .cards { --w7d: 10rem; --w-rs: 8rem; --w-mw: 8.5rem; --w5h: 7.5rem; --w-acct: minmax(16rem, 36rem); --w-st: minmax(12rem, 26rem); }
+}
+/* A ledger between 1000 and 1300 px wide keeps one line with narrower figures. */
+@container ledger (max-width: 1299px) {
+  .ledger-top, .cards { --w-acct: minmax(10rem, 1.6fr); --w-st: minmax(6.5rem, 1fr); --w7d: 6.5rem; --w-rs: 6.25rem; --w-mw: 5.5rem; --w5h: 4.5rem; }
+  .ledger-head, .row { column-gap: 10px; }
+  .ledger-head .h-mw, .row > .u.mw { padding-inline-start: var(--space-2); }
+  /* Too narrow for a readable bar: the small meters keep their figure only,
+     and the 5-hour reset is left to the figure's hover. */
+  .row > :is(.u.mw, .u.h5) .bar { visibility: hidden; }
+  .view-controls { column-gap: var(--space-3); }
+  /* The prefixes stay the controls' names, read but not shown. */
+  .view-name { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+}
+
+/* A group header: what the rows under it are and what their times mean. */
+/* A tinted band with a rule in the group's tone, so where usable ends and the
+   spent groups begin reads at a glance. */
+.group {
+  min-block-size: 28px; padding: 5px var(--space-3);
+  font: 400 12px/18px var(--sans); color: var(--muted);
+  background: color-mix(in srgb, var(--text) 4%, var(--bg)); border-inline-start: 3px solid var(--faint);
+}
+.group .g-label { font: 500 13px/18px var(--sans); color: var(--text); }
+.group.usable { border-inline-start-color: var(--ok-fill); }
+.group.unread-in-use { border-inline-start-color: var(--warn-fill); }
+.group:is(.limited, .model-limited, .exhausted) { border-inline-start-color: var(--crit-fill); }
+.cards > .group:not(:first-child) { margin-block-start: var(--space-2); }
+
+.card { border-block-end: 1px solid var(--line); }
+@media (hover: hover) and (pointer: fine) {
+  .card:hover { background: var(--hover); box-shadow: inset 0 1px 0 var(--hover-rule), inset 0 -1px 0 var(--hover-rule); }
+  .card.next:hover { box-shadow: inset 3px 0 0 var(--accent), inset 0 1px 0 var(--hover-rule), inset 0 -1px 0 var(--hover-rule); }
+  /* The tracks would vanish into the hover band at their own shade. */
+  .card:hover .bar { background: var(--line-strong); }
+}
+/* The server's pick for the next switch, marked off the colour of its chip too. */
+.card.next { box-shadow: inset 3px 0 0 var(--accent); }
+.row { grid-template-rows: auto auto; padding: 4px var(--space-3); min-block-size: 44px; }
+.row > * { grid-row: 1 / 3; min-inline-size: 0; }
+.has-notice .row > .st { grid-row: 1; }
+.row > .notice { grid-row: 2; grid-column: 2; font: var(--text-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A row with nothing to say in Status lends that cell to its name and address. */
+@container ledger (min-width: 1000px) {
+  .ledger[data-density="compact"] .row:not(:has(> .notice)):has(> .st > .say.brief:empty) > .nm { grid-column: span 2; }
+  .ledger[data-density="compact"] .row:not(:has(> .notice)):has(> .st > .say.brief:empty) > .st { display: none; }
+}
+
+/* Account, one line: the dot, the name, the chips, then the address. When the
+   cell is tight the address takes only what is left: it ellipsizes, then goes,
+   and only then does the name ellipsize. A chip is never cut. The gaps are
+   margins, so a gone address leaves no gap behind. */
+.nm { display: grid; grid-template-columns: 10px minmax(0, max-content) max-content minmax(0, 1fr); grid-template-areas: "dot name chips addr"; align-items: center; }
+.nm .badges { flex-wrap: nowrap; margin-block: 0; margin-inline: var(--space-2) 0; }
+.nm h2 { margin-inline-start: var(--space-2); }
+.nm > .dot { grid-area: dot; }
+.nm .title { display: contents; }
+.card h2 { grid-area: name; font: 500 14px/20px var(--sans); display: flex; min-inline-size: 0; }
+.card h2 .display-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.badges { grid-area: chips; display: flex; gap: var(--space-1); margin-inline-end: var(--space-2); min-inline-size: 0; }
 .badges:empty { display: none; }
-.card h2 { font-size: 14px; }
-.address { grid-column: 2; font-family: var(--serif); font-size: 13px; color: var(--muted); }
-.st .say { font-size: 14px; }
-.lines p { font-family: var(--serif); font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.ledger[data-density="compact"] .badges:not(:has(> :not(.detail-only))) { display: none; }
+/* A chip is never cut: the address beside it gives way first, and chips that
+   still do not fit take a second line. */
+.nm .badge { height: 18px; flex-shrink: 0; }
+.address { grid-area: addr; container: address / inline-size; font: 400 12px/18px var(--sans); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nm .address > span { padding-inline-start: var(--space-3); }
+/* Too little left to read: the address goes rather than show a stub. */
+@container address (max-width: 8rem) { .nm .address > span { display: none; } }
+.ledger[data-density="detailed"] .nm { grid-template-columns: 18px minmax(0, 1fr); grid-template-areas: "dot name" ". chips" ". addr"; row-gap: 4px; column-gap: 0; }
+.ledger[data-density="detailed"] .nm :is(h2, .badges) { margin-inline-start: 0; }
+.ledger[data-density="detailed"] .nm .address > span { padding-inline-start: 0; }
+.ledger[data-density="detailed"] .badges { flex-wrap: wrap; margin: 0; }
+.ledger[data-density="detailed"] .address { white-space: normal; }
+
+/* Status: a few words in compact, the sentence in Detailed. */
+.st .say { font: var(--text-md); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.st .say.brief:empty { display: none; }
+.ledger[data-density="compact"] .st .say.full, .ledger[data-density="detailed"] .st .say.brief { display: none; }
+.lines p { font: 400 12px/16px var(--sans); color: var(--muted); overflow-wrap: anywhere; }
 .lines .browser { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lines .cli-logout, .cli-logout { color: var(--crit); }
 .login-expiry.warn { color: var(--warn); }
-.u { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; align-items: center; font-variant-numeric: tabular-nums; }
-.u .pct { font-size: 13px; font-weight: 500; text-align: right; }
-.u small { grid-column: 1 / -1; font-size: 11.5px; color: var(--muted); }
+
+/* A window: bar, then the percentage in a fixed end-aligned slot, so every
+   bar in a column has one length whatever its figure (the bundled Poppins has
+   no tabular digits). */
+.u { display: grid; grid-template-columns: minmax(0, 1fr) 3.25rem; column-gap: var(--space-2); align-items: center; }
+.u .bar, .u .no-bar { grid-column: 1; }
+.u.mw .bar, .u.h5 .bar { height: 4px; }
+.u .pct { grid-column: 2; font: 500 13px/18px var(--sans); text-align: end; white-space: nowrap; }
+.u small { grid-column: 1 / -1; font: var(--text-xs); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Resets: the ledger's spine. */
+.rs { text-align: end; white-space: nowrap; }
+.rs .when { font: 500 14px/20px var(--sans); }
+.rs .when.muted { font-weight: 400; color: var(--muted); }
+/* The window a row counts down to when it is not the column's. */
+.rs .window { font: var(--text-xs); color: var(--muted); }
 /* Read by screen readers everywhere; seen only where the column header is not. */
 .cell-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.act { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; align-items: center; }
-.seg { display: inline-flex; align-items: center; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; background: var(--surface); }
-.seg > * { border: 0; border-radius: 0; }
-.seg > * + * { border-left: 1px solid var(--line-strong); }
+
+/* Switch: a slot for a secondary action, the segment at one x on every row,
+   then the menu. Nothing here wraps. */
+.act { display: grid; grid-template-columns: var(--fix) 10.5rem 2rem; column-gap: 6px; justify-items: end; align-items: center; }
+/* The one fix a row offers, filling its own fixed slot on every row, so the
+   fixes share both edges; an empty slot keeps its width. */
+.extra { display: flex; gap: 6px; justify-self: stretch; min-inline-size: 0; }
+.extra > button { flex: 1 1 0; min-inline-size: 0; padding-inline: var(--space-2); }
+/* A row's fix: outlined, in the orange's text tone. */
+.secondary.fix { color: var(--high); border-color: color-mix(in srgb, var(--high) 45%, var(--line-strong)); }
+.extra, .seg { grid-row: 1; }
+.extra { grid-column: 1; }
+.seg { grid-column: 2; }
+.act > details.more { grid-column: 3; }
+/* The segment fills its slot, so a pair of buttons and a "Live on" label
+   start and end at the same x on every row. */
+.seg { display: inline-flex; align-items: center; justify-self: stretch; border: 1px solid var(--line-strong); border-radius: var(--radius-md); overflow: hidden; background: var(--surface); }
+.seg > * { border: 0; border-radius: 0; flex: 1 1 auto; text-align: center; justify-content: center; }
+.seg > * + * { border-inline-start: 1px solid var(--line-strong); }
 .seg button { background: transparent; }
-.seg button:hover { background: var(--surface-2); }
+.seg > :focus-visible { outline-offset: -2px; }
+@media (hover: hover) and (pointer: fine) { .seg button:not(:disabled):hover { background: var(--surface-2); } }
 /* A switch the server refuses is not offered at all. */
 .seg button[data-refused] { display: none; }
 .seg:not(:has(> :not([data-refused]))) { display: none; }
-.seg .live { font-size: 12.5px; color: var(--muted); padding: 0 10px; line-height: 28px; white-space: nowrap; }
+.seg .live { font: var(--text-xs); color: var(--info); padding: 0 10px; line-height: 26px; white-space: nowrap; }
+/* Where the account lives: a filled chip, not a button. */
+.seg:has(> .live) { border-color: transparent; background: color-mix(in srgb, var(--info) 10%, var(--surface)); }
+.seg:has(> .live) > * { border-inline-start-color: transparent; }
+
+/* Rows that cannot be used now read quieter: muted name and time, faded bars. */
+.card.quiet h2, .card.quiet .rs .when { color: var(--muted); font-weight: 400; }
+/* Faded only so far that a fill still stands 3:1 off its track. */
+.card.quiet .u .bar { opacity: .8; }
+/* A spent row is not a first pick: its figures and switch buttons step back,
+   in muted text, which keeps AA. */
+.card.spent .u .pct { color: var(--muted); font-weight: 400; }
+.card.spent .seg:not(:has(> .live)) { border-color: var(--line); background: transparent; }
+.card.spent .seg > * + * { border-inline-start-color: var(--line); }
+.card.spent .seg button:not(:disabled) { color: var(--muted); }
+@media (hover: hover) and (pointer: fine) {
+  .card.spent:hover .seg { border-color: var(--line-strong); }
+  .card.spent:hover .seg > * + * { border-inline-start-color: var(--line-strong); }
+  .card.spent:hover .seg button:not(:disabled) { color: var(--text); }
+}
+/* A switch the banner turns off reads as off, in the same muted outline as a
+   spent row's: one look for a switch that is not a first pick now. */
+.seg button:disabled { background: transparent; color: var(--muted); }
+.seg:has(> button:disabled:not([data-refused])) { border-color: var(--line); }
+.seg:has(> button:disabled:not([data-refused])) > * + * { border-inline-start-color: var(--line); }
+/* Paused reads as muted text, which holds AA; only the bars and dot fade. */
+.card.paused .row > :not(.act), .card.paused .row > :not(.act) * { color: var(--muted); }
+.card.paused .bar { opacity: .6; }
+
+/* Density: compact keeps one line per account and the warnings; detailed
+   shows every line the row has. */
+.ledger[data-density="compact"] :is(.detail-only, .lines, .rename-label, .address wbr) { display: none; }
+.ledger[data-density="detailed"] .compact-only { display: none; }
+.ledger[data-density="detailed"] .row { align-items: start; padding-block: 10px; }
+.ledger[data-density="detailed"] .row > * { grid-row: auto; }
+.ledger[data-density="detailed"] .st { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; }
+.ledger[data-density="detailed"] .st .say.detail-only { font: var(--text-xs); }
+.ledger[data-density="detailed"] .card h2 .display-name { white-space: normal; }
+.ledger[data-density="detailed"] .st .say { white-space: normal; }
+.ledger[data-density="detailed"] .u small { margin-block-start: 2px; }
 
 /* The heading is the display name and the control that renames it. */
 .card h2 button.rename {
-  height: auto; padding: 0; border: 0; background: none; border-radius: 4px;
-  display: inline-flex; align-items: baseline; gap: 8px; font: inherit; font-weight: 500; white-space: normal; text-align: left;
+  height: auto; padding: 0; border: 0; background: none; border-radius: var(--radius-sm); min-inline-size: 0; max-inline-size: 100%;
+  display: inline-flex; align-items: baseline; gap: var(--space-2); font: inherit; font-weight: inherit; color: inherit; white-space: nowrap; text-align: start;
 }
 .card h2 button.rename:hover .display-name, .card h2 button.rename:focus-visible .display-name { text-decoration: underline; }
-.card h2 button.rename .rename-label { font-size: 11.5px; font-weight: 400; color: var(--muted); opacity: 0; }
+.card h2 button.rename .rename-label { font: 400 12px/16px var(--sans); color: var(--muted); opacity: 0; }
 .card:hover h2 button.rename .rename-label, .card h2 button.rename:focus-visible .rename-label { opacity: 1; }
-.card h2 input.rename { width: 100%; height: 28px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); }
+.card h2 input.rename { width: 100%; height: 28px; padding: 0 var(--space-2); border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--surface); }
 
 /* The row menu. */
 details.more { position: relative; }
-details.more > summary { font-size: 16px; letter-spacing: 1px; }
+details.more > summary { width: 2rem; padding: 0; font-size: 16px; letter-spacing: 1px; }
 details.more .menu {
-  position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; min-width: 13rem; padding: 6px; display: grid;
-  background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 32px -8px rgb(20 20 19 / .18);
+  position: absolute; inset-inline-end: 0; inset-block-start: calc(100% + 6px); z-index: 20; min-width: 13rem; padding: var(--space-1); display: grid;
+  background: var(--surface-overlay); border: 1px solid var(--line); border-radius: var(--radius-lg); box-shadow: var(--elevation-overlay);
 }
-details.more .menu button { justify-content: flex-start; font-weight: 400; }
+details.more .menu button { height: 32px; justify-content: flex-start; font-weight: 400; border-radius: var(--radius-md); }
 details.more .menu button.quiet { color: var(--text); }
-details.more .menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; width: 100%; }
+details.more .menu button:disabled { color: var(--muted); }
+details.more .menu hr { border: 0; border-block-start: 1px solid var(--line-strong); margin: var(--space-1) 0; width: 100%; }
+details.more .menu button.danger { color: var(--crit); }
 
 /* A row's Edit and login panels open under it, full width. */
 .card > details.edit:not([open]) { display: none; }
-.card > details.edit, .card > details.login { margin: 0 12px 16px 32px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.card > details.edit { max-inline-size: 78rem; }
+.card > details.edit, .card > details.login { margin: 0 var(--space-3) var(--space-4) var(--space-8); padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
 .card > details > summary { font-weight: 500; }
 .card details.login a { color: var(--info); }
-.card details.login p { font-family: var(--serif); margin-top: 8px; }
+.card details.login p { font-family: var(--serif); margin-top: var(--space-2); }
+
+/* The line an empty filter leaves, and the way back; the line before the
+   first dashboard arrives. */
+.cards > .loading { padding: var(--space-4) var(--space-3); font: var(--text-md); color: var(--muted); border-block-end: 1px solid var(--line); }
+.cards > .empty { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-4) var(--space-3); font: var(--text-md); color: var(--muted); border-block-end: 1px solid var(--line); }
+details.history { margin-block-start: var(--space-1); }
+/* A disclosure that reads as one: a marker, in the group headers' type. */
+details.history > summary { display: inline-flex; align-items: center; height: 28px; padding: 0 var(--space-3); font: 500 12px/16px var(--sans); color: var(--text); cursor: pointer; }
+details.history > summary::before { content: "\25B8\00A0"; color: var(--muted); }
+details.history[open] > summary::before { content: "\25BE\00A0"; }
 
 /* ---------- forms ---------- */
-.roster-form { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; max-width: 32rem; }
+.roster-form { display: flex; flex-direction: column; gap: 10px; margin-top: var(--space-3); max-width: 32rem; }
 .popover.roster-form { margin-top: 0; }
 .roster-form .fields, .roster-form .field { display: flex; flex-direction: column; }
 .roster-form .fields { gap: 10px; }
-.roster-form .field { gap: 4px; }
-.roster-form .field > span { font-size: 12px; color: var(--muted); }
+.roster-form .field { gap: var(--space-1); }
+.roster-form .field > span { font: var(--text-xs); color: var(--muted); }
 .roster-form .field[hidden] { display: none; }
 .roster-form textarea { resize: vertical; }
-.roster-form input, .roster-form select, .roster-form textarea {
-  width: 100%; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--text);
+/* Inputs and selects: one height, their text at one offset; a select keeps
+   room for its chevron and cuts a long profile with an ellipsis. */
+.roster-form input:not([type="checkbox"], [type="radio"]), .roster-form select, .roster-form textarea {
+  width: 100%; height: 36px; padding: 0 12px; border-radius: var(--radius-md); border: 1px solid var(--line-strong); background: var(--surface); color: var(--text);
 }
+.roster-form select { padding-inline-end: 32px; text-overflow: ellipsis; }
+.roster-form textarea { height: auto; padding-block: 8px; }
+/* A checkbox keeps its own size and sits before its label on one line. */
+.roster-form input:is([type="checkbox"], [type="radio"]) { inline-size: 16px; block-size: 16px; margin: 0; flex: none; accent-color: var(--accent-press); }
+.popover-title { font: 500 14px/20px var(--sans); }
+.roster-form .popover-actions { justify-content: flex-end; }
+.roster-form .popover-actions button { align-self: auto; }
+.roster-form .field:has(> input:is([type="checkbox"], [type="radio"])) { flex-direction: row-reverse; justify-content: flex-end; align-items: center; gap: var(--space-2); }
+.roster-form .field:has(> input:is([type="checkbox"], [type="radio"])) > span { font: var(--text-sm); color: var(--text); }
 .roster-form ::placeholder { color: var(--muted); opacity: 1; }
 .roster-form button { align-self: flex-start; }
-.roster-form details.repair > summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+.roster-form details.repair > summary { cursor: pointer; font: var(--text-xs); color: var(--muted); }
 .roster-form details.repair > summary::before { content: "\25B8\00A0"; }
 .roster-form details.repair[open] > summary::before { content: "\25BE\00A0"; }
 .roster-form details.repair > p, .roster-form details.repair > .field { margin-top: 10px; }
-.instance-token { max-width: 32rem; margin: 32px auto 0; background: var(--surface); border: 1px solid var(--line); font-family: var(--sans); }
+/* The Edit panel: two columns, the repair fold and the actions under both. */
+.roster-form.edit-form { max-width: 75rem; display: grid; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); gap: var(--space-3) var(--space-6); align-items: start; }
+.edit-col { display: flex; flex-direction: column; gap: 10px; min-inline-size: 0; }
+.edit-form > :is(details.repair, .form-actions) { grid-column: 1 / -1; }
+.form-actions { display: flex; gap: var(--space-2); }
+.form-actions > .login-again { order: 1; margin-inline-start: auto; }
+.roster-form .role-list { gap: 6px; }
+.role-list .group-label { font: var(--text-xs); color: var(--muted); }
+.instance-token { max-width: 32rem; margin: var(--space-8) auto 0; background: var(--surface); border: 1px solid var(--line); font-family: var(--sans); }
 
 /* ---------- toast, stopped page ---------- */
 .toast {
-  position: fixed; right: 24px; bottom: 24px; max-width: 28rem; padding: 12px 16px; border-radius: 12px;
-  background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--line-strong);
-  box-shadow: 0 12px 32px -8px rgb(20 20 19 / .25); font-family: var(--serif);
+  position: fixed; inset-inline-end: var(--space-6); inset-block-end: var(--space-6); max-width: 28rem; padding: var(--space-3) var(--space-4); border-radius: var(--radius-lg);
+  background: var(--surface-overlay); border: 1px solid var(--line); border-inline-start: 4px solid var(--line-strong);
+  box-shadow: var(--elevation-overlay); font-family: var(--sans);
 }
-.toast.ok { border-left-color: var(--ok-fill); }
-.toast.warn { border-left-color: var(--warn-fill); }
-.toast.error { border-left-color: var(--crit-fill); }
-.stopped { max-width: 40rem; margin: 80px auto; padding: 0 32px; display: grid; gap: 12px; font-family: var(--serif); }
-.stopped h1 { font: 500 20px var(--sans); }
+.toast.ok { border-inline-start-color: var(--ok-fill); }
+.toast.warn { border-inline-start-color: var(--warn-fill); }
+.toast.error { border-inline-start-color: var(--crit-fill); }
+.stopped { max-width: 40rem; margin: 80px auto; padding: 0 var(--space-8); display: grid; gap: var(--space-3); font-family: var(--serif); }
+.stopped h1 { font: 500 20px/28px var(--sans); }
 
-@media (max-width: 1000px) {
-  .cell-label { position: static; width: auto; height: auto; clip-path: none; grid-column: 1 / -1; font-size: 12px; color: var(--muted); }
+/* ---------- a ledger under 1000 px wide: two lines per row ---------- */
+@container ledger (max-width: 999px) {
+  .ledger-top { grid-template-columns: minmax(0, 1fr); }
+  .view-controls { grid-column: 1; justify-content: flex-start; margin-block-start: var(--space-2); }
+  /* The density pair on the title line, and the figures' time in the title's
+     hover, so the controls take one line less above the first row. */
+  .view-density { position: absolute; inset-block-start: 0; inset-inline-end: 0; }
+  .figures-asof { display: none; }
   .ledger-head { display: none; }
-  .row { grid-template-columns: 1fr 1fr; }
-  .nm, .act { grid-column: 1 / -1; }
-  .act { justify-content: flex-start; }
+  .row, .ledger.no-5h .row {
+    grid-template-columns: minmax(0, 1fr) minmax(9rem, 10rem) 9.5rem minmax(9rem, 10rem) minmax(9rem, 10rem);
+    grid-template-rows: auto auto auto;
+    grid-template-areas: "nm nm act act act" "st d7 rs mw h5" "nt nt nt nt nt";
+    row-gap: 6px; padding-block: var(--space-2);
+  }
+  .ledger.no-5h .row { grid-template-columns: minmax(0, 1fr) minmax(9rem, 10rem) 9.5rem minmax(9rem, 10rem); grid-template-areas: "nm act act act" "st d7 rs mw" "nt nt nt nt"; }
+  .row > * { grid-row: auto; }
+  .row > .nm { grid-area: nm; }
+  .row > .act { grid-area: act; }
+  .row > .st, .has-notice .row > .st { grid-area: st; }
+  .row > .d7 { grid-area: d7; }
+  .row > .rs { grid-area: rs; }
+  .row > .mw { grid-area: mw; }
+  .row > .h5 { grid-area: h5; }
+  .row > .notice { grid-area: nt; }
+  .cell-label { position: static; width: auto; height: auto; clip-path: none; font: var(--text-xs); color: var(--muted); }
+  /* Each label beside its bar, the bar never under 2.5rem, the figure in a
+     fixed slot at the end. */
+  .u { grid-template-columns: max-content minmax(2.5rem, 1fr) 3rem; column-gap: 6px; }
+  .u .cell-label { grid-column: 1; }
+  /* A window the plan does not have is not worth a labelled dash. */
+  .row > .u.none { visibility: hidden; }
+  .fleet-summary { column-gap: var(--space-4); }
+  .fleet-summary .figure + .figure::before { content: none; }
+  .view-summary { justify-content: flex-start; }
+  .row > .u.mw, .row > .u.h5 { padding-inline: 0; }
+  .row > :is(.u.mw, .u.h5) .bar { visibility: visible; }
+  .u .bar, .u .no-bar { grid-column: 2; }
+  .u .pct { grid-column: 3; }
+  .rs { display: flex; justify-content: flex-end; align-items: baseline; gap: 6px; }
+}
+/* Narrower still: every cell on its own line. */
+@container ledger (max-width: 639px) {
+  .row, .ledger.no-5h .row { grid-template-columns: minmax(0, 1fr); grid-template-areas: none; }
+  /* Each cell by name: `.row > *` loses to the area rules above. */
+  .row > .nm, .row > .act, .row > .st, .has-notice .row > .st, .row > .d7, .row > .rs, .row > .mw, .row > .h5, .row > .notice { grid-area: auto; grid-column: 1; }
+  .act { justify-content: start; }
+  .rs { justify-content: flex-start; }
 }
 
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+/* ---------- motion ---------- */
+/* Rows moving after a reorder (app.js settle()): nothing lands on a row while
+   it slides, and a row crossing another hides the one beneath. */
+#cards.settling { pointer-events: none; }
+#cards.settling > :is(.card, .group) { position: relative; background: var(--bg); }
+
+/* The row menu and the popovers open from their top right corner (app.js
+   enter()); the toast rises in and fades out. Closing either is instant. */
+details.more > .menu, .roster-add > .popover { transform-origin: top right; }
+@media (prefers-reduced-motion: no-preference) {
+  .toast { transition: opacity var(--dur-short) var(--ease-in), display var(--dur-short) allow-discrete; }
+  .toast:not([hidden]) { transition: opacity var(--dur-medium) var(--ease-out), translate var(--dur-medium) var(--ease-out), display var(--dur-medium) allow-discrete; }
+  .toast[hidden] { opacity: 0; }
+  @starting-style { .toast:not([hidden]) { opacity: 0; translate: 0 8px; } }
+}
+/* Reduced motion keeps the fades and drops the movement. */
+@media (prefers-reduced-motion: reduce) {
+  .toast { transition: opacity var(--dur-short) var(--ease-in), display var(--dur-short) allow-discrete; }
+  .toast:not([hidden]) { transition: opacity var(--dur-medium) var(--ease-out), display var(--dur-medium) allow-discrete; }
+  .toast[hidden] { opacity: 0; }
+  @starting-style { .toast:not([hidden]) { opacity: 0; } }
+}
