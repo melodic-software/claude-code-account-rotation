@@ -90,6 +90,7 @@
     module.exports.loginLine = loginLine;
     module.exports.loginOffered = loginOffered;
     module.exports.countdown = countdown;
+    module.exports.resetWindowOf = resetWindowOf;
     module.exports.resetTitle = resetTitle;
     module.exports.parseView = parseView;
     module.exports.readView = readView;
@@ -3200,6 +3201,16 @@
     return box;
   }
 
+  // Which window a row's reset figure counts down to. Only the two reset
+  // orders pick the window; every other order counts down to nextResetAt,
+  // whose window follows the standing.
+  function resetWindowOf(order, account) {
+    return order === "reset5" ? "5-hour"
+      : order === "reset7" ? "7-day"
+      : account.standing === "limited" ? "5-hour"
+      : account.standing === "model-limited" ? (account.limitedModel || "Model") + " weekly" : "7-day";
+  }
+
   // The instant the row is ordered by in its group, as a countdown: the
   // ledger's spine, end-aligned so the times read down one edge.
   function resetCell(resetAt, at, windowName, columnWindow) {
@@ -3546,8 +3557,7 @@
     function limitOf(kind) { return account.usage.limits.filter(function (limit) { return limit.kind === kind; })[0]; }
     var modelColumn = modelLabel(lastAccounts);
     // Which window the Resets figure counts down to, for its hover.
-    var resetWindow = view.order === "reset5" || (view.order === "burn" && account.standing === "limited") ? "5-hour"
-      : view.order === "burn" && account.standing === "model-limited" ? (account.limitedModel || "Model") + " weekly" : "7-day";
+    var resetWindow = resetWindowOf(view.order, account);
     line.appendChild(cell(limitOf("weekly_all"), at, meterTicks(account, dashboard.alertThresholds), "d7", "7-day"));
     line.appendChild(resetCell(resetAt, at, resetWindow, view.order === "reset5" ? "5-hour" : "7-day"));
     line.appendChild(cell(limitOf("weekly_scoped"), at, [], "mw", modelShort(modelColumn)));

@@ -650,7 +650,8 @@ details.history[open] > summary::before { content: "\25BE\00A0"; }
 /* Narrower still: every cell on its own line. */
 @container ledger (max-width: 639px) {
   .row, .ledger.no-5h .row { grid-template-columns: minmax(0, 1fr); grid-template-areas: none; }
-  .row > *, .row > .notice { grid-area: auto; grid-column: 1; }
+  /* Each cell by name: `.row > *` loses to the area rules above. */
+  .row > .nm, .row > .act, .row > .st, .has-notice .row > .st, .row > .d7, .row > .rs, .row > .mw, .row > .h5, .row > .notice { grid-area: auto; grid-column: 1; }
   .act { justify-content: start; }
   .rs { justify-content: flex-start; }
 }

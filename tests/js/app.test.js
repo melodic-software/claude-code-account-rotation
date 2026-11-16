@@ -1670,3 +1670,16 @@ test("the 5-hour column narrows when under one account in five has a 5-hour figu
   assert.strictEqual(fiveHourSparse(some), true);
   assert.strictEqual(fiveHourSparse(some.slice(0, 5)), false);
 });
+
+test("a row's reset names the window nextResetAt belongs to under every order but the two reset orders", () => {
+  const { resetWindowOf } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+  const limited = { standing: "limited" };
+  const model = { standing: "model-limited", limitedModel: "Fable" };
+  ["burn", "left", "name"].forEach((order) => {
+    assert.strictEqual(resetWindowOf(order, limited), "5-hour");
+    assert.strictEqual(resetWindowOf(order, model), "Fable weekly");
+    assert.strictEqual(resetWindowOf(order, { standing: "usable" }), "7-day");
+  });
+  assert.strictEqual(resetWindowOf("reset7", limited), "7-day");
+  assert.strictEqual(resetWindowOf("reset5", model), "5-hour");
+});
