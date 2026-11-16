@@ -356,6 +356,31 @@ public sealed class LoginEndpointTests
     }
 
     [Fact]
+    public async Task AWrongAddressLoginIntoAFolderIdentifiedOnlyByItsStateFileKeepsThatIdentity()
+    {
+        await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
+        string folder = FolderOf(factory, ParkedEmail);
+        byte[] pairBefore = await SeedPairAsync(folder, "refresh-old", TestContext.Current.CancellationToken);
+        // A login whose tidy-up never ran: the pair, and a state file as the only identity.
+        await File.WriteAllTextAsync(
+            Path.Combine(folder, ".claude.json"),
+            new JsonObject { ["numStartups"] = 1, ["oauthAccount"] = AppFactory.AccountJson(ParkedEmail) }.ToJsonString(),
+            TestContext.Current.CancellationToken);
+        factory.LoginChild.OnCode = SignInAs(factory, LiveEmail);
+        using HttpClient client = factory.CreateMutatingClient();
+        JsonObject started = await StartLoginAsync(client, TestContext.Current.CancellationToken);
+
+        JsonObject refused = await SubmitCodeAsync(client, started["id"]!.GetValue<string>(), Code, TestContext.Current.CancellationToken);
+
+        refused["message"]!.GetValue<string>().ShouldContain("put back");
+        (await File.ReadAllBytesAsync(Path.Combine(folder, CredentialFiles.FileName), TestContext.Current.CancellationToken)).ShouldBe(pairBefore);
+        // The login rewrote the state file to name the other account. The folder must still be the row's.
+        JsonObject profile = JsonNode.Parse(
+            await File.ReadAllTextAsync(Path.Combine(folder, "profile.json"), TestContext.Current.CancellationToken))!.AsObject();
+        profile["emailAddress"]!.GetValue<string>().ShouldBe(ParkedEmail);
+    }
+
+    [Fact]
     public async Task AWrongAddressLoginWhoseRevocationFailsStillPutsTheOldPairBackAndSaysSo()
     {
         await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);

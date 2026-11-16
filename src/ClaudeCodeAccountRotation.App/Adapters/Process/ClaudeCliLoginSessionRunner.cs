@@ -214,13 +214,14 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
                 return Result<LoginSession, string>.Failure(UnreadablePairAtStartReason);
             }
 
+            OAuthAccountBlock? accountAtStart = pairAtStart is null ? null : await ReadAccountAtStartAsync(folder);
             Result<ILoginChild, string> child = _start(Arguments(email), folder);
             if (child.IsFailure)
             {
                 return Result<LoginSession, string>.Failure(child.Error);
             }
 
-            session = new Session(LoginSessionId.New(), email, folder, child.Value, pairAtStart, _clock.GetUtcNow() + SessionLifetime, SessionLifetime, _clock);
+            session = new Session(LoginSessionId.New(), email, folder, child.Value, pairAtStart, accountAtStart, _clock.GetUtcNow() + SessionLifetime, SessionLifetime, _clock);
             // Started under the gate, so a session anything can find already has its
             // pump. The pump's own finish takes the gate in turn and waits on it
             // until the finally below releases it, which is at once.
@@ -613,6 +614,22 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     }
 
     /// <summary>
+    /// The identity a folder records before the child can rewrite it. Best
+    /// effort: an identity that cannot be read is not a reason to refuse a login.
+    /// </summary>
+    private async Task<OAuthAccountBlock?> ReadAccountAtStartAsync(string folder)
+    {
+        try
+        {
+            return await _profiles.ReadAccountAsync(folder, CancellationToken.None);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// The SHA-256 of a credential file's bytes. Bytes, not the token inside
     /// them: an unparsable file still compares, and a completed login always
     /// writes new tokens.
@@ -747,6 +764,15 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
         {
             await AtomicBytesFile.WriteAsync(
                 Path.Combine(session.Folder, FileSystemCredentialPairStore.FileName), held, CancellationToken.None);
+            // A folder identified only by its state file has that file rewritten by
+            // the login, and the residue removal below deletes it: without a profile
+            // the restored pair would belong to no listed account.
+            if (session.AccountAtStart is OAuthAccountBlock account
+                && !File.Exists(Path.Combine(session.Folder, ProfileFolderStore.ProfileFileName)))
+            {
+                await _profiles.WriteProfileAsync(session.Folder, account, CancellationToken.None);
+            }
+
             _profiles.DiscardLoginResidue(session.Folder);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -1101,6 +1127,7 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
             string folder,
             ILoginChild child,
             byte[]? credentialFileAtStart,
+            OAuthAccountBlock? accountAtStart,
             DateTimeOffset expiresAt,
             TimeSpan lifetime,
             TimeProvider clock)
@@ -1110,6 +1137,7 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
             Folder = folder;
             Child = child;
             CredentialFileAtStart = credentialFileAtStart;
+            AccountAtStart = accountAtStart;
             CredentialFileDigestAtStart = Digest(credentialFileAtStart);
             ExpiresAt = expiresAt;
             Lifetime = new CancellationTokenSource(lifetime, clock);
@@ -1141,6 +1169,9 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
         /// what goes back.
         /// </summary>
         public byte[]? CredentialFileAtStart { get; }
+
+        /// <summary>The identity the folder recorded beside that pair, for a folder that has no profile to keep it.</summary>
+        public OAuthAccountBlock? AccountAtStart { get; }
 
         public DateTimeOffset ExpiresAt { get; }
 
