@@ -816,7 +816,7 @@ test("newRoleItem refuses a role in one repository and asks nothing", () => {
   assert.deepStrictEqual(newRoleItem("X", " octo/repo ", { roles: [] }), refused);
 });
 
-const { reissueButton, ciPanelChecked, meterTicks, alertLines } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+const { ciPanelChecked, meterTicks, alertLines } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
 
 // Three accounts as the dashboard sends them: two back a role, one does not.
 const BACKER = { email: "a@example.com", roster: { backsCiRole: true, ciRoles: [AUTOMATIONS] } };
@@ -826,20 +826,10 @@ const UNCLAIMED = { roles: [
   { name: "ISSUE_LANE", prefix: "ISSUE_LANE", organization: "octo", tokenSecret: "ISSUE_LANE_CLAUDE_CODE_OAUTH_TOKEN", keySecret: "ISSUE_LANE_CLAUDE_API_KEY", holder: null }
 ] };
 
-test("reissue opens the CI token panel with the account's roles preselected", () => {
-  let opened = null;
-  const button = reissueButton(BACKER, (account) => { opened = account; });
-  assert.strictEqual(button.label, "Re-issue token");
-  button.click();
-  assert.strictEqual(opened, BACKER);
+test("the CI token panel opens with the account's own roles preselected", () => {
   // The panel ticks the opened account's AUTOMATIONS role, not another account's role or an unclaimed one.
   const roles = assignableRoles([BACKER, OTHER_BACKER, NO_ROLE], UNCLAIMED);
-  assert.deepStrictEqual(ciPanelChecked(roles, opened.email), [true, false, false]);
-});
-
-test("reissueButton is offered only on an account the server says backs a CI role", () => {
-  assert.strictEqual(reissueButton(NO_ROLE, () => {}), null);
-  assert.strictEqual(reissueButton({ email: "d@example.com", roster: null }, () => {}), null);
+  assert.deepStrictEqual(ciPanelChecked(roles, BACKER.email), [true, false, false]);
 });
 
 test("ciPanelChecked ticks exactly the roles the given account backs", () => {
@@ -1572,8 +1562,8 @@ test("a rebuilt row gives the focus back to the same control by its label, and t
   const labels = ["Rename this account", "This machine", "WSL", "More actions for a"];
   assert.strictEqual(pickControl(labels, { index: 2, label: "WSL" }), 2);
   assert.strictEqual(pickControl(["Rename this account", "Log in again", "This machine", "WSL"], { index: 2, label: "WSL" }), 3);
-  // Re-issue token went away: the focus must not fall to the Switch now at its place.
-  assert.strictEqual(pickControl(labels, { index: 1, label: "Re-issue token" }), -1);
+  // Log in again went away: the focus must not fall to the switch at its place.
+  assert.strictEqual(pickControl(labels, { index: 1, label: "Log in again" }), -1);
 });
 
 test("a view change is said in one sentence: the order, the rows shown, and what differs from the default", () => {

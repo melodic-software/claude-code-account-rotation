@@ -232,12 +232,11 @@ button.fold, button.fold:is(:hover, :disabled) { height: auto; padding: 0; borde
 .meter small { display: block; margin-block-start: 4px; font: var(--text-xs); color: var(--muted); }
 /* A window with no reset to show keeps the line, so both strips' buttons sit level. */
 .meter:not(:has(small))::after { content: "\00a0"; display: block; margin-block-start: 4px; font: var(--text-xs); }
-/* Stacked at every width: a login fix across the strip, then the switch
-   with Hand back beside it; the switch's name wraps rather than being cut. */
-.go { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2); align-items: stretch; }
-.go > :is(.login-side, :not(.hand-back):last-child) { grid-column: 1 / -1; }
+/* Stacked at every width: a login fix, then the switch, each across the
+   strip so both strips' switches are one size, then Hand back under it; the
+   switch's name wraps rather than being cut. */
+.go { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2); }
 .go > :not(.lg) { justify-self: start; }
-.go > .hand-back { justify-self: stretch; height: auto; }
 .go .lg { min-inline-size: 0; }
 .go .lg > span { max-inline-size: 100%; overflow-wrap: anywhere; }
 /* The strip's login fix: outlined in the warning tone, not a solid fill. */

@@ -58,7 +58,6 @@
       historyLines: historyLines,
       historyReadLines: historyReadLines
     };
-    module.exports.reissueButton = reissueButton;
     module.exports.ciPanelChecked = ciPanelChecked;
     module.exports.meterTicks = meterTicks;
     module.exports.alertLines = alertLines;
@@ -891,7 +890,7 @@
       }
       // Read at click time, and re-read by the server before anything moves.
       if (side.liveAccount) {
-        go.appendChild(blockable(actionButton("Hand back", "secondary hand-back", function () { releaseSide(side.side, side.liveAccount); }), false));
+        go.appendChild(blockable(actionButton("Hand back", "secondary sm hand-back", function () { releaseSide(side.side, side.liveAccount); }), false));
       }
     } else if (side.canStart) {
       go.appendChild(blockable(actionButton("Start " + sideLabel(name) + " side", "secondary", function () { mutate(sidePath(side.side, "/start"), "POST", null, null); }), false));
@@ -2374,17 +2373,9 @@
   }
 
   // Which of the panel's roles start ticked: the ones this account backs, so
-  // Generate CI token and Re-issue token both re-issue its own roles by default.
+  // Generate CI token re-issues its own roles by default.
   function ciPanelChecked(roles, email) {
     return roles.map(function (role) { return role.holder === email; });
-  }
-
-  // The Re-issue token button on the card of an account that backs a CI role
-  // (the server's roster.backsCiRole), or null: its label, and its click,
-  // which hands the account to open (the CI token panel).
-  function reissueButton(account, open) {
-    if (!backsCiRole(account)) { return null; }
-    return { label: "Re-issue token", click: function () { open(account); } };
   }
 
   function backsCiRole(account) {
@@ -3459,7 +3450,7 @@
     var title = element("div", "title");
     title.appendChild(cardHeading(account));
     var badges = element("span", "badges");
-    if (next) { badges.appendChild(element("span", "badge next", "Next up")); }
+    if (next) { badges.appendChild(element("span", "badge next", "next up")); }
     // Two axes, and a card shows the second only when it adds something: the
     // store chip says where this account's one pair is, and the credential
     // chip says whether this side can switch to it. "live here" and "parked"
@@ -3573,14 +3564,6 @@
     var act = element("div", "act");
     var extra = element("span", "extra");
     act.appendChild(extra);
-    // Beside the meters, so an account near its 7-day limit can have its
-    // roles' token re-issued without opening the menu. It opens the same
-    // panel as Generate CI token, with this account's roles ticked.
-    // The slot holds one button. A login the row needs outranks the re-issue,
-    // which then moves into the row menu.
-    var reissue = reissueButton(account, openCiTokenPanel);
-    var loginFix = !!roster && ((!account.isLive && loginOffered(account, at)) || !!account.loggedOutOn);
-    if (reissue && !loginFix) { extra.appendChild(actionButton(reissue.label, "secondary sm", reissue.click)); }
     // The live account is signed in already; logging it into its parked folder
     // would leave one account holding two logins. A card with a login good for
     // longer than the warning window does not need the button on its face; an
@@ -3619,7 +3602,6 @@
       }));
     }
     menu.appendChild(blockable(menuItem(more, "Refresh usage", "quiet sm", function () { refreshAccount(account.email); }), false));
-    if (reissue && loginFix) { menu.appendChild(menuItem(more, reissue.label, "quiet sm", reissue.click)); }
     // In groups under rules: open, CI token, API and Admin keys, rotation, and
     // every delete last, apart under its own rule, so no ordinary item sits
     // between two that destroy something. A delete reads in the danger colour.

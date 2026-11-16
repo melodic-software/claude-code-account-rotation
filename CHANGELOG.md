@@ -4,6 +4,19 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.3] - 2026-11-15
+
+### Changed
+
+- **Row chips are all lowercase.** `Next up` reads `next up`, like `live here` and `in use by wsl`.
+- **Both Now strips' switch buttons are one size.** The switch spans the strip on each, and Hand
+  back is a small button under it instead of a tall one beside it.
+
+### Removed
+
+- **The Re-issue token button on a CI-role account's row.** Generate CI token in the row's menu
+  opens the same panel with the account's roles ticked.
+
 ## [3.1.2] - 2026-11-15
 
 ### Fixed
