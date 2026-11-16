@@ -24,16 +24,29 @@ internal static class ParkedFolderAdmission
     /// run leaves its state file standing, so nothing on disk proves which login
     /// wrote a block that names a Max tier, and a block that cannot be tied to
     /// this login is no evidence about the seat that just signed in.
+    /// <para>
+    /// The same answer names the address that signed in, which is the caller's
+    /// to compare with the row the login was started from: the browser step
+    /// signs in whichever account its profile holds, whatever address the row
+    /// asked for. Null when the CLI named none, or named something that is not
+    /// an address.
+    /// </para>
     /// </summary>
-    public static async Task<(MaxTierVerdict Verdict, string? Reason)> JudgeFreshLoginAsync(
+    public static async Task<(MaxTierVerdict Verdict, string? Reason, AccountEmail? SignedInAs)> JudgeFreshLoginAsync(
         string folderPath,
         IClaudeCliAuthStatus cli,
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(folderPath);
         ArgumentNullException.ThrowIfNull(cli);
-        Result<ClaudeAuthStatus, string> status = await cli.ReadAsync(folderPath, cancellationToken);
-        return MaxTierAdmission.Evaluate(status.IsSuccess ? status.Value : null, account: null);
+        Result<ClaudeAuthStatus, string> read = await cli.ReadAsync(folderPath, cancellationToken);
+        ClaudeAuthStatus? status = read.IsSuccess ? read.Value : null;
+        (MaxTierVerdict verdict, string? reason) = MaxTierAdmission.Evaluate(status, account: null);
+        AccountEmail? signedInAs =
+            status is { LoggedIn: true, Email: string address } && AccountEmail.Parse(address) is { IsSuccess: true } parsed
+                ? parsed.Value
+                : null;
+        return (verdict, reason, signedInAs);
     }
 
     /// <summary>

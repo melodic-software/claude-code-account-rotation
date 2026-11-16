@@ -82,14 +82,22 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     private const string RefusedPrefix = "That login was refused: ";
     private const string UnreadableTierReason =
         "the CLI did not report what kind of account signed in, and a tier that cannot be read is refused rather than admitted";
+    private const string UnnamedAddressReason =
+        "the CLI did not report which address signed in, and a login that cannot be tied to this row is refused rather than admitted";
+    private const string PickMaxRetry = " Log in again and pick the Max account at the sign-in step.";
     private const string RevokedSuffix =
-        ". The credentials it wrote were revoked with `claude auth logout` and deleted, so nothing joined the rotation."
-        + " Log in again and pick the Max account at the sign-in step.";
+        ". The credentials it wrote were revoked with `claude auth logout` and deleted, so nothing joined the rotation.";
     private const string NotRevokedSuffix =
-        ". The credentials it wrote were deleted but could not be revoked, so that refresh token stays valid until its login expires."
-        + " Log in again and pick the Max account at the sign-in step.";
+        ". The credentials it wrote were deleted but could not be revoked, so that refresh token stays valid until its login expires.";
     private const string NotDeletedSuffix =
         ". The credentials it wrote could not be deleted; remove the account from the roster before switching to anything.";
+    private const string RestoredSuffix =
+        ". The credentials it wrote were revoked with `claude auth logout`, and the login that folder held before was put back.";
+    private const string RestoredNotRevokedSuffix =
+        ". The credentials it wrote could not be revoked, so that refresh token stays valid until its login expires,"
+        + " and the login that folder held before was put back.";
+    private const string NotRestoredSuffix =
+        ". The login that folder held before could not be put back; remove the account from the roster before switching to anything.";
     private const string UnjudgedMessage =
         "Another credential change held the lock, so what kind of account signed in could not be checked."
         + " Remove the account from the roster, which revokes that login, before switching to it.";
@@ -192,10 +200,10 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
             // What the folder holds before the child can touch it, read under the
             // same gate, so nothing else is moving it: the finish tells this login's
             // own pair from an earlier one only by comparison with this reading.
-            string? digestAtStart;
+            byte[]? pairAtStart;
             try
             {
-                digestAtStart = await DigestCredentialFileAsync(folder);
+                pairAtStart = await ReadCredentialFileAsync(folder);
             }
             catch (IOException)
             {
@@ -212,7 +220,7 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
                 return Result<LoginSession, string>.Failure(child.Error);
             }
 
-            session = new Session(LoginSessionId.New(), email, folder, child.Value, digestAtStart, _clock.GetUtcNow() + SessionLifetime, SessionLifetime, _clock);
+            session = new Session(LoginSessionId.New(), email, folder, child.Value, pairAtStart, _clock.GetUtcNow() + SessionLifetime, SessionLifetime, _clock);
             // Started under the gate, so a session anything can find already has its
             // pump. The pump's own finish takes the gate in turn and waits on it
             // until the finally below releases it, which is at once.
@@ -540,7 +548,7 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
             string? digest;
             try
             {
-                digest = await DigestCredentialFileAsync(session.Folder);
+                digest = Digest(await ReadCredentialFileAsync(session.Folder));
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
@@ -605,12 +613,19 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     }
 
     /// <summary>
-    /// The SHA-256 of the credential file's bytes, or null when the folder holds
-    /// none, read through the shared reader so the CLI's own write to the file
-    /// is never blocked by it. Bytes, not the token inside them: an unparsable
-    /// file still compares, and a completed login always writes new tokens.
+    /// The SHA-256 of a credential file's bytes. Bytes, not the token inside
+    /// them: an unparsable file still compares, and a completed login always
+    /// writes new tokens.
     /// </summary>
-    private static async Task<string?> DigestCredentialFileAsync(string folder)
+    private static string? Digest(byte[]? credentialFile) =>
+        credentialFile is null ? null : Convert.ToHexString(SHA256.HashData(credentialFile));
+
+    /// <summary>
+    /// The credential file's bytes, or null when the folder holds none, read
+    /// through the shared reader so the CLI's own write to the file is never
+    /// blocked by it.
+    /// </summary>
+    private static async Task<byte[]?> ReadCredentialFileAsync(string folder)
     {
         string path = Path.Combine(folder, FileSystemCredentialPairStore.FileName);
         if (!File.Exists(path))
@@ -620,8 +635,7 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
 
         try
         {
-            byte[] bytes = await SharedFileReader.ReadAllBytesAsync(path, CancellationToken.None);
-            return Convert.ToHexString(SHA256.HashData(bytes));
+            return await SharedFileReader.ReadAllBytesAsync(path, CancellationToken.None);
         }
         catch (FileNotFoundException)
         {
@@ -658,42 +672,114 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     /// discarded: if the delete fails, the rewritten profile names the refused
     /// seat instead of leaving a stale Max one beside a new pair.
     /// </para>
+    /// <para>
+    /// The address is judged before the tier. The browser step signs in whichever
+    /// account its profile holds, so a row whose profile is signed in to another
+    /// account completes as that one, and a Max tier says nothing about whose it
+    /// is. A login the CLI names another address for is refused whatever its
+    /// tier, and its pair is revoked: here the pair is proven not to be the
+    /// row's, so a folder that held one before gets those earlier bytes back
+    /// rather than keeping the new pair. A Max login the CLI names no address for
+    /// is treated as one whose tier could not be read.
+    /// </para>
     /// </summary>
     private async Task<(LoginSessionState State, string Message)> AdmitAsync(Session session)
     {
-        (MaxTierVerdict verdict, string? reason) =
+        (MaxTierVerdict verdict, string? reason, AccountEmail? signedInAs) =
             await ParkedFolderAdmission.JudgeFreshLoginAsync(session.Folder, _authStatus, CancellationToken.None);
-        if (verdict == MaxTierVerdict.Unknown && session.CredentialFileDigestAtStart is not null)
+        if (signedInAs is AccountEmail other && other != session.Email)
+        {
+            LogLoginWrongAccount(session.Email.Value, other.Value);
+            string refusal = RefusedPrefix + "the browser signed in as " + other.Value + ", not " + session.Email.Value;
+            string retry = " Log in again and pick " + session.Email.Value + " at the sign-in step.";
+            if (session.CredentialFileAtStart is byte[] held)
+            {
+                return (LoginSessionState.Failed, refusal + await RestoreAsync(session, held, retry));
+            }
+
+            await TryAdoptAsync(session);
+            return (LoginSessionState.Failed, refusal + await DiscardAsync(session, retry));
+        }
+
+        if (signedInAs is null && verdict == MaxTierVerdict.Admitted)
+        {
+            (verdict, reason) = (MaxTierVerdict.Unknown, UnnamedAddressReason);
+        }
+
+        if (verdict == MaxTierVerdict.Unknown && session.CredentialFileAtStart is not null)
         {
             return (LoginSessionState.Failed, UnjudgedKeptMessage);
         }
 
-        bool adopted;
-        try
-        {
-            adopted = await _profiles.AdoptFreshLoginAsync(session.Folder, CancellationToken.None);
-        }
-        catch (IOException)
-        {
-            // A file the CLI wrote seconds ago is still held by something else.
-            adopted = false;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            adopted = false;
-        }
-
+        bool adopted = await TryAdoptAsync(session);
         if (verdict == MaxTierVerdict.Admitted)
         {
             return (LoginSessionState.Completed, adopted ? "Logged in as " + session.Email.Value + "." : ResidueKeptMessage);
         }
 
-        return (LoginSessionState.Failed, RefusedPrefix + (reason ?? UnreadableTierReason) + await DiscardAsync(session));
+        return (LoginSessionState.Failed, RefusedPrefix + (reason ?? UnreadableTierReason) + await DiscardAsync(session, PickMaxRetry));
+    }
+
+    private async Task<bool> TryAdoptAsync(Session session)
+    {
+        try
+        {
+            return await _profiles.AdoptFreshLoginAsync(session.Folder, CancellationToken.None);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // A file the CLI wrote seconds ago is still held by something else.
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Revokes a pair written by a login that signed in as another account, and
+    /// puts back the bytes the folder held before it, with the residue the login
+    /// left removed and the folder's own profile untouched. The earlier pair goes
+    /// back even when the revocation failed: the folder then holds the row's own
+    /// login again, and the operator is told the other token is still valid.
+    /// </summary>
+    private async Task<string> RestoreAsync(Session session, byte[] held, string retry)
+    {
+        bool revoked = await RevokeAsync(session);
+        try
+        {
+            await AtomicBytesFile.WriteAsync(
+                Path.Combine(session.Folder, FileSystemCredentialPairStore.FileName), held, CancellationToken.None);
+            _profiles.DiscardLoginResidue(session.Folder);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return NotRestoredSuffix;
+        }
+
+        return (revoked ? RestoredSuffix : RestoredNotRevokedSuffix) + retry;
+    }
+
+    /// <summary>
+    /// Runs <c>claude auth logout</c> under the session's folder and records the
+    /// outcome. The failure text is not the outcome: the port's error can repeat
+    /// what the child printed, and that printout is the wrong thing to keep.
+    /// </summary>
+    private async Task<bool> RevokeAsync(Session session)
+    {
+        Result<Unit, string> revoked = await _logout.LogoutAsync(session.Folder, CancellationToken.None);
+        if (revoked.IsSuccess)
+        {
+            LogLogoutRevoked(session.Email.Value);
+        }
+        else
+        {
+            LogLogoutFailed(session.Email.Value);
+        }
+
+        return revoked.IsSuccess;
     }
 
     /// <summary>
     /// Revokes and empties the folder of a login that turned out not to be a Max
-    /// account, and says which of those two happened.
+    /// account, or not the row's account, and says which of those two happened.
     /// <para>
     /// The revocation is the honest disposition for a seat that must never be
     /// rotated: the pair exists, and deleted bytes holding a refresh token are
@@ -706,20 +792,9 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     /// folder when a logout fails, because there nothing has yet been admitted.
     /// </para>
     /// </summary>
-    private async Task<string> DiscardAsync(Session session)
+    private async Task<string> DiscardAsync(Session session, string retry)
     {
-        // The failure text is not the outcome. The port's error can repeat what
-        // the child printed, and that printout is the wrong thing to keep.
-        Result<Unit, string> revoked = await _logout.LogoutAsync(session.Folder, CancellationToken.None);
-        if (revoked.IsSuccess)
-        {
-            LogLogoutRevoked(session.Email.Value);
-        }
-        else
-        {
-            LogLogoutFailed(session.Email.Value);
-        }
-
+        bool revoked = await RevokeAsync(session);
         try
         {
             await _profiles.DeleteFolderAsync(session.Folder, CancellationToken.None);
@@ -729,7 +804,7 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
             return NotDeletedSuffix;
         }
 
-        return revoked.IsSuccess ? RevokedSuffix : NotRevokedSuffix;
+        return (revoked ? RevokedSuffix : NotRevokedSuffix) + retry;
     }
 
     /// <summary>
@@ -977,6 +1052,9 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     [LoggerMessage(Level = LogLevel.Warning, Message = "login for {Account} failed")]
     private partial void LogLoginFailed(string account);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "login for {Account} signed in as {SignedInAs}")]
+    private partial void LogLoginWrongAccount(string account, string signedInAs);
+
     [LoggerMessage(Level = LogLevel.Warning, Message = "login for {Account} expired")]
     private partial void LogLoginExpired(string account);
 
@@ -1022,7 +1100,7 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
             AccountEmail email,
             string folder,
             ILoginChild child,
-            string? credentialFileDigestAtStart,
+            byte[]? credentialFileAtStart,
             DateTimeOffset expiresAt,
             TimeSpan lifetime,
             TimeProvider clock)
@@ -1031,7 +1109,8 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
             Email = email;
             Folder = folder;
             Child = child;
-            CredentialFileDigestAtStart = credentialFileDigestAtStart;
+            CredentialFileAtStart = credentialFileAtStart;
+            CredentialFileDigestAtStart = Digest(credentialFileAtStart);
             ExpiresAt = expiresAt;
             Lifetime = new CancellationTokenSource(lifetime, clock);
         }
@@ -1055,6 +1134,13 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
         /// the gate, or its rewrite would be judged as a login that never happened.
         /// </summary>
         public string? CredentialFileDigestAtStart { get; }
+
+        /// <summary>
+        /// The bytes that digest was taken from, kept so a login that signs in as
+        /// another account can be undone: its pair overwrote these, and they are
+        /// what goes back.
+        /// </summary>
+        public byte[]? CredentialFileAtStart { get; }
 
         public DateTimeOffset ExpiresAt { get; }
 
