@@ -1,0 +1,18 @@
+# Shell in this repository. Contract and schema:
+# https://github.com/melodic-software/claude-code-plugins/tree/main/docs/contracts/ecosystem-commands
+# shellcheck over eng/*.sh, as CI's check-repository job runs it
+# (.github/workflows/pr-require-checks.yml, step 'shellcheck (zero findings)'):
+# no -x, no severity filter, and shellcheck finds the root .shellcheckrc by its
+# own upward search. Commands run from the repository root.
+enabled: true
+globs: ["*.sh", "*.bash"]
+project-discovery: []
+build-cmd: null
+test-cmd: null
+check-cmd: "shellcheck eng/*.sh"
+fix-cmd: "shfmt -w <files>"
+code-fix-cmd: null
+opt-in: "shellcheck always applies to shell files"
+install-hint: "winget install koalaman.shellcheck mvdan.shfmt | brew install shellcheck shfmt"
+gates: []
+notes: "check-cmd lints eng/*.sh whatever shell file changed, because that is CI's whole shell lint (pr-require-checks.yml:123); .claude/cloud-bootstrap.sh, hooks/*.sh and tests/acceptance/*.sh are linted by no CI lane. CI uses the shellcheck preinstalled on the ubuntu-24.04 image, so no version is pinned. eng/check-no-machine-paths.sh runs in cross-cutting, eng/smoke-linux-publish.sh as dotnet's gate. No CI lane or hook runs shfmt; fix-cmd follows the shfmt style .editorconfig declares for shell files and can reformat lines beyond the change. tests/acceptance/*.sh drive a live rotation install by hand (tests/acceptance/README.md) and no record runs them."

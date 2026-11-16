@@ -1,0 +1,17 @@
+# JavaScript in this repository (no TypeScript is tracked). Contract and schema:
+# https://github.com/melodic-software/claude-code-plugins/tree/main/docs/contracts/ecosystem-commands
+# The dashboard script src/ClaudeCodeAccountRotation.App/wwwroot/app.js and its
+# node:test suite, run as CI's check-repository job runs it
+# (.github/workflows/pr-require-checks.yml, step 'Page script tests'). Commands
+# run from the repository root.
+enabled: true
+globs: ["*.js", "*.mjs", "*.cjs"]
+project-discovery: []
+build-cmd: null
+test-cmd: "node --test tests/js/*.test.js"
+check-cmd: null
+fix-cmd: null
+code-fix-cmd: null
+install-hint: "node 24 (.node-version names 24.21.0): https://nodejs.org"
+gates: []
+notes: "The shell expands the glob, since node --test <directory> does not search a directory (pr-require-checks.yml:126-129). CI runs this step on the ubuntu-24.04 image's preinstalled node, before setup-node reads .node-version, so no version is pinned. No linter or formatter is configured for JavaScript here and CI runs none, so check-cmd is null. .github/standards/runner-policy/runner-policy.mjs and .lefthook/dotnet-format-staged.mjs also match these globs; the runner policy runs in yaml, and the lefthook script has no test. There is no root package.json, so project-discovery is empty and the commands run once from the repository root."

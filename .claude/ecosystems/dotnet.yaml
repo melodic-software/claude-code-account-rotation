@@ -1,0 +1,26 @@
+# .NET in this repository. Contract and schema:
+# https://github.com/melodic-software/claude-code-plugins/tree/main/docs/contracts/ecosystem-commands
+# The commands of CI's build-and-test job (.github/workflows/pr-require-checks.yml,
+# steps 'Restore (locked mode)', 'Build', 'Test', 'Whitespace format' and
+# 'linux-x64 publish serves the follower dashboard'). Commands run from the
+# repository root.
+enabled: true
+globs: ["*.cs", "*.csproj", "*.slnx", "*.props", "*.targets"]
+anchor: "ClaudeCodeAccountRotation.slnx at the repository root"
+project-discovery: []
+build-cmd: "dotnet restore ClaudeCodeAccountRotation.slnx --locked-mode && dotnet build ClaudeCodeAccountRotation.slnx -c Release --no-restore"
+test-cmd: "CCAR_REQUIRE_REAL_CLI_TESTS=1 dotnet test ClaudeCodeAccountRotation.slnx -c Release --no-build"
+check-cmd: "dotnet format whitespace ClaudeCodeAccountRotation.slnx --verify-no-changes"
+fix-cmd: "dotnet format whitespace ClaudeCodeAccountRotation.slnx"
+code-fix-cmd: null
+opt-in: ".editorconfig at the repository root"
+install-hint: "the .NET SDK global.json names (10.0.403, rollForward disable): https://dot.net; the tests also need node and a claude CLI on PATH (CI installs @anthropic-ai/claude-code 2.1.310 on its throwaway runner; a local CLI of another version runs the same tests)"
+tool-pin:
+  dotnet-sdk: "10.0.403"
+  claude-code: "2.1.310"
+gates:
+  - name: linux-publish-smoke
+    cmd: "bash eng/smoke-linux-publish.sh"
+    run-from: repo-root
+    remediation: "the linux-x64 publish no longer serves the follower dashboard; run bash eng/smoke-linux-publish.sh and read its output"
+notes: "Pins: global.json:3 (setup-dotnet reads it, pr-require-checks.yml:81) and pr-require-checks.yml:95 (the CLI the pseudo-terminal contract tests drive). test-cmd sets CCAR_REQUIRE_REAL_CLI_TESTS=1 as CI does (pr-require-checks.yml:100): a missing node or claude on PATH then fails PseudoTerminalChildTests and ClaudeCliUsageReaderTests instead of skipping them. Those tests run the real `claude setup-token` against a temporary CLAUDE_CONFIG_DIR and type it a made-up code, which the CLI sends to Anthropic's token endpoint; nothing signs in. test-cmd passes --no-build, so it needs build-cmd's Release output first. dotnet test exits 0 with skipped tests (the Windows-only facts on Linux); read the skipped count. check-cmd is CI's whitespace pass only: dotnet format's import-ordering and style passes are not gated in CI. The gate runs on Linux only in CI (pr-require-checks.yml:107) and publishes linux-x64 into a temp directory; that publish restores for linux-x64 and adds a \"net10.0/linux-x64\" entry to src/ClaudeCodeAccountRotation.Core/packages.lock.json, which CI's throwaway checkout discards: undo it locally with git restore src/ClaudeCodeAccountRotation.Core/packages.lock.json. Glob gaps: Directory.Packages.props and the *.props files match; packages.lock.json, global.json, nuget.config and eng/dotnet-analysis/dotnet.globalconfig, which CI's build reads, select nothing."
