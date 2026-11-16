@@ -11,9 +11,10 @@ All notable changes to this project are documented in this file. The format foll
 - **A login that signs in as a different account than its row is refused.** When the row's browser
   profile was signed in to another account, the login completed as that account and its
   credentials were kept in the row's folder. Now the login ends failed, the message names the
-  address that signed in, and the credentials it wrote are revoked with `claude auth logout` and
-  deleted. A row that already held a login keeps that login. A login the CLI reports no address for
-  is refused the same way as one whose tier cannot be read.
+  address that signed in, and the credentials it wrote are deleted. They are not revoked:
+  `claude auth logout` is never run against another account's login, so that refresh token stays
+  valid until its login expires. A row that already held a login keeps that login. A login the CLI
+  reports no address for is refused the same way as one whose tier cannot be read.
 
 ## [3.1.1] - 2026-11-15
 

@@ -91,11 +91,12 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
         ". The credentials it wrote were deleted but could not be revoked, so that refresh token stays valid until its login expires.";
     private const string NotDeletedSuffix =
         ". The credentials it wrote could not be deleted; remove the account from the roster before switching to anything.";
+    private const string OtherAccountUnrevoked =
+        " `claude auth logout` is never run against another account's login, so that refresh token stays valid until its login expires.";
+    private const string OtherAccountDeletedSuffix =
+        ". The credentials it wrote were deleted, so nothing joined the rotation." + OtherAccountUnrevoked;
     private const string RestoredSuffix =
-        ". The credentials it wrote were revoked with `claude auth logout`, and the login that folder held before was put back.";
-    private const string RestoredNotRevokedSuffix =
-        ". The credentials it wrote could not be revoked, so that refresh token stays valid until its login expires,"
-        + " and the login that folder held before was put back.";
+        ". The credentials it wrote were removed, and the login that folder held before was put back." + OtherAccountUnrevoked;
     private const string NotRestoredSuffix =
         ". The login that folder held before could not be put back; remove the account from the roster before switching to anything.";
     private const string UnjudgedMessage =
@@ -694,10 +695,13 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     /// account its profile holds, so a row whose profile is signed in to another
     /// account completes as that one, and a Max tier says nothing about whose it
     /// is. A login the CLI names another address for is refused whatever its
-    /// tier, and its pair is revoked: here the pair is proven not to be the
-    /// row's, so a folder that held one before gets those earlier bytes back
-    /// rather than keeping the new pair. A Max login the CLI names no address for
-    /// is treated as one whose tier could not be read.
+    /// tier: here the pair is proven not to be the row's, so a folder that held
+    /// one before gets those earlier bytes back rather than keeping the new pair.
+    /// That pair is removed and never revoked. It belongs to another account,
+    /// often the live one, and what <c>claude auth logout</c> ends beyond the
+    /// one login is not documented, so the tool does not run it against a login
+    /// of an account the row never asked for. A Max login the CLI names no
+    /// address for is treated as one whose tier could not be read.
     /// </para>
     /// </summary>
     private async Task<(LoginSessionState State, string Message)> AdmitAsync(Session session)
@@ -715,7 +719,7 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
             }
 
             await TryAdoptAsync(session);
-            return (LoginSessionState.Failed, refusal + await DiscardAsync(session, retry));
+            return (LoginSessionState.Failed, refusal + await DiscardAsync(session, retry, revoke: false));
         }
 
         if (signedInAs is null && verdict == MaxTierVerdict.Admitted)
@@ -751,15 +755,12 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     }
 
     /// <summary>
-    /// Revokes a pair written by a login that signed in as another account, and
-    /// puts back the bytes the folder held before it, with the residue the login
-    /// left removed and the folder's own profile untouched. The earlier pair goes
-    /// back even when the revocation failed: the folder then holds the row's own
-    /// login again, and the operator is told the other token is still valid.
+    /// Overwrites a pair written by a login that signed in as another account
+    /// with the bytes the folder held before it, with the residue the login left
+    /// removed and the folder's own profile untouched.
     /// </summary>
     private async Task<string> RestoreAsync(Session session, byte[] held, string retry)
     {
-        bool revoked = await RevokeAsync(session);
         try
         {
             await AtomicBytesFile.WriteAsync(
@@ -780,32 +781,14 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
             return NotRestoredSuffix;
         }
 
-        return (revoked ? RestoredSuffix : RestoredNotRevokedSuffix) + retry;
-    }
-
-    /// <summary>
-    /// Runs <c>claude auth logout</c> under the session's folder and records the
-    /// outcome. The failure text is not the outcome: the port's error can repeat
-    /// what the child printed, and that printout is the wrong thing to keep.
-    /// </summary>
-    private async Task<bool> RevokeAsync(Session session)
-    {
-        Result<Unit, string> revoked = await _logout.LogoutAsync(session.Folder, CancellationToken.None);
-        if (revoked.IsSuccess)
-        {
-            LogLogoutRevoked(session.Email.Value);
-        }
-        else
-        {
-            LogLogoutFailed(session.Email.Value);
-        }
-
-        return revoked.IsSuccess;
+        return RestoredSuffix + retry;
     }
 
     /// <summary>
     /// Revokes and empties the folder of a login that turned out not to be a Max
-    /// account, or not the row's account, and says which of those two happened.
+    /// account, and says which of those two happened. A login that signed in as
+    /// another account is emptied the same way with <paramref name="revoke"/>
+    /// false, for the reason on <see cref="AdmitAsync"/>.
     /// <para>
     /// The revocation is the honest disposition for a seat that must never be
     /// rotated: the pair exists, and deleted bytes holding a refresh token are
@@ -818,9 +801,20 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     /// folder when a logout fails, because there nothing has yet been admitted.
     /// </para>
     /// </summary>
-    private async Task<string> DiscardAsync(Session session, string retry)
+    private async Task<string> DiscardAsync(Session session, string retry, bool revoke = true)
     {
-        bool revoked = await RevokeAsync(session);
+        // The failure text is not the outcome. The port's error can repeat what
+        // the child printed, and that printout is the wrong thing to keep.
+        bool revoked = revoke && (await _logout.LogoutAsync(session.Folder, CancellationToken.None)).IsSuccess;
+        if (revoked)
+        {
+            LogLogoutRevoked(session.Email.Value);
+        }
+        else if (revoke)
+        {
+            LogLogoutFailed(session.Email.Value);
+        }
+
         try
         {
             await _profiles.DeleteFolderAsync(session.Folder, CancellationToken.None);
@@ -830,7 +824,7 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
             return NotDeletedSuffix;
         }
 
-        return (revoked ? RevokedSuffix : NotRevokedSuffix) + retry;
+        return (revoked ? RevokedSuffix : revoke ? NotRevokedSuffix : OtherAccountDeletedSuffix) + retry;
     }
 
     /// <summary>

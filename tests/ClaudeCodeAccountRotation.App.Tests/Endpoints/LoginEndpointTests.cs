@@ -302,10 +302,13 @@ public sealed class LoginEndpointTests
     private const string WrongAccountPrefix =
         "That login was refused: the browser signed in as " + LiveEmail + ", not " + ParkedEmail + ".";
 
+    private const string OtherAccountUnrevoked =
+        " `claude auth logout` is never run against another account's login, so that refresh token stays valid until its login expires.";
+
     private const string PickTheRowsAccount = " Log in again and pick " + ParkedEmail + " at the sign-in step.";
 
     [Fact]
-    public async Task ALoginThatSignsInAsAnotherAddressIsRevokedDeletedAndNamesThatAddress()
+    public async Task ALoginThatSignsInAsAnotherAddressIsDeletedUnrevokedAndNamesThatAddress()
     {
         await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
         factory.LoginChild.OnCode = SignInAs(factory, LiveEmail);
@@ -318,9 +321,11 @@ public sealed class LoginEndpointTests
         refused["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Failed));
         refused["message"]!.GetValue<string>().ShouldBe(
             WrongAccountPrefix
-            + " The credentials it wrote were revoked with `claude auth logout` and deleted, so nothing joined the rotation."
+            + " The credentials it wrote were deleted, so nothing joined the rotation."
+            + OtherAccountUnrevoked
             + PickTheRowsAccount);
-        factory.Cli.LogoutCalls.ShouldBe([folder]);
+        // The pair is another account's, often the live one: no logout runs against it.
+        factory.Cli.LogoutCalls.ShouldBeEmpty();
         // Nothing is left under the row's folder to be listed as the other account.
         File.Exists(Path.Combine(folder, CredentialFiles.FileName)).ShouldBeFalse();
         File.Exists(Path.Combine(folder, "profile.json")).ShouldBeFalse();
@@ -346,10 +351,11 @@ public sealed class LoginEndpointTests
         refused["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Failed));
         refused["message"]!.GetValue<string>().ShouldBe(
             WrongAccountPrefix
-            + " The credentials it wrote were revoked with `claude auth logout`, and the login that folder held before was put back."
+            + " The credentials it wrote were removed, and the login that folder held before was put back."
+            + OtherAccountUnrevoked
             + PickTheRowsAccount);
         // The row's working login is the operator's, and the wrong sign-in does not cost it.
-        factory.Cli.LogoutCalls.ShouldBe([folder]);
+        factory.Cli.LogoutCalls.ShouldBeEmpty();
         (await File.ReadAllBytesAsync(Path.Combine(folder, CredentialFiles.FileName), TestContext.Current.CancellationToken)).ShouldBe(pairBefore);
         (await File.ReadAllBytesAsync(profilePath, TestContext.Current.CancellationToken)).ShouldBe(profileBefore);
         File.Exists(Path.Combine(folder, ".claude.json")).ShouldBeFalse();
@@ -378,26 +384,6 @@ public sealed class LoginEndpointTests
         JsonObject profile = JsonNode.Parse(
             await File.ReadAllTextAsync(Path.Combine(folder, "profile.json"), TestContext.Current.CancellationToken))!.AsObject();
         profile["emailAddress"]!.GetValue<string>().ShouldBe(ParkedEmail);
-    }
-
-    [Fact]
-    public async Task AWrongAddressLoginWhoseRevocationFailsStillPutsTheOldPairBackAndSaysSo()
-    {
-        await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
-        string folder = FolderOf(factory, ParkedEmail);
-        byte[] pairBefore = await SeedPairAsync(folder, "refresh-old", TestContext.Current.CancellationToken);
-        factory.Cli.LogoutError = "claude auth logout exited with code 1";
-        factory.LoginChild.OnCode = SignInAs(factory, LiveEmail);
-        using HttpClient client = factory.CreateMutatingClient();
-        JsonObject started = await StartLoginAsync(client, TestContext.Current.CancellationToken);
-
-        JsonObject refused = await SubmitCodeAsync(client, started["id"]!.GetValue<string>(), Code, TestContext.Current.CancellationToken);
-
-        refused["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Failed));
-        refused["message"]!.GetValue<string>().ShouldStartWith(WrongAccountPrefix);
-        refused["message"]!.GetValue<string>().ShouldContain("could not be revoked");
-        refused["message"]!.GetValue<string>().ShouldContain("put back");
-        (await File.ReadAllBytesAsync(Path.Combine(folder, CredentialFiles.FileName), TestContext.Current.CancellationToken)).ShouldBe(pairBefore);
     }
 
     [Fact]
