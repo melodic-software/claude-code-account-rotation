@@ -4,6 +4,32 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.3] - 2026-11-15
+
+### Added
+
+- **A Theme choice on the view bar: System, Light or Dark.** System follows the operating
+  system's setting, as before. The choice is kept with the other view settings in the browser's
+  local storage. The page applies it when its script runs, so a reload under a theme that differs
+  from the system's can show the system's for an instant.
+
+### Changed
+
+- **Role history reads as a record.** Its lines were drawn in the warning colour; they are body
+  text on the page's surface, and each time says it is UTC.
+- **A duration no longer breaks across lines.** In Detailed rows `2 d 1 h` and `19 d` wrap as one
+  word, and the reset line under the model-weekly and 5-hour meters wraps instead of being cut
+  off with an ellipsis.
+
+- **Row chips are all lowercase.** `Next up` reads `next up`, like `live here` and `in use by wsl`.
+- **Both Now strips' switch buttons are one size.** The switch spans the strip on each, and Hand
+  back is a small button under it instead of a tall one beside it.
+
+### Removed
+
+- **The Re-issue token button on a CI-role account's row.** Generate CI token in the row's menu
+  opens the same panel with the account's roles ticked.
+
 ## [3.1.2] - 2026-11-15
 
 ### Fixed

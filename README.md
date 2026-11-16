@@ -428,10 +428,9 @@ line already names the figure. The spare is picked again from the figures the ca
 every dashboard poll, so a spare paused since the pass is not offered. With no spare, or a spare
 with no stored CI token, the line has no button.
 
-Each CI-role account's 7-day meter carries a tick at each threshold, and its card has a Re-issue
-token button beside the meters. The button opens the Generate CI token panel with that account's
-roles already ticked. To move a role off the account instead, open Generate CI token on the
-account that is to take it.
+Each CI-role account's 7-day meter carries a tick at each threshold. Generate CI token in that
+account's menu opens with its roles already ticked, which re-issues its token. To move a role off
+the account instead, open Generate CI token on the account that is to take it.
 
 The alerts are computed at the end of a full refresh pass (page open, Refresh all) and of each
 CI-role pass. The 10-second poll only shows the last result and its time, and a card's own
@@ -497,9 +496,10 @@ is offered next or the order the server keeps:
 - **Compact** (one line per account, warnings kept on the row) or **Detailed** (every line the
   row has).
 
-The choices are kept in the browser's local storage under `ccar.view.v1`, as these four settings
+The choices are kept in the browser's local storage under `ccar.view.v1`, as these five settings
 and nothing else. `127.0.0.1`, `localhost` and another port are separate origins to the browser,
-so each keeps its own choices. `Next up`, the Now strips' buttons and the switch prompts always
+so each keeps its own choices. Theme is System, Light or Dark; System follows the operating
+system's setting. `next up`, the Now strips' buttons and the switch prompts always
 follow the server's order, whatever the page shows.
 
 ## Reading the dashboard from scripts

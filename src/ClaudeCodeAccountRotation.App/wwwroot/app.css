@@ -48,8 +48,11 @@
   --act: calc(var(--fix) + 12.5rem + 12px);
 }
 
+/* The dark palette, twice: under the system's scheme unless the view bar's
+   Theme says Light, and under Theme: Dark whatever the system says. The two
+   blocks hold the same values. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #141413; --surface: #1f1e1d; --surface-2: #262624; --line: #2c2b29; --line-strong: #3a3936;
     --text: #faf9f5; --muted: #a3a19a; --faint: #5e5d58;
     --accent-hover: #e3906f;
@@ -60,6 +63,18 @@
     --elevation-overlay: 0 0 0 1px rgb(255 255 255 / .14), 0 0 0 2px rgb(0 0 0 / .4), 0 12px 32px rgb(0 0 0 / .6);
   }
 }
+:root[data-theme="dark"] {
+  --bg: #141413; --surface: #1f1e1d; --surface-2: #262624; --line: #2c2b29; --line-strong: #3a3936;
+  --text: #faf9f5; --muted: #a3a19a; --faint: #5e5d58;
+  --accent-hover: #e3906f;
+  --ok: #a3b584; --ok-fill: #8fa472; --info: #8db4dc; --high: #eb8f55; --high-fill: #e08045; --warn: #d4a94f; --warn-fill: #d4a94f; --crit: #e8716a; --crit-fill: #e0605a;
+  --track: #2e2d2b; --focus: #6a9bcc; --shadow: 0 1px 2px rgb(0 0 0 / .3);
+  --hover: #2d2c2a; --hover-rule: #4a4944;
+  --surface-overlay: #2a2927;
+  --elevation-overlay: 0 0 0 1px rgb(255 255 255 / .14), 0 0 0 2px rgb(0 0 0 / .4), 0 12px 32px rgb(0 0 0 / .6);
+}
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
 
 * { box-sizing: border-box; }
 html, body { margin: 0; }
@@ -232,12 +247,11 @@ button.fold, button.fold:is(:hover, :disabled) { height: auto; padding: 0; borde
 .meter small { display: block; margin-block-start: 4px; font: var(--text-xs); color: var(--muted); }
 /* A window with no reset to show keeps the line, so both strips' buttons sit level. */
 .meter:not(:has(small))::after { content: "\00a0"; display: block; margin-block-start: 4px; font: var(--text-xs); }
-/* Stacked at every width: a login fix across the strip, then the switch
-   with Hand back beside it; the switch's name wraps rather than being cut. */
-.go { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2); align-items: stretch; }
-.go > :is(.login-side, :not(.hand-back):last-child) { grid-column: 1 / -1; }
+/* Stacked at every width: a login fix, then the switch, each across the
+   strip so both strips' switches are one size, then Hand back under it; the
+   switch's name wraps rather than being cut. */
+.go { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2); }
 .go > :not(.lg) { justify-self: start; }
-.go > .hand-back { justify-self: stretch; height: auto; }
 .go .lg { min-inline-size: 0; }
 .go .lg > span { max-inline-size: 100%; overflow-wrap: anywhere; }
 /* The strip's login fix: outlined in the warning tone, not a solid fill. */
@@ -440,6 +454,8 @@ button.fold, button.fold:is(:hover, :disabled) { height: auto; padding: 0; borde
 .u.mw .bar, .u.h5 .bar { height: 4px; }
 .u .pct { grid-column: 2; font: 500 13px/18px var(--sans); text-align: end; white-space: nowrap; }
 .u small { grid-column: 1 / -1; font: var(--text-xs); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The two narrow windows wrap their reset line rather than cut it. */
+.u:is(.mw, .h5) small { white-space: normal; overflow: visible; }
 /* Resets: the ledger's spine. */
 .rs { text-align: end; white-space: nowrap; }
 .rs .when { font: 500 14px/20px var(--sans); }
@@ -555,6 +571,8 @@ details.history { margin-block-start: var(--space-1); }
 details.history > summary { display: inline-flex; align-items: center; height: 28px; padding: 0 var(--space-3); font: 500 12px/16px var(--sans); color: var(--text); cursor: pointer; }
 details.history > summary::before { content: "\25B8\00A0"; color: var(--muted); }
 details.history[open] > summary::before { content: "\25BE\00A0"; }
+/* A record, not a warning: body text on the page's surface. */
+.history-list { list-style: none; display: grid; gap: var(--space-1); margin: var(--space-1) 0 0; padding: var(--space-2) var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); font: var(--text-sm); color: var(--text); overflow-wrap: anywhere; }
 
 /* ---------- forms ---------- */
 .roster-form { display: flex; flex-direction: column; gap: 10px; margin-top: var(--space-3); max-width: 32rem; }
