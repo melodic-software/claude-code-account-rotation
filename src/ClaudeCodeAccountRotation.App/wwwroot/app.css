@@ -15,7 +15,9 @@
   --accent: #d97757; --accent-hover: #e08a6d; --accent-press: #c6613f; --accent-fg: #141413;
   --ok: #5f7148; --ok-fill: #788c5d; --info: #3f6c9c; --high: #a4501c; --high-fill: #d0702f; --warn: #8a6414; --warn-fill: #c79a3e; --crit: #b0453a; --crit-fill: #c0503f;
   --track: #ecebe4; --focus: #3f6c9c; --shadow: 0 1px 2px rgb(20 20 19 / .04), 0 2px 8px -2px rgb(20 20 19 / .05);
-  --hover: color-mix(in srgb, var(--line) 80%, var(--surface-2));
+  /* The row hover: a band as dark as muted and toned text allow (AA), framed
+     by two rules that carry it across a wide ledger. */
+  --hover: #eeede5; --hover-rule: #bdbbb1;
   --sans: Poppins, Arial, sans-serif; --serif: Lora, Georgia, serif;
 
   /* Type: one scale, size and line height in pairs. */
@@ -41,7 +43,7 @@
 
   /* The page frame and the ledger's columns. */
   --gutter: clamp(16px, 2.5vw, 48px);
-  --rail: clamp(24rem, 21vw, 28rem);
+  --rail: clamp(24rem, 20vw, 28rem);
   --fix: 7.5rem;
   --act: calc(var(--fix) + 12.5rem + 12px);
 }
@@ -53,7 +55,7 @@
     --accent-hover: #e3906f;
     --ok: #a3b584; --ok-fill: #8fa472; --info: #8db4dc; --high: #eb8f55; --high-fill: #e08045; --warn: #d4a94f; --warn-fill: #d4a94f; --crit: #e8716a; --crit-fill: #e0605a;
     --track: #2e2d2b; --focus: #6a9bcc; --shadow: 0 1px 2px rgb(0 0 0 / .3);
-    --hover: #282725;
+    --hover: #2d2c2a; --hover-rule: #4a4944;
     --surface-overlay: #2a2927;
     --elevation-overlay: 0 0 0 1px rgb(255 255 255 / .14), 0 0 0 2px rgb(0 0 0 / .4), 0 12px 32px rgb(0 0 0 / .6);
   }
@@ -73,7 +75,8 @@ p { margin: 0; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 /* ---------- the page frame ---------- */
-.wrap { max-inline-size: 2400px; margin-inline: auto; padding: var(--space-4) var(--gutter) var(--space-8); }
+/* Content up to 3200 px: about 93% of a 3440 px ultrawide. */
+.wrap { max-inline-size: calc(3200px + 2 * var(--gutter)); margin-inline: auto; padding: var(--space-4) var(--gutter) var(--space-8); }
 .regions { display: grid; gap: var(--space-4); margin-block-start: var(--space-4); }
 .rail { display: grid; gap: var(--space-3); align-content: start; min-inline-size: 0; }
 .ledger { container: ledger / inline-size; min-inline-size: 0; }
@@ -82,6 +85,8 @@ p { margin: 0; }
   .regions { grid-template-columns: var(--rail) minmax(0, 1fr); column-gap: var(--space-6); align-items: start; }
   .rail .now { grid-template-columns: minmax(0, 1fr); }
 }
+/* An ultrawide page lets the rail grow to 32rem. */
+@media (min-width: 2800px) { :root { --rail: clamp(28rem, 15vw, 32rem); } }
 /* Under 1600 px the alerts, the notices and the setup sentence share one
    line while folded, rather than a bar each. */
 @media (max-width: 1599px) {
@@ -303,7 +308,7 @@ button.fold, button.fold:is(:hover, :disabled) { height: auto; padding: 0; borde
    Switch. Declared on the two grids' parents, so a ledger class that narrows
    the 5-hour column (--w5h) reaches them. */
 .ledger-top, .cards {
-  --w-acct: minmax(16rem, 1.25fr); --w-st: minmax(12rem, 1fr); --w7d: 7.5rem; --w-rs: 6rem; --w-mw: 6.5rem; --w5h: 6rem;
+  --w-acct: minmax(16rem, 1.4fr); --w-st: minmax(12rem, 1fr); --w7d: 7.5rem; --w-rs: 6rem; --w-mw: 6.5rem; --w5h: 6rem;
   --cols: var(--w-acct) var(--w-st) var(--w7d) var(--w-rs) var(--w-mw) var(--w5h) var(--act);
   --cols-no-5h: var(--w-acct) var(--w-st) var(--w7d) var(--w-rs) var(--w-mw) var(--act);
 }
@@ -364,7 +369,8 @@ button.fold, button.fold:is(:hover, :disabled) { height: auto; padding: 0; borde
 
 .card { border-block-end: 1px solid var(--line); }
 @media (hover: hover) and (pointer: fine) {
-  .card:hover { background: var(--hover); }
+  .card:hover { background: var(--hover); box-shadow: inset 0 1px 0 var(--hover-rule), inset 0 -1px 0 var(--hover-rule); }
+  .card.next:hover { box-shadow: inset 3px 0 0 var(--accent), inset 0 1px 0 var(--hover-rule), inset 0 -1px 0 var(--hover-rule); }
   /* The tracks would vanish into the hover band at their own shade. */
   .card:hover .bar { background: var(--line-strong); }
 }
@@ -375,10 +381,13 @@ button.fold, button.fold:is(:hover, :disabled) { height: auto; padding: 0; borde
 .has-notice .row > .st { grid-row: 1; }
 .row > .notice { grid-row: 2; grid-column: 2; font: var(--text-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-/* Account, one line: the dot, the name, the chips, then the address, which
-   gives way first, then the name; a chip is never cut. */
-.nm { display: grid; grid-template-columns: 10px minmax(0, max-content) auto minmax(0, 1fr); grid-template-areas: "dot name chips addr"; align-items: center; column-gap: var(--space-2); }
-.nm .badges { flex-wrap: nowrap; margin: 0; overflow: hidden; }
+/* Account, one line: the dot, the name, the chips, then the address. When the
+   cell is tight the address takes only what is left: it ellipsizes, then goes,
+   and only then does the name ellipsize. A chip is never cut. The gaps are
+   margins, so a gone address leaves no gap behind. */
+.nm { display: grid; grid-template-columns: 10px minmax(0, max-content) max-content minmax(0, 1fr); grid-template-areas: "dot name chips addr"; align-items: center; }
+.nm .badges { flex-wrap: nowrap; margin-block: 0; margin-inline: var(--space-2) 0; }
+.nm h2 { margin-inline-start: var(--space-2); }
 .nm > .dot { grid-area: dot; }
 .nm .title { display: contents; }
 .card h2 { grid-area: name; font: 500 14px/20px var(--sans); display: flex; min-inline-size: 0; }
@@ -389,8 +398,13 @@ button.fold, button.fold:is(:hover, :disabled) { height: auto; padding: 0; borde
 /* A chip is never cut: the address beside it gives way first, and chips that
    still do not fit take a second line. */
 .nm .badge { height: 18px; flex-shrink: 0; }
-.address { grid-area: addr; font: 400 12px/18px var(--sans); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.address { grid-area: addr; container: address / inline-size; font: 400 12px/18px var(--sans); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nm .address > span { padding-inline-start: var(--space-3); }
+/* Too little left to read: the address goes rather than show a stub. */
+@container address (max-width: 4.5rem) { .nm .address > span { display: none; } }
 .ledger[data-density="detailed"] .nm { grid-template-columns: 18px minmax(0, 1fr); grid-template-areas: "dot name" ". chips" ". addr"; row-gap: 4px; column-gap: 0; }
+.ledger[data-density="detailed"] .nm :is(h2, .badges) { margin-inline-start: 0; }
+.ledger[data-density="detailed"] .nm .address > span { padding-inline-start: 0; }
 .ledger[data-density="detailed"] .badges { flex-wrap: wrap; margin: 0; }
 .ledger[data-density="detailed"] .address { white-space: normal; }
 
