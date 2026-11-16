@@ -114,6 +114,11 @@
     module.exports.motionPlan = motionPlan;
     module.exports.pickControl = pickControl;
     module.exports.viewAnnouncement = viewAnnouncement;
+    module.exports.credentialBlocked = credentialBlocked;
+    module.exports.usableNow = usableNow;
+    module.exports.rowStatus = rowStatus;
+    module.exports.localStamps = localStamps;
+    module.exports.fiveHourSparse = fiveHourSparse;
     return;
   }
 
@@ -138,6 +143,18 @@
   var alertStrip = element("ul", "alerts");
   alertStrip.hidden = true;
   warnings.parentNode.insertBefore(alertStrip, warnings);
+  // Under 1600 px the alerts and the warnings each fold to one line; whether
+  // each is open lives here only, for this page's life.
+  var alertsOpen = false;
+  var warningsOpen = false;
+  [[alertStrip, "alerts"], [warnings, "warnings"]].forEach(function (pair) {
+    pair[0].addEventListener("click", function (event) {
+      var fold = event.target.closest && event.target.closest("button.fold");
+      if (!fold) { return; }
+      var open = pair[1] === "alerts" ? (alertsOpen = !alertsOpen) : (warningsOpen = !warningsOpen);
+      fold.setAttribute("aria-expanded", String(open));
+    });
+  });
   var captured = document.getElementById("captured");
   var refreshAllButton = document.getElementById("refresh-all");
   var refreshStateLine = document.getElementById("refresh-state");
@@ -797,10 +814,11 @@
       who.appendChild(element("h2", "empty", side && !side.online ? "Not answering" : (side && side.liveAccount) || "Holding nothing"));
     }
     head.appendChild(who);
-    if (account) {
-      var room = headroom(account);
+    // No figure, no headline: a bare dash there reads as a minus sign.
+    var room = account ? headroom(account) : null;
+    if (room !== null) {
       var figure = element("div", "hr");
-      figure.appendChild(element("span", "n " + (room === null ? "" : tier(100 - room)), room === null ? "–" : room + "%"));
+      figure.appendChild(element("span", "n " + tier(100 - room), room + "%"));
       figure.appendChild(element("span", null, "left"));
       head.appendChild(figure);
     }
@@ -817,7 +835,10 @@
       });
       strip.appendChild(meters);
       account.usage.limits.forEach(function (limit) {
-        if (!limit.source) { return; }
+        // A window read with the rest, minutes apart and current, adds a
+        // timestamp and nothing else.
+        var withTheRest = account.usage.capturedAt && limit.source === account.usage.source && Math.abs(Date.parse(limit.capturedAt) - Date.parse(account.usage.capturedAt)) <= 300000;
+        if (!limit.source || (withTheRest && !stale(limit.capturedAt, at))) { return; }
         var source = limit.label + " " + asOf(limit.capturedAt, limit.source, at);
         strip.appendChild(element("p", "source" + (stale(limit.capturedAt, at) ? " stale" : ""), source)).title = source;
       });
@@ -1678,29 +1699,37 @@
   function editPanel(account, offerLogin) {
     var panel = element("details", "edit");
     panel.appendChild(element("summary", null, "Edit"));
-    var form = element("form", "roster-form");
-    var fields = accountFields(form, account.roster);
+    // Two columns: who the account is on the left, its notes and CI record on
+    // the right; the repair fold and the actions run under both.
+    var form = element("form", "roster-form edit-form");
+    var left = form.appendChild(element("div", "edit-col"));
+    var right = form.appendChild(element("div", "edit-col"));
+    var fields = accountFields(left, account.roster);
     // A warning is a note, not a name. The heading stays a short display name
     // because this field is where that sentence goes.
     var notes = element("textarea");
     notes.rows = 3;
     notes.value = (account.roster && account.roster.notes) || "";
     notes.placeholder = "warnings belong here, not in the name";
-    labeled(form, "Notes", notes);
+    labeled(right, "Notes", notes);
     // Generate CI token sets this itself. By hand it is the operator's own
     // record of when they ran `claude setup-token`; clearing it also clears
     // every token half the account backs. Nothing here reads GitHub or the token itself.
     var ciToken = element("input");
     ciToken.type = "date";
     ciToken.value = (account.roster && account.roster.ciTokenGeneratedOn) || "";
-    labeled(form, "CI token generated on", ciToken);
-    // The roles this account backs; unticking one takes it off on save.
+    labeled(right, "CI token generated on", ciToken);
+    // The roles this account backs; unticking one takes it off on save. Roles
+    // that share one place are listed under it once.
     var ciRoles = (account.roster && account.roster.ciRoles) || [];
+    var places = ciRoles.map(roleWhere).filter(function (place, index, all) { return all.indexOf(place) === index; });
+    var roleBox = ciRoles.length ? right.appendChild(element("div", "fields role-list")) : null;
+    if (roleBox) { roleBox.appendChild(element("span", "group-label", places.length === 1 ? "Backs these roles in " + places[0] : "Backs these roles")); }
     var ciKeep = ciRoles.map(function (role) {
       var box = element("input");
       box.type = "checkbox";
       box.checked = true;
-      labeled(form, "Backs " + role.name + " in " + roleWhere(role), box);
+      labeled(roleBox, places.length === 1 ? role.name : role.name + " in " + roleWhere(role), box);
       return box;
     });
     // Roles to add by their token secrets, all set on the date above. It
@@ -1741,13 +1770,14 @@
     ciSecretWhere.placeholder = "owner/repository, or an organization";
     labeled(repair, "CI secret in", ciSecretWhere);
     form.appendChild(repair);
-    var save = element("button", null, "Save");
+    var actions = form.appendChild(element("div", "form-actions"));
+    var save = element("button", "primary", "Save");
     save.type = "submit";
-    form.appendChild(save);
+    actions.appendChild(save);
     // A card that does not need a login still lets the operator force one; here
     // it is reachable without inviting a click from the card's face.
     if (offerLogin) {
-      form.appendChild(actionButton("Log in again", "secondary", function () { startLogin(account.email); }));
+      actions.appendChild(actionButton("Log in again", "secondary", function () { startLogin(account.email); }));
     }
     form.addEventListener("submit", function (event) {
       event.preventDefault();
@@ -1820,6 +1850,16 @@
   // Locale and zone are the browser's unless a caller names them.
   function resetTitle(instant, locale, zone) {
     return new Date(instant).toLocaleString(locale, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: zone });
+  }
+
+  // A server sentence with its UTC stamps ("2026-11-14 21:43:10Z") said in
+  // local time like every other time on the page.
+  function localStamps(text, locale, zone) {
+    return String(text).replace(/\b(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?)Z\b/g, function (stamp, day, time) {
+      var instant = new Date(day + "T" + time + "Z");
+      return isNaN(instant.getTime()) ? stamp
+        : instant.toLocaleString(locale, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: zone });
+    });
   }
 
   // An age in the buckets a countdown uses, said the other way round, so the
@@ -1990,6 +2030,8 @@
       tick.title = "alert at " + percentText(percent);
       track.appendChild(tick);
     });
+    // A 2 px tick is too small to hover, so the whole track names the marks.
+    if (ticks && ticks.length) { track.title = "Ticks: CI alerts at " + ticks.map(percentText).join(" and "); }
     return track;
   }
 
@@ -2363,11 +2405,14 @@
         if (kind === "crit") { group.kind = "crit"; }
         return;
       }
+      // Named by the address's local part, which stays short where a display
+      // name can run to a sentence; the display name is the line's hover.
       var account = (accounts || []).filter(function (candidate) { return candidate.email === alert.account; })[0];
-      groups.push({ account: alert.account, name: account ? uniqueName(account, accounts) : alert.account, parts: [part], kind: kind, first: index });
+      var shared = (accounts || []).some(function (other) { return other.email !== alert.account && localPart(other.email) === localPart(alert.account); });
+      groups.push({ account: alert.account, name: account && !shared ? localPart(alert.account) : alert.account, title: account ? displayName(account) : alert.account, parts: [part], kind: kind, first: index });
     });
     return groups.map(function (group) {
-      return { kind: group.kind, text: group.name + " · " + group.parts.join(" · "), first: group.first };
+      return { kind: group.kind, text: group.name + " · " + group.parts.join(" · "), title: group.title, first: group.first };
     });
   }
 
@@ -2683,6 +2728,27 @@
     return { kind: "ok", text: "Usable now" };
   }
 
+  // The ledger row's state in a few words: sentence() without the reset, which
+  // the Resets column carries, and without the reading's age, which the
+  // row's notice line carries. Empty for a plain usable row, whose group
+  // already says so.
+  function rowStatus(account, at) {
+    var say = sentence(account, at);
+    var chip = stateChip(account, at);
+    if (account.cliLoggedOut || ["login expired", "error", "needs login"].indexOf(chip) !== -1) { return say; }
+    if (account.standing === "exhausted") { return { kind: "crit", text: "Exhausted" }; }
+    if (account.standing === "limited") { return { kind: "crit", text: "5-hour limit reached" }; }
+    if (account.standing === "model-limited") { return { kind: "crit", text: (account.limitedModel || "Model") + " limit reached" }; }
+    if (say.kind === "paused" || account.standing === "unread") { return say; }
+    var near = nearestLimit(account.usage.limits);
+    if (near) { return { kind: meterTone(near), text: "Near " + near.label + " limit" }; }
+    var age = usageAge(account, at);
+    if (age !== null && age > STALE_SECONDS) { return { kind: "warn", text: "May be out of date" }; }
+    if (say.kind !== "ok") { return say; }
+    if (chip === "login paused") { return { kind: "warn", text: "Login paused" }; }
+    return { kind: "ok", text: "" };
+  }
+
   // The sentence's line. When it counts down to a reset, its hover names the
   // instant: whichever of the account's resets the sentence printed.
   function sayLine(say, account, at) {
@@ -2730,9 +2796,26 @@
     }
   }
 
+  // Whether the account's login stops a switch to it until someone logs in
+  // again: a CLI logout, a login missing, expired or refused, or credentials
+  // stranded in recovery. A paused login is not one, since Switch retries it,
+  // and neither is the empty slot of an account another side holds.
+  function credentialBlocked(account, at) {
+    if (account.cliLoggedOut) { return true; }
+    if (account.isLive || account.heldAway) { return false; }
+    return account.hasCredentials === false || loginExpired(account, at) || !!(account.refresh && account.refresh.state === "stranded");
+  }
+
+  // Usable by its quota and by its login: what the Usable group and count hold.
+  function usableNow(account, at) {
+    return account.standing === "usable" && !credentialBlocked(account, at);
+  }
+
   // The group an account sits in: its standing, with an unread account in use
-  // (the server lifts it to just after the usable ones) apart from an idle one.
-  function groupOf(account) {
+  // (the server lifts it to just after the usable ones) apart from an idle one,
+  // and a usable one whose login blocks a switch apart from the rest.
+  function groupOf(account, at) {
+    if (account.standing === "usable" && credentialBlocked(account, at)) { return "needs-login"; }
     return account.standing === "unread" && (account.isLive || account.heldAway) ? "unread-in-use" : account.standing;
   }
 
@@ -2742,6 +2825,7 @@
     var usable = { burn: "soonest 7-day reset first", reset7: "soonest 7-day reset first", reset5: "soonest 5-hour reset first", left: "most left first", name: "by name" };
     var headings = {
       usable: ["Usable", usable[order]],
+      "needs-login": ["Needs login", "quota left, log in again to use"],
       "unread-in-use": ["In use, not read", "no figures yet"],
       "model-limited": [(model || "Model") + " limit reached", "usable again at the " + (model || "model's") + " weekly reset"],
       limited: ["5-hour limit reached", "usable again at the 5-hour reset"],
@@ -2755,11 +2839,14 @@
 
   // Any warning or error on the row: a stale reading, a refresh error, a login
   // that is missing, expired, paused or expiring within the warning window, a
-  // CLI logout, or a CI token expiry. A spent window alone is not one.
+  // CLI logout, a CI token expiry, or a usable account in the red near a
+  // limit. A spent window alone is not one.
   function needsAttention(account, at, accounts) {
     var age = usageAge(account, at);
     var chip = stateChip(account, at);
+    var near = account.standing === "usable" ? nearestLimit(account.usage.limits) : null;
     return !!account.cliLoggedOut
+      || (!!near && meterTone(near) === "crit")
       || ["error", "needs login", "login expired", "login paused"].indexOf(chip) !== -1
       || loginSoon(account, at)
       || (age !== null && age > STALE_SECONDS)
@@ -2773,7 +2860,7 @@
 
   // Whether the Show filter keeps the row.
   function shows(account, show, at, accounts) {
-    if (show === "usable") { return account.standing === "usable"; }
+    if (show === "usable") { return usableNow(account, at); }
     if (show === "spent") { return spent(account); }
     if (show === "paused") { return account.standing === "paused" || !!(account.roster && account.roster.paused); }
     if (show === "attention") { return needsAttention(account, at, accounts); }
@@ -2806,9 +2893,26 @@
   // ties keep the server's order. A filter only marks rows hidden, and a
   // header hidden when it is left with none.
   function arrange(accounts, view, at) {
+    // A usable run's blocked logins follow it as one run of their own, each
+    // side keeping the server's order, so the burn order inside a group is
+    // still the server's.
+    var family = -1;
+    var previous = null;
+    var entries = accounts.map(function (account, index) {
+      var key = groupOf(account, at);
+      var kind = key === "needs-login" ? "usable" : key;
+      if (kind !== previous) { family += 1; }
+      previous = kind;
+      return { account: account, index: index, key: key, family: family };
+    });
+    entries.sort(function (a, b) {
+      return a.family - b.family || (a.key === "needs-login") - (b.key === "needs-login") || a.index - b.index;
+    });
     var runs = [];
-    var rows = accounts.map(function (account, index) {
-      var key = groupOf(account);
+    var rows = entries.map(function (entry) {
+      var account = entry.account;
+      var index = entry.index;
+      var key = entry.key;
       if (!runs.length || runs[runs.length - 1].key !== key) { runs.push({ key: key, model: account.limitedModel || null, count: 0 }); }
       var resetAt = view.order === "reset7" ? windowReset(account, "weekly_all")
         : view.order === "reset5" ? windowReset(account, "session")
@@ -2912,11 +3016,11 @@
       || arriving.some(function (part, index) { return part !== rendered[index]; });
   }
 
-  // The fleet in four figures: usable accounts of all, the 7-day quota the
+  // The fleet in four figures: accounts usable now of all, the 7-day quota the
   // usable ones have left counted in whole accounts, the soonest reset among
   // them, and the first spent account to come back. A figure with no data is null.
   function fleetSummary(accounts, at) {
-    var usable = accounts.filter(function (account) { return account.standing === "usable"; });
+    var usable = accounts.filter(function (account) { return usableNow(account, at); });
     var left = null;
     usable.forEach(function (account) {
       var weekly = account.usage.limits.filter(function (limit) { return limit.kind === "weekly_all"; })[0];
@@ -2943,6 +3047,15 @@
     return accounts.some(function (account) {
       return account.usage.limits.some(function (limit) { return limit.kind === "session" && limit.notApplicable !== true; });
     });
+  }
+
+  // Whether so few accounts have a 5-hour figure (under one in five) that the
+  // column narrows to the figure alone.
+  function fiveHourSparse(accounts) {
+    var known = accounts.filter(function (account) {
+      return account.usage.limits.some(function (limit) { return limit.kind === "session" && limit.known && limit.percent !== null; });
+    }).length;
+    return known < accounts.length / 5;
   }
 
   // The model-weekly column's heading: the one label the known model-scoped
@@ -3071,23 +3184,32 @@
     var box = element("div", "u " + kind);
     // The column header is hidden on narrow screens and from screen readers,
     // so each cell names its own window.
-    box.appendChild(element("span", "cell-label", (limit && limit.known && limit.label) || label));
+    // The model column says one name on every row, the one its header says.
+    box.appendChild(element("span", "cell-label", (kind !== "mw" && limit && limit.known && limit.label) || label));
     var figure = cellReading(limit);
     box.appendChild(figure.muted && !(limit && limit.windowReset) ? element("span", "no-bar") : bar(limit, ticks));
     var pct = box.appendChild(element("span", "pct " + (figure.muted ? "muted" : meterTone(limit)), figure.text));
     if (figure.title) { pct.title = figure.title; }
     var reset = limit ? resetLine(limit, at) : null;
-    if (reset) { box.appendChild(element("small", null, reset)).title = reset + "\n" + resetTitle(limit.resetsAt); }
+    if (reset) {
+      box.appendChild(element("small", "detail-only", reset)).title = reset + "\n" + resetTitle(limit.resetsAt);
+      // The Resets column counts down one window per row; the 5-hour window's
+      // own reset stays under its figure in compact too.
+      if (kind === "h5") {
+        pct.title = [figure.title, reset].filter(Boolean).join("\n");
+        box.appendChild(element("small", "compact-only soon", countdown(secondsUntil(limit.resetsAt, at)))).title = reset + "\n" + resetTitle(limit.resetsAt);
+      }
+    }
     return box;
   }
 
   // The instant the row is ordered by in its group, as a countdown: the
   // ledger's spine, end-aligned so the times read down one edge.
-  function resetCell(resetAt, at) {
+  function resetCell(resetAt, at, windowName) {
     var box = element("div", "rs");
     box.appendChild(element("span", "cell-label", "Resets"));
     if (resetAt && Date.parse(resetAt) > at) {
-      box.appendChild(element("span", "when", countdown(secondsUntil(resetAt, at)))).title = resetTitle(resetAt);
+      box.appendChild(element("span", "when", countdown(secondsUntil(resetAt, at)))).title = windowName + " reset, " + resetTitle(resetAt);
     } else {
       box.appendChild(element("span", "when muted", "–")).title = "no reset to count down to";
     }
@@ -3332,8 +3454,9 @@
     // class is fixed rather than derived from the text, since a chip can
     // carry "(offline)".
     var chip = stateChip(account, at);
-    // Parked is where nearly every account sits, so the compact row leaves it out.
-    if (account.chip) { badges.appendChild(element("span", "badge store" + (account.chip === "parked" ? " detail-only" : ""), account.chip)); }
+    // Parked is where nearly every account sits, so the compact row leaves it
+    // out, and a logout's status already names the side the account is in use on.
+    if (account.chip) { badges.appendChild(element("span", "badge store" + (account.chip === "parked" || account.cliLoggedOut ? " detail-only" : ""), account.chip)); }
     if (chip && (!account.chip || (chip !== "live" && chip !== "ready"))) {
       badges.appendChild(element("span", "badge " + chip.replace(/ /g, "-"), chip));
     }
@@ -3375,11 +3498,24 @@
     who.lastChild.title = account.email;
     line.appendChild(who);
 
-    // One sentence on the row's face, the whole of it on hover; the neutral
-    // lines under it show in Detailed only.
+    // Compact says the state in a few words, the whole sentence on hover;
+    // Detailed says the sentence and the neutral lines under it.
     var status = element("div", "st");
-    status.appendChild(sayLine(say, account, at));
-    status.firstChild.title = say.text + (status.firstChild.title ? "\n" + status.firstChild.title : "");
+    var full = sayLine(say, account, at);
+    full.title = say.text + (full.title ? "\n" + full.title : "");
+    var brief = rowStatus(account, at);
+    // The warnings stay on the compact row's face: on the status line when the
+    // state needs no words, else as one line under it, never repeating it.
+    var notices = rowNotices(account, dashboard, at, lastAccounts).filter(function (text) { return text !== brief.text && text !== say.text; });
+    var noticeKind = account.cliLoggedOut || loginExpired(account, at) ? "crit" : "warn";
+    if (!brief.text && notices.length) {
+      brief = { kind: noticeKind, text: notices.join(" · ") };
+      notices = [];
+    }
+    var briefLine = status.appendChild(element("p", "say brief " + brief.kind, brief.text));
+    briefLine.title = brief.text === say.text ? full.title : [brief.text, full.title].filter(Boolean).join("\n");
+    full.className += " full";
+    status.appendChild(full);
     status.appendChild(statusLines(account, dashboard, at));
     ciTokenExpiries(roster, at, lastAccounts, account.email).forEach(function (expiry) {
       status.appendChild(element("p", "say detail-only " + expiry.tone, ciExpirySentence(expiry)));
@@ -3387,16 +3523,18 @@
     line.appendChild(status);
 
     function limitOf(kind) { return account.usage.limits.filter(function (limit) { return limit.kind === kind; })[0]; }
+    var modelColumn = modelLabel(lastAccounts);
+    // Which window the Resets figure counts down to, for its hover.
+    var resetWindow = view.order === "reset5" || (view.order === "burn" && account.standing === "limited") ? "5-hour"
+      : view.order === "burn" && account.standing === "model-limited" ? (account.limitedModel || "Model") + " weekly" : "7-day";
     line.appendChild(cell(limitOf("weekly_all"), at, meterTicks(account, dashboard.alertThresholds), "d7", "7-day"));
-    line.appendChild(resetCell(resetAt, at));
-    line.appendChild(cell(limitOf("weekly_scoped"), at, [], "mw", "Model weekly"));
+    line.appendChild(resetCell(resetAt, at, resetWindow));
+    line.appendChild(cell(limitOf("weekly_scoped"), at, [], "mw", modelColumn));
     line.appendChild(cell(limitOf("session"), at, [], "h5", "5-hour"));
 
-    // The warnings stay on the compact row's face as one line under it.
-    var notices = rowNotices(account, dashboard, at, lastAccounts);
     if (notices.length) {
       card.className += " has-notice";
-      var notice = element("p", "notice compact-only " + (account.cliLoggedOut || loginExpired(account, at) ? "crit" : "warn"), notices.join(" · "));
+      var notice = element("p", "notice compact-only " + noticeKind, notices.join(" · "));
       notice.title = notice.textContent;
       line.appendChild(notice);
     }
@@ -3418,13 +3556,14 @@
     // anyway; the button goes so the operator is not sent at a 409.
     var needsLogin = loginOffered(account, at);
     if (roster && !account.isLive && needsLogin) {
-      extra.appendChild(actionButton(account.hasCredentials ? "Log in again" : "Login", "primary sm", function () { startLogin(account.email); }));
+      // A row's fix is outlined: the filled orange is the Now strip's one call to act.
+      extra.appendChild(actionButton(account.hasCredentials ? "Log in again" : "Log in", "secondary sm fix", function () { startLogin(account.email); }));
     }
     if (roster && account.loggedOutOn) {
-      extra.appendChild(actionButton("Log in again", "primary sm", function () { loginFromSide(account.loggedOutOn, account.email); }));
+      extra.appendChild(actionButton("Log in again", "secondary sm fix", function () { loginFromSide(account.loggedOutOn, account.email); }));
     }
     if (!roster && account.isLive) {
-      extra.appendChild(actionButton("Adopt", "secondary sm", function () { adopt(account.email); }));
+      extra.appendChild(actionButton("Adopt", "secondary sm", function () { adopt(account.email); })).title = "Put the live account on the roster";
     }
     act.appendChild(switchButtons(account, dashboard));
 
@@ -3437,40 +3576,50 @@
     if (edit) {
       menu.appendChild(menuItem(more, "Edit", "quiet sm", function () {
         edit.open = true;
+        // The row and its panel land just under the sticky ledger head, not
+        // beneath it, before the first field takes the focus.
+        document.documentElement.style.scrollPaddingTop = (document.querySelector(".ledger-top").getBoundingClientRect().height + 8) + "px";
+        card.scrollIntoView({ block: "start" });
         var first = edit.querySelector("input, select, textarea");
-        if (first) { first.focus(); }
+        if (first) { first.focus({ preventScroll: true }); }
       }));
     }
     menu.appendChild(blockable(menuItem(more, "Refresh usage", "quiet sm", function () { refreshAccount(account.email); }), false));
+    // In groups under rules: open, CI token, API and Admin keys, rotation. A
+    // delete reads in the danger colour.
     if (roster) {
+      menu.appendChild(element("hr"));
       menu.appendChild(menuItem(more, "Open claude.ai", "quiet sm", function () { openAccountPage(account.email, "claude-ai", "claude.ai"); }));
       menu.appendChild(menuItem(more, "Open Console", "quiet sm", function () { openAccountPage(account.email, "keys", "the Console's API keys page"); }));
+      menu.appendChild(element("hr"));
       menu.appendChild(menuItem(more, "Generate CI token", "quiet sm", function () { openCiTokenPanel(account); }));
       menu.appendChild(menuItem(more, roster.ciTokenStoredOn ? "Replace CI token" : "Store CI token", "quiet sm", function () { openCiTokenValuePanel(account); }));
       if (roster.ciTokenStoredOn) {
-        menu.appendChild(menuItem(more, "Delete CI token", "quiet sm", function () { clearCiTokenValue(account.email); }));
+        menu.appendChild(menuItem(more, "Delete CI token", "danger sm", function () { clearCiTokenValue(account.email); }));
       }
       if (roster.ciTokenStoredOn || roster.consoleApiKeySetOn) {
         menu.appendChild(menuItem(more, "Assign to role", "quiet sm", function () { openAssignPanel(account); }));
       }
     }
     if (roster) {
+      menu.appendChild(element("hr"));
       menu.appendChild(menuItem(more, roster.consoleApiKeySetOn ? "Replace API key" : "Set API key", "quiet sm", function () { openApiKeyPanel(account); }));
       if (roster.consoleApiKeySetOn && (roster.ciRoles || []).some(function (role) { return role.keySecret; })) {
         menu.appendChild(menuItem(more, "Push API key", "quiet sm", function () { openApiKeyPanel(account); }));
       }
       if (roster.consoleApiKeySetOn) {
-        menu.appendChild(menuItem(more, "Delete API key", "quiet sm", function () { clearApiKey(account.email); }));
+        menu.appendChild(menuItem(more, "Delete API key", "danger sm", function () { clearApiKey(account.email); }));
       }
       menu.appendChild(menuItem(more, roster.adminKeySetOn ? "Replace Admin key" : "Set Admin key", "quiet sm", function () { openApiKeyPanel(account, true); }));
       if (roster.adminKeySetOn) {
-        menu.appendChild(menuItem(more, "Delete Admin key", "quiet sm", function () { clearApiKey(account.email, true); }));
+        menu.appendChild(menuItem(more, "Delete Admin key", "danger sm", function () { clearApiKey(account.email, true); }));
       }
       if (roster.consoleApiKeySetOn && roster.adminKeySetOn) {
         menu.appendChild(menuItem(more, "Check API key", "quiet sm", function () { checkApiKey(account.email); }));
       }
     }
     if (roster) {
+      menu.appendChild(element("hr"));
       menu.appendChild(menuItem(more, paused ? "Resume rotation" : "Pause rotation", "quiet sm", function () { setPaused(account.email, !paused); }));
     }
     // Remove revokes the login and deletes the folder, so it sits apart, under
@@ -3655,17 +3804,30 @@
     setup.textContent = dashboard.setup || "";
     warnings.innerHTML = "";
     warnings.hidden = dashboard.warnings.length === 0;
-    dashboard.warnings.forEach(function (warning) { warnings.appendChild(element("li", null, warning)); });
+    if (dashboard.warnings.length) {
+      var notesFold = warnings.appendChild(element("li", "warnings-head")).appendChild(element("button", "fold", "Notices · " + dashboard.warnings.length));
+      notesFold.type = "button";
+      notesFold.setAttribute("aria-expanded", String(warningsOpen));
+    }
+    dashboard.warnings.forEach(function (warning) { warnings.appendChild(element("li", null, localStamps(warning))); });
     var alerts = alertLines(dashboard.alerts, dashboard.accounts);
     alertStrip.hidden = alerts.length === 0;
     var spareActions = bestSpareActions(dashboard.alerts, dashboard.accounts);
     // Built aside and put in place only when it says something new, so a poll
     // that changes nothing never moves a button from under the pointer.
     var fresh = element("ul");
-    if (alerts.length) { fresh.appendChild(element("li", "alerts-head", "Usage alerts · " + alerts.length)); }
+    if (alerts.length) {
+      // Under 1600 px the alerts fold to this one line until it is opened;
+      // in the rail they are always open and this is their heading.
+      var head = fresh.appendChild(element("li", "alerts-head"));
+      var fold = head.appendChild(element("button", "fold", "Usage alerts · " + alerts.length));
+      fold.type = "button";
+      fold.setAttribute("aria-expanded", String(alertsOpen));
+    }
     alerts.forEach(function (alert) {
       var line = element("li", "alert " + alert.kind);
-      line.appendChild(element("p", "alert-text", alert.text));
+      // "7-day" and "5-hour" never break at their hyphen.
+      line.appendChild(element("p", "alert-text", alert.text.replace(/(\d)-(day|hour)/g, "$1‑$2"))).title = alert.title + "\n" + alert.text;
       var actions = spareActions[alert.first];
       if (actions.length) {
         var spare = accountByEmail(actions[0].spare);
@@ -3682,7 +3844,9 @@
       }
       fresh.appendChild(line);
     });
-    if (alerts.length && dashboard.alertsComputedAt) {
+    // Its own time only when it is not the figures' time the ledger states.
+    var figuresTaken = figuresAsOf(dashboard.accounts);
+    if (alerts.length && dashboard.alertsComputedAt && !(figuresTaken && Math.abs(Date.parse(dashboard.alertsComputedAt) - Date.parse(figuresTaken)) <= 300000)) {
       fresh.appendChild(element("li", "asof", "as of the last refresh, " + new Date(dashboard.alertsComputedAt).toLocaleTimeString()));
     }
     if (fresh.innerHTML !== alertStrip.innerHTML) { alertStrip.replaceChildren.apply(alertStrip, Array.prototype.slice.call(fresh.childNodes)); }
@@ -3708,7 +3872,8 @@
     // The 5-hour column comes and goes with the accounts that have the window,
     // which moves every column after it, so the guard counts it as a move.
     var fiveHour = fiveHourShown(dashboard.accounts);
-    var arriving = layoutKey(items, view.density + (fiveHour ? "" : " no-5h"));
+    var sparse = fiveHour && fiveHourSparse(dashboard.accounts);
+    var arriving = layoutKey(items, view.density + (fiveHour ? "" : " no-5h") + (sparse ? " sparse-5h" : ""));
     // The first paint has no row on screen to move, only the loading line.
     var first = renderedOrder.length === 0;
     var moved = !first && reordered(arriving, renderedOrder);
@@ -3734,6 +3899,7 @@
     cards.setAttribute("data-density", view.density);
     ledger.setAttribute("data-density", view.density);
     ledger.classList.toggle("no-5h", !fiveHour);
+    ledger.classList.toggle("sparse-5h", sparse);
     ledger.querySelector(".h-mw").textContent = ledger.querySelector(".h-mw").title = modelLabel(dashboard.accounts);
     // Every row is built, the filtered ones hidden, so a panel opener always
     // finds its card.
@@ -4097,7 +4263,8 @@
   function mountHistory() {
     if (document.querySelector("details.history")) { return; }
     var panel = element("details", "history");
-    panel.appendChild(element("summary", "quiet sm", "History"));
+    // Its count is not known until it is read, which waits for the opening.
+    panel.appendChild(element("summary", null, "Role history · last 30 days"));
     var list = element("ul", "warnings");
     panel.appendChild(list);
     panel.addEventListener("toggle", function () {
