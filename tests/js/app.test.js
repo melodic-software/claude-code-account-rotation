@@ -585,8 +585,8 @@ test("history lines run newest first and name the role half and where, both acco
     { at: "2026-10-02T09:30:00.0000000Z", role: { prefix: "", repository: "octo/lane-one" }, half: "token", account: null, previous: "b@example.com", via: "delete" }
   ];
   assert.deepStrictEqual(historyLines(entries), [
-    "2026-10-02 09:30 \u00b7 legacy (review lanes) in octo/lane-one token: b@example.com \u2192 no account (delete)",
-    "2026-10-01 11:00 \u00b7 AUTOMATIONS in org octo token: a@example.com \u2192 b@example.com (push)"
+    "2026-10-02 09:30 UTC \u00b7 legacy (review lanes) in octo/lane-one token: b@example.com \u2192 no account (delete)",
+    "2026-10-01 11:00 UTC \u00b7 AUTOMATIONS in org octo token: a@example.com \u2192 b@example.com (push)"
   ]);
   assert.deepStrictEqual(historyLines(null), []);
 });
@@ -1228,11 +1228,19 @@ function fleet() {
   ]);
 }
 
-const DEFAULT_VIEW = { order: "burn", group: true, show: "all", density: "compact" };
+const DEFAULT_VIEW = { order: "burn", group: true, show: "all", density: "compact", theme: "system" };
 
 function rowsOf(items) {
   return items.filter((item) => item.account).map((item) => item.account.email);
 }
+
+test("a duration wraps as one word, and other text is left alone", () => {
+  const { unbroken } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+  assert.strictEqual(unbroken("Fable 55%, resets in 2 d 1 h"), "Fable 55%, resets in 2\u00a0d\u00a01\u00a0h");
+  assert.strictEqual(unbroken("resets in 22 h 14 min"), "resets in 22\u00a0h\u00a014\u00a0min");
+  assert.strictEqual(unbroken("logged in 9 d ago"), "logged in 9\u00a0d ago");
+  assert.strictEqual(unbroken("chrome / Ines (Profile 3)"), "chrome / Ines (Profile 3)");
+});
 
 test("a reset sentence counts down in days and hours", () => {
   const account = dated("x@x", 49, { standing: "exhausted", hasCredentials: true, refresh: { state: "read" } }, 100);
@@ -1246,8 +1254,8 @@ test("the stored view falls back to the defaults on anything it does not recogni
   assert.deepStrictEqual(parseView("[1,2]"), DEFAULT_VIEW);
   assert.deepStrictEqual(parseView(JSON.stringify({ order: "evil", group: "yes", show: "<img>", density: 3 })), DEFAULT_VIEW);
   assert.deepStrictEqual(
-    parseView(JSON.stringify({ order: "name", group: false, show: "spent", density: "detailed", token: "secret", email: "a@x" })),
-    { order: "name", group: false, show: "spent", density: "detailed" });
+    parseView(JSON.stringify({ order: "name", group: false, show: "spent", density: "detailed", theme: "dark", token: "secret", email: "a@x" })),
+    { order: "name", group: false, show: "spent", density: "detailed", theme: "dark" });
   assert.deepStrictEqual(parseView(JSON.stringify({ order: "reset5" })), Object.assign({}, DEFAULT_VIEW, { order: "reset5" }));
 });
 
@@ -1261,13 +1269,13 @@ test("the view is read from ccar.view.v1, and storage that is missing or throws 
   assert.deepStrictEqual(readView({ getItem: () => "{\"order\":\"evil\"}" }), DEFAULT_VIEW);
 });
 
-test("writing the view sets ccar.view.v1 once with the four view values only, and a storage that throws is survived", () => {
+test("writing the view sets ccar.view.v1 once with the five view values only, and a storage that throws is survived", () => {
   const calls = [];
-  const written = writeView({ setItem: (key, value) => calls.push([key, value]) }, { order: "reset7", group: false, show: "paused", density: "detailed", token: "t" });
+  const written = writeView({ setItem: (key, value) => calls.push([key, value]) }, { order: "reset7", group: false, show: "paused", density: "detailed", theme: "light", token: "t" });
   assert.strictEqual(written, true);
   assert.strictEqual(calls.length, 1);
   assert.strictEqual(calls[0][0], "ccar.view.v1");
-  assert.deepStrictEqual(JSON.parse(calls[0][1]), { order: "reset7", group: false, show: "paused", density: "detailed" });
+  assert.deepStrictEqual(JSON.parse(calls[0][1]), { order: "reset7", group: false, show: "paused", density: "detailed", theme: "light" });
   assert.strictEqual(writeView({ setItem: () => { throw new Error("quota"); } }, DEFAULT_VIEW), false);
   assert.strictEqual(writeView(null, DEFAULT_VIEW), false);
 });

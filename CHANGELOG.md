@@ -6,7 +6,20 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [3.1.3] - 2026-11-15
 
+### Added
+
+- **A Theme choice on the view bar: System, Light or Dark.** System follows the operating
+  system's setting, as before. The choice is kept with the other view settings in the browser's
+  local storage. The page applies it when its script runs, so a reload under a theme that differs
+  from the system's can show the system's for an instant.
+
 ### Changed
+
+- **Role history reads as a record.** Its lines were drawn in the warning colour; they are body
+  text on the page's surface, and each time says it is UTC.
+- **A duration no longer breaks across lines.** In Detailed rows `2 d 1 h` and `19 d` wrap as one
+  word, and the reset line under the model-weekly and 5-hour meters wraps instead of being cut
+  off with an ellipsis.
 
 - **Row chips are all lowercase.** `Next up` reads `next up`, like `live here` and `in use by wsl`.
 - **Both Now strips' switch buttons are one size.** The switch spans the strip on each, and Hand

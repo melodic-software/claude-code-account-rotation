@@ -24,6 +24,8 @@
   var VIEW_ORDERS = ["burn", "reset7", "reset5", "left", "name"];
   var VIEW_SHOWS = ["all", "usable", "attention", "spent", "paused"];
   var VIEW_DENSITIES = ["compact", "detailed"];
+  // System follows the operating system's light or dark setting.
+  var VIEW_THEMES = ["system", "light", "dark"];
   // The refresh outcomes a row warns about. The rest say nothing or are said
   // by the credential chip.
   var REFRESH_ERRORS = ["stranded", "lost", "token-refresh-failed", "read-failed", "login-dead", "rate-limited", "budget-refused"];
@@ -59,6 +61,7 @@
       historyReadLines: historyReadLines
     };
     module.exports.ciPanelChecked = ciPanelChecked;
+    module.exports.unbroken = unbroken;
     module.exports.meterTicks = meterTicks;
     module.exports.alertLines = alertLines;
     module.exports.bestSpareActions = bestSpareActions;
@@ -199,6 +202,7 @@
   // The ledger's view settings, read once at load; the bar that changes them
   // sits on the All accounts line, outside #cards.
   var view = readView(viewStorage());
+  applyTheme(view.theme);
   var viewBar = buildViewBar();
   // The per-process token from the document's meta, or from a #t= fragment that
   // --open put on the URL, or pasted by the operator. It stays in this closure:
@@ -380,7 +384,7 @@
       var name = (role.tokenSecret || role.prefix || "legacy (review lanes)")
         + " in " + roleWhere(role);
       var moved = (entry.previous || "no account") + " \u2192 " + (entry.account || "no account");
-      return String(entry.at).slice(0, 16).replace("T", " ") + " \u00b7 " + name + " " + entry.half + ": " + moved + " (" + entry.via + ")";
+      return String(entry.at).slice(0, 16).replace("T", " ") + " UTC \u00b7 " + name + " " + entry.half + ": " + moved + " (" + entry.via + ")";
     });
   }
 
@@ -1835,6 +1839,12 @@
     return hours < 48 ? hours + " h " + (minutes % 60) + " min" : Math.round(hours / 24) + " d";
   }
 
+  // A duration that wraps as one word: "2 d 1 h" never leaves its "d" or its
+  // "1 h" alone on the next line.
+  function unbroken(text) {
+    return text.replace(/(\d) (s|min|h|d)\b/g, "$1\u00a0$2").replace(/(\u00a0[hd]) (?=\d)/g, "$1\u00a0");
+  }
+
   function relative(instant, from) {
     return "in " + span(secondsUntil(instant, from));
   }
@@ -2756,7 +2766,7 @@
   // The sentence's line. When it counts down to a reset, its hover names the
   // instant: whichever of the account's resets the sentence printed.
   function sayLine(say, account, at) {
-    var line = element("p", "say " + say.kind, say.text);
+    var line = element("p", "say " + say.kind, unbroken(say.text));
     var named = [account.nextResetAt].concat(account.usage.limits.map(function (limit) { return limit.resetsAt; })).filter(function (instant) {
       return instant && say.text.indexOf(resetIn(instant, at)) !== -1;
     })[0];
@@ -2776,7 +2786,8 @@
       order: pick(VIEW_ORDERS, stored.order),
       group: typeof stored.group === "boolean" ? stored.group : true,
       show: pick(VIEW_SHOWS, stored.show),
-      density: pick(VIEW_DENSITIES, stored.density)
+      density: pick(VIEW_DENSITIES, stored.density),
+      theme: pick(VIEW_THEMES, stored.theme)
     };
   }
 
@@ -3165,6 +3176,9 @@
       // One line, cut short with the whole of it on hover.
       lines.appendChild(element("p", "muted browser", browser)).title = browser;
     }
+    Array.prototype.forEach.call(lines.children, function (line) {
+      if (!line.children.length) { line.textContent = unbroken(line.textContent); }
+    });
     return lines;
   }
 
@@ -3184,7 +3198,7 @@
     if (figure.title) { pct.title = figure.title; }
     var reset = limit ? resetLine(limit, at) : null;
     if (reset) {
-      box.appendChild(element("small", "detail-only", reset)).title = reset + "\n" + resetTitle(limit.resetsAt);
+      box.appendChild(element("small", "detail-only", unbroken(reset))).title = reset + "\n" + resetTitle(limit.resetsAt);
       // The compact cell is one line, bar and figure; the window's own reset
       // is the figure's hover there.
       pct.title = [figure.title, reset, resetTitle(limit.resetsAt)].filter(Boolean).join("\n");
@@ -3449,6 +3463,8 @@
     var dot = who.appendChild(element("span", "dot " + tone));
     var title = element("div", "title");
     title.appendChild(cardHeading(account));
+    // Every chip on a row is lowercase ("next up", "live here", "in use by
+    // wsl"); status sentences and buttons are sentence case.
     var badges = element("span", "badges");
     if (next) { badges.appendChild(element("span", "badge next", "next up")); }
     // Two axes, and a card shows the second only when it adds something: the
@@ -3525,7 +3541,7 @@
     }
     // Every status starts with a capital, a server's lower-case message too.
     var briefText = brief.text.charAt(0).toUpperCase() + brief.text.slice(1);
-    var briefLine = status.appendChild(element("p", "say brief " + brief.kind, briefText));
+    var briefLine = status.appendChild(element("p", "say brief " + brief.kind, unbroken(briefText)));
     briefLine.title = brief.text === say.text ? briefText + full.title.slice(say.text.length) : [briefText, full.title].filter(Boolean).join("\n");
     // The dot says the worst the row says: a usable account with a warning on
     // its face is not green.
@@ -3738,6 +3754,15 @@
     segment.appendChild(viewChoice("density", "detailed", "Detailed", "option"));
     density.appendChild(segment);
     controls.appendChild(density);
+    var theme = element("div", "view-theme");
+    theme.setAttribute("role", "radiogroup");
+    theme.setAttribute("aria-label", "Theme");
+    var themes = element("span", "toggle");
+    [["system", "System"], ["light", "Light"], ["dark", "Dark"]].forEach(function (choice) {
+      themes.appendChild(viewChoice("theme", choice[0], choice[1], "option"));
+    });
+    theme.appendChild(themes);
+    controls.appendChild(theme);
     bar.appendChild(controls);
     var summary = element("div", "view-summary");
     summary.appendChild(element("p", "fleet-summary"));
@@ -3747,6 +3772,16 @@
     title.parentNode.insertBefore(bar, title.nextSibling);
     syncViewBar(bar);
     return bar;
+  }
+
+  // The stylesheet reads the choice from the root element: no attribute is
+  // System, which leaves the palette to the operating system's setting.
+  function applyTheme(theme) {
+    if (theme === "system") {
+      document.documentElement.removeAttribute("data-theme");
+    } else {
+      document.documentElement.setAttribute("data-theme", theme);
+    }
   }
 
   // The bar's controls set to the view in force.
@@ -3765,6 +3800,7 @@
   function changeView(change) {
     view = parseView(JSON.stringify(Object.assign({}, view, change)));
     writeView(viewStorage(), view);
+    applyTheme(view.theme);
     syncViewBar(viewBar);
     if (lastDashboard) { render(lastDashboard, false, true); }
   }
@@ -4303,7 +4339,7 @@
     var panel = element("details", "history");
     // Its count is not known until it is read, which waits for the opening.
     panel.appendChild(element("summary", null, "Role history · last 30 days"));
-    var list = element("ul", "warnings");
+    var list = element("ul", "history-list");
     panel.appendChild(list);
     panel.addEventListener("toggle", function () {
       if (!panel.open) { return; }

@@ -496,9 +496,10 @@ is offered next or the order the server keeps:
 - **Compact** (one line per account, warnings kept on the row) or **Detailed** (every line the
   row has).
 
-The choices are kept in the browser's local storage under `ccar.view.v1`, as these four settings
+The choices are kept in the browser's local storage under `ccar.view.v1`, as these five settings
 and nothing else. `127.0.0.1`, `localhost` and another port are separate origins to the browser,
-so each keeps its own choices. `next up`, the Now strips' buttons and the switch prompts always
+so each keeps its own choices. Theme is System, Light or Dark; System follows the operating
+system's setting. `next up`, the Now strips' buttons and the switch prompts always
 follow the server's order, whatever the page shows.
 
 ## Reading the dashboard from scripts
