@@ -15,8 +15,6 @@ check-cmd: "npm ci --prefix .github/standards/runner-policy --ignore-scripts --n
 fix-cmd: null
 code-fix-cmd: null
 opt-in: ".github/runner-policy.json present"
-install-hint: "node 24.21.0 (.node-version, which CI's setup-node reads for this step): https://nodejs.org"
-tool-pin:
-  node: "24.21.0"
+install-hint: "node at the version .node-version names (CI's setup-node reads it for this step): https://nodejs.org"
 gates: []
 notes: "CI sets CI_REPOSITORY_VISIBILITY from github.event.repository.visibility (pr-require-checks.yml:138-141); this repository is public, so the record passes public. If its visibility changes, change this value. The npm ci installs the lockfile's ajv and yaml into .github/standards/runner-policy/node_modules (gitignored) as CI does (pr-require-checks.yml:137); --ignore-scripts, --no-audit and --no-fund are added here and change nothing those two packages install. No CI lane or hook runs actionlint, zizmor or a dependabot.yml schema check here."

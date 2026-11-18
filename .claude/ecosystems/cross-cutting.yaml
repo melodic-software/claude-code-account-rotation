@@ -19,8 +19,6 @@ check-cmd: |
 fix-cmd: null
 code-fix-cmd: null
 opt-in: "eng/check-no-machine-paths.sh and .gitleaks.toml at the repository root"
-install-hint: "gitleaks 8.30.1: winget install Gitleaks.Gitleaks | brew install gitleaks"
-tool-pin:
-  gitleaks: "8.30.1"
+install-hint: "gitleaks: winget install Gitleaks.Gitleaks | brew install gitleaks"
 gates: []
 notes: "Lint-only: owned by /toolchain:lint. No CI lane here runs gitleaks; the scan stays because the repository tracks .gitleaks.toml, its allowlist. gitleaks dir scans the working tree, gitignored build output (bin/, obj/) included. check-no-machine-paths.sh scans src, tests, README.md and docs from the repository root it resolves itself; set CHECK_NO_MACHINE_PATHS_NAMES to add your own user name to its patterns. typos and editorconfig-checker are not run: their configs (_typos.toml, .editorconfig-checker.json) are synced from melodic-software/standards, but no CI lane and no installed hook runs them here. lychee runs in markdown."
