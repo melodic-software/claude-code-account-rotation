@@ -14,8 +14,6 @@ check-cmd: "lychee --offline --no-progress --config lychee.toml '**/*.md'"
 fix-cmd: null
 code-fix-cmd: null
 opt-in: "lychee.toml at the repository root"
-install-hint: "lychee 0.24.2 (the version CI installs): winget install lycheeverse.lychee | brew install lychee"
-tool-pin:
-  lychee: "0.24.2"
+install-hint: "lychee at the version ci-workflows' lychee-offline action pins (the version CI installs): winget install lycheeverse.lychee | brew install lychee"
 gates: []
-notes: "Pin: the lychee-offline composite's version default at 944d346 (action.yml, input version). Its run.sh runs lychee --offline --no-progress --config <config> <globs>, globs defaulting to '**/*.md'. CI checks every tracked markdown file, not only the changed ones. lychee.toml excludes any path containing .work/, so run from a checkout whose own path has none, with the relative glob. markdownlint is not run: no CI lane runs it, and lefthook.yml extends only the guardrails remote config, not .lefthook/base.yml's markdownlint lane, which also needs a root package.json this repository does not have."
+notes: "The lychee-offline composite's run.sh runs lychee --offline --no-progress --config <config> <globs>, globs defaulting to '**/*.md'. CI checks every tracked markdown file, not only the changed ones. lychee.toml excludes any path containing .work/, so run from a checkout whose own path has none, with the relative glob. markdownlint is not run: no CI lane runs it, and lefthook.yml extends only the guardrails remote config, not .lefthook/base.yml's markdownlint lane, which also needs a root package.json this repository does not have."
