@@ -13,10 +13,16 @@ credential_file="$live_dir/.credentials.json"
 profile_url="https://api.anthropic.com/api/oauth/profile"
 user_agent="claude-code-account-rotation-acceptance/1 (+https://github.com/melodic-software/claude-code-account-rotation)"
 
-[[ -f "$credential_file" ]] || { echo "no live credential file at $credential_file" >&2; exit 2; }
+[[ -f "$credential_file" ]] || {
+  echo "no live credential file at $credential_file" >&2
+  exit 2
+}
 
 access_token="$(jq -r '.claudeAiOauth.accessToken // empty' -- "$credential_file")"
-[[ -n "$access_token" ]] || { echo "no access token in $credential_file" >&2; exit 2; }
+[[ -n "$access_token" ]] || {
+  echo "no access token in $credential_file" >&2
+  exit 2
+}
 
 # The bearer header travels on curl's stdin as a config line, never as an argument:
 # an argument would sit in the process list and /proc/<pid>/cmdline for the life of

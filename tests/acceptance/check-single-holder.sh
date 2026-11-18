@@ -42,7 +42,10 @@ declare -a positional=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --root)
-      [[ $# -ge 2 ]] || { echo "usage: $0 --root <dir> [--root <dir>]..." >&2; exit 2; }
+      [[ $# -ge 2 ]] || {
+        echo "usage: $0 --root <dir> [--root <dir>]..." >&2
+        exit 2
+      }
       roots+=("$2")
       shift 2
       ;;
@@ -128,33 +131,33 @@ if [[ ${#roots[@]} -gt 0 ]]; then
   done
 else
 
-[[ -f "$live_dir/$credential_file" ]] && files+=("$live_dir/$credential_file")
-collect_temps "$live_dir"
+  [[ -f "$live_dir/$credential_file" ]] && files+=("$live_dir/$credential_file")
+  collect_temps "$live_dir"
 
-# The state file is "$HOME/.claude.json" when CLAUDE_CONFIG_DIR is unset and
-# "$CLAUDE_CONFIG_DIR/.claude.json" when it is set, so its own crash temp lands
-# in whichever of those roots is live. Follow that same rule rather than always
-# scanning the home root: under a custom root, a temp left at "$HOME" by an old
-# default-root installation is stale residue this run must not fail on. When the
-# state root is the live directory it was already scanned above.
-#
-# A state temp holds no refresh token, so it fingerprints empty and only ever
-# adds a "no refresh token" line below, never a duplicate. Only state-file-named
-# temps are collected here: a state root that is the home directory is not
-# Claude-owned, and an unrelated tool's stray "*.tmp" must not fail this run.
-state_root="${CLAUDE_CONFIG_DIR:-${HOME:-}}"
-if [[ -n "$state_root" ]] && ! [[ "$state_root" -ef "$live_dir" ]]; then
-  collect_temps "$state_root" '.*claude*.tmp'
-fi
+  # The state file is "$HOME/.claude.json" when CLAUDE_CONFIG_DIR is unset and
+  # "$CLAUDE_CONFIG_DIR/.claude.json" when it is set, so its own crash temp lands
+  # in whichever of those roots is live. Follow that same rule rather than always
+  # scanning the home root: under a custom root, a temp left at "$HOME" by an old
+  # default-root installation is stale residue this run must not fail on. When the
+  # state root is the live directory it was already scanned above.
+  #
+  # A state temp holds no refresh token, so it fingerprints empty and only ever
+  # adds a "no refresh token" line below, never a duplicate. Only state-file-named
+  # temps are collected here: a state root that is the home directory is not
+  # Claude-owned, and an unrelated tool's stray "*.tmp" must not fail this run.
+  state_root="${CLAUDE_CONFIG_DIR:-${HOME:-}}"
+  if [[ -n "$state_root" ]] && ! [[ "$state_root" -ef "$live_dir" ]]; then
+    collect_temps "$state_root" '.*claude*.tmp'
+  fi
 
-if [[ -d "$profiles_root" ]]; then
-  while IFS= read -r -d '' file; do
-    files+=("$file")
-  done < <(find "$profiles_root" -mindepth 2 -maxdepth 2 -name "$credential_file" -type f -print0 | sort -z)
-  while IFS= read -r -d '' dir; do
-    collect_temps "$dir"
-  done < <(find "$profiles_root" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
-fi
+  if [[ -d "$profiles_root" ]]; then
+    while IFS= read -r -d '' file; do
+      files+=("$file")
+    done < <(find "$profiles_root" -mindepth 2 -maxdepth 2 -name "$credential_file" -type f -print0 | sort -z)
+    while IFS= read -r -d '' dir; do
+      collect_temps "$dir"
+    done < <(find "$profiles_root" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
+  fi
 
 fi
 
