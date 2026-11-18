@@ -58,25 +58,55 @@ switches=20
 keep_roots="no"
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --leader) leader_publish="${2:?--leader needs a directory}"; shift 2 ;;
-    --follower) follower_publish="${2:?--follower needs a directory}"; shift 2 ;;
-    --distro) distro="${2:?--distro needs a name}"; shift 2 ;;
-    --switches) switches="${2:?--switches needs a number}"; shift 2 ;;
-    --keep) keep_roots="yes"; shift ;;
-    *) echo "usage: $0 --leader <dir> --follower <linux dir> [--distro D] [--switches N] [--keep]" >&2; exit 2 ;;
+    --leader)
+      leader_publish="${2:?--leader needs a directory}"
+      shift 2
+      ;;
+    --follower)
+      follower_publish="${2:?--follower needs a directory}"
+      shift 2
+      ;;
+    --distro)
+      distro="${2:?--distro needs a name}"
+      shift 2
+      ;;
+    --switches)
+      switches="${2:?--switches needs a number}"
+      shift 2
+      ;;
+    --keep)
+      keep_roots="yes"
+      shift
+      ;;
+    *)
+      echo "usage: $0 --leader <dir> --follower <linux dir> [--distro D] [--switches N] [--keep]" >&2
+      exit 2
+      ;;
   esac
 done
-[[ -n "$leader_publish" && -n "$follower_publish" ]] || { echo "usage: $0 --leader <dir> --follower <linux dir> [--distro D] [--switches N] [--keep]" >&2; exit 2; }
+[[ -n "$leader_publish" && -n "$follower_publish" ]] || {
+  echo "usage: $0 --leader <dir> --follower <linux dir> [--distro D] [--switches N] [--keep]" >&2
+  exit 2
+}
 
 leader_exe="$leader_publish/claude-code-account-rotation.exe"
-[[ -f "$leader_exe" ]] || { echo "no leader binary at $leader_exe" >&2; exit 2; }
+[[ -f "$leader_exe" ]] || {
+  echo "no leader binary at $leader_exe" >&2
+  exit 2
+}
 
 # The machine's own names are derived, never typed, which is what keeps
 # eng/check-no-machine-paths.sh true of this file.
 [[ -n "$distro" ]] || distro="$(wsl.exe --list --quiet 2>/dev/null | tr -d '\000\r' | head -1)"
-[[ -n "$distro" ]] || { echo "no WSL distribution found" >&2; exit 2; }
+[[ -n "$distro" ]] || {
+  echo "no WSL distribution found" >&2
+  exit 2
+}
 wsl_user="$(wsl.exe -d "$distro" -e bash -c 'whoami' 2>/dev/null | tr -d '\000\r')"
-[[ -n "$wsl_user" ]] || { echo "could not read the distro's user" >&2; exit 2; }
+[[ -n "$wsl_user" ]] || {
+  echo "could not read the distro's user" >&2
+  exit 2
+}
 
 # A login shell, because check-single-holder.sh needs the distro's own jq and a
 # non-login `bash -c` gets none of the operator's PATH.
@@ -86,7 +116,10 @@ wsl_run() { wsl.exe -d "$distro" -u "$wsl_user" -e bash -lc "$1" 2>&1 | tr -d '\
 # (forward slashes, so the JSON below needs no escaping), as this shell sees it,
 # and as the distro sees it through the mount.
 windows_profile="${USERPROFILE:-}"
-[[ -n "$windows_profile" ]] || { echo "USERPROFILE is not set" >&2; exit 2; }
+[[ -n "$windows_profile" ]] || {
+  echo "USERPROFILE is not set" >&2
+  exit 2
+}
 windows_profile="${windows_profile//\\//}"
 run_id="ccar-accept-$$"
 win_root_native="$windows_profile/AppData/Local/Temp/$run_id"
@@ -116,8 +149,11 @@ wrapper_src_wsl="/mnt/$repo_drive${repo:2}/src/ClaudeCodeAccountRotation.App/fol
 # Publish places the wrapper beside the binary. A directory copied into the
 # distro before that, or a copy that dropped the executable bit, is repaired
 # from this tree: the page's Start execs the wrapper, not the binary.
-wsl_run "test -f '$follower_wrapper' || cp -f '$wrapper_src_wsl' '$follower_wrapper'; chmod +x '$follower_wrapper' '$follower_exe'; test -x '$follower_wrapper'" >/dev/null \
-  || { echo "the follower wrapper is not executable at $follower_wrapper" >&2; exit 2; }
+wsl_run "test -f '$follower_wrapper' || cp -f '$wrapper_src_wsl' '$follower_wrapper'; chmod +x '$follower_wrapper' '$follower_exe'; test -x '$follower_wrapper'" >/dev/null ||
+  {
+    echo "the follower wrapper is not executable at $follower_wrapper" >&2
+    exit 2
+  }
 
 leader_port=48411
 follower_port=48412
@@ -132,8 +168,8 @@ leader_token() {
 }
 
 follower_token() {
-  wsl.exe -d "$distro" -u "$wsl_user" --exec cat -- "$wsl_appdata/instance.url" 2>/dev/null \
-    | tr -d '\000\r' | sed -n '2p' | tr -d '\n' || true
+  wsl.exe -d "$distro" -u "$wsl_user" --exec cat -- "$wsl_appdata/instance.url" 2>/dev/null |
+    tr -d '\000\r' | sed -n '2p' | tr -d '\n' || true
 }
 
 curl_with_token() {
@@ -148,7 +184,10 @@ follower_wrapper_pid=""
 failures=0
 
 say() { printf '%s %s\n' "$(date -u +%H:%M:%S)" "$*"; }
-fail() { failures=$((failures + 1)); printf '%s FAIL %s\n' "$(date -u +%H:%M:%S)" "$*"; }
+fail() {
+  failures=$((failures + 1))
+  printf '%s FAIL %s\n' "$(date -u +%H:%M:%S)" "$*"
+}
 
 # --- processes ---------------------------------------------------------------
 #
@@ -204,8 +243,8 @@ trap cleanup EXIT
 # process behind, and a run that talked to it instead of its own follower would
 # report nonsense with the cause hours upstream.
 for port_in_use in "$leader_port" "$follower_port"; do
-  if curl -fsS --max-time 2 "http://127.0.0.1:$port_in_use/healthz" >/dev/null 2>&1 \
-    || curl -fsS --max-time 2 "http://127.0.0.1:$port_in_use/api/dashboard" >/dev/null 2>&1; then
+  if curl -fsS --max-time 2 "http://127.0.0.1:$port_in_use/healthz" >/dev/null 2>&1 ||
+    curl -fsS --max-time 2 "http://127.0.0.1:$port_in_use/api/dashboard" >/dev/null 2>&1; then
     echo "something is already answering on port $port_in_use; stop it before running this" >&2
     exit 2
   fi
@@ -224,7 +263,7 @@ write_pair() {
   now="$(date +%s)"
   mkdir -p "$(dirname "$path")"
   printf '{"claudeAiOauth":{"accessToken":"access-%s","refreshToken":"%s","expiresAt":%s,"refreshTokenExpiresAt":%s,"scopes":["user:inference"]}}\n' \
-    "$token" "$token" "$(( (now + 8 * 3600) * 1000 ))" "$(( (now + 28 * 24 * 3600) * 1000 ))" > "$path"
+    "$token" "$token" "$(((now + 8 * 3600) * 1000))" "$(((now + 28 * 24 * 3600) * 1000))" >"$path"
 }
 
 # profile.json holds the oauthAccount block itself, not a document wrapping
@@ -234,7 +273,7 @@ write_profile() {
   local folder="$1" email="$2"
   mkdir -p "$folder"
   printf '{"accountUuid":"uuid-%s","emailAddress":"%s","organizationRateLimitTier":"default_claude_max_20x"}\n' \
-    "$email" "$email" > "$folder/profile.json"
+    "$email" "$email" >"$folder/profile.json"
 }
 
 accounts=()
@@ -244,7 +283,7 @@ for index in 1 2 3 4 5 6; do
   write_profile "$store_here/$email" "$email"
   write_pair "$store_here/$email/.credentials.json" "refresh-$email-$run_id"
 done
-printf '{"numStartups":7}\n' > "$win_root_here/.claude.json"
+printf '{"numStartups":7}\n' >"$win_root_here/.claude.json"
 
 # --- configuration -----------------------------------------------------------
 #
@@ -252,7 +291,7 @@ printf '{"numStartups":7}\n' > "$win_root_here/.claude.json"
 # is handed to it as a /mnt path: only its live directory and app data are
 # required to be off the mount, and its own configuration is neither.
 
-cat > "$win_root_here/leader-config.json" <<JSON
+cat >"$win_root_here/leader-config.json" <<JSON
 {
   "liveConfigDirectory": "$win_root_native/live",
   "stateFilePath": "$win_root_native/.claude.json",
@@ -279,7 +318,7 @@ cat > "$win_root_here/leader-config.json" <<JSON
 }
 JSON
 
-cat > "$win_root_here/follower-config.json" <<JSON
+cat >"$win_root_here/follower-config.json" <<JSON
 {
   "role": "follower",
   "liveConfigDirectory": "$wsl_live",
@@ -327,10 +366,13 @@ start_follower() {
   # content root there.
   wsl.exe -d "$distro" -u "$wsl_user" -e bash -c \
     "cd '$wsl_root' && echo \$\$ > follower.pid; exec env CCAR_FAIL_AFTER_STEP='$fail_after' '$follower_exe' --config '$win_root_wsl/follower-config.json'" \
-    > "$log" 2>&1 &
+    >"$log" 2>&1 &
   follower_wrapper_pid=$!
   cp -f "$log" "$log_dir/follower-latest.log" 2>/dev/null || true
-  wait_for_follower_dashboard || { fail "the follower did not come up; see $log"; return 1; }
+  wait_for_follower_dashboard || {
+    fail "the follower did not come up; see $log"
+    return 1
+  }
 }
 
 start_leader() {
@@ -338,14 +380,17 @@ start_leader() {
   log="$log_dir/leader-$(date -u +%H%M%S)-$RANDOM.log"
   if [[ -n "$corrupt" ]]; then
     CCAR_FAIL_AFTER_STEP="$fail_after" CCAR_CORRUPT_EXPORT_BEFORE_GATE=1 \
-      "$leader_exe" --config "$win_root_here/leader-config.json" > "$log" 2>&1 &
+      "$leader_exe" --config "$win_root_here/leader-config.json" >"$log" 2>&1 &
   else
     CCAR_FAIL_AFTER_STEP="$fail_after" \
-      "$leader_exe" --config "$win_root_here/leader-config.json" > "$log" 2>&1 &
+      "$leader_exe" --config "$win_root_here/leader-config.json" >"$log" 2>&1 &
   fi
   leader_pid=$!
   leader_log="$log"
-  wait_for "$leader_url/healthz" || { fail "the leader did not come up; see $log"; return 1; }
+  wait_for "$leader_url/healthz" || {
+    fail "the leader did not come up; see $log"
+    return 1
+  }
 }
 
 # --- the routes --------------------------------------------------------------
@@ -373,8 +418,8 @@ wsl_release() {
 }
 
 side_online() {
-  curl_with_token "$(leader_token)" -fsS --max-time 5 "$leader_url/api/sides/wsl" 2>/dev/null \
-    | sed -n 's/.*"online":\([a-z]*\).*/\1/p' | head -1
+  curl_with_token "$(leader_token)" -fsS --max-time 5 "$leader_url/api/sides/wsl" 2>/dev/null |
+    sed -n 's/.*"online":\([a-z]*\).*/\1/p' | head -1
 }
 
 # One poll of the leader's dashboard, which is where its own crash table runs.
@@ -383,14 +428,20 @@ poll_leader() { curl_with_token "$(leader_token)" -fsS --max-time 60 "$leader_ur
 follower_live_account() {
   local body
   body="$(curl_with_token "$(follower_token)" -fsS --max-time 5 "$follower_url/api/dashboard" 2>/dev/null || true)"
-  [[ -n "$body" ]] || { echo "unreachable"; return; }
+  [[ -n "$body" ]] || {
+    echo "unreachable"
+    return
+  }
   printf '%s' "$body" | sed -n 's/.*"liveAccount":"\([^"]*\)".*/\1/p' | head -1 | grep . || echo "none"
 }
 
 # --- assertions --------------------------------------------------------------
 
 fingerprint_of() {
-  [[ -f "$1" ]] || { echo "absent"; return; }
+  [[ -f "$1" ]] || {
+    echo "absent"
+    return
+  }
   sed -n 's/.*"refreshToken":"\([^"]*\)".*/\1/p' "$1" | head -1 | tr -d '\n' | sha256sum | cut -c1-12
 }
 
@@ -532,10 +583,16 @@ for step in Planned Staged Exported Swapped Released Patched; do
     fi
 
     stop_follower
-    start_follower "$timing" || { fail "the follower would not start for $timing"; continue; }
+    start_follower "$timing" || {
+      fail "the follower would not start for $timing"
+      continue
+    }
     say "  $timing: the switch answered $(wsl_switch "$incoming") with the follower killed mid-import"
     stop_follower
-    start_follower || { fail "the follower would not restart after $timing"; continue; }
+    start_follower || {
+      fail "the follower would not restart after $timing"
+      continue
+    }
     if settle 90; then
       check_row "$timing" "$victim" "$incoming"
     else
@@ -555,10 +612,16 @@ for step in Claimed ExportVerified Imported Parked; do
     fi
 
     stop_leader
-    start_leader "$timing" || { fail "the leader would not start for $timing"; continue; }
+    start_leader "$timing" || {
+      fail "the leader would not start for $timing"
+      continue
+    }
     say "  $timing: the switch answered $(wsl_switch "$incoming") with the leader killed mid-hand-off"
     stop_leader
-    start_leader || { fail "the leader would not restart after $timing"; continue; }
+    start_leader || {
+      fail "the leader would not restart after $timing"
+      continue
+    }
     if settle 90; then
       check_row "$timing" "$victim" "$incoming"
     else
@@ -626,10 +689,16 @@ else
     fi
 
     stop_follower
-    start_follower "$timing" || { fail "the follower would not start for the release row $timing"; continue; }
+    start_follower "$timing" || {
+      fail "the follower would not start for the release row $timing"
+      continue
+    }
     say "  $timing: the release answered $(wsl_release) with the follower killed mid-release"
     stop_follower
-    start_follower || { fail "the follower would not restart after the release row $timing"; continue; }
+    start_follower || {
+      fail "the follower would not restart after the release row $timing"
+      continue
+    }
     if settle 90; then
       check_release_row "$timing" "$held"
     else

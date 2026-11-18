@@ -24,7 +24,7 @@ mkdir -p "$work/live" "$work/appdata" "$work/store/.transit/wsl"
 
 # A follower's container registers no CLI adapter, no login runner and no
 # refresh engine, so nothing here can resolve the runner's own `claude`.
-cat > "$work/appdata/config.json" <<JSON
+cat >"$work/appdata/config.json" <<JSON
 {
   "role": "follower",
   "liveConfigDirectory": "$work/live",
@@ -37,7 +37,7 @@ JSON
 
 port=48299
 "$work/publish/claude-code-account-rotation" --config "$work/appdata/config.json" --port "$port" \
-  > "$work/follower.log" 2>&1 &
+  >"$work/follower.log" 2>&1 &
 follower_pid=$!
 
 for _ in $(seq 1 60); do

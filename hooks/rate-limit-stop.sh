@@ -12,11 +12,11 @@ else
 fi
 
 [[ -r "$instance" ]] || exit 0
-{ read -r url && read -r token; } < "$instance" || exit 0
+{ read -r url && read -r token; } <"$instance" || exit 0
 
 # The token goes in on stdin rather than argv, where other processes can read it.
 printf 'Authorization: Bearer %s\n' "$token" | curl -fsS --max-time 5 -X POST \
   -H @- \
   -H "X-Claude-Code-Account-Rotation: 1" \
-  "$url/api/hooks/rate-limit" > /dev/null 2>&1
+  "$url/api/hooks/rate-limit" >/dev/null 2>&1
 exit 0

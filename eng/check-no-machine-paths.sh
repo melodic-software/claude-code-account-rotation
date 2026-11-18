@@ -25,7 +25,7 @@ pattern='(^|[^A-Za-z])[A-Za-z]:[\\/]|[\\/]Users[\\/][A-Za-z0-9._-]+|/home/[A-Za-
 # make grep fail, and a failed grep inside the if would read as "no match".
 name_args=()
 if [[ -n "${CHECK_NO_MACHINE_PATHS_NAMES:-}" ]]; then
-  IFS=',' read -r -a extra_names <<< "$CHECK_NO_MACHINE_PATHS_NAMES"
+  IFS=',' read -r -a extra_names <<<"$CHECK_NO_MACHINE_PATHS_NAMES"
   for name in "${extra_names[@]}"; do
     [[ -n "$name" ]] && name_args+=(-e "$name")
   done
@@ -38,7 +38,7 @@ while IFS= read -r -d '' file; do
   if grep -InE "$pattern" -- "$file"; then
     findings=1
   fi
-  if (( ${#name_args[@]} > 0 )) && grep -InF "${name_args[@]}" -- "$file"; then
+  if ((${#name_args[@]} > 0)) && grep -InF "${name_args[@]}" -- "$file"; then
     findings=1
   fi
 done < <(git ls-files -z -- "${surfaces[@]}")
