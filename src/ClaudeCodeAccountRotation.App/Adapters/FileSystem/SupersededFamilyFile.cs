@@ -1,7 +1,3 @@
-using System.Globalization;
-using System.Text.Json;
-using System.Text.Json.Nodes;
-using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Switching;
 
 namespace ClaudeCodeAccountRotation.App.Adapters.FileSystem;
@@ -22,12 +18,13 @@ namespace ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 /// different lifetimes, so they are different files.
 /// </para>
 /// <para>
-/// The shape is <see cref="HolderRecord"/>'s, read the same way: a missing,
-/// torn, or unparsable file answers "no superseded family", because the
-/// consequence of misreading one is a refused switch and never a moved pair.
-/// The fingerprint is the family's as it was when the slot was superseded; the
-/// other side refreshes its own token on its own schedule, so it is evidence
-/// for the operator and never a key anything matches on.
+/// The shape is <see cref="HolderRecord"/>'s, read the same way by
+/// <see cref="HolderRecordJson"/>: a missing, torn, or unparsable file answers
+/// "no superseded family", because the consequence of misreading one is a
+/// refused switch and never a moved pair. The fingerprint is the family's as it
+/// was when the slot was superseded; the other side refreshes its own token on
+/// its own schedule, so it is evidence for the operator and never a key
+/// anything matches on.
 /// </para>
 /// </summary>
 internal static class SupersededFamilyFile
@@ -37,57 +34,13 @@ internal static class SupersededFamilyFile
     public static string PathIn(string folderPath) =>
         Path.Combine(folderPath, FileName);
 
-    public static async Task<HolderRecord?> ReadAsync(string folderPath, CancellationToken cancellationToken)
-    {
-        string path = PathIn(folderPath);
-        if (!File.Exists(path))
-        {
-            return null;
-        }
+    public static Task<HolderRecord?> ReadAsync(string folderPath, CancellationToken cancellationToken) =>
+        HolderRecordJson.ReadAsync(folderPath, FileName, cancellationToken);
 
-        JsonObject? raw;
-        try
-        {
-            raw = JsonNode.Parse(await SharedFileReader.ReadAllBytesAsync(path, cancellationToken)) as JsonObject;
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
+    public static Task WriteAsync(string folderPath, HolderRecord record, CancellationToken cancellationToken) =>
+        HolderRecordJson.WriteAsync(folderPath, FileName, record, cancellationToken);
 
-        if (Text(raw, "side") is not string side
-            || Text(raw, "fingerprint") is not string fingerprint
-            || Text(raw, "since") is not string since
-            || !DateTimeOffset.TryParse(since, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTimeOffset at))
-        {
-            return null;
-        }
-
-        return new HolderRecord(new SideName(side), new RefreshTokenFingerprint(fingerprint), at);
-    }
-
-    public static Task WriteAsync(string folderPath, HolderRecord record, CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(record);
-        Directory.CreateDirectory(folderPath);
-        return AtomicJsonFile.WriteAsync(
-            PathIn(folderPath),
-            new JsonObject
-            {
-                ["side"] = record.Side.Value,
-                ["fingerprint"] = record.Fingerprint.Sha256Hex,
-                ["since"] = record.Since.ToString("O", CultureInfo.InvariantCulture),
-            },
-            cancellationToken);
-    }
-
-    /// <summary>Removes the record, if there is one. A slot without one is already in the wanted state.</summary>
-    public static Task DeleteAsync(string folderPath, CancellationToken cancellationToken)
-    {
-        string path = PathIn(folderPath);
-        return File.Exists(path) ? AtomicBytesFile.DeleteWithRetryAsync(path, cancellationToken) : Task.CompletedTask;
-    }
-
-    private static string? Text(JsonObject? raw, string key) =>
-        raw?[key] is JsonValue value && value.TryGetValue(out string? text) && !string.IsNullOrWhiteSpace(text) ? text : null;
+    /// <inheritdoc cref="HolderRecordJson.DeleteAsync"/>
+    public static Task DeleteAsync(string folderPath, CancellationToken cancellationToken) =>
+        HolderRecordJson.DeleteAsync(folderPath, FileName, cancellationToken);
 }
