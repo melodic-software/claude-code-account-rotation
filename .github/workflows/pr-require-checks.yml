@@ -151,7 +151,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Check local links and anchors
-        uses: melodic-software/ci-workflows/.github/actions/lychee-offline@9c5bedfbfdbdfe733b9ce4cd7ca80c1574bd4cb8 # v0.76.3
+        uses: melodic-software/ci-workflows/.github/actions/lychee-offline@d7ba00151fa8429aa9a94fb919f1e517c2e74368 # v0.78.0
         with:
           config: lychee.toml
 
@@ -199,7 +199,7 @@ jobs:
       # that should have run and did not.
       - name: Aggregate lane results
         id: report
-        uses: melodic-software/ci-workflows/.github/actions/pr-require-checks/report-ci-status@9c5bedfbfdbdfe733b9ce4cd7ca80c1574bd4cb8 # v0.76.3
+        uses: melodic-software/ci-workflows/.github/actions/pr-require-checks/report-ci-status@d7ba00151fa8429aa9a94fb919f1e517c2e74368 # v0.78.0
         with:
           step-name: Aggregate lane results
           # Derived from the needs graph above — the single source of truth for
