@@ -3,18 +3,18 @@
 # Lint-only: /toolchain:lint runs it, /toolchain:check does not. CI's one
 # workflow check is the runner policy of its check-repository job
 # (.github/workflows/pr-require-checks.yml, steps 'Install pinned
-# runner-policy dependencies' and 'Enforce runner policy'), which reads every
-# workflow against .github/runner-policy.json. Commands run from the
-# repository root.
+# runner-policy dependencies' and 'Enforce runner policy'), which audits every
+# workflow using the built-in public hosted-only default when
+# CI_REPOSITORY_VISIBILITY=public. Commands run from the repository root.
 enabled: true
-globs: [".github/**/*.yml", ".github/**/*.yaml", ".github/runner-policy.json", ".github/standards/runner-policy/**"]
+globs: [".github/**/*.yml", ".github/**/*.yaml", ".github/standards/runner-policy/**"]
 project-discovery: []
 build-cmd: null
 test-cmd: null
 check-cmd: "npm ci --prefix .github/standards/runner-policy --ignore-scripts --no-audit --no-fund && CI_REPOSITORY_VISIBILITY=public node .github/standards/runner-policy/runner-policy.mjs --root ."
 fix-cmd: null
 code-fix-cmd: null
-opt-in: ".github/runner-policy.json present"
+opt-in: ".github/standards/runner-policy/runner-policy.mjs present"
 install-hint: "node at the version .node-version names (CI's setup-node reads it for this step): https://nodejs.org"
 gates: []
 notes: "CI sets CI_REPOSITORY_VISIBILITY from github.event.repository.visibility (pr-require-checks.yml:138-141); this repository is public, so the record passes public. If its visibility changes, change this value. The npm ci installs the lockfile's ajv and yaml into .github/standards/runner-policy/node_modules (gitignored) as CI does (pr-require-checks.yml:137); --ignore-scripts, --no-audit and --no-fund are added here and change nothing those two packages install. No CI lane or hook runs actionlint, zizmor or a dependabot.yml schema check here."
