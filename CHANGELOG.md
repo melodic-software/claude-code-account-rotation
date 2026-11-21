@@ -1197,7 +1197,7 @@ Org usage from an Admin key's Cost Report is not in this release; it is deferred
   its retries parks the rotated pair in an owner-only file under the app data directory's
   `recovery/`, since the old refresh token dies the moment the token endpoint answers and that file
   is then the only copy of a working login: the card reads `credentials stranded in recovery`, a
-  switch to that folder is refused by the server rather than only greyed out on the page, removing
+  switch to that folder is refused by the server rather than only grayed out on the page, removing
   the account is refused until the file is resolved, and the next start and the next per-card
   refresh both try the restore through the same compare-and-swap. A recovery file whose folder was
   legitimately rewritten since is moved to `recovery/stale/` and named in a warning instead of
