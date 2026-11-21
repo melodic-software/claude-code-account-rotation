@@ -107,4 +107,37 @@ public sealed class RosterTests
         roster.Entries.Select(static entry => entry.Email.Value).ShouldBe(["b@example.com"]);
         roster.Find(Email("a@example.com")).ShouldBeNull();
     }
+
+    [Fact]
+    public void EntriesOnTheSameBrowserAndProfileDirectoryNameEachOtherInEmailOrder()
+    {
+        Roster roster = Roster.Empty
+            .With(new RosterEntry(Email("c@example.com"), Browser: BrowserFamily.Chrome, BrowserProfileDirectory: "profile 1"))
+            .With(new RosterEntry(Email("a@example.com"), Browser: BrowserFamily.Chrome, BrowserProfileDirectory: "Profile 1"))
+            .With(new RosterEntry(Email("b@example.com"), Browser: BrowserFamily.Chrome, BrowserProfileDirectory: "Profile 1"));
+
+        roster.SharedBrowserProfileWith(Email("a@example.com")).ShouldBe([Email("b@example.com"), Email("c@example.com")]);
+        roster.SharedBrowserProfileWith(Email("b@example.com")).ShouldBe([Email("a@example.com"), Email("c@example.com")]);
+        roster.SharedBrowserProfileWith(Email("c@example.com")).ShouldBe([Email("a@example.com"), Email("b@example.com")]);
+    }
+
+    [Fact]
+    public void EntriesOnDifferentProfilesOrBrowsersOrWithNoProfileSetHaveNoSharedProfile()
+    {
+        Roster roster = Roster.Empty
+            .With(new RosterEntry(Email("a@example.com"), Browser: BrowserFamily.Chrome, BrowserProfileDirectory: "Profile 1"))
+            .With(new RosterEntry(Email("b@example.com"), Browser: BrowserFamily.Chrome, BrowserProfileDirectory: "Profile 2"))
+            .With(new RosterEntry(Email("c@example.com"), Browser: BrowserFamily.Edge, BrowserProfileDirectory: "Profile 1"))
+            .With(new RosterEntry(Email("d@example.com"), Browser: BrowserFamily.Chrome, BrowserProfileDirectory: null))
+            .With(new RosterEntry(Email("e@example.com"), Browser: BrowserFamily.Chrome, BrowserProfileDirectory: null))
+            .With(new RosterEntry(Email("f@example.com"), Browser: null, BrowserProfileDirectory: "Profile 1"))
+            .With(new RosterEntry(Email("g@example.com"), Browser: null, BrowserProfileDirectory: null));
+
+        foreach (RosterEntry entry in roster.Entries)
+        {
+            roster.SharedBrowserProfileWith(entry.Email).ShouldBeEmpty();
+        }
+
+        roster.SharedBrowserProfileWith(Email("missing@example.com")).ShouldBeEmpty();
+    }
 }

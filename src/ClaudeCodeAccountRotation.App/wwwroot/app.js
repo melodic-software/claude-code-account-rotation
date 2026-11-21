@@ -2853,13 +2853,14 @@
 
   // Any warning or error on the row: a stale reading, a refresh error, a login
   // that is missing, expired, paused or expiring within the warning window, a
-  // CLI logout, a CI token expiry, or a usable account in the red near a
-  // limit. A spent window alone is not one.
+  // CLI logout, a shared browser profile, a CI token expiry, or a usable
+  // account in the red near a limit. A spent window alone is not one.
   function needsAttention(account, at, accounts) {
     var age = usageAge(account, at);
     var chip = stateChip(account, at);
     var near = account.standing === "usable" ? nearestLimit(account.usage.limits) : null;
     return !!account.cliLoggedOut
+      || !!account.browserProfileWarning
       || (!!near && meterTone(near) === "crit")
       || ["error", "needs login", "login expired", "login paused"].indexOf(chip) !== -1
       || loginSoon(account, at)
@@ -3096,7 +3097,8 @@
 
   // The warnings a row keeps on its face in either density: a CLI logout, a
   // stale reading, a refresh that failed, a login that is expiring, expired or
-  // missing, and a CI token expiry. Neutral facts are not among them.
+  // missing, a shared browser profile, and a CI token expiry. Neutral facts are
+  // not among them.
   function rowNotices(account, dashboard, at, accounts) {
     var notices = [];
     if (account.cliLoggedOut) { notices.push(account.cliLoggedOut); }
@@ -3112,6 +3114,7 @@
     }
     if (REFRESH_ERRORS.indexOf(account.refresh && account.refresh.state) !== -1) { notices.push(refreshState(account, dashboard)); }
     if (loginSoon(account, at) && loginLine(account, at)) { notices.push(loginLine(account, at)); }
+    if (account.browserProfileWarning) { notices.push(account.browserProfileWarning); }
     ciTokenExpiries(account.roster, at, accounts, account.email).forEach(function (expiry) { notices.push(ciExpirySentence(expiry)); });
     return notices;
   }
@@ -3176,6 +3179,7 @@
       // One line, cut short with the whole of it on hover.
       lines.appendChild(element("p", "muted browser", browser)).title = browser;
     }
+    if (account.browserProfileWarning) { lines.appendChild(element("p", "browser-profile-warning warn", account.browserProfileWarning)); }
     Array.prototype.forEach.call(lines.children, function (line) {
       if (!line.children.length) { line.textContent = unbroken(line.textContent); }
     });

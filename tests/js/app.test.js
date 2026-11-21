@@ -1528,6 +1528,10 @@ test("a row keeps its warnings on its face and leaves neutral facts to Detailed"
   assert.deepStrictEqual(rowNotices(out, dashboard, NOW, [out]), ["The CLI logged out of this account; log in again."]);
   const soon = dated("soon@x", 30, Object.assign({ loginExpiresAt: new Date(NOW + 3 * 86400000).toISOString() }, read));
   assert.deepStrictEqual(rowNotices(soon, dashboard, NOW, [soon]), ["login expires in 3 d"]);
+  const shared = dated("shared@x", 30, Object.assign({ browserProfileWarning: "Shares browser profile with other@x; change one in Edit." }, read));
+  assert.deepStrictEqual(rowNotices(shared, dashboard, NOW, [shared]), ["Shares browser profile with other@x; change one in Edit."]);
+  assert.strictEqual(needsAttention(shared, NOW, [shared]), true);
+  assert.strictEqual(needsAttention(dated("plain@x", 30, read), NOW, []), false);
   const token = dated("token@x", 30, Object.assign({ roster: { ciRoles: [{ name: "Lane", tokenSetOn: "2025-10-20", tokenSecret: "T" }] } }, read));
   assert.match(rowNotices(token, dashboard, NOW, [token])[0], /^When the CI token expires on 2026-10-20, these roles stop: Lane$/);
 });

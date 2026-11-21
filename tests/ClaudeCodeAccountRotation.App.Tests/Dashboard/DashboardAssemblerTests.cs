@@ -108,6 +108,43 @@ public sealed class DashboardAssemblerTests
     }
 
     [Fact]
+    public async Task TwoRosterEntriesOnTheSameBrowserProfileWarnOnBothRowsNamingTheOther()
+    {
+        await using AppFactory factory = new();
+        await RosterAsync(
+            factory,
+            new RosterEntry(AccountEmail.Parse(FirstEmail).Value, Browser: BrowserFamily.Chrome, BrowserProfileDirectory: "Profile 2"),
+            new RosterEntry(AccountEmail.Parse(SecondEmail).Value, Browser: BrowserFamily.Chrome, BrowserProfileDirectory: "Profile 2"));
+
+        Payload dashboard = await DashboardAsync(factory);
+
+        Card(dashboard, FirstEmail).GetProperty("browserProfileWarning").GetString()
+            .ShouldBe("Shares browser profile with " + SecondEmail + "; change one in Edit.");
+        Card(dashboard, SecondEmail).GetProperty("browserProfileWarning").GetString()
+            .ShouldBe("Shares browser profile with " + FirstEmail + "; change one in Edit.");
+    }
+
+    [Fact]
+    public async Task RosterEntriesOnDifferentProfilesOrWithNoProfileSetCarryNoBrowserProfileWarning()
+    {
+        await using AppFactory factory = new();
+        await RosterAsync(
+            factory,
+            new RosterEntry(AccountEmail.Parse(FirstEmail).Value, Browser: BrowserFamily.Chrome, BrowserProfileDirectory: "Profile 1"),
+            new RosterEntry(AccountEmail.Parse(SecondEmail).Value, Browser: BrowserFamily.Chrome, BrowserProfileDirectory: "Profile 2"),
+            new RosterEntry(AccountEmail.Parse(ThirdEmail).Value, Browser: BrowserFamily.Edge, BrowserProfileDirectory: "Profile 1"),
+            new RosterEntry(AccountEmail.Parse(FourthEmail).Value, Browser: BrowserFamily.Chrome, BrowserProfileDirectory: null),
+            new RosterEntry(AccountEmail.Parse(FifthEmail).Value, Browser: null, BrowserProfileDirectory: null));
+
+        Payload dashboard = await DashboardAsync(factory);
+
+        foreach (string email in new[] { FirstEmail, SecondEmail, ThirdEmail, FourthEmail, FifthEmail })
+        {
+            Card(dashboard, email).GetProperty("browserProfileWarning").ValueKind.ShouldBe(JsonValueKind.Null);
+        }
+    }
+
+    [Fact]
     public async Task AnUnreadableTeeFileLeavesTheCardWithoutNumbers()
     {
         await using AppFactory factory = new();
@@ -1789,6 +1826,11 @@ public sealed class DashboardAssemblerTests
                     if (card["cliLoggedOut"] is JsonNode loggedOut)
                     {
                         yield return loggedOut.GetValue<string>();
+                    }
+
+                    if (card["browserProfileWarning"] is JsonNode profileWarning)
+                    {
+                        yield return profileWarning.GetValue<string>();
                     }
                 }
 

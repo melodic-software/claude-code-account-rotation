@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **A warning on dashboard rows that share a browser profile.** When two or more roster entries
+  name the same browser and browser profile directory, each row warns and names the other address
+  so the operator can change one in Edit before logging in. Entries on different profiles or with
+  no profile set show no warning.
+
 ## [3.1.3] - 2026-11-15
 
 ### Added
