@@ -105,7 +105,7 @@ internal static class AppComposition
 
         if (created)
         {
-            await Console.Out.WriteLineAsync("Created configuration at " + fullConfigPath);
+            await Console.Out.WriteLineAsync("Created configuration at " + fullConfigPath, cancellationToken);
         }
 
         // Port 0 is this launch only: the file keeps a real listenPort, which is
@@ -132,7 +132,7 @@ internal static class AppComposition
                 return Result<bool, string>.Failure(read.Error);
             }
 
-            await Console.Out.WriteLineAsync(CiUsageTrigger.Format(read.Value, arguments.Emails, arguments.AllAccounts));
+            await Console.Out.WriteLineAsync(CiUsageTrigger.Format(read.Value, arguments.Emails, arguments.AllAccounts), cancellationToken);
             return Result<bool, string>.Success(false);
         }
 
