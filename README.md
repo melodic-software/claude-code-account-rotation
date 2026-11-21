@@ -903,8 +903,11 @@ mapping; the quota cache; the computed queue; and quarantined families.
 
 What survives: the live Claude Code login, and the parked pairs.
 
-Remove on a card is the explicit per-account logout. Uninstall never calls it, and never runs
-`claude auth logout` against the live directory.
+Remove on a card is the explicit per-account logout: it runs `claude auth logout` against that
+account's profile folder and deletes the folder. Whether `claude auth logout` revokes a
+claude.ai refresh token server-side is not documented, so the token may stay valid until its
+login expires. Uninstall never calls Remove, and never runs `claude auth logout` against the
+live directory.
 
 After a later install, parked folders show as not on the roster, and Adopt is offered only for
 the live account.

@@ -209,13 +209,13 @@ public sealed class CredentialAuditLogTests
         failed["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Failed));
         ShouldRecord(factory, "login for " + ParkedEmail + " started");
         ShouldRecord(factory, "login for " + ParkedEmail + " failed");
-        ShouldRecord(factory, "logout for " + ParkedEmail + " revoked");
+        ShouldRecord(factory, "logout for " + ParkedEmail + " completed");
         ShouldRecord(factory, "credential folder for " + ParkedEmail + " deleted");
         ShouldOmitSecrets(factory);
     }
 
     [Fact]
-    public async Task RemovingAnAccountRecordsTheRevocationAndTheFolderDeletionWithoutThePair()
+    public async Task RemovingAnAccountRecordsTheLogoutAndTheFolderDeletionWithoutThePair()
     {
         await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
         string folder = await factory.ParkedProfileAsync(ParkedEmail, RefreshToken, TestContext.Current.CancellationToken);
@@ -228,7 +228,7 @@ public sealed class CredentialAuditLogTests
 
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
         Directory.Exists(folder).ShouldBeFalse();
-        ShouldRecord(factory, "logout for " + ParkedEmail + " revoked");
+        ShouldRecord(factory, "logout for " + ParkedEmail + " completed");
         ShouldRecord(factory, "credential folder for " + ParkedEmail + " deleted");
         ShouldOmitSecrets(factory);
     }

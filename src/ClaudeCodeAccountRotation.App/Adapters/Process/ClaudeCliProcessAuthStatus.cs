@@ -12,7 +12,7 @@ namespace ClaudeCodeAccountRotation.App.Adapters.Process;
 /// timeout. A non-zero exit, a timeout, or unparsable output is a failure
 /// carrying a short classified sentence. Two commands run this way: <c>auth status
 /// --json</c>, the authority on which account a folder holds, and <c>auth
-/// logout</c>, which revokes a removed account's login.
+/// logout</c>, which logs a removed account out of its folder.
 /// <para>
 /// A failure carries the command and its exit code, or which kind of failure it
 /// was, and nothing the child wrote. What the child wrote goes to the log, cut
