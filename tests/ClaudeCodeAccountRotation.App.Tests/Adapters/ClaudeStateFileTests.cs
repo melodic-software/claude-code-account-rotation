@@ -37,7 +37,7 @@ public sealed class ClaudeStateFileTests : IDisposable
         {
             builder.Append("    \"/srv/dev/repos/projekt-").Append(index).Append("\": {\n");
             builder.Append("      \"allowedTools\": [\"Bash(ls:*)\", \"Read\"],\n");
-            builder.Append("      \"lastPrompt\": \"Größe prüfen — 日本語 テスト ✓ ").Append(new string('x', 120)).Append("\",\n");
+            builder.Append("      \"lastPrompt\": \"Größe prüfen — 日本語 テスト ✓ ").Append('x', 120).Append("\",\n");
             builder.Append("      \"hasTrustDialogAccepted\": true\n");
             builder.Append("    },\n");
         }

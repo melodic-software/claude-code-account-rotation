@@ -5,8 +5,8 @@
 
   <!-- Project scope shared by every project in this repository. -->
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <LangVersion>14.0</LangVersion>
+    <TargetFramework>net11.0</TargetFramework>
+    <LangVersion>15.0</LangVersion>
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 </Project>

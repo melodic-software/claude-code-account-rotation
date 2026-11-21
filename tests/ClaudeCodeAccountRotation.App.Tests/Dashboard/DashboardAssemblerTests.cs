@@ -1800,7 +1800,7 @@ public sealed class DashboardAssemblerTests
     {
         public JsonNode Raw { get; } = JsonNode.Parse(body)!;
 
-        public JsonElement Element { get; } = JsonDocument.Parse(body).RootElement.Clone();
+        public JsonElement Element { get; } = JsonElement.Parse(body);
 
         public IEnumerable<string> Messages
         {
