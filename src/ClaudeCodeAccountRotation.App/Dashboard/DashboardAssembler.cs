@@ -512,6 +512,10 @@ internal sealed partial class DashboardAssembler(
         string? loggedOutOn = slot?.State == SlotState.HeldElsewhere && holder is { Online: true, LiveLoginDead: true } && holder.LiveAccount == email
             ? holder.Side.Value
             : null;
+        IReadOnlyList<AccountEmail> sharedProfileWith = roster.SharedBrowserProfileWith(email);
+        string? browserProfileWarning = sharedProfileWith.Count > 0
+            ? "Shares browser profile with " + string.Join(", ", sharedProfileWith.Select(static other => other.Value)) + "; change one in Edit."
+            : null;
         return (
             new AccountCardView(
                 email.Value,
@@ -540,7 +544,8 @@ internal sealed partial class DashboardAssembler(
                 CliLoggedOut: isLive
                     ? cliLoggedOutSentence
                     : loggedOutOn is null ? null : "The CLI on " + loggedOutOn + " logged out of this account; log in again.",
-                LoggedOutOn: loggedOutOn),
+                LoggedOutOn: loggedOutOn,
+                BrowserProfileWarning: browserProfileWarning),
             new AccountStanding(email, isLive, entry?.Paused ?? false, hasCredentials, merged?.Merged, loginExpiresAt, HeldElsewhere: heldAway));
     }
 

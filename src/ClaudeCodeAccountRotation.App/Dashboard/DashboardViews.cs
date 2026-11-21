@@ -163,6 +163,12 @@ internal sealed record LiveAccountView(string? Email, bool HasCredentials, strin
 /// which frees the slot, then the ordinary login.
 /// </para>
 /// <para>
+/// <c>BrowserProfileWarning</c> is set when another roster entry names the same
+/// browser and browser profile directory as this card's roster entry, naming
+/// every other address that shares it so the operator can change one in Edit
+/// before logging in; null otherwise.
+/// </para>
+/// <para>
 /// Every optional member carries a default, so a route that hands back a card
 /// for an account nothing has read constructs one unchanged.
 /// </para>
@@ -190,7 +196,8 @@ internal sealed record AccountCardView(
     string? LimitedModel = null,
     bool LoginDead = false,
     string? LiveOn = null,
-    bool LoginPaused = false);
+    bool LoginPaused = false,
+    string? BrowserProfileWarning = null);
 
 /// <summary>
 /// The roster entry behind a card, or null when the account is on the machine

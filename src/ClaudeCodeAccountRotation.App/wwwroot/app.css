@@ -444,7 +444,7 @@ button.fold, button.fold:is(:hover, :disabled) { height: auto; padding: 0; borde
 .lines p { font: 400 12px/16px var(--sans); color: var(--muted); overflow-wrap: anywhere; }
 .lines .browser { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lines .cli-logout, .cli-logout { color: var(--crit); }
-.login-expiry.warn { color: var(--warn); }
+.login-expiry.warn, .browser-profile-warning.warn { color: var(--warn); }
 
 /* A window: bar, then the percentage in a fixed end-aligned slot, so every
    bar in a column has one length whatever its figure (the bundled Poppins has

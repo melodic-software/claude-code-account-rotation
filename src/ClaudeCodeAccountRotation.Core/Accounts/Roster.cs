@@ -25,6 +25,31 @@ public sealed class Roster
     public RosterEntry? Find(AccountEmail email) => _entries.Find(entry => entry.Email == email);
 
     /// <summary>
+    /// The other entries on this roster that name the same browser and browser
+    /// profile directory as <paramref name="email"/>, in e-mail order, or empty
+    /// when the entry is absent, has no browser or profile directory set, or
+    /// shares its profile with no other entry. Directory comparison is
+    /// case-insensitive because Chromium profile directories on Windows and
+    /// macOS match regardless of case and browsers do not create distinct
+    /// profiles differing only in case.
+    /// </summary>
+    public IReadOnlyList<AccountEmail> SharedBrowserProfileWith(AccountEmail email)
+    {
+        if (Find(email) is not { Browser: BrowserFamily browser, BrowserProfileDirectory: string directory }
+            || string.IsNullOrWhiteSpace(directory))
+        {
+            return [];
+        }
+
+        return [.. _entries
+            .Where(other => other.Email != email
+                && other.Browser == browser
+                && !string.IsNullOrWhiteSpace(other.BrowserProfileDirectory)
+                && string.Equals(other.BrowserProfileDirectory, directory, StringComparison.OrdinalIgnoreCase))
+            .Select(static other => other.Email)];
+    }
+
+    /// <summary>
     /// Adds <paramref name="entry"/>, replacing any entry for the same account.
     /// One account backs each CI role half at a time, since each half is its own
     /// secret: every half <paramref name="entry"/> now holds that it did not
