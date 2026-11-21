@@ -13,6 +13,15 @@ All notable changes to this project are documented in this file. The format foll
   so the operator can change one in Edit before logging in. Entries on different profiles or with
   no profile set show no warning.
 
+### Fixed
+
+- **Messages, logs, and documentation no longer promise server-side revocation on `claude auth logout`.**
+  Anthropic's documentation claims revocation only for keyless Console sign-ins, not claude.ai
+  OAuth logins, and whether `claude auth logout` revokes a claude.ai refresh token server-side is
+  unverified. Account removal prompts, refusal messages, refused non-Max login messages, audit logs
+  (`logout for <account> completed`), and the README now report `claude auth logout` and note that
+  the refresh token may stay valid server-side until its login expires.
+
 ## [3.1.3] - 2026-11-15
 
 ### Added

@@ -34,7 +34,7 @@ public interface ILoginSessionRunner
     /// Whether a login is in flight against <paramref name="folderPath"/>. A
     /// login owns its folder for the whole of its ten-minute window: the child
     /// writes a credential pair into it at a moment nothing here chooses, so
-    /// every other operation that would move, delete, or revoke what is in that
+    /// every other operation that would move, delete, or log out what is in that
     /// folder asks this first and refuses rather than racing the child.
     /// </summary>
     bool IsRunningAgainst(string folderPath);

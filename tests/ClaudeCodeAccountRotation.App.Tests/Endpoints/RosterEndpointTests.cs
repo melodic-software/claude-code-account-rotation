@@ -453,7 +453,7 @@ public sealed class RosterEndpointTests
     }
 
     [Fact]
-    public async Task RemoveRevokesTheLoginAndDeletesTheFolder()
+    public async Task RemoveLogsOutAndDeletesTheFolder()
     {
         await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
         string folder = await factory.ParkedProfileAsync(ParkedEmail, "refresh-parked", TestContext.Current.CancellationToken);
@@ -470,7 +470,7 @@ public sealed class RosterEndpointTests
     }
 
     [Fact]
-    public async Task AFailedLogoutKeepsTheFolderRatherThanStrandingALiveToken()
+    public async Task AFailedLogoutKeepsTheFolderRatherThanSkippingLogoutSilently()
     {
         await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
         string folder = await factory.ParkedProfileAsync(ParkedEmail, "refresh-parked", TestContext.Current.CancellationToken);
@@ -481,18 +481,22 @@ public sealed class RosterEndpointTests
 
         response.StatusCode.ShouldBe(HttpStatusCode.Conflict);
         Directory.Exists(folder).ShouldBeTrue();
-        (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["refusal"]!.GetValue<string>().ShouldBe("LogoutFailed");
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+        body["refusal"]!.GetValue<string>().ShouldBe("LogoutFailed");
+        string message = body["message"]!.GetValue<string>();
+        message.ShouldContain("could not be logged out");
+        message.ShouldNotContain("revok", Case.Insensitive);
     }
 
     [Fact]
-    public async Task ARemovalPutsAStrandedPairBackBeforeRevokingIt()
+    public async Task ARemovalPutsAStrandedPairBackBeforeLoggingOut()
     {
         // A stranded folder holds the pair a rotation replaced; the working
-        // lineage is in the recovery directory. Revoking what the folder holds
-        // would kill the dead pair and leave the live one valid for the rest of
-        // its login, in a file belonging to an account the roster no longer names
-        // and no card ever shows again. The logout here fails on purpose, because
-        // a successful one deletes the folder and takes the evidence with it.
+        // lineage is in the recovery directory. Logging out what the folder holds
+        // would run against the dead pair and leave the live one in a recovery
+        // file belonging to an account the roster no longer names and no card ever
+        // shows again. The logout here fails on purpose, because a successful one
+        // deletes the folder and takes the evidence with it.
         await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
         string folder = await factory.ParkedProfileAsync(ParkedEmail, "refresh-parked", TestContext.Current.CancellationToken);
         factory.Cli.LogoutError = "the CLI could not reach the token endpoint";
@@ -529,14 +533,17 @@ public sealed class RosterEndpointTests
         response.StatusCode.ShouldBe(HttpStatusCode.Conflict);
         JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
         body["refusal"]!.GetValue<string>().ShouldBe("StrandedInRecovery");
-        body["message"]!.GetValue<string>().ShouldContain("recovery");
+        string message = body["message"]!.GetValue<string>();
+        message.ShouldContain("recovery");
+        message.ShouldContain("log out");
+        message.ShouldNotContain("revok", Case.Insensitive);
         Directory.Exists(folder).ShouldBeTrue();
         factory.Cli.LogoutCalls.ShouldBeEmpty();
         factory.Services.GetRequiredService<RecoveryFiles>().HasRecoveryFor(folder).ShouldBeTrue();
     }
 
     [Fact]
-    public async Task RemoveWithLogoutFalseDeletesTheFolderAndSaysTheTokenWasNotRevoked()
+    public async Task RemoveWithLogoutFalseDeletesTheFolderAndSaysTheTokenStaysValid()
     {
         await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
         string folder = await factory.ParkedProfileAsync(ParkedEmail, "refresh-parked", TestContext.Current.CancellationToken);
@@ -582,7 +589,7 @@ public sealed class RosterEndpointTests
     [Fact]
     public async Task RemovingAnAccountIsRefusedWhileAnotherCredentialChangeHoldsTheGate()
     {
-        // The removal revokes a login and deletes a folder, so it belongs behind the
+        // The removal logs out and deletes a folder, so it belongs behind the
         // one gate every other credential-touching operation takes. Landing between a
         // switch's journal write and its unpark takes away the folder that switch is
         // about to rename out of, past the point where it can back out.
@@ -607,9 +614,9 @@ public sealed class RosterEndpointTests
     [Fact]
     public async Task RemovingAnAccountALoginIsRunningAgainstIsRefused()
     {
-        // The login child is still alive on an authenticated pipe. Revoke and delete
-        // now and the operator's next paste recreates the folder with a fresh,
-        // unrevoked token for the account the response said had been removed.
+        // The login child is still alive on an authenticated pipe. Log out and
+        // delete now and the operator's next paste recreates the folder with a
+        // fresh login for the account the response said had been removed.
         await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
         string folder = await factory.ParkedProfileAsync(ParkedEmail, "refresh-parked", TestContext.Current.CancellationToken);
         using HttpClient client = factory.CreateMutatingClient();

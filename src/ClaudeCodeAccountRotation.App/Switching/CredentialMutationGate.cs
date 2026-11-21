@@ -10,7 +10,7 @@ namespace ClaudeCodeAccountRotation.App.Switching;
 /// writes into the folder minutes later, and holding the gate for a ten-minute
 /// window would refuse every switch for its duration. So a login takes the
 /// gate twice, at admission and at completion, and registers itself between
-/// them; everything that would move, delete, or revoke what is in a folder
+/// them; everything that would move, delete, or log out what is in a folder
 /// asks <see cref="ClaudeCodeAccountRotation.Core.Ports.ILoginSessionRunner.IsRunningAgainst"/>
 /// while holding this gate and refuses rather than racing the child.
 /// </para>

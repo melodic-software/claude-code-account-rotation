@@ -30,17 +30,18 @@ namespace ClaudeCodeAccountRotation.App.Endpoints;
 /// and is judged again once it has a login.
 /// </para>
 /// <para>
-/// Removal revokes by default (<c>?logout=true</c>). Deleting a folder leaves
-/// recoverable bytes holding a refresh token valid for the rest of its 28 days,
-/// so the revocation is the removal, and a failed logout refuses the delete
-/// rather than silently leaving a live token behind. <c>?logout=false</c> is
-/// the operator's deliberate override: the folder goes and the response says
-/// the token was not revoked. A folder that holds no pair skips the logout
-/// entirely; there is nothing to revoke. The revocation and the folder deletion
-/// are each logged with the account and the outcome, and neither line carries
-/// the token or the logout's own diagnostic. A folder whose pair is stranded in
-/// recovery is put back first, so the revocation reaches the lineage that is
-/// actually alive.
+/// Removal runs <c>claude auth logout</c> by default (<c>?logout=true</c>).
+/// Whether <c>claude auth logout</c> revokes a claude.ai refresh token
+/// server-side is not documented, so the token may stay valid until it expires;
+/// running logout still clears the CLI's own local credential state before the
+/// folder is deleted, and a failed logout refuses the delete rather than
+/// silently skipping it. <c>?logout=false</c> is the operator's deliberate
+/// override: the folder goes and the response says no logout was run. A folder
+/// that holds no pair skips the logout entirely; there is nothing to log out
+/// of. The logout and the folder deletion are each logged with the account and
+/// the outcome, and neither line carries the token or the logout's own
+/// diagnostic. A folder whose pair is stranded in recovery is put back first,
+/// so the logout runs against the lineage that is actually alive.
 /// </para>
 /// </summary>
 internal static partial class RosterEndpoints
@@ -255,7 +256,7 @@ internal static partial class RosterEndpoints
             IDisposable? permit = null;
             try
             {
-                // A removal revokes a login and deletes a folder, so it is a credential
+                // A removal logs out and deletes a folder, so it is a credential
                 // mutation and takes the one gate like every other. Without it the
                 // delete could land between a switch's journal write and its unpark,
                 // taking away the folder the switch is about to rename out of, past the
@@ -292,13 +293,13 @@ internal static partial class RosterEndpoints
                 {
                     return Refused(
                         "HeldByOtherSide",
-                        "The other side of this machine holds that account, or a hand-off for it is in flight; switch it away there first, so the removal can revoke the login it really has.");
+                        "The other side of this machine holds that account, or a hand-off for it is in flight; switch it away there first, so the removal can log out the login it really has.");
                 }
 
                 // The escape hatch's own case, which the verdict above cannot
                 // see: the slot reads Parked because the re-login put a fresh
                 // family in it, and the family the other side still holds is
-                // recorded beside it. Removing here would revoke the fresh
+                // recorded beside it. Removing here would log out the fresh
                 // family, delete the record with the folder, and report success
                 // while a live refresh token stayed in the distro with nothing
                 // left on this machine naming it. The empty hold costs nothing
@@ -318,7 +319,7 @@ internal static partial class RosterEndpoints
                     // The gate alone does not cover this: a login holds it only at the
                     // end, so the child is still alive on an authenticated pipe. Delete
                     // now and the operator's next paste recreates the folder with a
-                    // fresh, unrevoked token for the account they were told was gone.
+                    // fresh login for the account they were told was gone.
                     return Refused(
                         "LoginInProgress",
                         "A login is running against that account's folder; finish it or let it expire before removing the account.");
@@ -326,47 +327,47 @@ internal static partial class RosterEndpoints
 
                 // From here on the request's own token is not consulted, the way a
                 // switch stops consulting it past its journal write: a browser that
-                // navigates away must not leave a revoked login beside a kept folder.
+                // navigates away must not leave a logged-out folder kept on disk.
                 CancellationToken committed = CancellationToken.None;
 
                 // A stranded folder holds the pair a rotation replaced while the
-                // working lineage waits in the recovery directory. Revoking what the
-                // folder holds would kill the dead pair and leave the live one valid
-                // for the rest of its login, in a file belonging to an account the
-                // roster no longer names. So the restore runs first, under the gate
-                // this handler already holds, and the logout revokes what the account
-                // really has. A restore that cannot apply refuses the removal
-                // outright rather than choosing which lineage to leave behind.
+                // working lineage waits in the recovery directory. Logging out what
+                // the folder holds would run against the dead pair and leave the live
+                // one in a recovery file belonging to an account the roster no longer
+                // names. So the restore runs first, under the gate this handler
+                // already holds, and the logout runs against what the account really
+                // has. A restore that cannot apply refuses the removal outright
+                // rather than choosing which lineage to leave behind.
                 if (recovery.HasRecoveryFor(folder) && !await recovery.RestoreAsync(folder, committed))
                 {
                     return Refused(
                         "StrandedInRecovery",
-                        "That account's rotated credentials are held in the recovery directory and could not be put back, so a removal now would revoke the wrong login. The warning on this page says what that account needs; remove it once the recovery file is resolved.");
+                        "That account's rotated credentials are held in the recovery directory and could not be put back, so a removal now would log out the wrong login. The warning on this page says what that account needs; remove it once the recovery file is resolved.");
                 }
 
                 // Read again rather than reusing the value the slot guard took: the
                 // restore above can have put a pair back into the folder, and a
-                // logout skipped on the older answer would leave that login valid.
+                // logout skipped on the older answer would skip logging out that pair.
                 bool hasPair = File.Exists(Path.Combine(folder, FileSystemCredentialPairStore.FileName));
-                bool revoke = logout ?? true;
-                bool revoked = false;
-                if (hasPair && revoke)
+                bool runLogout = logout ?? true;
+                bool loggedOut = false;
+                if (hasPair && runLogout)
                 {
-                    Result<Unit, string> loggedOut = await cli.LogoutAsync(folder, committed);
-                    if (loggedOut.IsFailure)
+                    Result<Unit, string> logoutResult = await cli.LogoutAsync(folder, committed);
+                    if (logoutResult.IsFailure)
                     {
-                        // loggedOut.Error reaches the page as a classified sentence.
+                        // logoutResult.Error reaches the page as a classified sentence.
                         // It does not reach the log: the port's diagnostic can repeat
                         // what the child printed.
                         LogLogoutFailed(logger, target.Value);
                         return Refused(
                             "LogoutFailed",
-                            "That account's login could not be revoked, so the folder was kept: " + loggedOut.Error
-                            + " Retry, or remove with logout=false to delete the folder without revoking.");
+                            "That account could not be logged out, so the folder was kept: " + logoutResult.Error
+                            + " Retry, or remove with logout=false to delete the folder without running claude auth logout.");
                     }
 
-                    LogLogoutRevoked(logger, target.Value);
-                    revoked = true;
+                    LogLogoutCompleted(logger, target.Value);
+                    loggedOut = true;
                 }
 
                 if (Directory.Exists(folder))
@@ -380,7 +381,7 @@ internal static partial class RosterEndpoints
 
                 // Every stored credential goes with the account. A recorded one the store
                 // cannot delete keeps the entry and its record, so a retry (which
-                // finds no folder left to revoke or delete) comes back here, unless
+                // finds no folder left to log out or delete) comes back here, unless
                 // the operator says to leave the key: then the response names it.
                 RosterEntry entry = (await rosterFile.ReadAsync(committed)).Find(target) ?? new RosterEntry(target);
                 StoredKeyRemoval keys = await ApiKeyEndpoints.DeleteStoredKeysAsync(
@@ -391,12 +392,12 @@ internal static partial class RosterEndpoints
                 }
 
                 await rosterFile.UpdateAsync(roster => roster.Without(target), committed, via: LaneVia.Delete);
-                string? folderWarning = hasPair && !revoked
+                string? folderWarning = hasPair && !loggedOut
                     ? "The folder was deleted without a logout; that refresh token stays valid until its login expires."
                     : null;
                 return Results.Ok(new RemovalView(
                     target.Value,
-                    revoked,
+                    loggedOut,
                     folderWarning is null || keys.Warning is null ? folderWarning ?? keys.Warning : folderWarning + " " + keys.Warning));
             }
             finally
@@ -885,12 +886,12 @@ internal static partial class RosterEndpoints
         body[key] is JsonValue value && value.TryGetValue(out bool flag) ? flag : null;
 
     // The account and the outcome only. The logout diagnostic is not an outcome.
-    [LoggerMessage(Level = LogLevel.Information, Message = "logout for {Account} revoked")]
-    private static partial void LogLogoutRevoked(ILogger logger, string account);
+    [LoggerMessage(Level = LogLevel.Information, Message = "logout for {Account} completed")]
+    private static partial void LogLogoutCompleted(ILogger logger, string account);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "logout for {Account} failed")]
     private static partial void LogLogoutFailed(ILogger logger, string account);
 }
 
-/// <summary>What a removal did, including whether the refresh token was revoked.</summary>
+/// <summary>What a removal did, including whether <c>claude auth logout</c> ran.</summary>
 internal sealed record RemovalView(string Removed, bool LoggedOut, string? Warning);

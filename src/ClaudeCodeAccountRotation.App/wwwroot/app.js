@@ -936,7 +936,7 @@
   }
 
   function remove(email) {
-    if (!window.confirm("Remove " + email + "? Its login is revoked and its profile folder is deleted.")) {
+    if (!window.confirm("Remove " + email + "? The tool runs claude auth logout and deletes its profile folder. Its refresh token may stay valid server-side until its login expires.")) {
       return Promise.resolve();
     }
     return mutate(accountPath(email), "DELETE", null, function (result) {
@@ -944,9 +944,9 @@
         showToast(email + " removed" + (result.body.warning ? ". " + result.body.warning : " and logged out"), result.body.warning ? "warn" : "ok");
         return null;
       }
-      // The delete is refused rather than stranding a token the tool believes it
-      // revoked. Deleting anyway is the operator's call, and it is said plainly.
-      if (result.body.refusal === "LogoutFailed" && window.confirm(result.body.message + "\n\nDelete the folder anyway, without revoking?")) {
+      // The delete is refused rather than skipping the logout silently.
+      // Deleting anyway is the operator's call, and it is said plainly.
+      if (result.body.refusal === "LogoutFailed" && window.confirm(result.body.message + "\n\nDelete the folder anyway, without logging out?")) {
         return send(accountPath(email) + "?logout=false", "DELETE", null).then(function (forced) {
           showToast(forced.ok ? email + " removed. " + forced.body.warning : refused(forced.body), forced.ok ? "warn" : "error");
         });
@@ -3657,7 +3657,7 @@
     if (roster && roster.adminKeySetOn) {
       deletes.push(menuItem(more, "Delete Admin key", "danger sm", function () { clearApiKey(account.email, true); }));
     }
-    // Remove revokes the login and deletes the folder, so it sits apart, under
+    // Remove logs out and deletes the folder, so it sits apart, under
     // a rule, and never beside Switch.
     if (!account.isLive) {
       // Removing a slot the other side holds would skip the logout it cannot

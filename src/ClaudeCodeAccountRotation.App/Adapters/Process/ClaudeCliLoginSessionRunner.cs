@@ -74,10 +74,10 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
         "the credentials already in that folder could not be read, so a new login there could not be told apart from them; try again in a moment";
     private const string UnreadablePairMessage =
         "The credentials in that folder could not be read after the login ended, so what it wrote could not be told from what was"
-        + " there before, and nothing was deleted. Remove the account from the roster, which revokes that login, before switching to it.";
+        + " there before, and nothing was deleted. Remove the account from the roster, which logs it out and deletes its folder, before switching to it.";
     private const string UnjudgedKeptMessage =
         "What kind of account signed in could not be checked, and the folder held a login before this one, so its credentials were"
-        + " left in place rather than deleted. Remove the account from the roster, which revokes that login, before switching to it.";
+        + " left in place rather than deleted. Remove the account from the roster, which logs it out and deletes its folder, before switching to it.";
 
     private const string RefusedPrefix = "That login was refused: ";
     private const string UnreadableTierReason =
@@ -85,26 +85,26 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     private const string UnnamedAddressReason =
         "the CLI did not report which address signed in, and a login that cannot be tied to this row is refused rather than admitted";
     private const string PickMaxRetry = " Log in again and pick the Max account at the sign-in step.";
-    private const string RevokedSuffix =
-        ". The credentials it wrote were revoked with `claude auth logout` and deleted, so nothing joined the rotation.";
-    private const string NotRevokedSuffix =
-        ". The credentials it wrote were deleted but could not be revoked, so that refresh token stays valid until its login expires.";
+    private const string LoggedOutSuffix =
+        ". The credentials it wrote were logged out with `claude auth logout` and deleted, so nothing joined the rotation; that refresh token may still stay valid server-side until its login expires.";
+    private const string LogoutFailedSuffix =
+        ". The credentials it wrote were deleted, but `claude auth logout` failed, so that refresh token stays valid until its login expires.";
     private const string NotDeletedSuffix =
         ". The credentials it wrote could not be deleted; remove the account from the roster before switching to anything.";
-    private const string OtherAccountUnrevoked =
+    private const string OtherAccountNotLoggedOut =
         " `claude auth logout` is never run against another account's login, so that refresh token stays valid until its login expires.";
     private const string OtherAccountDeletedSuffix =
-        ". The credentials it wrote were deleted, so nothing joined the rotation." + OtherAccountUnrevoked;
+        ". The credentials it wrote were deleted, so nothing joined the rotation." + OtherAccountNotLoggedOut;
     private const string RestoredSuffix =
-        ". The credentials it wrote were removed, and the login that folder held before was put back." + OtherAccountUnrevoked;
+        ". The credentials it wrote were removed, and the login that folder held before was put back." + OtherAccountNotLoggedOut;
     private const string NotRestoredSuffix =
         ". The login that folder held before could not be put back; remove the account from the roster before switching to anything.";
     private const string UnjudgedMessage =
         "Another credential change held the lock, so what kind of account signed in could not be checked."
-        + " Remove the account from the roster, which revokes that login, before switching to it.";
+        + " Remove the account from the roster, which logs it out and deletes its folder, before switching to it.";
     private const string FaultedMessage =
         "Judging what kind of account signed in failed, so the credentials in that folder were left in place."
-        + " Remove the account from the roster, which revokes that login, before switching to it.";
+        + " Remove the account from the roster, which logs it out and deletes its folder, before switching to it.";
     private const string PumpFaultedMessage = "The login stopped unexpectedly. Start it again.";
 
     private readonly LoginChildFactory _start;
@@ -544,7 +544,7 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
         try
         {
             // The whole of it under one permit. Reading the pair, judging the tier,
-            // and revoking it are separate steps, and a switch that slipped between
+            // and logging it out are separate steps, and a switch that slipped between
             // any two of them would take the very pair being compared or refused.
             using IDisposable permit = await _gate.AcquireAsync(_gateWait, CancellationToken.None);
             string? digest;
@@ -579,7 +579,7 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
         }
         catch (TimeoutException)
         {
-            // Nothing may move, revoke, or delete what is in a folder without the
+            // Nothing may move, log out, or delete what is in a folder without the
             // gate, so an unjudged pair is left exactly where it is and the operator
             // is told to remove the account rather than switch to it.
             Settle(session, LoginSessionState.Failed, UnjudgedMessage);
@@ -697,11 +697,12 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     /// is. A login the CLI names another address for is refused whatever its
     /// tier: here the pair is proven not to be the row's, so a folder that held
     /// one before gets those earlier bytes back rather than keeping the new pair.
-    /// That pair is removed and never revoked. It belongs to another account,
-    /// often the live one, and what <c>claude auth logout</c> ends beyond the
-    /// one login is not documented, so the tool does not run it against a login
-    /// of an account the row never asked for. A Max login the CLI names no
-    /// address for is treated as one whose tier could not be read.
+    /// That pair is removed without running <c>claude auth logout</c>. It
+    /// belongs to another account, often the live one, and what
+    /// <c>claude auth logout</c> ends beyond the one login is not documented, so
+    /// the tool does not run it against a login of an account the row never
+    /// asked for. A Max login the CLI names no address for is treated as one
+    /// whose tier could not be read.
     /// </para>
     /// </summary>
     private async Task<(LoginSessionState State, string Message)> AdmitAsync(Session session)
@@ -719,7 +720,7 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
             }
 
             await TryAdoptAsync(session);
-            return (LoginSessionState.Failed, refusal + await DiscardAsync(session, retry, revoke: false));
+            return (LoginSessionState.Failed, refusal + await DiscardAsync(session, retry, runLogout: false));
         }
 
         if (signedInAs is null && verdict == MaxTierVerdict.Admitted)
@@ -785,32 +786,33 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     }
 
     /// <summary>
-    /// Revokes and empties the folder of a login that turned out not to be a Max
-    /// account, and says which of those two happened. A login that signed in as
-    /// another account is emptied the same way with <paramref name="revoke"/>
+    /// Logs out and empties the folder of a login that turned out not to be a
+    /// Max account, and says which of those two happened. A login that signed in
+    /// as another account is emptied the same way with <paramref name="runLogout"/>
     /// false, for the reason on <see cref="AdmitAsync"/>.
     /// <para>
-    /// The revocation is the honest disposition for a seat that must never be
-    /// rotated: the pair exists, and deleted bytes holding a refresh token are
-    /// recoverable where a revoked token is not. It is not, however, what keeps
-    /// the account out of the rotation. A switch admits any folder holding a
-    /// credential file whatever its token is worth, so the file goes too, and it
-    /// goes even when the revocation failed: an unrevoked token the operator has
-    /// been told about is the smaller harm beside a switchable Enterprise seat.
-    /// This is the deliberate opposite of the removal endpoint, which keeps the
-    /// folder when a logout fails, because there nothing has yet been admitted.
+    /// Running <c>claude auth logout</c> clears the CLI's own local credential
+    /// state for a seat that must never be rotated, though whether it revokes a
+    /// claude.ai refresh token server-side is not documented. It is not,
+    /// however, what keeps the account out of the rotation. A switch admits any
+    /// folder holding a credential file whatever its token is worth, so the file
+    /// goes too, and it goes even when the logout failed: a skipped logout the
+    /// operator has been told about is the smaller harm beside a switchable
+    /// Enterprise seat. This is the deliberate opposite of the removal endpoint,
+    /// which keeps the folder when a logout fails, because there nothing has yet
+    /// been admitted.
     /// </para>
     /// </summary>
-    private async Task<string> DiscardAsync(Session session, string retry, bool revoke = true)
+    private async Task<string> DiscardAsync(Session session, string retry, bool runLogout = true)
     {
         // The failure text is not the outcome. The port's error can repeat what
         // the child printed, and that printout is the wrong thing to keep.
-        bool revoked = revoke && (await _logout.LogoutAsync(session.Folder, CancellationToken.None)).IsSuccess;
-        if (revoked)
+        bool loggedOut = runLogout && (await _logout.LogoutAsync(session.Folder, CancellationToken.None)).IsSuccess;
+        if (loggedOut)
         {
-            LogLogoutRevoked(session.Email.Value);
+            LogLogoutCompleted(session.Email.Value);
         }
-        else if (revoke)
+        else if (runLogout)
         {
             LogLogoutFailed(session.Email.Value);
         }
@@ -824,7 +826,7 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
             return NotDeletedSuffix;
         }
 
-        return (revoked ? RevokedSuffix : revoke ? NotRevokedSuffix : OtherAccountDeletedSuffix) + retry;
+        return (loggedOut ? LoggedOutSuffix : runLogout ? LogoutFailedSuffix : OtherAccountDeletedSuffix) + retry;
     }
 
     /// <summary>
@@ -1078,8 +1080,8 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     [LoggerMessage(Level = LogLevel.Warning, Message = "login for {Account} expired")]
     private partial void LogLoginExpired(string account);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "logout for {Account} revoked")]
-    private partial void LogLogoutRevoked(string account);
+    [LoggerMessage(Level = LogLevel.Information, Message = "logout for {Account} completed")]
+    private partial void LogLogoutCompleted(string account);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "logout for {Account} failed")]
     private partial void LogLogoutFailed(string account);

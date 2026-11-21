@@ -189,13 +189,14 @@ public sealed class LoginEndpointTests
     private static string RefusedMessage(string subscriptionType) =>
         "That login was refused: that account reports a \"" + subscriptionType
         + "\" subscription; only Max accounts are rotated, and a Team or Enterprise seat never is."
-        + " The credentials it wrote were revoked with `claude auth logout` and deleted, so nothing joined the rotation."
+        + " The credentials it wrote were logged out with `claude auth logout` and deleted, so nothing joined the rotation;"
+        + " that refresh token may still stay valid server-side until its login expires."
         + " Log in again and pick the Max account at the sign-in step.";
 
     [Theory]
     [InlineData("enterprise")]
     [InlineData("team")]
-    public async Task ALoginThatCompletesAsATeamOrEnterpriseSeatIsRevokedAndLeavesNothingToSwitchTo(string subscriptionType)
+    public async Task ALoginThatCompletesAsATeamOrEnterpriseSeatIsLoggedOutAndLeavesNothingToSwitchTo(string subscriptionType)
     {
         await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
         // One address, two accounts behind it: the browser offers both, and this is
@@ -210,8 +211,8 @@ public sealed class LoginEndpointTests
 
         refused["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Failed));
         refused["message"]!.GetValue<string>().ShouldBe(RefusedMessage(subscriptionType));
-        // Revoked at the source, under that folder and no other, then the pair the
-        // login wrote is gone: a switch admits any folder holding one.
+        // Logged out under that folder and no other, then the pair the login wrote
+        // is gone: a switch admits any folder holding one.
         factory.Cli.LogoutCalls.ShouldBe([folder]);
         File.Exists(Path.Combine(folder, CredentialFiles.FileName)).ShouldBeFalse();
         using HttpResponseMessage switched = await client.PostAsync(Account(ParkedEmail, "/switch"), content: null, TestContext.Current.CancellationToken);
@@ -225,7 +226,7 @@ public sealed class LoginEndpointTests
     }
 
     [Fact]
-    public async Task ARefusedLoginWhoseRevocationFailsStillLeavesNothingToSwitchTo()
+    public async Task ARefusedLoginWhoseLogoutFailsStillLeavesNothingToSwitchTo()
     {
         await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
         factory.Cli.SubscriptionType = "enterprise";
@@ -237,11 +238,13 @@ public sealed class LoginEndpointTests
 
         JsonObject refused = await SubmitCodeAsync(client, started["id"]!.GetValue<string>(), Code, TestContext.Current.CancellationToken);
 
-        // A switchable Enterprise seat is worse than an unrevoked token, so the
-        // pair goes either way and the message says the token was not revoked.
+        // A switchable Enterprise seat is worse than a skipped logout, so the pair
+        // goes either way and the message says `claude auth logout` failed.
         refused["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Failed));
-        refused["message"]!.GetValue<string>().ShouldContain("\"enterprise\" subscription");
-        refused["message"]!.GetValue<string>().ShouldContain("could not be revoked");
+        string message = refused["message"]!.GetValue<string>();
+        message.ShouldContain("\"enterprise\" subscription");
+        message.ShouldContain("`claude auth logout` failed");
+        message.ShouldNotContain("revok", Case.Insensitive);
         File.Exists(Path.Combine(folder, CredentialFiles.FileName)).ShouldBeFalse();
     }
 
@@ -264,7 +267,7 @@ public sealed class LoginEndpointTests
     }
 
     [Fact]
-    public async Task ALoginThatCompletesAsMaxIsAdmittedAndNothingIsRevoked()
+    public async Task ALoginThatCompletesAsMaxIsAdmittedAndNoLogoutRuns()
     {
         await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
         factory.LoginChild.OnCode = LoginChildScript.CompleteLoginAsync;
@@ -605,6 +608,7 @@ public sealed class LoginEndpointTests
         kept["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Failed));
         kept["message"]!.GetValue<string>().ShouldContain("could not be checked");
         kept["message"]!.GetValue<string>().ShouldContain("Remove the account from the roster");
+        kept["message"]!.GetValue<string>().ShouldNotContain("revok", Case.Insensitive);
         factory.Cli.LogoutCalls.ShouldBeEmpty();
         (await File.ReadAllTextAsync(Path.Combine(folder, CredentialFiles.FileName), TestContext.Current.CancellationToken)).ShouldContain("refresh-new");
     }
@@ -663,6 +667,7 @@ public sealed class LoginEndpointTests
         faulted["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Failed));
         faulted["message"]!.GetValue<string>().ShouldContain("failed");
         faulted["message"]!.GetValue<string>().ShouldContain("Remove the account from the roster");
+        faulted["message"]!.GetValue<string>().ShouldNotContain("revok", Case.Insensitive);
         faulted["message"]!.GetValue<string>().ShouldNotContain("the adapter threw");
         factory.Cli.LogoutCalls.ShouldBeEmpty();
         (await File.ReadAllTextAsync(Path.Combine(folder, CredentialFiles.FileName), TestContext.Current.CancellationToken)).ShouldContain("refresh-new");

@@ -1,10 +1,10 @@
 namespace ClaudeCodeAccountRotation.Core.Ports;
 
 /// <summary>
-/// Revokes a folder's login by running the CLI's own <c>auth logout</c> under
-/// that folder. A removed account's refresh token is revoked at the source
-/// rather than merely deleted, since deleted bytes are recoverable and a
-/// revoked token is not. Out of process, so a port.
+/// Logs a folder out by running the CLI's own <c>auth logout</c> under that
+/// folder before the folder is deleted. Whether <c>claude auth logout</c>
+/// revokes a claude.ai refresh token server-side is not documented, so the
+/// token may stay valid until it expires. Out of process, so a port.
 /// </summary>
 public interface IClaudeCliLogout
 {

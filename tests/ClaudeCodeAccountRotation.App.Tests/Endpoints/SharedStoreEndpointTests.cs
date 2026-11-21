@@ -191,7 +191,7 @@ public sealed class SharedStoreEndpointTests
     {
         // The slot reads `parked` after the escape hatch, because the re-login
         // put a fresh family in it, so the held-by-other-side guard cannot see
-        // this. A removal here would revoke the fresh family, delete the record
+        // this. A removal here would log out the fresh family, delete the record
         // with the folder, and report success while a live refresh token stayed
         // on the side that is not answering.
         using AppFactory factory = await LiveOnAWithBHeldByWslAsync(sharedStore: true, TestContext.Current.CancellationToken);
@@ -342,6 +342,8 @@ public sealed class SharedStoreEndpointTests
         response.StatusCode.ShouldBe(HttpStatusCode.Conflict);
         JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
         body["refusal"]!.GetValue<string>().ShouldBe("HeldByOtherSide");
+        body["message"]!.GetValue<string>().ShouldContain("log out");
+        body["message"]!.GetValue<string>().ShouldNotContain("revok", Case.Insensitive);
         // The one thing on this side that says the distro holds a pair is still there,
         // no logout was attempted against a folder with nothing in it, and the card stays.
         File.Exists(Path.Combine(factory.ProfilesRoot, "b@example.com", HolderRecordFile.FileName)).ShouldBeTrue();
