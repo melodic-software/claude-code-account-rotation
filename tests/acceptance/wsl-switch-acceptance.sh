@@ -189,8 +189,6 @@ fail() {
   printf '%s FAIL %s\n' "$(date -u +%H:%M:%S)" "$*"
 }
 
-# --- processes ---------------------------------------------------------------
-#
 # Nothing here is ever killed by name. The operator's own instance runs under
 # the same executable name on this machine, and a pkill would take it down.
 
@@ -253,8 +251,6 @@ done
 mkdir -p "$store_here" "$win_live_here" "$win_appdata_here" "$mailbox_here" "$log_dir"
 wsl_run "mkdir -p '$wsl_live' '$wsl_appdata'" >/dev/null
 
-# --- seeding -----------------------------------------------------------------
-
 # A credential pair in the shape the product reads, with a refresh token that
 # is a label and never a secret. Only SHA-256 fingerprints of these are ever
 # compared or printed, which is what check-single-holder.sh does too.
@@ -285,8 +281,6 @@ for index in 1 2 3 4 5 6; do
 done
 printf '{"numStartups":7}\n' >"$win_root_here/.claude.json"
 
-# --- configuration -----------------------------------------------------------
-#
 # Both files are written on this side. The follower's lives under the mount and
 # is handed to it as a /mnt path: only its live directory and app data are
 # required to be off the mount, and its own configuration is neither.
@@ -329,8 +323,6 @@ cat >"$win_root_here/follower-config.json" <<JSON
   "mailbox": "$mailbox_wsl"
 }
 JSON
-
-# --- lifecycle ---------------------------------------------------------------
 
 wait_for() {
   local url="$1" attempts="${2:-120}" index
@@ -393,8 +385,6 @@ start_leader() {
   }
 }
 
-# --- the routes --------------------------------------------------------------
-
 # The last three characters, because curl writes one code per connection it
 # made and a leader killed mid-request leaves it having made two.
 wsl_switch() {
@@ -434,8 +424,6 @@ follower_live_account() {
   }
   printf '%s' "$body" | sed -n 's/.*"liveAccount":"\([^"]*\)".*/\1/p' | head -1 | grep . || echo "none"
 }
-
-# --- assertions --------------------------------------------------------------
 
 fingerprint_of() {
   [[ -f "$1" ]] || {
@@ -530,8 +518,6 @@ check_release_row() {
     fail "$label left the follower holding '$after', which is neither side of the release"
   fi
 }
-
-# --- the run -----------------------------------------------------------------
 
 # Set by start_leader; the gate assertion greps the current leader's log.
 leader_log=""
