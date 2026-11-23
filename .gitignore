@@ -26,3 +26,6 @@ lefthook-local.yml
 
 # Claude Code worktrees
 .claude/worktrees/
+
+# Personal overrides beside tracked convention layers (docs/conventions/ecosystems/bash.local.yaml)
+docs/conventions/**/*.local.*
