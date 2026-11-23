@@ -115,6 +115,14 @@ public sealed class ClaudeExecutableLocatorTests : IDisposable
     }
 
     [Fact]
+    public void EveryCommandAsksTheCliForTheWholeSignInUrl()
+    {
+        ClaudeExecutable executable = new(Path.Combine(_root, "claude.exe"), []);
+
+        executable.StartInfo(["setup-token"], configDirectory: null).Environment["CLAUDE_CODE_FULL_SIGN_IN_LINK"].ShouldBe("1");
+    }
+
+    [Fact]
     public void NothingResolvableIsRefusedWithGuidance()
     {
         Result<ClaudeExecutable, string> result = ClaudeExecutableLocator.Locate(null, Path.Combine(_root, "empty"), isWindows: true);
