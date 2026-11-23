@@ -4,7 +4,7 @@ name: PR Require Checks
 # context is the single check `CI Status` (job `ci-status`) below: it
 # aggregates every lane in this file and carries the pull-request contract
 # (title, do-not-merge label, issue linkage) as steps of that one check,
-# through the SHA-pinned ci-workflows composite `report-ci-status`.
+# through the ci-workflows composite `report-ci-status`, called at `main`.
 
 on:
   push:
@@ -71,11 +71,11 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Set up .NET
-        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        uses: actions/setup-dotnet@v6
         with:
           global-json-file: global.json
       - name: Restore (locked mode)
@@ -117,7 +117,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Check out
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
       # shellcheck is preinstalled on the ubuntu-24.04 image.
@@ -130,7 +130,7 @@ jobs:
       - name: Page script tests
         run: node --test tests/js/*.test.js
       - name: Set up Node
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
           cache: npm
@@ -150,11 +150,11 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Check local links and anchors
-        uses: melodic-software/ci-workflows/.github/actions/lychee-offline@07df326dec55d0740f9b0dd885a2d09c09620deb # v0.82.0
+        uses: melodic-software/ci-workflows/.github/actions/lychee-offline@main
         with:
           config: lychee.toml
 
@@ -215,7 +215,7 @@ jobs:
       # that should have run and did not.
       - name: Aggregate lane results
         id: report
-        uses: melodic-software/ci-workflows/.github/actions/pr-require-checks/report-ci-status@07df326dec55d0740f9b0dd885a2d09c09620deb # v0.82.0
+        uses: melodic-software/ci-workflows/.github/actions/pr-require-checks/report-ci-status@main
         with:
           step-name: Aggregate lane results
           # Derived from the needs graph above — the single source of truth for
