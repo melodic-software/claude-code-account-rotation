@@ -91,7 +91,7 @@ jobs:
       # The CLI is pinned so a release cannot turn CI red on its own; bump it
       # deliberately, which is when the contract test earns its keep.
       - name: Install the Claude Code CLI for the pseudo-terminal contract test
-        run: npm install --global @anthropic-ai/claude-code@2.1.310
+        run: npm install --global @anthropic-ai/claude-code@2.1.310 # zizmor: ignore[adhoc-packages] exact-pinned CLI the pseudo-terminal contract test drives
       - name: Test
         run: dotnet test ClaudeCodeAccountRotation.slnx -c Release --no-build
         env:
@@ -155,6 +155,18 @@ jobs:
         with:
           config: lychee.toml
 
+  pr-audit-workflows:
+    name: PR Audit Workflows
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (contains(fromJSON('["labeled","unlabeled"]'), github.event.action) || (github.event.action == 'edited' && !github.event.changes.base))) }}
+    permissions:
+      contents: read
+      security-events: write
+    uses: melodic-software/ci-workflows/.github/workflows/pr-audit-workflows.yml@main
+    with:
+      runner: ubuntu-24.04
+      paths: .
+      fail-on-severity: low
+
   ci-status:
     name: CI Status
     # `always()`, never a success-guard: a lane failure must still run this
@@ -165,6 +177,7 @@ jobs:
       - build-and-test
       - check-repository
       - lychee
+      - pr-audit-workflows
     runs-on: ubuntu-24.04
     # No run waits for another: a contract-only run lists in-flight runs once
     # and reads the status once, and a full run's ci-status runs after its
