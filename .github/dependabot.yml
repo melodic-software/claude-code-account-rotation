@@ -65,6 +65,24 @@ updates:
         patterns:
           - "*"
 
+  - package-ecosystem: npm
+    directory: /eng/claude-cli
+    labels: ["dependencies"]
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: build
+    cooldown:
+      default-days: 3
+      exclude:
+        - "@anthropic-ai/claude-code"
+    groups:
+      npm-minor-patch:
+        patterns:
+          - "*"
+        update-types: [minor, patch]
+
   # Minor and patch bumps batch into one reviewed PR; majors stay individual.
   - package-ecosystem: nuget
     directory: /
