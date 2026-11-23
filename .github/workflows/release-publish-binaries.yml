@@ -30,7 +30,7 @@ jobs:
     environment: plugin-release
     steps:
       - name: Check out
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
       # The version is digits only, so it is safe in every later run line.
@@ -55,7 +55,7 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Set up .NET
         if: steps.version.outputs.version
-        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        uses: actions/setup-dotnet@v6
         with:
           global-json-file: global.json
       # Both runtime identifiers are published from the one runner: the
@@ -89,7 +89,7 @@ jobs:
       - name: Mint the release App token
         if: steps.version.outputs.version
         id: app-token
-        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ vars.PLUGIN_RELEASE_APP_CLIENT_ID }}
           private-key: ${{ secrets.PLUGIN_RELEASE_APP_PRIVATE_KEY }}

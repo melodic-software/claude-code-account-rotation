@@ -1,4 +1,5 @@
-# Dependabot keeps this repository's SHA-pinned GitHub Actions, the global.json
+# Dependabot keeps this repository's GitHub Actions (third-party actions SHA-pinned,
+# first-party and vendor actions unpinned, at `main` or a major tag), the global.json
 # .NET SDK and the centrally managed NuGet packages (Directory.Packages.props)
 # current with REVIEWED pull requests: GitHub-native, no third-party app and no
 # token.
