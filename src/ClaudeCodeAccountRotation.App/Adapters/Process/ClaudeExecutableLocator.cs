@@ -64,6 +64,11 @@ internal sealed record ClaudeExecutable(string FileName, IReadOnlyList<string> A
         // command this tool runs wants a browser of its own.
         startInfo.Environment["BROWSER"] = "true";
 
+        // Otherwise the CLI draws a shortened sign-in URL without the
+        // code_challenge and state parameters this tool checks before it adds
+        // the login hint. This variable makes it draw the whole authorize URL.
+        startInfo.Environment["CLAUDE_CODE_FULL_SIGN_IN_LINK"] = "1";
+
         return startInfo;
     }
 
