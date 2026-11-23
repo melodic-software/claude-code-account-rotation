@@ -198,16 +198,73 @@ internal sealed partial class WindowsPseudoConsoleChild : ILoginChild
         await Task.Run(() => { _input.Write(keys); _input.Flush(); }, cancellationToken);
     }
 
+    /// <summary>
+    /// Ends every process in the job and waits, up to
+    /// <see cref="KillWaitMilliseconds"/>, for each to exit. Termination is asynchronous, and a process keeps its
+    /// files open until it has exited, so a caller deleting the config
+    /// directory right after a kill would find the CLI's lock file still held.
+    /// </summary>
     public void Kill()
     {
+        bool referenced = false;
         try
         {
-            _ = TerminateJobObject(_job, 1);
+            _job.DangerousAddRef(ref referenced);
+            List<SafeWaitHandle> members = OpenMembers(_job);
+            try
+            {
+                _ = TerminateJobObject(_job, 1);
+                long deadline = Environment.TickCount64 + KillWaitMilliseconds;
+                foreach (SafeWaitHandle member in members)
+                {
+                    _ = WaitForSingleObject(member, (uint)Math.Max(0, deadline - Environment.TickCount64));
+                }
+            }
+            finally
+            {
+                members.ForEach(static member => member.Dispose());
+            }
         }
         catch (ObjectDisposedException)
         {
             // The child already ended and the waiter closed the job.
         }
+        finally
+        {
+            if (referenced)
+            {
+                _job.DangerousRelease();
+            }
+        }
+    }
+
+    /// <summary>A waitable handle to each process in the job, opened before it is terminated so no handle can name a reused process ID.</summary>
+    private static unsafe List<SafeWaitHandle> OpenMembers(SafeWaitHandle job)
+    {
+        List<SafeWaitHandle> members = [];
+        int size = (2 * sizeof(uint)) + (MaxJobMembers * sizeof(nuint));
+        byte* list = stackalloc byte[size];
+        if (!QueryInformationJobObject(job, JobObjectBasicProcessIdListClass, list, (uint)size, 0))
+        {
+            return members;
+        }
+
+        uint count = ((uint*)list)[1];
+        nuint* ids = (nuint*)(list + (2 * sizeof(uint)));
+        for (uint index = 0; index < count; index++)
+        {
+            SafeWaitHandle member = OpenProcess(Synchronize, inheritHandle: false, (uint)ids[index]);
+            if (member.IsInvalid)
+            {
+                member.Dispose();
+            }
+            else
+            {
+                members.Add(member);
+            }
+        }
+
+        return members;
     }
 
     public void Dispose()
@@ -370,6 +427,13 @@ internal sealed partial class WindowsPseudoConsoleChild : ILoginChild
     private const uint Infinite = 0xFFFFFFFF;
     private const uint JobObjectLimitKillOnJobClose = 0x00002000;
     private const int JobObjectExtendedLimitInformationClass = 9;
+    private const int JobObjectBasicProcessIdListClass = 3;
+    private const uint Synchronize = 0x00100000;
+
+    /// <summary>More than the CLI and an npm shim's interpreter ever start; a job holding more is killed without the wait.</summary>
+    private const int MaxJobMembers = 64;
+
+    private const int KillWaitMilliseconds = 5000;
 
     [StructLayout(LayoutKind.Sequential)]
     private readonly struct Coord(short x, short y)
@@ -526,4 +590,13 @@ internal sealed partial class WindowsPseudoConsoleChild : ILoginChild
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool TerminateJobObject(SafeWaitHandle job, uint exitCode);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static unsafe partial bool QueryInformationJobObject(SafeWaitHandle job, int informationClass, void* information, uint length, nint returnLength);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static partial SafeWaitHandle OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inheritHandle, uint processId);
 }

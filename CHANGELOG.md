@@ -20,6 +20,11 @@ All notable changes to this project are documented in this file. The format foll
   sign-in link. Every command the tool starts now sets `CLAUDE_CODE_FULL_SIGN_IN_LINK=1`, which
   makes the CLI draw the whole authorize URL again, for logins as well.
 
+- **On Windows, a CI token session's temporary config directory is removed when the session
+  ends.** Ending the session now waits for every CLI process to exit before the directory is
+  deleted. Before, a CLI process could still hold its lock file there, and the directory was left
+  behind.
+
 - **Messages, logs, and documentation no longer promise server-side revocation on `claude auth logout`.**
   Anthropic's documentation claims revocation only for keyless Console sign-ins, not claude.ai
   OAuth logins, and whether `claude auth logout` revokes a claude.ai refresh token server-side is
