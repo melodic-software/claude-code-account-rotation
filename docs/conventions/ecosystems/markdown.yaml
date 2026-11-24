@@ -13,8 +13,8 @@ build-cmd: null
 test-cmd: null
 check-cmd: |
   # lychee-offline: on-disk link and anchor integrity, no network, with the standards
-  # lychee.toml CI falls back to: STANDARDS_DIR names a standards checkout, else the ghq clone
-  lychee --offline --no-progress --config "${STANDARDS_DIR:-$(git config --path --get ghq.root)/github.com/melodic-software/standards}/lychee.toml" '**/*.md'
+  # lychee.toml CI falls back to: STANDARDS_DIR names a standards checkout, else the ghq root (ghq.root, default ~/ghq)
+  lychee --offline --no-progress --config "${STANDARDS_DIR:-$(git config --path --get ghq.root || printf '%s' "$HOME/ghq")/github.com/melodic-software/standards}/lychee.toml" '**/*.md'
 fix-cmd: null
 code-fix-cmd: null
 opt-in: "none: lychee reads standards' lychee.toml, the config CI falls back to"
