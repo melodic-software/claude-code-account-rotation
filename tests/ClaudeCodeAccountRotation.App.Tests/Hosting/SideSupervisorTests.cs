@@ -233,9 +233,11 @@ public sealed class SideSupervisorTests
 
         public Task<Result<Unit, string>> StartAsync(CancellationToken cancellationToken)
         {
-            Interlocked.Increment(ref _starts);
+            // The count is published last: a test that sees it can change the
+            // side's state without a start still in flight overwriting it.
             instance.Version = installed;
             instance.DashboardError = null;
+            Interlocked.Increment(ref _starts);
             return Task.FromResult(Result<Unit, string>.Success(Unit.Value));
         }
 
