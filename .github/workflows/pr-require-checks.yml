@@ -132,12 +132,12 @@ jobs:
       - name: Download standards
         id: standards
         uses: melodic-software/ci-workflows/.github/actions/download-standards@main
+      # No npm cache: setup-node hashes only lockfiles under the workspace,
+      # and the standards download sits outside it.
       - name: Set up Node
         uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
-          cache: npm
-          cache-dependency-path: ${{ steps.standards.outputs.path }}/components/runner-policy/package-lock.json
       - name: Install pinned runner-policy dependencies
         env:
           STANDARDS_PATH: ${{ steps.standards.outputs.path }}
