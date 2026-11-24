@@ -2,6 +2,6 @@
   "name": "claude-cli-contract-test",
   "private": true,
   "dependencies": {
-    "@anthropic-ai/claude-code": "2.1.330"
+    "@anthropic-ai/claude-code": "2.1.331"
   }
 }
