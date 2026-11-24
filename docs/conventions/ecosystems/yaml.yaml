@@ -8,14 +8,14 @@
 # CI_REPOSITORY_VISIBILITY=public. CI also runs zizmor (the pr-audit-workflows
 # job). Commands run from the repository root.
 enabled: true
-globs: [".github/**/*.yml", ".github/**/*.yaml", ".github/standards/runner-policy/**"]
+globs: [".github/**/*.yml", ".github/**/*.yaml"]
 project-discovery: []
 build-cmd: null
 test-cmd: null
-check-cmd: "npm ci --prefix .github/standards/runner-policy --ignore-scripts --no-audit --no-fund && CI_REPOSITORY_VISIBILITY=public node .github/standards/runner-policy/runner-policy.mjs --root ."
+check-cmd: "rp=\"${STANDARDS_DIR:-$(git config --path --get ghq.root || printf '%s' \"$HOME/ghq\")/github.com/melodic-software/standards}/components/runner-policy\" && npm ci --prefix \"$rp\" --ignore-scripts --no-audit --no-fund && CI_REPOSITORY_VISIBILITY=public node \"$rp/runner-policy.mjs\" --root ."
 fix-cmd: null
 code-fix-cmd: null
-opt-in: ".github/standards/runner-policy/runner-policy.mjs present"
+opt-in: "a melodic-software/standards checkout at $STANDARDS_DIR, else <ghq root>/github.com/melodic-software/standards, holding components/runner-policy/runner-policy.mjs"
 install-hint: "node at the version .node-version names (CI's setup-node reads it for this step): https://nodejs.org"
 gates: []
-notes: "CI sets CI_REPOSITORY_VISIBILITY from github.event.repository.visibility (pr-require-checks.yml:138-141); this repository is public, so the record passes public. If its visibility changes, change this value. The npm ci installs the lockfile's ajv and yaml into .github/standards/runner-policy/node_modules (gitignored) as CI does (pr-require-checks.yml:137); --ignore-scripts, --no-audit and --no-fund are added here and change nothing those two packages install. CI's pr-audit-workflows job runs zizmor over the whole repository through ci-workflows' reusable pr-audit-workflows.yml and fails on any finding (fail-on-severity: low); no CI lane or hook runs actionlint or a dependabot.yml schema check here."
+notes: "CI sets CI_REPOSITORY_VISIBILITY from github.event.repository.visibility (pr-require-checks.yml:145-149); this repository is public, so the record passes public. If its visibility changes, change this value. CI runs the policy from its standards download (step 'Download standards'); locally the record runs it from the standards checkout STANDARDS_DIR names, else the ghq clone. The npm ci installs the lockfile's ajv and yaml into that checkout's components/runner-policy/node_modules (gitignored there) as CI does (pr-require-checks.yml:141-144); --ignore-scripts, --no-audit and --no-fund are added here and change nothing those two packages install. CI's pr-audit-workflows job runs zizmor over the whole repository through ci-workflows' reusable pr-audit-workflows.yml and fails on any finding (fail-on-severity: low); no CI lane or hook runs actionlint or a dependabot.yml schema check here."
