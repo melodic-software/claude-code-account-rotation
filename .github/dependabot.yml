@@ -1,24 +1,22 @@
-# Dependabot keeps this repository's GitHub Actions (third-party actions SHA-pinned,
-# first-party and vendor actions unpinned, at `main` or a major tag), the global.json
+# Dependabot keeps this repository's GitHub Actions (first-party `melodic-software/*`
+# refs track `@main`, vendor actions `actions/*`, `github/*` and `anthropics/*` use major
+# tags, other third-party actions stay hash-pinned and move by Dependabot), the global.json
 # .NET SDK and the centrally managed NuGet packages (Directory.Packages.props)
 # current with REVIEWED pull requests: GitHub-native, no third-party app and no
 # token.
 #
 # Merge lanes follow the standards dependabot-policy component: the
-# `first-party-actions` group (the melodic-software/ci-workflows composite
-# action pins) and the `vendor-actions` group (non-major only) are the
-# auto-merge lanes armed by pr-automerge-dependabot.yml; every other PR is
-# in the review tier. A dependency joins the first group that matches it: a
-# vendor major falls through to the reviewed `github-actions` group, and a
-# first-party major stays in `first-party-actions`, where the lane does not arm
-# a pull request that holds a major bump, so it takes the review tier.
+# `vendor-actions` group (non-major only) is the auto-merge lane armed by
+# pr-automerge-dependabot.yml; every other PR is in the review tier. A
+# dependency joins the first group that matches it: a vendor major falls
+# through to the reviewed `github-actions` group.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     labels: ["dependencies"]
     schedule:
-      interval: daily
+      interval: weekly
     open-pull-requests-limit: 5
     commit-message:
       prefix: build
@@ -26,20 +24,7 @@ updates:
     # security-advisory updates bypass cooldown and still surface immediately.
     cooldown:
       default-days: 3
-      # First-party releases take no soak (the synced Dependabot policy's
-      # `fastTrack.own`).
-      exclude:
-        - "melodic-software/ci-workflows/*"
-    # The one first-party pin Dependabot leaves alone sits in the sync-managed
-    # pr-check-managed-files-hosted.yml, which the standards sync owns.
-    ignore:
-      - dependency-name: "melodic-software/ci-workflows/.github/actions/check-managed-files"
     groups:
-      # Every ci-workflows composite-action pin moves in one pull request, so
-      # the repository stays on one ci-workflows release.
-      first-party-actions:
-        patterns:
-          - "melodic-software/*"
       vendor-actions:
         patterns:
           - actions/*
