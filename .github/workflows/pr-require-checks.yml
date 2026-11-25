@@ -124,11 +124,15 @@ jobs:
         id: standards
         uses: melodic-software/ci-workflows/.github/actions/download-standards@main
       # shellcheck is preinstalled on the ubuntu-24.04 image. The rules are
-      # standards' .shellcheckrc; this repository holds no copy.
+      # standards' .shellcheckrc; this repository holds no copy. The image's
+      # shellcheck predates --rcfile, so the step puts the file at the root of
+      # this throwaway checkout, where shellcheck's upward search finds it.
       - name: shellcheck (zero findings)
         env:
           STANDARDS_PATH: ${{ steps.standards.outputs.path }}
-        run: shellcheck --rcfile "$STANDARDS_PATH/.shellcheckrc" eng/*.sh
+        run: |
+          cp -- "$STANDARDS_PATH/.shellcheckrc" .shellcheckrc
+          shellcheck eng/*.sh
       - name: No machine paths in shipped surfaces
         run: bash eng/check-no-machine-paths.sh
       # node is preinstalled on the ubuntu-24.04 image. The shell expands the
