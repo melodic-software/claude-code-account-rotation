@@ -120,18 +120,21 @@ jobs:
         uses: actions/checkout@v7
         with:
           persist-credentials: false
-      # shellcheck is preinstalled on the ubuntu-24.04 image.
+      - name: Download standards
+        id: standards
+        uses: melodic-software/ci-workflows/.github/actions/download-standards@main
+      # shellcheck is preinstalled on the ubuntu-24.04 image. The rules are
+      # standards' .shellcheckrc; this repository holds no copy.
       - name: shellcheck (zero findings)
-        run: shellcheck eng/*.sh
+        env:
+          STANDARDS_PATH: ${{ steps.standards.outputs.path }}
+        run: shellcheck --rcfile "$STANDARDS_PATH/.shellcheckrc" eng/*.sh
       - name: No machine paths in shipped surfaces
         run: bash eng/check-no-machine-paths.sh
       # node is preinstalled on the ubuntu-24.04 image. The shell expands the
       # glob, since `node --test <directory>` does not search a directory.
       - name: Page script tests
         run: node --test tests/js/*.test.js
-      - name: Download standards
-        id: standards
-        uses: melodic-software/ci-workflows/.github/actions/download-standards@main
       # No npm cache: setup-node hashes only lockfiles under the workspace,
       # and the standards download sits outside it.
       - name: Set up Node
