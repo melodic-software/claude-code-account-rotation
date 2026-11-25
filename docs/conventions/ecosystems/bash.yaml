@@ -2,14 +2,14 @@
 # https://github.com/melodic-software/claude-code-plugins/tree/main/docs/contracts/ecosystem-commands
 # shellcheck over eng/*.sh, as CI's check-repository job runs it
 # (.github/workflows/pr-require-checks.yml, step 'shellcheck (zero findings)'):
-# no -x, no severity filter, and shellcheck finds the root .shellcheckrc by its
-# own upward search. Commands run from the repository root.
+# no -x, no severity filter, with standards' .shellcheckrc (STANDARDS_DIR names a
+# standards checkout, else the ghq root). Commands run from the repository root.
 enabled: true
 globs: ["*.sh", "*.bash"]
 project-discovery: []
 build-cmd: null
 test-cmd: null
-check-cmd: "shellcheck eng/*.sh"
+check-cmd: 'shellcheck --rcfile "${STANDARDS_DIR:-$(git config --path --get ghq.root || printf ''%s'' "$HOME/ghq")/github.com/melodic-software/standards}/.shellcheckrc" eng/*.sh'
 fix-cmd: "shfmt -w <files>"
 code-fix-cmd: null
 opt-in: "shellcheck always applies to shell files"

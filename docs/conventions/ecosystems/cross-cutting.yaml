@@ -3,7 +3,7 @@
 # Lint-only: /toolchain:lint runs it, /toolchain:check does not. The
 # machine-path check of CI's check-repository job
 # (.github/workflows/pr-require-checks.yml, step 'No machine paths in shipped
-# surfaces'), and a gitleaks scan with the root .gitleaks.toml. Every check
+# surfaces'), and a gitleaks scan with standards' .gitleaks.toml. Every check
 # runs and any failure fails the command. Commands run from the repository
 # root.
 enabled: true
@@ -14,11 +14,12 @@ test-cmd: null
 check-cmd: |
   rc=0
   bash eng/check-no-machine-paths.sh || rc=1
-  gitleaks dir . --config .gitleaks.toml --no-banner --redact || rc=1
+  # STANDARDS_DIR names a standards checkout, else the ghq root (ghq.root, default ~/ghq)
+  gitleaks dir . --config "${STANDARDS_DIR:-$(git config --path --get ghq.root || printf '%s' "$HOME/ghq")/github.com/melodic-software/standards}/.gitleaks.toml" --no-banner --redact || rc=1
   test "$rc" -eq 0
 fix-cmd: null
 code-fix-cmd: null
-opt-in: "eng/check-no-machine-paths.sh and .gitleaks.toml at the repository root"
+opt-in: "eng/check-no-machine-paths.sh, and a melodic-software/standards checkout (STANDARDS_DIR, else under the ghq root) for .gitleaks.toml"
 install-hint: "gitleaks: winget install Gitleaks.Gitleaks | brew install gitleaks"
 gates: []
-notes: "Lint-only: owned by /toolchain:lint. No CI lane here runs gitleaks; the scan stays because the repository tracks .gitleaks.toml, its allowlist. gitleaks dir scans the working tree, gitignored build output (bin/, obj/) included. check-no-machine-paths.sh scans src, tests, README.md and docs from the repository root it resolves itself; set CHECK_NO_MACHINE_PATHS_NAMES to add your own user name to its patterns. typos and editorconfig-checker are not run: their configs (_typos.toml, .editorconfig-checker.json) are synced from melodic-software/standards, but no CI lane and no installed hook runs them here. lychee runs in markdown."
+notes: "Lint-only: owned by /toolchain:lint. No CI lane here runs gitleaks; the local scan reads standards' .gitleaks.toml from the standards checkout. gitleaks dir scans the working tree, gitignored build output (bin/, obj/) included. check-no-machine-paths.sh scans src, tests, README.md and docs from the repository root it resolves itself; set CHECK_NO_MACHINE_PATHS_NAMES to add your own user name to its patterns. typos and editorconfig-checker are not run: no CI lane runs them here. lychee runs in markdown."
