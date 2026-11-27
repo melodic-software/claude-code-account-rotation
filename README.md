@@ -169,8 +169,9 @@ its terms at any time.
   listed [suspension reason](https://support.claude.com/en/articles/8241253-safeguards-warnings-and-appeals).
 - [ ] On the 1st of each month, confirm on every account that Console Billing auto-reload
   (`platform.claude.com/settings/billing`) and `claude.ai` extra usage (`Settings > Usage`) remain
-  **off**, and record `YYYY-MM-DD auto-reload off, extra usage off` in your rotation log: auto-reload
-  triggers on your purchased balance even while included credits remain
+  **off**, and record one dated line per account (`YYYY-MM-DD <account email> auto-reload off,
+  extra usage off`) in your personal rotation record or in that account's **Notes** field:
+  auto-reload triggers on your purchased balance even while included credits remain
   ([API credits for subscribers](https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers)),
   and no API reads Console auto-reload.
 - [ ] Re-check the sources table whenever Anthropic announces a terms, limits or enforcement
