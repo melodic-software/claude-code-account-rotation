@@ -167,6 +167,12 @@ its terms at any time.
 - [ ] Use Claude only from a [supported country](https://www.anthropic.com/supported-countries),
   and avoid VPN exits that change your region: account creation from an unsupported location is a
   listed [suspension reason](https://support.claude.com/en/articles/8241253-safeguards-warnings-and-appeals).
+- [ ] On the 1st of each month, confirm on every account that Console Billing auto-reload
+  (`platform.claude.com/settings/billing`) and `claude.ai` extra usage (`Settings > Usage`) remain
+  **off**, and record `YYYY-MM-DD auto-reload off, extra usage off` in your rotation log: auto-reload
+  triggers on your purchased balance even while included credits remain
+  ([API credits for subscribers](https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers)),
+  and no API reads Console auto-reload.
 - [ ] Re-check the sources table whenever Anthropic announces a terms, limits or enforcement
   change, and at least once a quarter, then update the "Last reviewed" date above.
 
