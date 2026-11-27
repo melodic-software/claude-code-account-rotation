@@ -122,6 +122,9 @@
     module.exports.rowStatus = rowStatus;
     module.exports.localStamps = localStamps;
     module.exports.fiveHourSparse = fiveHourSparse;
+    module.exports.extraUsageStatus = extraUsageStatus;
+    module.exports.compactNotice = compactNotice;
+    module.exports.creditsLine = creditsLine;
     return;
   }
 
@@ -807,7 +810,7 @@
     var where = element("div", "where");
     where.appendChild(element("span", "dot " + (say ? say.kind : "")));
     where.appendChild(element("span", null, sideLabel(name)));
-    if (side) { where.appendChild(element("span", "detail", side.detail)).title = side.detail; }
+    if (side && side.detail) { where.appendChild(element("span", "detail", side.detail)).title = side.detail; }
     who.appendChild(where);
     if (account) {
       // Every strip is headed the same way, the name over the address, so the
@@ -1012,7 +1015,7 @@
       panel.appendChild(element("p", "muted", "The mapped browser did not open: " + session.browserError + " Use the link above."));
     }
 
-    var status = element("p", "muted", "Sign in, then paste the code that page shows. This login expires in ten minutes.");
+    var status = element("p", "muted panel-status", "Sign in, then paste the code that page shows. This login expires in ten minutes.");
     panel.appendChild(status);
 
     var form = element("form", "roster-form");
@@ -1020,10 +1023,12 @@
     code.type = "text";
     code.autocomplete = "off";
     code.placeholder = "paste the code here";
-    var submit = element("button", null, "Submit code");
+    var submit = element("button", "primary", "Submit code");
     submit.type = "submit";
     labeled(form, "Sign-in code", code);
-    form.appendChild(submit);
+    var actions = element("div", "form-actions");
+    actions.appendChild(submit);
+    form.appendChild(actions);
     form.addEventListener("submit", function (event) {
       event.preventDefault();
       submitCode(session.id, email, code, status, panel);
@@ -1109,14 +1114,27 @@
       labeled(form, "New role's organization", where);
     }
 
-    // A keyed role's Console key goes live with the token, so the owner
-    // answers the cost questions first (issue #317 item 1).
-    var cost = roles.some(function (role) { return role.keyed; }) || !cataloged ? costQuestions(form) : null;
-    var start = element("button", null, words.start);
+    // A keyed role's Console key goes live with the token, so show the cost
+    // confirmation only while a keyed role (or typed new role) is selected.
+    var cost = roles.some(function (role) { return role.keyed; }) || !cataloged ? costQuestions(form, account) : null;
+    function syncCost() {
+      if (!cost) { return; }
+      var keyedChecked = roles.some(function (role, index) { return boxes[index].checked && role.keyed; });
+      var typedPrefix = !cataloged && !!prefix.value.trim();
+      var needsKey = keyedChecked || typedPrefix;
+      cost.container.hidden = !needsKey;
+      start.disabled = needsKey && cost.blocked;
+    }
+    var actions = element("div", "form-actions");
+    var start = element("button", "primary", words.start);
     start.type = "submit";
-    form.appendChild(start);
-    form.appendChild(actionButton("Cancel", "secondary", function () { panel.parentNode.removeChild(panel); }));
-    var status = element("p", "muted");
+    actions.appendChild(start);
+    actions.appendChild(actionButton("Cancel", "quiet", function () { panel.parentNode.removeChild(panel); }));
+    form.appendChild(actions);
+    boxes.forEach(function (box) { box.addEventListener("change", syncCost); });
+    if (!cataloged) { prefix.addEventListener("input", syncCost); }
+    syncCost();
+    var status = element("p", "muted panel-status");
     form.addEventListener("submit", function (event) {
       event.preventDefault();
       var keyedPicked = roles.some(function (role, index) { return boxes[index].checked && role.keyed; });
@@ -1132,7 +1150,8 @@
       if (!picked.length) { status.textContent = "Pick at least one role."; return; }
       var body = { roles: picked };
       if (cost && (keyedPicked || created)) {
-        var answered = costSettingsBody(cost.autoReload.value, cost.extraUsage.value, account.email);
+        var reading = cost.read();
+        var answered = costSettingsBody(reading.autoReload, reading.extraUsage, account.email);
         if (answered.error && keyedPicked) { status.textContent = answered.error; return; }
         if (!answered.error) { body.costSettings = answered.costSettings; }
       }
@@ -1225,8 +1244,10 @@
         var box = element("div", "limit-stops");
         notice.forEach(function (line) { box.appendChild(element("p", "say " + line.kind, line.text)); });
         var close = function (answer) { box.parentNode.removeChild(box); resolve(answer); };
-        box.appendChild(actionButton("Move anyway", null, function () { close(true); }));
-        box.appendChild(actionButton("Cancel", "secondary", function () { close(false); }));
+        var actions = element("div", "form-actions");
+        actions.appendChild(actionButton("Move anyway", "primary", function () { close(true); }));
+        actions.appendChild(actionButton("Cancel", "quiet", function () { close(false); }));
+        box.appendChild(actions);
         panel.insertBefore(box, status);
       });
     };
@@ -1235,23 +1256,57 @@
     });
   }
 
-  // The two cost questions every write of a Console key asks: auto-reload in
-  // the Console and extra usage on the plan. Neither has an answer until the
-  // owner picks one; this tool cannot read auto-reload, so it never assumes.
-  function costQuestions(form) {
-    function ask(text) {
-      var select = element("select");
-      [["", "Choose"], ["off", "Off"], ["on", "On"]].forEach(function (pair) {
-        var option = element("option", null, pair[1]);
-        option.value = pair[0];
-        select.appendChild(option);
-      });
-      labeled(form, text, select);
-      return select;
+  // What the latest usage read knows about extra usage on this account:
+  // "off" when verified disabled, "on" when enabled (server refuses key writes),
+  // or "unknown" when no usage read with credits has landed yet.
+  function extraUsageStatus(account) {
+    var credits = account && account.usage && account.usage.credits;
+    if (credits && credits.enabled === true) {
+      return { state: "on", value: "on", text: "Extra usage is on (last usage read) — turn it off on claude.ai and refresh usage first." };
     }
+    if (credits && credits.enabled === false) {
+      return { state: "off", value: "off", text: "Extra usage is off (verified from last usage read)" };
+    }
+    return { state: "unknown", value: "off", text: "Extra usage is off (claude.ai — not yet read)" };
+  }
+
+  // Cost-control confirmation for Console API key writes: auto-reload has no
+  // API so it defaults off via a pre-checked confirmation (showing when it was
+  // last confirmed), while extra usage uses the account's live usage read when
+  // available so an already-verified account adds zero extra clicks.
+  function costQuestions(form, account) {
+    var box = element("div", "cost-gate");
+    box.appendChild(element("span", "cost-gate-title", "Billing safety check (API key)"));
+    var autoBox = element("input");
+    autoBox.type = "checkbox";
+    autoBox.checked = true;
+    labeled(box, "Auto-reload is off in Console Billing", autoBox);
+    var confirmedOn = account && account.roster && account.roster.costSettingsConfirmedOn;
+    if (confirmedOn) {
+      box.appendChild(element("p", "cost-gate-meta", "Last confirmed off on " + confirmedOn));
+    }
+    var extra = extraUsageStatus(account);
+    var extraBox = null;
+    if (extra.state === "off") {
+      box.appendChild(element("p", "cost-gate-status ok", "\u2713 " + extra.text));
+    } else if (extra.state === "on") {
+      box.appendChild(element("p", "cost-gate-status crit", extra.text));
+    } else {
+      extraBox = element("input");
+      extraBox.type = "checkbox";
+      extraBox.checked = true;
+      labeled(box, extra.text, extraBox);
+    }
+    form.appendChild(box);
     return {
-      autoReload: ask("Auto-reload (Console, Billing)"),
-      extraUsage: ask("Extra usage (claude.ai, Usage)")
+      container: box,
+      blocked: extra.state === "on",
+      read: function () {
+        return {
+          autoReload: autoBox.checked ? "off" : "on",
+          extraUsage: extra.state === "on" ? "on" : extra.state === "off" ? "off" : (extraBox.checked ? "off" : "on")
+        };
+      }
     };
   }
 
@@ -1276,16 +1331,12 @@
     panel.open = true;
     panel.appendChild(element("summary", null, key.title + " for " + account.email));
     panel.appendChild(element("p", "muted",
-      "Paste this account's " + key.title + "." + (admin ? " It is used only when you click Check API key." : "")
-      + " It is kept only in this machine's OS store, never in a file of this tool's, and is not shown here again."));
+      (admin
+        ? "Used only when you click Check API key. Kept only in this machine's OS store and never shown again."
+        : "Name the key " + CONSOLE_KEY_NAME + " in Console. Kept only in this machine's OS store and never shown again.")));
     var catalog = lastDashboard && lastDashboard.laneCatalog;
-    if (!admin) {
-      panel.appendChild(element("p", "muted",
-        "In the Console, name the key " + CONSOLE_KEY_NAME + " and turn auto-reload and extra usage off for this account first."
-        + (roster.costSettingsConfirmedOn ? " You last confirmed both off on " + roster.costSettingsConfirmedOn + "." : "")));
-      if (catalogNotice(catalog)) {
-        panel.appendChild(catalogLoader(account, catalogNotice(catalog), function (again) { openApiKeyPanel(again); }));
-      }
+    if (!admin && catalogNotice(catalog)) {
+      panel.appendChild(catalogLoader(account, catalogNotice(catalog), function (again) { openApiKeyPanel(again); }));
     }
     var form = element("form", "roster-form");
     var field = element("input");
@@ -1301,13 +1352,22 @@
       labeled(form, choice.label, box);
       return box;
     });
-    var cost = choices.length ? costQuestions(form) : null;
-    var save = element("button", null, choices.length ? "Save and send" : "Save");
+    var cost = choices.length ? costQuestions(form, account) : null;
+    var actions = element("div", "form-actions");
+    var save = element("button", "primary", choices.length ? "Save and send" : "Save");
     save.type = "submit";
-    form.appendChild(save);
+    actions.appendChild(save);
+    function syncCost() {
+      var anyPicked = boxes.some(function (box) { return box.checked; });
+      if (cost) { cost.container.hidden = !anyPicked; }
+      save.textContent = anyPicked ? "Save and send" : "Save";
+      save.disabled = anyPicked && !!cost && cost.blocked;
+    }
+    boxes.forEach(function (box) { box.addEventListener("change", syncCost); });
+    syncCost();
     // The Console page that creates this kind of key, in the account's mapped
     // browser profile, so the key is made while signed in as this account.
-    form.appendChild(actionButton("Open Console", "secondary", function () {
+    actions.appendChild(actionButton("Open Console", "secondary", function () {
       busy = true;
       setButtonsDisabled(true);
       status.textContent = "Opening the Console...";
@@ -1320,12 +1380,14 @@
         .catch(function (error) { status.textContent = "Request failed: " + error; })
         .then(function () { busy = false; setButtonsDisabled(false); });
     }));
-    form.appendChild(actionButton("Cancel", "secondary", function () { panel.parentNode.removeChild(panel); }));
-    var status = element("p", "muted");
+    actions.appendChild(actionButton("Cancel", "quiet", function () { panel.parentNode.removeChild(panel); }));
+    form.appendChild(actions);
+    var status = element("p", "muted panel-status");
     form.addEventListener("submit", function (event) {
       event.preventDefault();
       var picked = choices.filter(function (_, index) { return boxes[index].checked; });
-      var answered = picked.length ? costSettingsBody(cost.autoReload.value, cost.extraUsage.value, account.email) : null;
+      var reading = picked.length && cost ? cost.read() : null;
+      var answered = reading ? costSettingsBody(reading.autoReload, reading.extraUsage, account.email) : null;
       if (answered && answered.error) { status.textContent = answered.error; return; }
       var body = apiKeyBody(field.value);
       if (!body && !stored) { status.textContent = "Paste the key first."; return; }
@@ -1378,6 +1440,11 @@
       checkLimitStops(froms, panel, status, go);
     });
     panel.appendChild(form);
+    if (!admin && !roster.adminKeySetOn) {
+      var adminLink = element("p", "muted panel-link");
+      adminLink.appendChild(actionButton("Set Admin key (Console organizations only)", "quiet", function () { openApiKeyPanel(account, true); }));
+      panel.appendChild(adminLink);
+    }
     panel.appendChild(status);
     card.appendChild(panel);
     field.focus();
@@ -1454,11 +1521,13 @@
     field.autocomplete = "off";
     field.spellcheck = false;
     labeled(form, "CI token", field);
-    var save = element("button", null, "Store");
+    var actions = element("div", "form-actions");
+    var save = element("button", "primary", "Store");
     save.type = "submit";
-    form.appendChild(save);
-    form.appendChild(actionButton("Cancel", "secondary", function () { panel.parentNode.removeChild(panel); }));
-    var status = element("p", "muted");
+    actions.appendChild(save);
+    actions.appendChild(actionButton("Cancel", "quiet", function () { panel.parentNode.removeChild(panel); }));
+    form.appendChild(actions);
+    var status = element("p", "muted panel-status");
     form.addEventListener("submit", function (event) {
       event.preventDefault();
       var body = ciTokenValueBody(field.value);
@@ -1514,13 +1583,21 @@
     var halves = element("select");
     labeled(form, "Send", halves);
     var note = element("p", "muted");
+    note.hidden = true;
     form.appendChild(note);
-    var cost = costQuestions(form);
-    var send = element("button", null, "Assign");
+    var cost = costQuestions(form, account);
+    var actions = element("div", "form-actions");
+    var send = element("button", "primary", "Assign");
     send.type = "submit";
-    form.appendChild(send);
-    form.appendChild(actionButton("Cancel", "secondary", function () { panel.parentNode.removeChild(panel); }));
-    var status = element("p", "muted");
+    actions.appendChild(send);
+    actions.appendChild(actionButton("Cancel", "quiet", function () { panel.parentNode.removeChild(panel); }));
+    form.appendChild(actions);
+    var status = element("p", "muted panel-status");
+    function syncCost() {
+      var needsKey = !!halves.value && halves.value !== "token";
+      cost.container.hidden = !needsKey;
+      send.disabled = !halves.value || (needsKey && cost.blocked);
+    }
     function redraw() {
       var role = roles[Number(picker.value)];
       var offered = assignHalves(roster, role);
@@ -1531,9 +1608,11 @@
         halves.appendChild(option);
       });
       note.textContent = offered.why ? "Not offered: " + offered.why + "." : "";
-      send.disabled = !offered.choices.length;
+      note.hidden = !offered.why;
+      syncCost();
     }
     picker.addEventListener("change", redraw);
+    halves.addEventListener("change", syncCost);
     redraw();
     form.addEventListener("submit", function (event) {
       event.preventDefault();
@@ -1541,7 +1620,8 @@
       if (!role || !halves.value) { status.textContent = "Pick a role and what to send."; return; }
       var body = { role: role.item, halves: halves.value };
       if (halves.value !== "token") {
-        var answered = costSettingsBody(cost.autoReload.value, cost.extraUsage.value, account.email);
+        var reading = cost.read();
+        var answered = costSettingsBody(reading.autoReload, reading.extraUsage, account.email);
         if (answered.error) { status.textContent = answered.error; return; }
         body.costSettings = answered.costSettings;
       }
@@ -2005,9 +2085,10 @@
   }
 
   function creditsLine(credits) {
-    var text = "usage credits: " + (credits.enabled
-      ? "enabled"
-      : "disabled" + (credits.disabledReason ? " (" + credits.disabledReason + ")" : ""));
+    var reason = credits.disabledReason && credits.disabledReason !== "disabled_by_user"
+      ? " (" + String(credits.disabledReason).replace(/_/g, " ") + ")"
+      : "";
+    var text = "Extra usage: " + (credits.enabled ? "on" : "off" + reason);
     return credits.spendLimitReached ? text + "; spend limit reached" : text;
   }
 
@@ -3095,6 +3176,29 @@
     return { text: percentText(limit.percent), title: null, muted: false };
   }
 
+  function shortIsoDay(isoDay) {
+    var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    var parts = String(isoDay).split("-");
+    var month = months[Number(parts[1]) - 1];
+    return month ? month + " " + Number(parts[2]) : isoDay;
+  }
+
+  // Shorten verbose warnings for the compact row's narrow Status column so the
+  // deadline or root issue stays visible; the full sentence stays in hover and
+  // in Detailed mode.
+  function compactNotice(text) {
+    if (!text) { return ""; }
+    var login = text.match(/^(?:logged in [^·]+· )?(login (?:expired|expires [^·]+))$/i);
+    if (login) { return login[1]; }
+    var ciFuture = text.match(/^When the CI token expires on (\d{4}-\d{2}-\d{2})/);
+    if (ciFuture) { return "CI expires " + shortIsoDay(ciFuture[1]); }
+    var ciPast = text.match(/^The CI token expired on (\d{4}-\d{2}-\d{2})/);
+    if (ciPast) { return "CI expired " + shortIsoDay(ciPast[1]); }
+    var stale = text.match(/^as of [^,]+, (.+?) ago via .+; may be out of date$/i);
+    if (stale) { return "Read " + stale[1] + " ago · stale"; }
+    return text;
+  }
+
   // The warnings a row keeps on its face in either density: a CLI logout, a
   // stale reading, a refresh that failed, a login that is expiring, expired or
   // missing, a shared browser profile, and a CI token expiry. Neutral facts are
@@ -3150,10 +3254,10 @@
     var lines = element("div", "lines");
     if (account.cliLoggedOut) { lines.appendChild(element("p", "cli-logout", account.cliLoggedOut)); }
     if (account.usage.source) { lines.appendChild(element("p", asOfClass(account.usage.capturedAt, at), asOf(account.usage.capturedAt, account.usage.source, at))); }
-    // The row's two columns are the 5-hour and 7-day windows; any other window
-    // the endpoint reported, and a column taken from another source, say so here.
+    // The row's three columns are 5-hour, 7-day, and model weekly; only truly
+    // extra unknown windows and per-window alternate sources say so here.
     account.usage.limits.forEach(function (limit) {
-      var column = limit.kind === "session" || limit.kind === "weekly_all";
+      var column = limit.kind === "session" || limit.kind === "weekly_all" || limit.kind === "weekly_scoped";
       if (!column && limit.known) {
         var reset = resetLine(limit, at);
         var other = lines.appendChild(element("p", "asof", limit.label + " " + reading(limit) + (reset ? ", " + reset : "")));
@@ -3412,10 +3516,12 @@
   // A row's overflow menu item: the menu closes before the action runs, so the
   // redraw that follows is not held back by an open menu.
   function menuItem(more, label, className, onClick) {
-    return actionButton(label, className, function () {
+    var button = actionButton(label, className, function () {
       more.open = false;
       onClick();
     });
+    button.setAttribute("role", "menuitem");
+    return button;
   }
 
   // The row's switch buttons, one per side: each hands that side this account in
@@ -3534,8 +3640,10 @@
     // state needs no words, else as one line under it, never repeating it.
     var notices = rowNotices(account, dashboard, at, lastAccounts).filter(function (text) { return text !== brief.text && text !== say.text; });
     var noticeKind = account.cliLoggedOut || loginExpired(account, at) ? "crit" : "warn";
+    var briefNoticeTitle = "";
     if (!brief.text && notices.length) {
-      brief = { kind: noticeKind, text: notices.join(" · ") };
+      briefNoticeTitle = notices.join(" · ");
+      brief = { kind: noticeKind, text: notices.map(compactNotice).join(" · ") };
       notices = [];
     }
     // A usage alert the rail lists is said on the row too, so the two agree.
@@ -3546,7 +3654,7 @@
     // Every status starts with a capital, a server's lower-case message too.
     var briefText = brief.text.charAt(0).toUpperCase() + brief.text.slice(1);
     var briefLine = status.appendChild(element("p", "say brief " + brief.kind, unbroken(briefText)));
-    briefLine.title = brief.text === say.text ? briefText + full.title.slice(say.text.length) : [briefText, full.title].filter(Boolean).join("\n");
+    briefLine.title = briefNoticeTitle || (brief.text === say.text ? briefText + full.title.slice(say.text.length) : [briefText, full.title].filter(Boolean).join("\n"));
     // The dot says the worst the row says: a usable account with a warning on
     // its face is not green.
     // A CI token's state is the lanes' trouble, not this account's quota or
@@ -3576,8 +3684,8 @@
 
     if (notices.length) {
       card.className += " has-notice";
-      var notice = element("p", "notice compact-only " + noticeKind, notices.join(" · "));
-      notice.title = notice.textContent;
+      var notice = element("p", "notice compact-only " + noticeKind, unbroken(notices.map(compactNotice).join(" · ")));
+      notice.title = notices.join(" · ");
       line.appendChild(notice);
     }
 
@@ -3607,8 +3715,10 @@
     var more = element("details", "more");
     var summary = element("summary", "quiet sm", "···");
     summary.setAttribute("aria-label", "More actions for " + uniqueName(account, lastAccounts));
+    summary.setAttribute("aria-haspopup", "menu");
     more.appendChild(summary);
     var menu = element("div", "menu");
+    menu.setAttribute("role", "menu");
     var edit = roster ? editPanel(account, !account.isLive && !needsLogin) : null;
     if (edit) {
       menu.appendChild(menuItem(more, "Edit", "quiet sm", function () {
@@ -3622,27 +3732,25 @@
       }));
     }
     menu.appendChild(blockable(menuItem(more, "Refresh usage", "quiet sm", function () { refreshAccount(account.email); }), false));
-    // In groups under rules: open, CI token, API and Admin keys, rotation, and
-    // every delete last, apart under its own rule, so no ordinary item sits
-    // between two that destroy something. A delete reads in the danger colour.
+    // Task-oriented groups: account pages, CI assignment & credentials, rotation,
+    // and destructive actions separated at the bottom. Admin key actions surface
+    // here only once an Admin key is stored (first-time setup lives inside Set API key).
     if (roster) {
       menu.appendChild(element("hr"));
       menu.appendChild(menuItem(more, "Open claude.ai", "quiet sm", function () { openAccountPage(account.email, "claude-ai", "claude.ai"); }));
       menu.appendChild(menuItem(more, "Open Console", "quiet sm", function () { openAccountPage(account.email, "keys", "the Console's API keys page"); }));
       menu.appendChild(element("hr"));
-      menu.appendChild(menuItem(more, "Generate CI token", "quiet sm", function () { openCiTokenPanel(account); }));
-      menu.appendChild(menuItem(more, roster.ciTokenStoredOn ? "Replace CI token" : "Store CI token", "quiet sm", function () { openCiTokenValuePanel(account); }));
       if (roster.ciTokenStoredOn || roster.consoleApiKeySetOn) {
         menu.appendChild(menuItem(more, "Assign to role", "quiet sm", function () { openAssignPanel(account); }));
       }
-      menu.appendChild(element("hr"));
-      menu.appendChild(menuItem(more, roster.consoleApiKeySetOn ? "Replace API key" : "Set API key", "quiet sm", function () { openApiKeyPanel(account); }));
-      if (roster.consoleApiKeySetOn && (roster.ciRoles || []).some(function (role) { return role.keySecret; })) {
-        menu.appendChild(menuItem(more, "Push API key", "quiet sm", function () { openApiKeyPanel(account); }));
-      }
-      menu.appendChild(menuItem(more, roster.adminKeySetOn ? "Replace Admin key" : "Set Admin key", "quiet sm", function () { openApiKeyPanel(account, true); }));
-      if (roster.consoleApiKeySetOn && roster.adminKeySetOn) {
-        menu.appendChild(menuItem(more, "Check API key", "quiet sm", function () { checkApiKey(account.email); }));
+      menu.appendChild(menuItem(more, "Generate CI token", "quiet sm", function () { openCiTokenPanel(account); }));
+      menu.appendChild(menuItem(more, roster.ciTokenStoredOn ? "Replace CI token" : "Store CI token", "quiet sm", function () { openCiTokenValuePanel(account); }));
+      menu.appendChild(menuItem(more, roster.consoleApiKeySetOn ? "API key & roles" : "Set API key", "quiet sm", function () { openApiKeyPanel(account); }));
+      if (roster.adminKeySetOn) {
+        menu.appendChild(menuItem(more, "Replace Admin key", "quiet sm", function () { openApiKeyPanel(account, true); }));
+        if (roster.consoleApiKeySetOn) {
+          menu.appendChild(menuItem(more, "Check API key", "quiet sm", function () { checkApiKey(account.email); }));
+        }
       }
       menu.appendChild(element("hr"));
       menu.appendChild(menuItem(more, paused ? "Resume rotation" : "Pause rotation", "quiet sm", function () { setPaused(account.email, !paused); }));
@@ -3766,7 +3874,12 @@
       themes.appendChild(viewChoice("theme", choice[0], choice[1], "option"));
     });
     theme.appendChild(themes);
-    controls.appendChild(theme);
+    var stop = document.getElementById("stop");
+    if (stop && stop.parentNode) {
+      stop.parentNode.insertBefore(theme, stop);
+    } else {
+      controls.appendChild(theme);
+    }
     bar.appendChild(controls);
     var summary = element("div", "view-summary");
     summary.appendChild(element("p", "fleet-summary"));
@@ -3780,19 +3893,28 @@
 
   // The stylesheet reads the choice from the root element: no attribute is
   // System, which leaves the palette to the operating system's setting.
+  // Momentarily suppress transitions while flipping palettes so buttons and
+  // surfaces switch in one cohesive frame.
   function applyTheme(theme) {
+    var root = document.documentElement;
+    var current = root.getAttribute("data-theme") || "system";
+    if (current !== theme) { root.setAttribute("data-theme-switching", ""); }
     if (theme === "system") {
-      document.documentElement.removeAttribute("data-theme");
+      root.removeAttribute("data-theme");
     } else {
-      document.documentElement.setAttribute("data-theme", theme);
+      root.setAttribute("data-theme", theme);
+    }
+    if (current !== theme) {
+      void root.offsetHeight;
+      root.removeAttribute("data-theme-switching");
     }
   }
 
-  // The bar's controls set to the view in force.
+  // The bar's controls set to the view in force (including the header Theme toggle).
   function syncViewBar(bar) {
     bar.querySelector("select[name='view-order']").value = view.order;
     bar.querySelector("input[name='view-group']").checked = view.group;
-    Array.prototype.forEach.call(bar.querySelectorAll("input[type='radio']"), function (input) {
+    Array.prototype.forEach.call(document.querySelectorAll("input[type='radio'][name^='view-']"), function (input) {
       input.checked = view[input.name.slice(5)] === input.value;
     });
   }
@@ -4165,9 +4287,20 @@
   // before the summary's default action opens it, so no frame shows it whole.
   document.addEventListener("click", function (event) {
     var summary = event.target.closest && event.target.closest("details.more > summary, details.roster-add > summary");
-    if (!summary || summary.parentNode.open || event.detail === 0) { return; }
-    var layer = summary.parentNode.querySelector(":scope > .menu, :scope > .popover");
+    if (!summary || summary.parentNode.open) { return; }
+    var details = summary.parentNode;
+    var layer = details.querySelector(":scope > .menu, :scope > .popover");
     if (!layer) { return; }
+    if (details.classList.contains("more")) {
+      var rect = summary.getBoundingClientRect();
+      var spaceBelow = window.innerHeight - rect.bottom;
+      // Estimate full menu height before paint so mid-list rows flip upward too.
+      var items = layer.querySelectorAll("button").length;
+      var rules = layer.querySelectorAll("hr").length;
+      var estimatedHeight = items * 32 + rules * 9 + 20;
+      details.classList.toggle("flip-up", spaceBelow < estimatedHeight && rect.top > spaceBelow);
+    }
+    if (event.detail === 0) { return; }
     layer.animate(lessMotion() ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 0, scale: 0.97 }, { opacity: 1, scale: 1 }],
       { duration: motionMs("--dur-short"), easing: motionToken("--ease-out") });
   }, true);
@@ -4240,8 +4373,8 @@
     form.appendChild(status);
     form.appendChild(found);
     panel.appendChild(form);
-    var stop = document.getElementById("stop");
-    stop.parentNode.insertBefore(panel, stop);
+    var anchor = document.querySelector(".tools > .view-theme") || document.getElementById("stop");
+    anchor.parentNode.insertBefore(panel, anchor);
     form.addEventListener("submit", function (event) {
       event.preventDefault();
       busy = true;

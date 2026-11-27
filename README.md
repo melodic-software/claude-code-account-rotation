@@ -605,12 +605,13 @@ those secrets (`admin:org` for organization secrets). The tool checks this befor
    leave the field blank to send the stored one; Push API key opens the same panel. With no role
    ticked, Save only stores the key.
 
-   The key is sent only when you answer that auto-reload and extra usage are both off. No API
-   this tool can call reads auto-reload, so it asks on every write that sends a key (this panel,
-   and Generate CI token for a keyed role) and sends nothing on a missing answer or an `On`. When
-   the account's last usage read says extra usage is on, it refuses whatever you answered; turn it
-   off, refresh the account's usage, and try again. The card's roster records the day you last
-   confirmed both off.
+   The key is sent only when auto-reload and extra usage are both off. When the account's latest
+   usage read already confirms extra usage is off, the panel shows that verification instead of
+   asking again (and still refuses whenever the read says extra usage is on; turn it off, refresh
+   the account's usage, and try again). No API this tool can call reads Console auto-reload, so
+   panels that send a key show a pre-checked auto-reload confirmation (with the date last confirmed
+   off) and hide the billing check whenever no key is being sent. The card's roster records the day
+   you last confirmed both off.
 2. Open its ··· menu, then Generate CI token. Tick the roles it is to back, and for a keyed role
    answer Auto-reload and Extra usage as above. With a lane catalog
    read, the list holds the catalog's roles, then any other role an account backs. Without one, it

@@ -13,6 +13,28 @@ All notable changes to this project are documented in this file. The format foll
   so the operator can change one in Edit before logging in. Entries on different profiles or with
   no profile set show no warning.
 
+### Changed
+
+- **Dashboard UX/UI quality pass and task-oriented billing safety check.**
+  - **Billing safety check on API-key writes:** `Assign to role`, `Set API key` / `API key & roles`,
+    and `Generate CI token` now hide the billing safety check whenever no Console API key is being
+    sent (such as `Token only` roles). When the account's latest usage read confirms extra usage is
+    off, the panel shows that verification instead of asking again (and still refuses whenever the
+    read says extra usage is on); Console Billing auto-reload uses a pre-checked confirmation
+    showing the last confirmed date instead of an unselected dropdown.
+  - **Layout and theme polish:** Account names stay visible on chip-heavy rows at medium widths
+    instead of collapsing to zero width; switching between System, Light, and Dark (now in the
+    page header so the ledger view bar fits cleanly on one line) no longer flashes split-speed
+    button fades; active segmented options have clear contrast in Dark mode; side-by-side Now
+    strips match height; and the WSL strip omits its separator when detail text is absent.
+  - **Panels, copy, and row menus:** `Assign to role`, `Set API key`, `Generate CI token`,
+    `Store CI token`, and `Login` panels now share `Edit`'s sans-serif typography, horizontal
+    primary/cancel button layout, and subtle open animation. Compact `Status` notices lead with the
+    expiry date or stale age so deadlines are not clipped, Detailed mode drops the duplicate model
+    line and humanizes `disabled_by_user`, and the `···` menu merges duplicate `Push API key`,
+    moves first-time `Set Admin key` into `Set API key`, adds menu ARIA roles, and flips upward
+    near the bottom of the viewport.
+
 ### Fixed
 
 - **CI token sessions work with Claude Code 2.1.330 and later.** That release draws a shortened
