@@ -1072,7 +1072,7 @@ test("an account with no usage read says its limits were not checked", () => {
   assert.ok(lines.every((line) => line.text.indexOf("Anthropic support") < 0));
 });
 
-const { keyRoleChoices, costSettingsBody } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+const { keyRoleChoices, costSettingsBody, extraUsageStatus, compactNotice, creditsLine, typedRoleNeedsKey, extraDetailLimits } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
 
 // A catalog with one keyed and one token-only role, built by hand: issue #259
 // asks that Set API key offer keyed roles only.
@@ -1112,6 +1112,48 @@ test("the cost answers go to the server only when both say off", () => {
   assert.ok(costSettingsBody("on", "off", "a@example.com").error.startsWith("Turn auto-reload and extra usage off"));
   assert.ok(costSettingsBody("off", "on", "a@example.com").error.startsWith("Turn auto-reload and extra usage off"));
   assert.deepStrictEqual(costSettingsBody("off", "off", "a@example.com"), { costSettings: { autoReload: "off", extraUsage: "off" } });
+});
+
+test("extraUsageStatus derives off/on/unknown from the account's latest usage credits read", () => {
+  assert.strictEqual(extraUsageStatus({ usage: { credits: { enabled: false, disabledReason: "disabled_by_user" } } }).state, "off");
+  assert.strictEqual(extraUsageStatus({ usage: { credits: { enabled: false } } }).value, "off");
+  assert.strictEqual(extraUsageStatus({ usage: { credits: { enabled: true } } }).state, "on");
+  assert.strictEqual(extraUsageStatus({ usage: { credits: { enabled: true } } }).value, "on");
+  assert.strictEqual(extraUsageStatus({ usage: { credits: null } }).state, "unknown");
+  assert.strictEqual(extraUsageStatus(null).value, "");
+});
+
+test("typedRoleNeedsKey skips blank prefixes and token-only role prefixes", () => {
+  assert.strictEqual(typedRoleNeedsKey("", ["REVIEWS"]), false);
+  assert.strictEqual(typedRoleNeedsKey("reviews", ["REVIEWS", "ISSUE_LANE"]), false);
+  assert.strictEqual(typedRoleNeedsKey("INTAKE", ["REVIEWS", "ISSUE_LANE"]), true);
+});
+
+test("extraDetailLimits drops the first weekly_scoped column limit but keeps second and later scoped windows", () => {
+  const limits = [
+    { kind: "session", label: "5-hour", known: true },
+    { kind: "weekly_all", label: "7-day", known: true },
+    { kind: "weekly_scoped", label: "Model A", known: true },
+    { kind: "weekly_scoped", label: "Model B", known: true },
+    { kind: "weekly_scoped", label: "Model C", known: false }
+  ];
+  assert.deepStrictEqual(extraDetailLimits(limits).map((l) => l.label), ["Model B"]);
+});
+
+test("compactNotice leads with the deadline or stale age so compact rows do not clip the key fact", () => {
+  assert.strictEqual(compactNotice("logged in 55 d ago · login expires in 5 d"), "login expires in 5 d");
+  assert.strictEqual(compactNotice("login expired"), "login expired");
+  assert.strictEqual(compactNotice("When the CI token expires on 2026-12-14, these roles fall back to their API key only: maintenance"), "CI expires Dec 14");
+  assert.strictEqual(compactNotice("The CI token expired on 2026-10-20; these roles stopped: lane"), "CI expired Oct 20");
+  assert.strictEqual(compactNotice("as of 2:28 PM, 50 min ago via usage endpoint; may be out of date"), "Read 50 min ago · stale");
+  assert.strictEqual(compactNotice("Shares browser profile with other@x; change one in Edit."), "Shares browser profile with other@x; change one in Edit.");
+});
+
+test("creditsLine humanizes extra usage state without raw enum underscores", () => {
+  assert.strictEqual(creditsLine({ enabled: false, disabledReason: "disabled_by_user", spendLimitReached: false }), "Extra usage: off");
+  assert.strictEqual(creditsLine({ enabled: false, disabledReason: "not_eligible", spendLimitReached: false }), "Extra usage: off (not eligible)");
+  assert.strictEqual(creditsLine({ enabled: true, disabledReason: null, spendLimitReached: false }), "Extra usage: on");
+  assert.strictEqual(creditsLine({ enabled: true, disabledReason: null, spendLimitReached: true }), "Extra usage: on; spend limit reached");
 });
 
 const { ciTokenBadge, assignHalves, ciTokenValueBody } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
