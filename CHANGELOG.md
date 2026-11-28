@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-11-27
+
 ### Added
 
 - **A warning on dashboard rows that share a browser profile.** When two or more roster entries
