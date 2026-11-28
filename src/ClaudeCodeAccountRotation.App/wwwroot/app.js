@@ -125,6 +125,8 @@
     module.exports.extraUsageStatus = extraUsageStatus;
     module.exports.compactNotice = compactNotice;
     module.exports.creditsLine = creditsLine;
+    module.exports.typedRoleNeedsKey = typedRoleNeedsKey;
+    module.exports.extraDetailLimits = extraDetailLimits;
     return;
   }
 
@@ -1115,13 +1117,13 @@
     }
 
     // A keyed role's Console key goes live with the token, so show the cost
-    // confirmation only while a keyed role (or typed new role) is selected.
+    // confirmation only while a keyed role (or keyed typed new role) is selected.
     var cost = roles.some(function (role) { return role.keyed; }) || !cataloged ? costQuestions(form, account) : null;
     function syncCost() {
       if (!cost) { return; }
       var keyedChecked = roles.some(function (role, index) { return boxes[index].checked && role.keyed; });
-      var typedPrefix = !cataloged && !!prefix.value.trim();
-      var needsKey = keyedChecked || typedPrefix;
+      var typedKeyed = !cataloged && typedRoleNeedsKey(prefix.value, lastDashboard && lastDashboard.tokenOnlyRolePrefixes);
+      var needsKey = keyedChecked || typedKeyed;
       cost.container.hidden = !needsKey;
       start.disabled = needsKey && cost.blocked;
     }
@@ -1256,6 +1258,13 @@
     });
   }
 
+  // Whether a hand-typed new role prefix requires a Console API key: false when
+  // blank or listed in the dashboard's token-only role prefixes.
+  function typedRoleNeedsKey(prefix, tokenOnly) {
+    var name = (prefix || "").trim().toUpperCase();
+    return !!name && (tokenOnly || []).indexOf(name) < 0;
+  }
+
   // What the latest usage read knows about extra usage on this account:
   // "off" when verified disabled, "on" when enabled (server refuses key writes),
   // or "unknown" when no usage read with credits has landed yet.
@@ -1267,13 +1276,13 @@
     if (credits && credits.enabled === false) {
       return { state: "off", value: "off", text: "Extra usage is off (verified from last usage read)" };
     }
-    return { state: "unknown", value: "off", text: "Extra usage is off (claude.ai — not yet read)" };
+    return { state: "unknown", value: "", text: "Confirm extra usage is off on claude.ai (not yet read)" };
   }
 
   // Cost-control confirmation for Console API key writes: auto-reload has no
   // API so it defaults off via a pre-checked confirmation (showing when it was
   // last confirmed), while extra usage uses the account's live usage read when
-  // available so an already-verified account adds zero extra clicks.
+  // available and requires an explicit tick when no usage read exists yet.
   function costQuestions(form, account) {
     var box = element("div", "cost-gate");
     box.appendChild(element("span", "cost-gate-title", "Billing safety check (API key)"));
@@ -1294,7 +1303,7 @@
     } else {
       extraBox = element("input");
       extraBox.type = "checkbox";
-      extraBox.checked = true;
+      extraBox.checked = false;
       labeled(box, extra.text, extraBox);
     }
     form.appendChild(box);
@@ -1304,7 +1313,7 @@
       read: function () {
         return {
           autoReload: autoBox.checked ? "off" : "on",
-          extraUsage: extra.state === "on" ? "on" : extra.state === "off" ? "off" : (extraBox.checked ? "off" : "on")
+          extraUsage: extra.state === "on" ? "on" : extra.state === "off" ? "off" : (extraBox.checked ? "off" : "")
         };
       }
     };
@@ -3247,6 +3256,17 @@
     }, null);
   }
 
+  // Limits shown in Detailed's Status lines: skip session, weekly_all, and the
+  // single weekly_scoped limit already rendered in the Model weekly column, but
+  // keep any second or later model-scoped window visible.
+  function extraDetailLimits(limits) {
+    var list = limits || [];
+    var shownScoped = list.filter(function (limit) { return limit.kind === "weekly_scoped"; })[0] || null;
+    return list.filter(function (limit) {
+      return limit.known && limit.kind !== "session" && limit.kind !== "weekly_all" && limit !== shownScoped;
+    });
+  }
+
   // Everything else a row knows, in small lines under its sentence: where the
   // figures came from and when, the credits, the refresh outcome, the login's
   // age and expiry, and the browser it opens in.
@@ -3254,15 +3274,12 @@
     var lines = element("div", "lines");
     if (account.cliLoggedOut) { lines.appendChild(element("p", "cli-logout", account.cliLoggedOut)); }
     if (account.usage.source) { lines.appendChild(element("p", asOfClass(account.usage.capturedAt, at), asOf(account.usage.capturedAt, account.usage.source, at))); }
-    // The row's three columns are 5-hour, 7-day, and model weekly; only truly
-    // extra unknown windows and per-window alternate sources say so here.
+    extraDetailLimits(account.usage.limits).forEach(function (limit) {
+      var reset = resetLine(limit, at);
+      var other = lines.appendChild(element("p", "asof", limit.label + " " + reading(limit) + (reset ? ", " + reset : "")));
+      if (reset) { other.title = resetTitle(limit.resetsAt); }
+    });
     account.usage.limits.forEach(function (limit) {
-      var column = limit.kind === "session" || limit.kind === "weekly_all" || limit.kind === "weekly_scoped";
-      if (!column && limit.known) {
-        var reset = resetLine(limit, at);
-        var other = lines.appendChild(element("p", "asof", limit.label + " " + reading(limit) + (reset ? ", " + reset : "")));
-        if (reset) { other.title = resetTitle(limit.resetsAt); }
-      }
       if (limit.source) { lines.appendChild(element("p", asOfClass(limit.capturedAt, at), limit.label + " " + asOf(limit.capturedAt, limit.source, at))); }
     });
     if (account.usage.credits) { lines.appendChild(element("p", "asof", creditsLine(account.usage.credits))); }

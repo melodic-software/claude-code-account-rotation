@@ -1072,7 +1072,7 @@ test("an account with no usage read says its limits were not checked", () => {
   assert.ok(lines.every((line) => line.text.indexOf("Anthropic support") < 0));
 });
 
-const { keyRoleChoices, costSettingsBody, extraUsageStatus, compactNotice, creditsLine } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
+const { keyRoleChoices, costSettingsBody, extraUsageStatus, compactNotice, creditsLine, typedRoleNeedsKey, extraDetailLimits } = require("../../src/ClaudeCodeAccountRotation.App/wwwroot/app.js");
 
 // A catalog with one keyed and one token-only role, built by hand: issue #259
 // asks that Set API key offer keyed roles only.
@@ -1120,7 +1120,24 @@ test("extraUsageStatus derives off/on/unknown from the account's latest usage cr
   assert.strictEqual(extraUsageStatus({ usage: { credits: { enabled: true } } }).state, "on");
   assert.strictEqual(extraUsageStatus({ usage: { credits: { enabled: true } } }).value, "on");
   assert.strictEqual(extraUsageStatus({ usage: { credits: null } }).state, "unknown");
-  assert.strictEqual(extraUsageStatus(null).value, "off");
+  assert.strictEqual(extraUsageStatus(null).value, "");
+});
+
+test("typedRoleNeedsKey skips blank prefixes and token-only role prefixes", () => {
+  assert.strictEqual(typedRoleNeedsKey("", ["REVIEWS"]), false);
+  assert.strictEqual(typedRoleNeedsKey("reviews", ["REVIEWS", "ISSUE_LANE"]), false);
+  assert.strictEqual(typedRoleNeedsKey("INTAKE", ["REVIEWS", "ISSUE_LANE"]), true);
+});
+
+test("extraDetailLimits drops the first weekly_scoped column limit but keeps second and later scoped windows", () => {
+  const limits = [
+    { kind: "session", label: "5-hour", known: true },
+    { kind: "weekly_all", label: "7-day", known: true },
+    { kind: "weekly_scoped", label: "Model A", known: true },
+    { kind: "weekly_scoped", label: "Model B", known: true },
+    { kind: "weekly_scoped", label: "Model C", known: false }
+  ];
+  assert.deepStrictEqual(extraDetailLimits(limits).map((l) => l.label), ["Model B"]);
 });
 
 test("compactNotice leads with the deadline or stale age so compact rows do not clip the key fact", () => {

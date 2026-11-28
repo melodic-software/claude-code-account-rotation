@@ -389,9 +389,15 @@ button.fold, button.fold:is(:hover, :disabled) { height: auto; padding: 0; borde
   /* The prefixes stay the controls' names, read but not shown. */
   .view-name { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 }
-/* Detailed rows carry multi-line status metadata and reset lines, so give
-   Status and the two small meters generous width. */
-@container ledger (min-width: 1000px) {
+/* Detailed rows carry multi-line status metadata and reset lines; scale their
+   minimum widths with container width so the ledger never overflows at 1000-1299px. */
+@container ledger (min-width: 1000px) and (max-width: 1199px) {
+  .ledger[data-density="detailed"] :is(.ledger-top, .cards) { --w-acct: minmax(8rem, 1.15fr); --w-st: minmax(8.5rem, 1.35fr); --w7d: 5.25rem; --w-rs: 5rem; --w-mw: 5.25rem; --w5h: 5.25rem; }
+}
+@container ledger (min-width: 1200px) and (max-width: 1319px) {
+  .ledger[data-density="detailed"] :is(.ledger-top, .cards) { --w-acct: minmax(9.5rem, 1.15fr); --w-st: minmax(10rem, 1.4fr); --w7d: 5.5rem; --w-rs: 5.25rem; --w-mw: 7.25rem; --w5h: 8rem; }
+}
+@container ledger (min-width: 1320px) {
   .ledger[data-density="detailed"] :is(.ledger-top, .cards) { --w-acct: minmax(13rem, 1.15fr); --w-st: minmax(13rem, 1.4fr); --w-mw: 7.75rem; --w5h: 8.75rem; }
 }
 
